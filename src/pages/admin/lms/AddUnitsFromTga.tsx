@@ -34,7 +34,7 @@ export default function AddUnitsFromTga({ course, units, onClose, onDone, nextSt
   course: RtoCourse; units: RtoUnit[]; onClose: () => void; onDone: () => void;
   /** Shown once the units are added and every packaging rule is met (a new course: "Create first intake"). */
   nextStep?: { label: string; onClick: () => void };
-  /** New course wizard: "Step 2 of 5 · Units" in the title. */
+  /** New course wizard: "Step 2 of 3 · Units" in the title. */
   stepLabel?: string;
 }) {
   const [release, setRelease] = useState<Release | null>(null);

@@ -290,7 +290,7 @@ export default function LmsCoursesPage() {
   const classesDone = (detail?.batches ?? []).some(b => b.classDays.length > 0);
   const setupStep: "units" | "hours" | "master" | "classes" | "done" | null = !detail || detail.course.id !== selectedId || masterSaved === null ? null
     : !units.length ? "units" : slit.some(h => !h?.confirmed) ? "hours" : !masterSaved ? "master" : !classesDone ? "classes" : "done";
-  const SETUP_TEXT = { units: "Step 2 of 5 · Units", hours: "Step 3 of 5 · Hours", master: "Step 4 of 5 · CoE weekly calendar", classes: "Rooms, trainers and weekly class times" } as const;
+  const SETUP_TEXT = { units: "Step 2 of 3 · Units", hours: "Step 3 of 3 · Hours", master: "CoE weekly calendar", classes: "Rooms, trainers and weekly class times" } as const;
   const continueSetup = () => {
     if (!selected || !setupStep || setupStep === "done") return;
     const courseId = selected.id;
@@ -325,20 +325,19 @@ export default function LmsCoursesPage() {
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }}
       onAddUnits={courseId => { setBulkSync(false); reloadAfterAdd(courseId, "units"); }} />
     {wizard?.step === "units" && !wizard.hidden && canEdit && detail?.course.id === wizard.courseId
-      ? <AddUnitsFromTga course={detail.course} units={detail.units} stepLabel="Step 2 of 5 · Units"
+      ? <AddUnitsFromTga course={detail.course} units={detail.units} stepLabel="Step 2 of 3 · Units"
         // The course reloads when the popup closes: reloading earlier would close it before its result and next step show.
         // Closing keeps the wizard: the bar at the top of the page opens the step again.
         onClose={() => { setWizard(w => (w ? { ...w, hidden: true } : w)); setReloadKey(k => k + 1); }} onDone={() => undefined}
         nextStep={{ label: "Next: unit hours", onClick: () => { setWizard({ courseId: wizard.courseId, step: "hours" }); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "hours" && !wizard.hidden && canEdit && selected?.id === wizard.courseId
-      ? <UnitHoursEditor course={selected} stepLabel="Step 3 of 5 · Hours" onClose={() => { setWizard(w => (w ? { ...w, hidden: true } : w)); setReloadKey(k => k + 1); }} onSaved={() => undefined}
-        // The wizard ends here (owner, 2026-11-20): the hours are saved and the course shown. The start date, rooms, trainers
-        // and weekly class times are set afterwards from the course (the bar at the top carries on with them).
-        // Then the two weekly calendars (owner, 2026-11-20): CoE (step 4) and VoE (step 5, which finishes the wizard).
-        nextStep={{ label: "Save and continue: CoE weekly calendar", onClick: () => { setWizard({ courseId: wizard.courseId, step: "master" }); setTab("master"); setReloadKey(k => k + 1); } }}
+      ? <UnitHoursEditor course={selected} stepLabel="Step 3 of 3 · Hours" onClose={() => { setWizard(w => (w ? { ...w, hidden: true } : w)); setReloadKey(k => k + 1); }} onSaved={() => undefined}
+        // The wizard ends here (owner, 2026-11-21: "the course is finished after step 3"). The CoE and VoE weekly calendars and
+        // the weekly classes follow from the course page (Continue setup and the calendar tabs).
+        nextStep={{ label: "Finish and save course", onClick: () => { setWizard(null); setTab("overview"); setReloadKey(k => k + 1); } }}
         backStep={{ label: "Back: units", onClick: () => { setWizard({ courseId: wizard.courseId, step: "units" }); setTab("units"); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "master" && !wizard.hidden && canEdit && selected?.id === wizard.courseId
-      ? <StartDateBreaksEditor course={selected} stepLabel="Step 4 of 5"
+      ? <StartDateBreaksEditor course={selected} stepLabel="Course setup"
         onStudyLoad={load => setWizardLoad({ courseId: selected.id, load })} registeredWeeks={registeredWeeks(selected.duration)}
         // With an intake already on the course this is the last step: closing ends the wizard.
         onClose={() => { setWizard(w => (w && !detail?.intakes.length ? { ...w, hidden: true } : null)); setReloadKey(k => k + 1); }}
@@ -346,11 +345,11 @@ export default function LmsCoursesPage() {
         nextStep={{ label: "Next: VoE weekly calendar", onClick: () => { setWizard({ courseId: wizard.courseId, step: "voe" }); setTab("voe"); } }}
         backStep={{ label: "Back: hours", onClick: () => { setWizard({ courseId: wizard.courseId, step: "hours" }); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "voe" && !wizard.hidden && canEdit && selected?.id === wizard.courseId
-      ? <VoeCalendarEditor course={selected} stepLabel="Step 5 of 5"
+      ? <VoeCalendarEditor course={selected} stepLabel="Course setup"
         onClose={() => { setWizard(w => (w && !detail?.intakes.length ? { ...w, hidden: true } : null)); setReloadKey(k => k + 1); }}
         backStep={{ label: "Back: CoE weekly calendar", onClick: () => { setWizard({ courseId: wizard.courseId, step: "master" }); setTab("master"); setReloadKey(k => k + 1); } }}
         // The last step: the wizard ends; rooms, trainers and class times are set later from the course ("Continue setup").
-        nextStep={{ label: "Finish and save course", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }} /> : null}
+        nextStep={{ label: "Save VoE calendar and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }} /> : null}
     {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
       allowBatch={false} requireUnitSchedule title="Course setup · Intake" createLabel="Create and continue: rooms"
       onClose={() => setWizard(null)}

@@ -360,7 +360,9 @@ export default function LmsCoursesPage() {
         onClose={() => { setWizard(w => (w && !detail?.intakes.length ? { ...w, hidden: true } : null)); setReloadKey(k => k + 1); }}
         backStep={{ label: "Back: CoE weekly calendar", onClick: () => { setWizard({ courseId: wizard.courseId, step: "master" }); setTab("master"); setReloadKey(k => k + 1); } }}
         // The last step: the wizard ends; rooms, trainers and class times are set later from the course ("Continue setup").
-        nextStep={{ label: "Save VoE calendar and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }} /> : null}
+        nextStep={{ label: "Save VoE calendar and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }}
+        // Or straight on to the daily timetables: the CoE intake's weekly classes, then the VoE intake's (owner, 2026-11-21).
+        dailyStep={{ label: "Save and next: daily timetables", onClick: () => { setReloadKey(k => k + 1); void openClasses(wizard.courseId, "coe"); } }} /> : null}
     {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
       allowBatch={false} requireUnitSchedule title="Course setup · Intake" createLabel="Create and continue: rooms"
       onClose={() => setWizard(null)}
@@ -497,7 +499,7 @@ export default function LmsCoursesPage() {
               </section> : null}
               </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
-              {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} /> : null}
+              {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} onDaily={() => void openClasses(selected.id, "coe")} /> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
             </div>
           </>}

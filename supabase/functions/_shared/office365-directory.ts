@@ -9,7 +9,8 @@
  *                   refused, never guessed.
  *   licence_assign  the licence of the person's type (students only the student licence, staff only the faculty one: planFor, as Create
  *                   Email); seats checked first; usage location set when missing (Microsoft requires it to assign a licence).
- * Every assign / remove (also refused and failed ones) is written to email_account_audit; the Skyline account row keeps the licence
+ * Every assign / remove / sign-in block / allow (also refused and failed ones) is written to email_account_audit; success is only
+ * reported once Graph shows the change (group-based licences explained, not hidden); the Skyline account row keeps the licence
  * (o365_licence_record). No user is ever deleted here.
  */
 import { appToken, fail, graphError, graphFor, LICENCE_NAMES, planFor, type Graph, type PersonKind, type Ports, type Reply } from "./office365-provision.ts";
@@ -17,6 +18,8 @@ import { appToken, fail, graphError, graphFor, LICENCE_NAMES, planFor, type Grap
 interface GUser {
   id: string; displayName: string | null; userPrincipalName: string; mail: string | null; accountEnabled?: boolean; userType?: string | null; createdDateTime?: string | null;
   assignedLicenses?: Array<{ skuId: string }>; assignedPlans?: Array<{ service?: string; capabilityStatus?: string }>; usageLocation?: string | null;
+  /** How each licence came: assignedByGroup set = group-based licensing (it cannot be removed from the user directly). */
+  licenseAssignmentStates?: Array<{ skuId: string; assignedByGroup?: string | null; state?: string; error?: string }>;
 }
 const SELECT = "id,displayName,userPrincipalName,mail,accountEnabled,assignedLicenses,assignedPlans,createdDateTime,userType";
 export type DirectoryType = "student" | "employee" | "trainer" | "agent" | "not_linked" | "shared";
@@ -26,11 +29,12 @@ export const ADMIN_ROLE_PERMISSION = "RoleManagement.Read.Directory";
 const read = (ports: Ports, n: string) => (ports.env(n) ?? "").trim();
 const low = (s: string | null | undefined) => String(s ?? "").trim().toLowerCase();
 
-// The tenant's users, kept for a minute per instance (a page, a search and a filter reuse it); dropped after every licence action.
+// The tenant's users, kept for a minute per instance (a page, a search and a filter reuse it). The cache is per instance, so an action
+// on one instance cannot clear another's: after an action the screen asks with `fresh` (2026-11-21: a removed licence stayed on the row).
 let cache: { at: number; users: GUser[] } | null = null;
 export const resetDirectoryCache = () => { cache = null; };
-async function allUsers(graph: Graph): Promise<GUser[]> {
-  if (cache && Date.now() - cache.at < 60_000) return cache.users;
+async function allUsers(graph: Graph, fresh = false): Promise<GUser[]> {
+  if (!fresh && cache && Date.now() - cache.at < 60_000) return cache.users;
   const users: GUser[] = [];
   let path: string | null = `/users?$select=${SELECT}&$top=999`;
   for (let page = 0; path && page < 50; page++) {
@@ -71,10 +75,15 @@ function skylineSkus(ports: Ports): { student: string; staff: string } {
 }
 const friendly = (part: string) => part === "STANDARDWOFFPACK_STUDENT" ? "A1 for students" : part === "STANDARDWOFFPACK_FACULTY" ? "A1 for faculty" : (LICENCE_NAMES[part] ?? part);
 
-interface Context { users: GUser[]; people: Map<string, Person>; skuPart: Map<string, string>; mine: { student: string; staff: string }; admins: Set<string> | null; studentDomain: string; sender: string; caller: string }
-async function context(ports: Ports, graph: Graph, caller: string, withAdmins: boolean): Promise<Context> {
-  const [users, who, list, admins] = await Promise.all([allUsers(graph), people(ports), skus(graph), withAdmins ? adminIds(graph) : Promise.resolve(null)]);
-  return { users, people: who, skuPart: new Map(list.map((s) => [s.skuId, s.part])), mine: skylineSkus(ports), admins,
+interface Context { users: GUser[]; people: Map<string, Person>; skuPart: Map<string, string>; mine: { student: string; staff: string }; admins: Set<string> | null; studentDomain: string; sender: string; caller: string;
+  /** Accounts whose sign-in Skyline blocked (latest sign-in action in the audit log): a blocked account, never a shared mailbox. */
+  skylineBlocked: Set<string> }
+async function blockedBySkyline(ports: Ports): Promise<Set<string>> {
+  try { const r = await ports.rpc("email_account_skyline_blocked", {}); return new Set(((r.data as string[] | null) ?? []).map(low)); } catch { return new Set(); }
+}
+async function context(ports: Ports, graph: Graph, caller: string, withAdmins: boolean, fresh = false): Promise<Context> {
+  const [users, who, list, admins, blocked] = await Promise.all([allUsers(graph, fresh), people(ports), skus(graph), withAdmins ? adminIds(graph) : Promise.resolve(null), blockedBySkyline(ports)]);
+  return { users, people: who, skuPart: new Map(list.map((s) => [s.skuId, s.part])), mine: skylineSkus(ports), admins, skylineBlocked: blocked,
     studentDomain: low(read(ports, "EF_MICROSOFT365_STUDENT_DOMAIN")), sender: low(read(ports, "EF_MICROSOFT365_WELCOME_SENDER")), caller: low(caller) };
 }
 function personOf(ctx: Context, u: GUser): Person | null { return ctx.people.get(low(u.userPrincipalName)) ?? (u.mail ? ctx.people.get(low(u.mail)) ?? null : null); }
@@ -86,7 +95,7 @@ function personOf(ctx: Context, u: GUser): Person | null { return ctx.people.get
 function isShared(ctx: Context, u: GUser, person: Person | null): boolean {
   if (low(u.userPrincipalName) === ctx.sender || low(u.mail) === ctx.sender) return true;
   const studentDomain = !!ctx.studentDomain && low(u.userPrincipalName).endsWith("@" + ctx.studentDomain);
-  return u.accountEnabled === false && !person && !studentDomain;
+  return u.accountEnabled === false && !person && !studentDomain && !ctx.skylineBlocked.has(low(u.userPrincipalName));
 }
 const isSelf = (ctx: Context, u: GUser) => !!ctx.caller && (low(u.userPrincipalName) === ctx.caller || low(u.mail) === ctx.caller);
 
@@ -103,17 +112,21 @@ function row(ctx: Context, u: GUser) {
   const removeBlocked = !skyline.length ? "No Skyline licence" : self ? "Your own account" : shared ? "Shared mailbox" : admin === null ? `Admin roles cannot be checked (${ADMIN_ROLE_PERMISSION})` : admin ? "Has an admin role" : null;
   const assignKind: PersonKind | null = skyline.length || shared ? null : type === "student" ? "student" : type === "employee" || type === "trainer" || type === "agent" ? type : null;
   const assignSku = assignKind ? (assignKind === "student" ? ctx.mine.student : ctx.mine.staff) : null;
-  return { id: u.id, name: u.displayName ?? "", upn: low(u.userPrincipalName), mail: u.mail ? low(u.mail) : null, enabled: u.accountEnabled !== false, type,
+  // Block / allow sign-in (2026-11-21): the same protections as licence removal.
+  const signinBlocked = self ? "Your own account" : shared ? "Shared mailbox" : admin === null ? `Admin roles cannot be checked (${ADMIN_ROLE_PERMISSION})` : admin ? "Has an admin role" : null;
+  const enabled = u.accountEnabled !== false;
+  return { id: u.id, name: u.displayName ?? "", upn: low(u.userPrincipalName), mail: u.mail ? low(u.mail) : null, enabled, type,
     person: person ? { kind: person.kind, id: person.id, name: person.name } : null, licences: parts.map((p) => ({ sku: p, name: friendly(p), skyline: skyline.includes(p) })),
     exchange, admin, self, createdAt: u.createdDateTime ?? null,
-    canRemove: !removeBlocked, removeBlocked, assign: assignSku ? { sku: assignSku, name: friendly(assignSku) } : null };
+    canRemove: !removeBlocked, removeBlocked, assign: assignSku ? { sku: assignSku, name: friendly(assignSku) } : null,
+    canBlock: enabled && !signinBlocked, canAllow: !enabled && !signinBlocked, signinBlocked };
 }
 
 const TYPE_LABEL: Record<DirectoryType, string> = { student: "Student", employee: "Employee", trainer: "Trainer", agent: "Agent", not_linked: "Not linked", shared: "Shared" };
-export async function directoryList(ports: Ports, caller: string, q: { search?: string; type?: string; status?: string; page?: number }): Promise<Reply> {
+export async function directoryList(ports: Ports, caller: string, q: { search?: string; type?: string; status?: string; page?: number; fresh?: boolean }): Promise<Reply> {
   try {
     const graph = graphFor(ports, await appToken(ports));
-    const ctx = await context(ports, graph, caller, true);
+    const ctx = await context(ports, graph, caller, true, q.fresh === true);
     const members = ctx.users.filter((u) => (u.userType ?? "Member") !== "Guest").map((u) => row(ctx, u));
     const words = low(q.search).split(/\s+/).filter(Boolean);
     const type = String(q.type ?? ""), status = String(q.status ?? "");
@@ -130,19 +143,38 @@ export async function directoryList(ports: Ports, caller: string, q: { search?: 
   } catch (e) { return fail(e); }
 }
 
-async function audit(ports: Ports, action: "licence_assigned" | "licence_removed", u: { upn: string; id: string }, sku: string | null, result: "ok" | "refused" | "failed", detail: Record<string, unknown>) {
+type AuditAction = "licence_assigned" | "licence_removed" | "signin_blocked" | "signin_allowed";
+async function audit(ports: Ports, action: AuditAction, u: { upn: string; id: string }, sku: string | null, result: "ok" | "refused" | "failed", detail: Record<string, unknown>) {
   try { await ports.rpc("email_account_audit_add", { p_action: action, p_upn: u.upn, p_ms_user: u.id, p_sku: sku, p_licence_name: sku ? friendly(sku) : null, p_result: result, p_detail: detail }); }
   catch { /* the action's own answer still says what happened */ }
 }
 async function userById(graph: Graph, id: string): Promise<GUser | null> {
-  const r = await graph("GET", `/users/${encodeURIComponent(id)}?$select=${SELECT},usageLocation`);
+  const r = await graph("GET", `/users/${encodeURIComponent(id)}?$select=${SELECT},usageLocation,licenseAssignmentStates`);
   if (r.status === 404) { await r.body?.cancel(); return null; }
   if (!r.ok) { await r.body?.cancel(); throw new Error(graphError(r.status, "microsoft_unavailable")); }
   return await r.json() as GUser;
 }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Microsoft's error code and message of a refused call, for the person (codes only are logged). */
+async function graphReason(r: Response): Promise<{ code: string; message: string }> {
+  try { const b = await r.json() as { error?: { code?: string; message?: string } }; return { code: String(b?.error?.code ?? r.status), message: String(b?.error?.message ?? "").slice(0, 300) }; }
+  catch { return { code: String(r.status), message: "" }; }
+}
+/**
+ * Reads the account again until Graph shows the change (a few seconds at most): success is only ever reported from Microsoft's own
+ * answer. `done` says whether the user now looks as intended.
+ */
+async function confirmed(graph: Graph, id: string, done: (u: GUser) => boolean): Promise<GUser | null> {
+  for (const wait of [0, 1500, 3000]) {
+    if (wait) await sleep(wait);
+    const u = await userById(graph, id);
+    if (u && done(u)) return u;
+  }
+  return null;
+}
 
-/** Remove the Skyline licence(s) from up to 50 accounts; every account answered and logged on its own. */
+/** Remove the Skyline licence(s) from up to 50 accounts; every account answered and logged on its own; success only when Graph confirms. */
 export async function licenceRemove(ports: Ports, caller: string, ids: unknown): Promise<Reply> {
   const list = Array.isArray(ids) ? [...new Set(ids.map(String))].filter((x) => UUID.test(x)).slice(0, 50) : [];
   if (!list.length) return { status: 400, body: { error: "Choose the accounts." } };
@@ -152,26 +184,40 @@ export async function licenceRemove(ports: Ports, caller: string, ids: unknown):
     if (!ctx.admins) return { status: 409, body: { code: "admin_roles_unreadable",
       error: `No licence was removed: Skyline must check that an account has no admin role first, which needs the Microsoft Graph application permission ${ADMIN_ROLE_PERMISSION} with admin consent.` } };
     const partToId = new Map([...ctx.skuPart].map(([id, part]) => [part, id]));
-    const results: Array<{ id: string; upn: string; ok: boolean; error?: string; removed?: string[] }> = [];
+    const results: Array<{ id: string; upn: string; ok: boolean; error?: string; removed?: string[]; row?: ReturnType<typeof row> }> = [];
     for (const id of list) {
       const u = await userById(graph, id);
       if (!u) { results.push({ id, upn: "", ok: false, error: "No longer in Microsoft 365." }); continue; }
       const r = row(ctx, u); const who = { upn: r.upn, id: u.id };
       const remove = r.licences.filter((l) => l.skyline).map((l) => l.sku);
-      if (!r.canRemove) { results.push({ id, upn: r.upn, ok: false, error: r.removeBlocked ?? "Not allowed" }); await audit(ports, "licence_removed", who, remove[0] ?? null, "refused", { reason: r.removeBlocked }); continue; }
-      const res = await graph("POST", `/users/${encodeURIComponent(u.id)}/assignLicense`, { addLicenses: [], removeLicenses: remove.map((p) => partToId.get(p)).filter(Boolean) });
+      if (!r.canRemove) { results.push({ id, upn: r.upn, ok: false, error: r.removeBlocked ?? "Not allowed", row: r }); await audit(ports, "licence_removed", who, remove[0] ?? null, "refused", { reason: r.removeBlocked }); continue; }
+      const removeIds = remove.map((p) => partToId.get(p)).filter((x): x is string => !!x);
+      // A licence that comes from a group cannot be removed from the user: say so before trying.
+      const byGroup = (u.licenseAssignmentStates ?? []).filter((s) => removeIds.includes(s.skuId) && s.assignedByGroup);
+      if (byGroup.length) {
+        const why = `The licence comes from a group (group-based licensing, group ${byGroup[0].assignedByGroup}): remove the person from that group, or the licence from the group, in the Microsoft 365 admin centre.`;
+        results.push({ id, upn: r.upn, ok: false, error: why, row: r }); await audit(ports, "licence_removed", who, remove.join(","), "refused", { reason: "group-based licence", group: byGroup[0].assignedByGroup }); continue;
+      }
+      const res = await graph("POST", `/users/${encodeURIComponent(u.id)}/assignLicense`, { addLicenses: [], removeLicenses: removeIds });
+      if (!res.ok) { const g = await graphReason(res); results.push({ id, upn: r.upn, ok: false, error: `Microsoft refused (${g.code}${g.message ? `: ${g.message}` : ""}).`, row: r }); await audit(ports, "licence_removed", who, remove.join(","), "failed", { status: res.status, code: g.code }); continue; }
       await res.body?.cancel();
-      if (!res.ok) { results.push({ id, upn: r.upn, ok: false, error: `Microsoft refused (${res.status}).` }); await audit(ports, "licence_removed", who, remove[0], "failed", { status: res.status }); continue; }
+      const after = await confirmed(graph, u.id, (x) => !(x.assignedLicenses ?? []).some((l) => removeIds.includes(l.skuId)));
+      if (!after) {
+        const now = await userById(graph, u.id);
+        const group = (now?.licenseAssignmentStates ?? []).find((s) => removeIds.includes(s.skuId) && s.assignedByGroup)?.assignedByGroup;
+        const why = group ? `Microsoft put the licence back from group ${group} (group-based licensing).` : "Microsoft still lists the licence on the account a few seconds later; it was not removed. Try again, or check the account in the Microsoft 365 admin centre.";
+        results.push({ id, upn: r.upn, ok: false, error: why, row: now ? row(ctx, now) : r }); await audit(ports, "licence_removed", who, remove.join(","), "failed", { reason: group ? "group-based licence" : "still listed", group: group ?? null }); continue;
+      }
       try { await ports.rpc("o365_licence_record", { p_upn: r.upn, p_sku: null }); } catch { /* Microsoft is the source; the row follows on the next lookup */ }
-      await audit(ports, "licence_removed", who, remove.join(","), "ok", { removed: remove });
-      results.push({ id, upn: r.upn, ok: true, removed: remove.map(friendly) });
+      await audit(ports, "licence_removed", who, remove.join(","), "ok", { removed: remove, confirmed: true });
+      results.push({ id, upn: r.upn, ok: true, removed: remove.map(friendly), row: row(ctx, after) });
     }
     resetDirectoryCache();
     return { status: 200, body: { results, removed: results.filter((x) => x.ok).length, refused: results.filter((x) => !x.ok).length } };
   } catch (e) { return fail(e); }
 }
 
-/** Assign the licence of the person's type (student: the student licence; employee / trainer / agent: the faculty one). */
+/** Assign the licence of the person's type (student: the student licence; employee / trainer / agent: the faculty one); confirmed by Graph. */
 export async function licenceAssign(ports: Ports, caller: string, id: unknown): Promise<Reply> {
   if (!UUID.test(String(id ?? ""))) return { status: 400, body: { error: "Choose an account." } };
   try {
@@ -191,11 +237,48 @@ export async function licenceAssign(ports: Ports, caller: string, id: unknown): 
       await p.body?.cancel(); if (!p.ok) throw new Error(graphError(p.status, "licence_assignment_failed"));
     }
     const res = await graph("POST", `/users/${encodeURIComponent(u.id)}/assignLicense`, { addLicenses: [{ skuId: seat.skuId, disabledPlans: [] }], removeLicenses: [] });
+    if (!res.ok) { const g = await graphReason(res); await audit(ports, "licence_assigned", who, r.assign.sku, "failed", { status: res.status, code: g.code }); return { status: 409, body: { error: `Microsoft refused the licence (${g.code}${g.message ? `: ${g.message}` : ""}).` } }; }
     await res.body?.cancel();
-    if (!res.ok) { await audit(ports, "licence_assigned", who, r.assign.sku, "failed", { status: res.status }); return { status: 409, body: { error: `Microsoft refused the licence (${res.status}).` } }; }
+    const after = await confirmed(graph, u.id, (x) => (x.assignedLicenses ?? []).some((l) => l.skuId === seat.skuId));
+    if (!after) { await audit(ports, "licence_assigned", who, r.assign.sku, "failed", { reason: "not listed afterwards" }); return { status: 409, body: { error: "Microsoft accepted the request but does not list the licence on the account yet. Reload in a minute; nothing else was changed." } }; }
     try { await ports.rpc("o365_licence_record", { p_upn: r.upn, p_sku: r.assign.sku }); } catch { /* the row follows on the next lookup */ }
-    await audit(ports, "licence_assigned", who, r.assign.sku, "ok", {});
+    await audit(ports, "licence_assigned", who, r.assign.sku, "ok", { confirmed: true });
     resetDirectoryCache();
-    return { status: 200, body: { ok: true, upn: r.upn, licence: r.assign.name } };
+    return { status: 200, body: { ok: true, upn: r.upn, licence: r.assign.name, row: row(ctx, after) } };
+  } catch (e) { return fail(e); }
+}
+
+/**
+ * Block (enabled false) or allow (true) sign-in on up to 50 accounts (PATCH accountEnabled), with the same protections as licence
+ * removal: never the caller's own account, an admin-role account or a shared mailbox. Confirmed by Graph; every account logged.
+ */
+export async function signinSet(ports: Ports, caller: string, ids: unknown, enabled: unknown): Promise<Reply> {
+  const list = Array.isArray(ids) ? [...new Set(ids.map(String))].filter((x) => UUID.test(x)).slice(0, 50) : [];
+  if (!list.length) return { status: 400, body: { error: "Choose the accounts." } };
+  if (typeof enabled !== "boolean") return { status: 400, body: { error: "Say whether sign-in is blocked or allowed." } };
+  const action: AuditAction = enabled ? "signin_allowed" : "signin_blocked";
+  try {
+    const graph = graphFor(ports, await appToken(ports));
+    const ctx = await context(ports, graph, caller, true);
+    if (!ctx.admins) return { status: 409, body: { code: "admin_roles_unreadable", error: `Nothing was changed: Skyline must check that an account has no admin role first, which needs ${ADMIN_ROLE_PERMISSION} with admin consent.` } };
+    const results: Array<{ id: string; upn: string; ok: boolean; error?: string; row?: ReturnType<typeof row> }> = [];
+    for (const id of list) {
+      const u = await userById(graph, id);
+      if (!u) { results.push({ id, upn: "", ok: false, error: "No longer in Microsoft 365." }); continue; }
+      const r = row(ctx, u); const who = { upn: r.upn, id: u.id };
+      if ((u.userType ?? "Member") === "Guest" || r.signinBlocked) { const why = r.signinBlocked ?? "Guest account"; results.push({ id, upn: r.upn, ok: false, error: why, row: r }); await audit(ports, action, who, null, "refused", { reason: why }); continue; }
+      if (r.enabled === enabled) { results.push({ id, upn: r.upn, ok: true, row: r }); continue; }
+      const res = await graph("PATCH", `/users/${encodeURIComponent(u.id)}`, { accountEnabled: enabled });
+      if (!res.ok) { const g = await graphReason(res); results.push({ id, upn: r.upn, ok: false, error: `Microsoft refused (${g.code}${g.message ? `: ${g.message}` : ""}).`, row: r }); await audit(ports, action, who, null, "failed", { status: res.status, code: g.code }); continue; }
+      await res.body?.cancel();
+      const after = await confirmed(graph, u.id, (x) => (x.accountEnabled !== false) === enabled);
+      if (!after) { results.push({ id, upn: r.upn, ok: false, error: "Microsoft does not show the change yet. Reload in a minute.", row: r }); await audit(ports, action, who, null, "failed", { reason: "not shown afterwards" }); continue; }
+      await audit(ports, action, who, null, "ok", { confirmed: true });
+      // The audit row just written makes a blocked, unlinked staff account "blocked by Skyline", not a shared mailbox.
+      if (!enabled) ctx.skylineBlocked.add(r.upn); else ctx.skylineBlocked.delete(r.upn);
+      results.push({ id, upn: r.upn, ok: true, row: row(ctx, after) });
+    }
+    resetDirectoryCache();
+    return { status: 200, body: { results, changed: results.filter((x) => x.ok).length, refused: results.filter((x) => !x.ok).length } };
   } catch (e) { return fail(e); }
 }

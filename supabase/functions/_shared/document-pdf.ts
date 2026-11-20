@@ -291,7 +291,15 @@ async function embedFonts(pdf: PDFDocument): Promise<Fonts> {
   for (const f of [r, b, i, bi, nr, nb]) sets.set(f, new Set(f.getCharacterSet()));
   return { faces: { r, b, i, bi }, fallback: { r: nr, b: nb }, sets };
 }
-interface Seg { text: string; font: PDFFont; width: number }
+/**
+ * Tick boxes and ticks are drawn as lines, never set as characters: neither Arimo nor Noto Sans has ☐ ☑ ☒ (they printed "?" on the
+ * offer letter's ADMIN USE ONLY table, 2026-11-21), and a glyph that happens to exist in one font would not match the editor anyway.
+ */
+export type Shape = "box" | "box-tick" | "box-cross" | "tick" | "cross";
+const SHAPES: Readonly<Record<string, Shape>> = { "☐": "box", "☑": "box-tick", "☒": "box-cross", "✓": "tick", "✔": "tick", "✗": "cross", "✘": "cross" };
+/** A shape's advance, in em (about the width of the symbol in Arial, so lines wrap as they did in the editor). */
+const SHAPE_EM = 0.86;
+interface Seg { text: string; font: PDFFont; width: number; shape?: Shape }
 
 /* ------------------------------------------------------------------ layout */
 interface Piece {
@@ -303,7 +311,14 @@ interface Line { pieces: Piece[]; width: number; height: number; ascent: number;
 export interface PlacedField { label: string; type: "text" | "initials"; page: number; x: number; y: number; w: number; h: number }
 /** Where a missing {{variable}} printed (fractions of the page from its top-left corner), so the preview can point at it. */
 export interface PlacedMark { key: string; page: number; x: number; y: number; w: number; h: number }
-interface DrawCtx { page: PDFPage; pageIndex: number; total: number; fields: PlacedField[]; sample: boolean; marks: PlacedMark[] }
+/**
+ * Where a tick box (☐ ☑ ☒) was drawn: the square itself (fractions of the page from its top-left corner), and the last words printed
+ * before it ("... Offer ACCEPTED"), so a caller can put an automatic field exactly on the box (offerSigningLayout.ts).
+ */
+export interface PlacedBox { shape: "box" | "box-tick" | "box-cross"; page: number; x: number; y: number; w: number; h: number; before: string }
+/** An empty table cell (fractions of the page) and the words printed before it ("... Date:"): where a value can be stamped later. */
+export interface PlacedBlank { page: number; x: number; y: number; w: number; h: number; before: string }
+interface DrawCtx { page: PDFPage; pageIndex: number; total: number; fields: PlacedField[]; sample: boolean; marks: PlacedMark[]; boxes: PlacedBox[]; blanks: PlacedBlank[] }
 interface Item {
   height: number; gap?: boolean; keep?: boolean; row?: boolean;
   draw(ctx: DrawCtx, x: number, top: number): void;
@@ -315,7 +330,39 @@ class Layout {
   readonly placed: Array<{ kind: "row"; page: number; top: number; bottom: number }> = [];
   private readonly fonts: Fonts;
   private readonly images: Map<string, PDFImage>;
+  /** The last words drawn (document order), for PlacedBox.before / PlacedBlank.before. */
+  private trail = "";
   constructor(fonts: Fonts, images: Map<string, PDFImage>) { this.fonts = fonts; this.images = images; }
+  private remember(text: string) { this.trail = `${this.trail} ${text}`.replace(/\s+/g, " ").slice(-120); }
+  /** Draws a ☐ ☑ ☒ ✓ ✗ as lines in the space of one character at `x` on `baseline`; a box is recorded in ctx.boxes. */
+  private drawShape(ctx: DrawCtx, shape: Shape, x: number, baseline: number, size: number, colour: ReturnType<typeof rgb>): void {
+    const page = ctx.page;
+    const side = size * 0.7, left = x + (size * SHAPE_EM - side) / 2, bottom = baseline - size * 0.04;
+    const thin = Math.max(0.5, size * 0.06), bold = Math.max(0.8, size * 0.1);
+    const tick = (l: number, b: number, s: number) => {
+      page.drawLine({ start: { x: l + s * 0.18, y: b + s * 0.5 }, end: { x: l + s * 0.42, y: b + s * 0.2 }, thickness: bold, color: colour });
+      page.drawLine({ start: { x: l + s * 0.42, y: b + s * 0.2 }, end: { x: l + s * 0.84, y: b + s * 0.82 }, thickness: bold, color: colour });
+    };
+    const cross = (l: number, b: number, s: number) => {
+      page.drawLine({ start: { x: l + s * 0.22, y: b + s * 0.22 }, end: { x: l + s * 0.78, y: b + s * 0.78 }, thickness: bold, color: colour });
+      page.drawLine({ start: { x: l + s * 0.22, y: b + s * 0.78 }, end: { x: l + s * 0.78, y: b + s * 0.22 }, thickness: bold, color: colour });
+    };
+    if (shape === "tick") { tick(left, bottom, side); return; }
+    if (shape === "cross") { cross(left, bottom, side); return; }
+    page.drawRectangle({ x: left, y: bottom, width: side, height: side, borderColor: colour, borderWidth: thin });
+    if (shape === "box-tick") tick(left, bottom, side);
+    if (shape === "box-cross") cross(left, bottom, side);
+    ctx.boxes.push({ shape, page: ctx.pageIndex + 1, x: left / DOC_PAGE_W, y: (DOC_PAGE_H - (bottom + side)) / DOC_PAGE_H, w: side / DOC_PAGE_W, h: side / DOC_PAGE_H, before: this.trail.trim() });
+  }
+  /** Segments drawn left to right from `x`: text in its font, shapes as lines. Returns the x after the last one. */
+  private drawSegs(ctx: DrawCtx, segs: Seg[], x: number, baseline: number, size: number, colour: ReturnType<typeof rgb>): number {
+    for (const s of segs) {
+      if (s.shape) this.drawShape(ctx, s.shape, x, baseline, size, colour);
+      else if (s.text.trim()) { ctx.page.drawText(s.text, { x, y: baseline, size, font: s.font, color: colour }); this.remember(s.text); }
+      x += s.width;
+    }
+    return x;
+  }
 
   private face(style: Style): PDFFont { const f = this.fonts.faces; return style.bold ? (style.italic ? f.bi : f.b) : style.italic ? f.i : f.r; }
   /** A text in segments of one font each: Arimo where it has the glyph, Noto Sans where only it has it, "?" (reported) otherwise. */
@@ -325,6 +372,8 @@ class Layout {
     const segs: Seg[] = [];
     for (const raw of text) {
       const cp = raw.codePointAt(0)!;
+      const shape = SHAPES[raw];
+      if (shape) { segs.push({ text: raw, font: face, width: 0, shape }); continue; }
       let ch = raw, font = face;
       if (raw === " ") ch = " ";
       else if (!this.fonts.sets.get(face)!.has(cp)) {
@@ -332,9 +381,9 @@ class Layout {
         else { const folded = raw.normalize("NFKD").replace(/[̀-ͯ]/g, ""); if (folded && [...folded].every((c) => this.fonts.sets.get(face)!.has(c.codePointAt(0)!))) ch = folded; else { this.unsupported.add(raw); ch = "?"; } }
       }
       const last = segs[segs.length - 1];
-      if (last && last.font === font) last.text += ch; else segs.push({ text: ch, font, width: 0 });
+      if (last && last.font === font && !last.shape) last.text += ch; else segs.push({ text: ch, font, width: 0 });
     }
-    for (const s of segs) s.width = s.font.widthOfTextAtSize(s.text, size);
+    for (const s of segs) s.width = s.shape ? size * SHAPE_EM : s.font.widthOfTextAtSize(s.text, size);
     return segs;
   }
   private sizeOf(style: Style) { return style.script ? style.size * 0.7 : style.size; }
@@ -456,8 +505,7 @@ class Layout {
     if (para.quote) page.drawLine({ start: { x: x0 + para.indent - 8, y: top }, end: { x: x0 + para.indent - 8, y: top - line.height }, thickness: 1.5, color: rgb(0.8, 0.8, 0.8) });
     if (first && para.marker) {
       const segs = this.segments(para.marker, line.pieces[0]?.style ?? plain, para.size);
-      let mx = x0 + para.indent - 5 - segs.reduce((n, s) => n + s.width, 0);
-      for (const s of segs) { page.drawText(s.text, { x: mx, y: baseline, size: para.size, font: s.font, color: rgb(0, 0, 0) }); mx += s.width; }
+      this.drawSegs(ctx, segs, x0 + para.indent - 5 - segs.reduce((n, s) => n + s.width, 0), baseline, para.size, rgb(0, 0, 0));
     }
     line.pieces.forEach((p, index) => {
       const colour = hexRgb(p.style.color);
@@ -472,19 +520,14 @@ class Layout {
         if (ctx.sample) {
           const label = p.field.field === "initials" ? "Initials" : p.field.label;
           const segs = this.segments(label, { ...p.style, italic: true }, Math.min(p.size, 8));
-          let lx = x + 2;
-          for (const s of segs) { page.drawText(s.text, { x: lx, y: baseline + 0.5, size: Math.min(p.size, 8), font: s.font, color: rgb(0.45, 0.45, 0.5) }); lx += s.width; }
+          this.drawSegs(ctx, segs, x + 2, baseline + 0.5, Math.min(p.size, 8), rgb(0.45, 0.45, 0.5));
         }
         ctx.fields.push({ label: p.field.field === "initials" ? p.field.label : tokenFieldLabel(p.field.label), type: p.field.field, page: ctx.pageIndex + 1,
           x: box.x / DOC_PAGE_W, y: (DOC_PAGE_H - (box.y + box.h)) / DOC_PAGE_H, w: Math.min(box.w, DOC_PAGE_W - box.x) / DOC_PAGE_W, h: box.h / DOC_PAGE_H });
       } else {
         let segs = p.segs;
         if (p.kind === "var" && p.varWhich) segs = this.segments(String(p.varWhich === "page" ? ctx.pageIndex + 1 : ctx.total), p.style, p.size);
-        let sx = x;
-        for (const s of segs) {
-          if (s.text.trim()) page.drawText(s.text, { x: sx, y: baseline + shift, size: p.size, font: s.font, color: colour });
-          sx += s.width;
-        }
+        this.drawSegs(ctx, segs, x, baseline + shift, p.size, colour);
         if (p.style.underline && textW > 0) page.drawLine({ start: { x, y: baseline - p.size * 0.12 }, end: { x: x + textW, y: baseline - p.size * 0.12 }, thickness: Math.max(0.5, p.size * 0.05), color: colour });
         if (p.style.strike && textW > 0) page.drawLine({ start: { x, y: baseline + p.size * 0.28 }, end: { x: x + textW, y: baseline + p.size * 0.28 }, thickness: Math.max(0.5, p.size * 0.05), color: colour });
         if (p.style.href && textW > 0) linkAnnotation(ctx, x, baseline - p.size * 0.25, textW, p.size * 1.15, p.style.href);
@@ -540,6 +583,8 @@ class Layout {
     const inner = c.items.reduce((n, it) => n + it.height, 0);
     const offset = c.cell.valign === "middle" ? (height - 2 * pad.v - inner) / 2 : c.cell.valign === "bottom" ? height - 2 * pad.v - inner : 0;
     let y = top - pad.v - offset;
+    const blank = c.cell.blocks.every((b) => b.kind === "para" && b.inlines.every((i) => i.t === "br" || (i.t === "text" && !i.text.trim())));
+    if (blank) ctx.blanks.push({ page: ctx.pageIndex + 1, x: (x0 + c.x) / DOC_PAGE_W, y: (DOC_PAGE_H - top) / DOC_PAGE_H, w: c.w / DOC_PAGE_W, h: height / DOC_PAGE_H, before: this.trail.trim() });
     for (const it of c.items) { it.draw(ctx, x0 + c.x + pad.h, y); y -= it.height; }
     const edge = (side: Side): Edge | null => c.cell.borders[side] !== undefined ? c.cell.borders[side]! : tableBorder ? { w: 0.5, color: BLACK } : null;
     const left = x0 + c.x, right = x0 + c.x + c.w, bottom = top - height;
@@ -632,6 +677,9 @@ export interface DocumentResult {
   placed: Array<{ kind: "row"; page: number; top: number; bottom: number }>;
   /** Where each missing {{variable}} printed. */
   marks: PlacedMark[];
+  /** Where each tick box was drawn, and each empty table cell (document order). */
+  boxes: PlacedBox[];
+  blanks: PlacedBlank[];
 }
 
 const imageSources = (html: string) => [...String(html ?? "").matchAll(/<img\b[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]).filter((src) => safeImageSrc(src) === src);
@@ -697,9 +745,10 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
 
   const total = pages.length;
   const fields: PlacedField[] = [];
+  const boxes: PlacedBox[] = [], blanks: PlacedBlank[] = [];
   pages.forEach((placed, index) => {
     const page = pdf.addPage([DOC_PAGE_W, DOC_PAGE_H]);
-    const ctx: DrawCtx = { page, pageIndex: index, total, fields, sample: !!input.sample, marks };
+    const ctx: DrawCtx = { page, pageIndex: index, total, fields, sample: !!input.sample, marks, boxes, blanks };
     if (headerBlocks.length) { let hy = DOC_PAGE_H - DOC_BAND; for (const it of layout.items(headerBlocks, width, { page: index + 1, total })) { it.draw(ctx, DOC_MARGIN_X, hy); hy -= it.height; } }
     for (const { item, top } of placed) item.draw(ctx, DOC_MARGIN_X, top);
     if (footerBlocks.length) {
@@ -709,5 +758,5 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
     }
   });
   const unsupported = layout.unsupported.size ? [...layout.unsupported].join("") : null;
-  return { bytes: await pdf.save({ useObjectStreams: true }), pages: total, fields, missing: [...(tokens?.missing ?? [])], unsupported, placed: layout.placed, marks };
+  return { bytes: await pdf.save({ useObjectStreams: true }), pages: total, fields, missing: [...(tokens?.missing ?? [])], unsupported, placed: layout.placed, marks, boxes, blanks };
 }

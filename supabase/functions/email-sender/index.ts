@@ -75,6 +75,19 @@ async function attachmentsFor(admin: any, d: Record<string, unknown>): Promise<{
     const ref = String(c.reference ?? "").replace(/[^\w.-]/g, "_") || "document";
     return { attachments: [{ Name: `${label}-${ref}.pdf`, Content: content, ContentType: "application/pdf" }], note: `The ${label} is attached as a PDF.` };
   }
+  if (d.event === "offer_deposit_paid") {
+    // The student's "Payment received" email carries the payment-confirmed copy of the signed letter (made by document-signing once the
+    // deposit is recorded): pending = still being made, the email waits a minute; missing / null = sent without it.
+    const { data, error } = await admin.rpc("notification_delivery_offer_payment_copy", { p_id: d.id, p_lease: d.lease_token });
+    if (error) return "retry";
+    if (!data || typeof data !== "object") return { attachments: [], note: "" };
+    const c = data as Record<string, unknown>;
+    if (c.pending === true) return "retry";
+    const size = Number(c.sizeBytes ?? 0), content = String(c.contentBase64 ?? "");
+    if (c.missing === true || !(size > 0 && size <= MAX_ATTACHMENT) || !content) return { attachments: [], note: "" };
+    const name = String(c.fileName ?? "Offer letter - signed - payment confirmed.pdf");
+    return { attachments: [{ Name: (/\.pdf$/i.test(name) ? name : `${name}.pdf`).replace(/[^\w .()-]/g, "_"), Content: content, ContentType: "application/pdf" }], note: "Your signed offer letter, now showing the payment, is attached as a PDF." };
+  }
   return { attachments: [], note: "" };
 }
 

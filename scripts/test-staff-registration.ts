@@ -273,6 +273,36 @@ test("document PDF: the header and footer repeat on every page with the right pa
   assert.deepEqual([literal.fields.length, (await pdfText(literal.bytes)).some((t) => t.text.includes("[Guardian Name]"))], [0, true]);
 });
 
+test("offer letter ADMIN USE ONLY: boxes are drawn (never \"?\"), ACCEPTED ticked at signing, Yes + date only on the payment copy", async () => {
+  const layout = await load.import<typeof import("../src/lib/offerSigningLayout.ts")>("../src/lib/offerSigningLayout.ts");
+  const td = (t: string) => `<td style="border:1px solid #808080"><p>${t}</p></td>`;
+  const body = `<p>Student Signature</p><table><tr><td colspan="7"><p><strong>ADMIN USE ONLY</strong></p></td></tr>`
+    + `<tr>${td("<strong>Offer</strong>")}${td("ACCEPTED")}${td("☐")}${td("DEFERRED")}${td("☐")}${td("DECLINED")}${td("☐")}</tr>`
+    + `<tr>${td("<strong>Payment made</strong>")}${td("Yes")}${td("☐")}${td("No")}${td("☐")}${td("Date:")}<td style="border:1px solid #808080"></td></tr></table>`
+    + `<p>Inline ☑ ☒ ✓ ✔ ✗ ✘</p>`;
+  const made = await documentPdf.buildDocumentPdf({ title: "Letter", body, values: {}, brackets: false });
+  assert.equal(made.unsupported, null, "tick boxes and ticks are shapes, not characters a font lacks");
+  assert.ok(!(await pdfText(made.bytes)).some((t) => /[?☐-☒✓-✘]/.test(t.text)), "no \"?\" and no box character in the text layer");
+  assert.deepEqual(made.boxes.map((b) => b.shape), ["box", "box", "box", "box", "box", "box-tick", "box-cross"]);
+  assert.equal(made.blanks.length, 1);
+  const admin = layout.adminTableFields({ boxes: made.boxes, blanks: made.blanks });
+  assert.deepEqual(admin.map((f) => [f.type, f.label]), [["checkbox", "Offer accepted"], ["checkbox", "Payment made"], ["text", "Payment date"]], "nothing on DEFERRED, DECLINED or No");
+  const accepted = made.boxes[0];
+  assert.deepEqual([admin[0].page, admin[0].x, admin[0].y], [accepted.page, +accepted.x.toFixed(5), +accepted.y.toFixed(5)], "the field is the drawn box");
+  assert.deepEqual(layout.adminTableFields(null), []);
+  // PDF #1: what signing stamps (hr.sign_auto_value with no payment): ACCEPTED ticked, the payment boxes and the date empty.
+  const atSigning = (f: (typeof admin)[number]) => f.label === "Offer accepted" ? "true" : f.label === "Payment made" ? "false" : "";
+  const recipients = [{ id: "r1", role: "Student", name: "S", email: "s@example.com", state: "signed", signer_name: "S", signature_kind: "typed", signature_image: null, signed_at: "2026-11-21T01:00:00Z" }];
+  const signed = await signingPdf.stampDocument(made.bytes, { reference: "SLIT-T", title: "Letter", recipients,
+    fields: [{ recipient_id: "r1", type: "signature", page: 1, x: 0.4, y: 0.05, w: 0.3, h: 0.04, value: "signed", done: true }, ...admin.map((f) => ({ ...f, recipient_id: "r1", value: atSigning(f), done: true }))] });
+  assert.ok(!(await pdfText(signed)).some((t) => /\d\d\/\d\d\/\d{4}/.test(t.text)), "no payment date on the signed letter");
+  // PDF #2: the payment copy (document-signing offer_payment_copy): the signed bytes unchanged at the start, Yes ticked, the date printed.
+  const copy = await signingPdf.stampDocument(signed, { reference: "SLIT-T", title: "Letter", recipients: [], incremental: true,
+    fields: admin.filter((f) => f.label !== "Offer accepted").map((f) => ({ ...f, recipient_id: null, value: f.type === "checkbox" ? "true" : "21/11/2026", done: true })) });
+  assert.ok(copy.length > signed.length && Buffer.from(copy.subarray(0, signed.length)).equals(Buffer.from(signed)), "the signed letter is the copy's first bytes");
+  assert.ok((await pdfText(copy)).some((t) => t.text === "21/11/2026"), "the paid date is printed");
+});
+
 /** A small .docx made here (no file on disk): a heading, a token Word split across a bold run, a fee table with a token in a cell. */
 async function sampleDocx(): Promise<Uint8Array> {
   const { zipSync, strToU8 } = await import("fflate");

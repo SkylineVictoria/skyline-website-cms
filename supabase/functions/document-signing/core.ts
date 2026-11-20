@@ -573,6 +573,26 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`) };
     }
 
+    // ------------------------------------------------------------------ an offer letter's payment-confirmed copy (service role only, queued by the database)
+    // 2026-11-21: once the deposit is recorded, the signed letter with "Payment made: Yes" ticked and the paid date printed in its ADMIN USE
+    // ONLY table, appended as an incremental update: the signed letter's bytes stay the copy's first bytes (the database refuses anything
+    // else), so the signature, the signing date and every word are those of the signed letter. Made once; a repeated call stores nothing.
+    if (action === "offer_payment_copy") {
+      if (!ports.isServiceCaller || !ports.serviceRpc) throw new SigningError("Not available.", 403);
+      const letterId = String(body.letterId ?? "");
+      if (!UUID.test(letterId)) throw new SigningError("Choose an offer letter.");
+      const source = await ports.serviceRpc("offer_letter_payment_copy_source", { p_letter: letterId }) as {
+        ready: boolean; reason?: string; reference: string; title: string; signedSha256: string | null; signedBase64: string;
+        fields: Array<{ type: string; page: number; x: number; y: number; w: number; h: number; label: string; value: string }> };
+      if (!source?.ready) return { made: false, reason: source?.reason ?? "not_ready" };
+      const signed = Uint8Array.from(atob(source.signedBase64), (c) => c.charCodeAt(0));
+      if (source.signedSha256 && await sha256Hex(signed) !== source.signedSha256) throw new SigningError("The signed letter does not match its recorded hash.");
+      const fields = source.fields.map((f) => ({ recipient_id: null, type: f.type, page: Number(f.page), x: Number(f.x), y: Number(f.y), w: Number(f.w), h: Number(f.h), value: f.value, done: true, label: f.label }));
+      const copy = fields.length ? await (await signingPdfModule()).stampDocument(signed, { reference: source.reference, title: source.title, fields, recipients: [], incremental: true }) : signed;
+      const stored = await ports.serviceRpc("offer_letter_payment_copy_store", { p_letter: letterId, p_content: toBase64(copy), p_sha256: await sha256Hex(copy) }) as { stored: boolean; already?: boolean };
+      return { made: stored?.stored === true, already: stored?.already === true, bytes: copy.length, marks: fields.length };
+    }
+
     // ------------------------------------------------------------------ an application form's follow-up (service role only, queued by the database)
     // 2026-11-20, CPU budget: the work after the agency admin's one signature, in calls of its own. "split": the combined signed document
     // becomes the application form and the agreement, then "after_application" is queued; "after_application": the referee checks, the

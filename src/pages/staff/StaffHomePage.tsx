@@ -16,6 +16,7 @@ import { myDocumentUrl, myOfferApi, myOnboarding, type MyOnboarding } from "@/li
 import { STAFF_DOC_LABEL, type StaffDocCategory } from "@/lib/staffStatus";
 import { JOB_TYPE_LABEL, PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template";
 import MySigningDocuments from "@/components/signing/MySigningDocuments";
+import TodayClasses from "@/components/timetable/TodayClasses";
 
 /**
  * /staff: "My HR" for a signed-in staff member (HR-02f): profile, role and joining date, current documents with their expiry,
@@ -155,6 +156,7 @@ export default function StaffHomePage() {
         ) : null}
         {me && me.status === "active" && p ? (
           <>
+            <TodayClasses className="mt-6" />
             {team && (team.isManager || team.isAdmin) ? (
               <p className="mt-4 flex flex-wrap gap-3 text-sm" data-testid="my-hr-team-links">
                 <Link to="/staff/team/timesheets" className="font-semibold text-primary-700 hover:underline">Team timesheets</Link>

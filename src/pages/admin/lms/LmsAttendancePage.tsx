@@ -49,8 +49,11 @@ export default function LmsAttendancePage() {
   // A student who joined late or is carried over from an earlier intake is on the roll only for the units they take in this intake.
   const students=useMemo(()=>batch?.batch.students.filter(s=>(s.status==="active"||s.status==="deferred")&&(!s.path||!unitId||s.path.unitIds.includes(unitId)))??[],[batch,unitId]);
   useEffect(()=>{setMarks({});setState("new");setMessage("");if(!batchId||!unitId||!date)return;let live=true;
-    supabase.rpc("lms_attendance",{p_action:"get",p_batch_id:batchId,p_unit_id:unitId,p_class_date:date}).then(({data,error})=>{if(!live)return;if(error)setError(error.message);else{const row=data as {state:string;marks:Record<string,Mark>};setState(row.state);setMarks(row.marks??{});}});
-    return()=>{live=false;};},[batchId,unitId,date]);
+    // rule-policy: technical register-read Loads the stored register through the existing lms_attendance RPC.
+    supabase.rpc("lms_attendance",{p_action:"get",p_batch_id:batchId,p_unit_id:unitId,p_class_date:date}).then(({data,error})=>{if(!live)return;if(error)setError(error.message);else{const row=data as {state:string;marks:Record<string,Mark>};setState(row.state);
+      // rule-policy: technical ui-prefill A new register for today or earlier is pre-filled Present on screen only; saving still goes through lms_attendance checks.
+      setMarks(row.state==="new"&&date<=today()?Object.fromEntries(students.map(s=>[s.enrolmentId,"present" as Mark])):row.marks??{});}});
+    return()=>{live=false;};},[batchId,unitId,date,students]);
   useEffect(()=>{if(!batchId||mode!=="history")return;let live=true;
     supabase.rpc("lms_attendance",{p_action:"history",p_batch_id:batchId}).then(({data,error})=>{if(!live)return;if(error)setError(error.message);else setHistory((data??[]) as History[]);});
     return()=>{live=false;};},[batchId,mode,state]);
@@ -104,6 +107,8 @@ export default function LmsAttendancePage() {
               </label>
               <button type="button" disabled={!batch.rtoManager} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100 disabled:opacity-50" onClick={()=>setMarks(Object.fromEntries(students.map(s=>[s.enrolmentId,"present" as Mark])))}>Mark all present</button>
             </div>
+            {/* // rule-policy: technical prefill-hint Explains the on-screen pre-fill of a new register. */}
+            {state==="new"&&students.length>0&&date<=today()?<p className="mt-3 rounded-lg bg-primary-50 px-3 py-2 text-xs text-primary-900">Everyone starts as Present. Change only the students who are absent, late or excused, then Save attendance.</p>:null}
             <div className="mt-3 max-h-[490px] overflow-y-auto">{!students.length?<p className="py-10 text-center text-sm text-foreground-500">No active students take this unit in this intake.</p>:students.filter(s=>s.name.toLowerCase().includes(studentSearch.toLowerCase())).map(s=><div key={s.enrolmentId} className="flex flex-wrap items-center justify-between gap-2 border-b border-background-100 px-3 py-2 hover:bg-background-100">
               <p className="min-w-0 truncate text-sm font-semibold text-foreground-950">{s.name}</p>
               <div className="flex flex-wrap gap-1">{statuses.map(st=><label key={st} className={"cursor-pointer rounded-full px-2.5 py-1 text-xs font-semibold capitalize has-[:disabled]:cursor-default has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary-400 "+(marks[s.enrolmentId]===st?markClass[st]+" ring-1":"text-foreground-500 hover:bg-background-200")}><input type="radio" className="sr-only" name={s.enrolmentId} value={st} checked={marks[s.enrolmentId]===st} disabled={!batch.rtoManager||busy} onChange={()=>setMarks(prev=>({...prev,[s.enrolmentId]:st}))}/>{st}</label>)}</div>

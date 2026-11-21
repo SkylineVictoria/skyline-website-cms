@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import TrainerAttendanceDialog from "@/components/timetable/TrainerAttendanceDialog";
+import TodayClasses from "@/components/timetable/TodayClasses";
 
 type Session = { id: string; date: string; start: string; end: string; type: string; status: string; batchName: string; courseName: string; courseCode: string;
   unitCode: string | null; unitName: string | null; room: string | null; campus: string | null; trainers: string; prerequisite?: boolean };
@@ -36,6 +37,7 @@ export default function ClassTimetable({ who }: { who: "student" | "trainer" }) 
 
   return (
     <div>
+      {who === "trainer" ? <TodayClasses className="mb-5" /> : null}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="font-heading text-lg font-semibold text-foreground-950">Week of {start.toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}</p>
         <div className="flex gap-2">

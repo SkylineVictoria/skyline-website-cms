@@ -8,7 +8,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { DangerDialog } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
-import TrainingGovBulkSync from "./TrainingGovBulkSync";
+import TrainingGovBulkSync from "@/pages/admin/components/rto/TrainingGovBulkSync";
 import LmsUnitsPage from "./LmsUnitsPage";
 import UnitHoursEditor from "./UnitHoursEditor";
 import StartDateBreaksEditor from "./StartDateBreaksEditor";
@@ -62,7 +62,7 @@ async function fillCricos(courseId: string, r: SyncResult): Promise<string> {
     const weeks = lookup.fields.cricos_duration_weeks;
     const detail = await rto<CourseDetail>("course_get", { courseId });
     if (!detail.course.duration?.trim() && typeof weeks === "number") await rto("course_save", { courseId, duration: `${weeks} weeks` });
-    return "CRICOS: filled from " + code + " (fees, duration, institution, locations)." + (lookup.warnings.length ? " " + lookup.warnings.join(" ") : "");
+    return `CRICOS: filled from ${code} (fees, duration, institution, locations).` + (lookup.warnings.length ? " " + lookup.warnings.join(" ") : "");
   } catch (e) {
     return `CRICOS: registered as ${code}, but it could not be filled automatically (${e instanceof Error ? e.message : "error"}). Use Edit › Fetch from CRICOS.`;
   }
@@ -321,7 +321,7 @@ export default function LmsCoursesPage() {
   }, [canEdit, load, selectedId, syncing]);
   const campuses = useMemo(() => Array.from(new Set(courses.map(c => c.campus).filter((x): x is string => !!x))).sort(), [courses]);
   const visible = useMemo(() => courses.filter(c =>
-    (!activeOnly || c.isActive) && (!campus || c.campus === c.campus) &&
+    (!activeOnly || c.isActive) && (!campus || c.campus === campus) &&
     (c.label + " " + c.code).toLowerCase().includes(query.trim().toLowerCase())
   ), [courses, query, campus, activeOnly]);
   const selected = courses.find(c => c.id === selectedId);
@@ -392,7 +392,7 @@ export default function LmsCoursesPage() {
     { id: "coeDaily", label: "CoE Daily Timetable" }, { id: "voeDaily", label: "VoE Daily Timetable" }] as const;
   /** The wizard is unfinished until both weekly calendars are saved and the weekly classes are booked. */
   const wizardUnfinished = !!(canEdit && selected && detail && masterSaved !== null && (masterSaved === false || voeSaved === false || !classesDone));
-  const menuItem = "flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
+  const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   const pane: Pane = tab === "master" || tab === "voe" || tab === "prereq" || tab === "coeDaily" || tab === "voeDaily" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
@@ -486,7 +486,7 @@ export default function LmsCoursesPage() {
           {campuses.length ? <select aria-label="Campus" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={campus} onChange={e => setCampus(e.target.value)}>
             <option value="">All campuses</option>{campuses.map(x => <option key={x} value={x}>{x}</option>)}
           </select> : null}
-          <span className="ml-auto text-foreground-500">{visible.length} course{visible.length === 0 ? "" : "s"}</span>
+          <span className="ml-auto text-foreground-500">{visible.length} course{visible.length === 1 ? "" : "s"}</span>
         </div>
         <div className="mt-3 max-h-[70vh] space-y-1 overflow-auto">
           {loading ? <p className="p-3 text-sm text-foreground-500">Loading…</p> : visible.length === 0 ? <p className="p-3 text-sm text-foreground-500">No matching courses.</p> : visible.map(c =>

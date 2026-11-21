@@ -10,7 +10,7 @@ export interface ReviewStep {
 }
 
 /** The one line shown under a complete step's title: its first two filled answers. */
-const summaryOf = (step: ReviewStep) => step.rows.map((row) => row.value.trim()).filter((value) => value && value !== "—").slice(0, 2).join(" · ");
+const summaryOf = (step: ReviewStep) => step.rows.map((row) => String(row.value ?? "").trim()).filter((value) => value && value !== "—").slice(0, 2).join(" · ");
 
 export interface ReviewGroup { key: string; title: string; steps: ReviewStep[] }
 

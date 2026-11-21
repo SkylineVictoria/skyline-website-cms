@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src --ext ts,tsx --report-unused-disable-disable-directives --max-warnings 0",
+    "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "type-check": "tsc --noEmit --project tsconfig.app.json",
     "test:document-extraction": "jiti scripts/test-document-extraction.ts",
     "test:document-provider": "jiti scripts/test-document-provider.ts",

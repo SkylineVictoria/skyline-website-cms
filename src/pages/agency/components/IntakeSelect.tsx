@@ -123,8 +123,9 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   // Course first, then CoE or VoE (only asked when the course has both), then the next three starts of that kind.
   const loadsOffered = (["coe", "voe"] as const).filter((l) => intakes.some((i) => !i.fallback && i.studyLoad === l));
   const selected = intakes.find((i) => keyOf(i) === value);
-  const load = loadsOffered.length === 1 ? loadsOffered[0] : (pickedLoad ?? selected?.studyLoad ?? null);
-  const needsLoad = loadsOffered.length > 1 && !load;
+  // CoE or VoE is always asked (never chosen for the student); a kind with no intake is shown but cannot be picked.
+  const load = pickedLoad ?? selected?.studyLoad ?? null;
+  const needsLoad = loadsOffered.length > 0 && !load;
   const shown = (() => {
     if (fallbackOnly(intakes) || loadsOffered.length === 0) return intakes;
     if (!load) return [];
@@ -140,15 +141,15 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : calendarMode ? (needsLoad ? "Choose CoE or VoE to see the start dates." : "Pick the date you want to start. Check the weekly timetable under each month to make sure the times suit you.") : courseId ? "The next three start dates of each intake are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
   return (
     <div>
-      {loadsOffered.length > 1 ? (
+      {loadsOffered.length > 0 && !fallbackOnly(intakes) ? (
         <div className="mb-2" role="radiogroup" aria-label="CoE or VoE" data-testid="intake-load">
           <p className="mb-1 text-xs font-medium text-foreground-700">How will the student study?</p>
           <div className="grid grid-cols-2 gap-2">
-            {loadsOffered.map((l) => (
-              <button key={l} type="button" role="radio" aria-checked={load === l} disabled={disabled}
+            {(["coe", "voe"] as const).map((l) => (
+              <button key={l} type="button" role="radio" aria-checked={load === l} disabled={disabled || !loadsOffered.includes(l)} title={loadsOffered.includes(l) ? undefined : `No ${LOAD_LABEL[l]} intake is open for this course`}
                 onClick={() => { setPickedLoad(l); if (selected && selected.studyLoad !== l) onChange(null); }}
-                className={`rounded-lg border-2 px-3 py-2 text-left text-sm ${load === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
-                {LOAD_LABEL[l]}
+                className={`rounded-lg border-2 px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${load === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
+                {LOAD_LABEL[l]}{loadsOffered.includes(l) ? "" : " · no intake open"}
               </button>
             ))}
           </div>

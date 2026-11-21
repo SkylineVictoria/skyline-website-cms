@@ -34,13 +34,13 @@ const TABS: { id: SheetTab; label: string }[] = [
 ];
 const active = (s: BatchStudent) => s.status === "active" || s.status === "deferred";
 
-export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "overview", startAddBatch = false, wizard = false, onClose, onChanged, onDuplicate, onDelete }: {
+export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "overview", startAddBatch = false, wizard = false, onClose, onChanged, onDelete }: {
   intakeId: string; canEdit: boolean; canEnrol: boolean; startTab?: SheetTab;
   /** Opens the class setup drawer at once. */
   startAddBatch?: boolean;
   /** New course wizard, step 5 (class setup of the intake), straight after its first intake is created. Students are never added here. */
   wizard?: boolean;
-  onClose: () => void; onChanged: () => void; onDuplicate: (i: RtoIntake) => void; onDelete: (i: RtoIntake) => void;
+  onClose: () => void; onChanged: () => void; onDelete: (i: RtoIntake) => void;
 }) {
   const { push } = useToast();
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
@@ -111,7 +111,6 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
             ) : <div className="h-14 w-64 animate-pulse rounded bg-background-200 motion-reduce:animate-none" />}
           </div>
           {i && canEdit ? <MoreMenu label="More actions" items={[
-            { label: "Duplicate…", icon: "ri-file-copy-line", onClick: () => onDuplicate(i) },
             { label: "Delete intake…", icon: "ri-delete-bin-line", danger: true, onClick: () => onDelete(i) },
           ]} /> : null}
           <button type="button" onClick={onClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-md text-foreground-500 hover:bg-background-200"><i className="ri-close-line text-xl" aria-hidden="true" /></button>

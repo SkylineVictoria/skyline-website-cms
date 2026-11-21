@@ -18,8 +18,7 @@ import {
 import { detailRequired, portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
-import { forgetIntakes, intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
-import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
+import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
 import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
@@ -160,7 +159,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // Staff: the courses of Learning Management (rto_admin course_list, every status) by their CMS id; RTO Managers may add an intake from here.
   const [staffCourses, setStaffCourses] = useState<RtoCourse[] | null>(null);
   const [rtoManager, setRtoManager] = useState(false);
-  const [intakeDrawer, setIntakeDrawer] = useState(false);
   const [intakeReload, setIntakeReload] = useState(0);
   /** The intake just created from the wizard: chosen as soon as the re-read list holds it. */
   const pendingIntake = useRef<string | null>(null);
@@ -531,13 +529,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (created) { setIntake(created); pendingIntake.current = null; }
   };
   const currentCourseId = answers.course ? courseIdOf(answers.course) : null;
-  /** The intake the RTO Manager just created: the list is read again from the database and the new one chosen; the wizard keeps everything else. */
-  const intakeCreated = (intakeId: string) => {
-    setIntakeDrawer(false);
-    if (currentCourseId) forgetIntakes(currentCourseId);
-    pendingIntake.current = intakeId;
-    setIntakeReload((n) => n + 1);
-  };
 
   /** Checks the screen's answers and saves them to the draft; false when something is missing or the save failed. */
   const saveAnswers = async (target: WizardQuestion): Promise<boolean> => {
@@ -659,15 +650,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         <>
           <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
             <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
-              onIntake={setIntake} onIntakesLoaded={intakesLoaded}
-              canAddIntake={rtoManager && Boolean(staffCourses)} onAddIntake={() => { if (currentCourseId) setIntakeDrawer(true); }} intakeReload={intakeReload} />
+              onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} />
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>
-          {/* The same New intake drawer as Learning Management › Intakes, over the wizard, locked to the chosen course; the wizard's state stays. */}
-          {rtoManager && currentCourseId ? (
-            <NewIntakeDrawer open={intakeDrawer} onClose={() => setIntakeDrawer(false)} courses={[]} courseId={currentCourseId} allowBatch={false} zIndex="z-[100]"
-              onCreated={(detail) => intakeCreated(detail.intake.id)} />
-          ) : null}
         </>
       );
     }

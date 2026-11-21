@@ -28,31 +28,44 @@ function IntakeCalendar({ intakeId, joinDate }: { intakeId: string; joinDate?: s
     });
     return () => { live = false; };
   }, [open, units, intakeId]);
-  const months = new Map<string, CalendarUnit[]>();
-  for (const u of units ?? []) { const k = u.startDate.slice(0, 7); months.set(k, [...(months.get(k) ?? []), u]); }
+  // One month at a time (arrows), starting at the month the student joins: the units running in that month.
+  const monthsWithUnits = [...new Set((units ?? []).flatMap(u => {
+    const out: string[] = []; let [y, m] = u.startDate.split("-").map(Number); const [ey, em] = (u.endDate ?? u.startDate).split("-").map(Number);
+    while (y < ey || (y === ey && m <= em)) { out.push(`${y}-${String(m).padStart(2, "0")}`); m++; if (m > 12) { m = 1; y++; } }
+    return out;
+  }))].sort();
+  const firstMonth = (joinDate ?? units?.[0]?.startDate ?? "").slice(0, 7);
+  const [month, setMonth] = useState("");
+  useEffect(() => { setMonth(""); }, [intakeId]);
+  const current = monthsWithUnits.includes(month) ? month : monthsWithUnits.includes(firstMonth) ? firstMonth : monthsWithUnits[0] ?? "";
+  const at = monthsWithUnits.indexOf(current);
+  const inMonth = (units ?? []).filter(u => u.startDate.slice(0, 7) <= current && (u.endDate ?? u.startDate).slice(0, 7) >= current);
   const monthName = (k: string) => new Date(`${k}-01T00:00:00Z`).toLocaleDateString("en-AU", { month: "long", year: "numeric", timeZone: "UTC" });
+  const arrow = "flex h-7 w-7 items-center justify-center rounded-md border border-background-300 text-foreground-700 hover:bg-background-100 disabled:opacity-40";
   return (
     <div className="mt-2">
       <button type="button" onClick={() => setOpen(o => !o)} className="text-xs font-semibold text-primary-700 underline underline-offset-2" data-testid="intake-calendar-toggle">
         {open ? "Hide the full calendar" : "View the full calendar"}
       </button>
       {open ? (
-        <div className="mt-2 max-h-80 overflow-y-auto rounded-lg border border-background-200 bg-background-50 p-3 text-sm" data-testid="intake-calendar">
+        <div className="mt-2 rounded-lg border border-background-200 bg-background-50 p-3 text-sm" data-testid="intake-calendar">
           {failed ? <p className="text-primary-700">The calendar could not be loaded.</p> : !units ? <p className="text-foreground-500">Loading…</p>
-            : units.length === 0 ? <p className="text-foreground-500">No unit dates are published for this intake yet.</p>
-            : [...months].map(([k, list]) => (
-              <div key={k} className="mb-3 last:mb-0">
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">{monthName(k)}</p>
-                <ul className="space-y-1">
-                  {list.map(u => (
-                    <li key={`${u.unitCode}-${u.startDate}`} className={`flex flex-wrap justify-between gap-x-3 rounded px-2 py-1 ${joinDate === u.startDate ? "bg-primary-50 font-medium text-primary-800" : "text-foreground-700"}`}>
-                      <span>{u.unitCode} {u.unitName}{joinDate === u.startDate ? " · you start here" : ""}</span>
-                      <span className="text-foreground-500">{day(u.startDate)}{u.endDate ? ` – ${day(u.endDate)}` : ""}{u.hours ? ` · ${u.hours} h` : ""}</span>
-                    </li>
-                  ))}
-                </ul>
+            : monthsWithUnits.length === 0 ? <p className="text-foreground-500">No unit dates are published for this intake yet.</p>
+            : <>
+              <div className="mb-2 flex items-center justify-between">
+                <button type="button" className={arrow} disabled={at <= 0} onClick={() => setMonth(monthsWithUnits[at - 1])} aria-label="Previous month"><i className="ri-arrow-left-s-line" aria-hidden="true" /></button>
+                <p className="text-sm font-semibold text-foreground-800" data-testid="intake-calendar-month">{monthName(current)}</p>
+                <button type="button" className={arrow} disabled={at >= monthsWithUnits.length - 1} onClick={() => setMonth(monthsWithUnits[at + 1])} aria-label="Next month"><i className="ri-arrow-right-s-line" aria-hidden="true" /></button>
               </div>
-            ))}
+              <ul className="space-y-1">
+                {inMonth.map(u => (
+                  <li key={`${u.unitCode}-${u.startDate}`} className={`flex flex-wrap justify-between gap-x-3 rounded px-2 py-1 ${joinDate === u.startDate ? "bg-primary-50 font-medium text-primary-800" : "text-foreground-700"}`}>
+                    <span>{u.unitCode} {u.unitName}{joinDate === u.startDate ? " · you start here" : ""}</span>
+                    <span className="text-foreground-500">{day(u.startDate)}{u.endDate ? ` – ${day(u.endDate)}` : ""}{u.hours ? ` · ${u.hours} h` : ""}</span>
+                  </li>
+                ))}
+              </ul>
+            </>}
         </div>
       ) : null}
     </div>

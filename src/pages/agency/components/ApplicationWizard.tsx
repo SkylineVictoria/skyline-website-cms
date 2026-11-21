@@ -511,6 +511,15 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   // null until the list has loaded; an empty list means no course is open for applications.
   const courseLabels: string[] | null = staffCourses ? staffCourses.map(staffCourseLabel) : institutionCourses ? institutionCourses.map((course) => `${course.code} - ${course.title}`) : null;
+  // A course saved on the draft that is no longer on offer (or is listed under another label) is not kept silently: the same course is
+  // matched by its code, otherwise the choice is cleared so the student picks again (instead of an error on Next).
+  useEffect(() => {
+    if (!courseLabels || !answers.course || courseLabels.includes(answers.course)) return;
+    const code = answers.course.split(" - ")[0].trim().toUpperCase();
+    const same = courseLabels.find((label) => label.split(" - ")[0].trim().toUpperCase() === code);
+    setAnswers((prev) => ({ ...prev, course: same ?? "", ...(same ? {} : { preferred_intake: "", intake_id: "", intake_join_date: "" }) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the offered list or the chosen course changes
+  }, [courseLabels?.join("|"), answers.course]);
   const institutionCourseOf = (label: string) => institutionCourses?.find((item) => `${item.code} - ${item.title}` === label) ?? null;
   const staffCourseOf = (label: string) => staffCourses?.find((c) => staffCourseLabel(c) === label) ?? null;
   const setAnswer = (name: string, value: string) => {

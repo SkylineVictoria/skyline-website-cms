@@ -332,10 +332,15 @@ export default function LmsCoursesPage() {
     }
   };
   /** The top button while the wizard is unfinished: carries on with the wizard at the CoE daily timetable (owner, 2026-11-21). */
+  /** The top button carries on with the next unfinished wizard step, in order: units, hours, CoE weekly, VoE weekly, then the daily timetables. */
   const finishWithWizard = () => {
     if (!selected) return;
-    if (masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); return; }
-    setTab("coeDaily"); void openClasses(selected.id, "coe");
+    const courseId = selected.id;
+    if (!units.length) { setTab("units"); setWizard({ courseId, step: "units" }); return; }
+    if (slit.some(h => !h?.confirmed)) { setWizard({ courseId, step: "hours" }); return; }
+    if (masterSaved === false) { setTab("master"); setWizard({ courseId, step: "master" }); return; }
+    if (voeSaved === false) { setTab("voe"); setWizard({ courseId, step: "voe" }); return; }
+    setTab("coeDaily"); void openClasses(courseId, "coe");
   };
   const continueSetup = () => {
     if (!selected || !setupStep || setupStep === "done") return;

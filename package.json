@@ -18,6 +18,7 @@
     "test:portal-document-attachments": "jiti scripts/test-portal-document-attachments.ts",
     "test:e2e": "playwright test",
     "test:staff-registration": "jiti scripts/test-staff-registration.ts",
+    "test:office365-groups": "jiti scripts/test-office365-groups.ts",
     "test:public-assistant": "node scripts/test-public-assistant.mjs",
     "test:public-assistant:local-acceptance": "node scripts/test-public-assistant-local-acceptance.mjs",
     "test:public-assistant:integration": "node scripts/lab/hosted-guard.mjs -- npx supabase test db supabase/tests/public_assistant_integration.sql",

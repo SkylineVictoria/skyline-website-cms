@@ -7,7 +7,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 export interface OpenIntake {
   id: string | null; courseId: string; startDate: string; endDate: string | null; name: string; display: string; fallback?: boolean; running?: boolean;
   /** JOIN-AT-UNIT (owner, 2026-11-20): one entry per upcoming start: the day the student joins (a unit start, or the intake's day one). */
-  joinDate?: string; unitCode?: string; unitName?: string; firstDay?: boolean; prereqFirst?: boolean; option?: string;
+  joinDate?: string; studyLoad?: "coe" | "voe"; unitCode?: string; unitName?: string; firstDay?: boolean; prereqFirst?: boolean; option?: string;
 }
 
 /** The dropdown value of an intake: its id, or its label for a fallback month (which has no intake row). */

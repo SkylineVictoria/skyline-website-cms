@@ -59,6 +59,10 @@ function IntakeCalendar({ intakeId, joinDate }: { intakeId: string; joinDate?: s
   );
 }
 
+const UPCOMING_STARTS = 3;
+const fallbackOnly = (list: OpenIntake[]) => list.length > 0 && list.every((i) => i.fallback);
+const LOAD_LABEL = { coe: "CoE", voe: "VoE" } as const;
+
 /**
  * The intake dropdown of the enrolment form (INT-01): the open intakes of the chosen course, loaded from the database, or, for a
  * course without published intakes, the start months the database offers instead (so enrolment never stops). Without a course it is
@@ -71,10 +75,12 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   onLoaded?: (intakes: OpenIntake[]) => void; error?: string; disabled?: boolean; className: string;
   canAdd?: boolean; onAdd?: () => void; reloadToken?: number;
 }) {
+  const [pickedLoad, setPickedLoad] = useState<"coe" | "voe" | null>(null);
   const [state, setState] = useState<{ course: string; intakes: OpenIntake[] | null; failed: string }>({ course: "", intakes: null, failed: "" });
   useEffect(() => {
     if (!courseId) { setState({ course: "", intakes: null, failed: "" }); return; }
     let live = true;
+    setPickedLoad(null);
     setState({ course: courseId, intakes: null, failed: "" });
     openIntakes(courseId).then((list) => { if (live) { setState({ course: courseId, intakes: list, failed: "" }); onLoaded?.(list); } })
       .catch((e: Error) => { if (live) setState({ course: courseId, intakes: null, failed: e.message }); });
@@ -86,15 +92,41 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   const none = Boolean(courseId) && state.intakes !== null && intakes.length === 0;
   const fallback = intakes.length > 0 && intakes.every((i) => i.fallback);
   const keyOf = (i: OpenIntake) => intakeKey(i.id, i.display, i.joinDate);
+  // Course first, then CoE or VoE (only asked when the course has both), then the next three starts of that kind.
+  const loadsOffered = (["coe", "voe"] as const).filter((l) => intakes.some((i) => !i.fallback && i.studyLoad === l));
+  const selected = intakes.find((i) => keyOf(i) === value);
+  const load = loadsOffered.length === 1 ? loadsOffered[0] : (pickedLoad ?? selected?.studyLoad ?? null);
+  const needsLoad = loadsOffered.length > 1 && !load;
+  const shown = (() => {
+    if (fallbackOnly(intakes) || loadsOffered.length === 0) return intakes;
+    if (!load) return [];
+    const ofLoad = intakes.filter((i) => i.studyLoad === load).sort((a, b) => (a.joinDate ?? a.startDate).localeCompare(b.joinDate ?? b.startDate));
+    const top = ofLoad.slice(0, UPCOMING_STARTS);
+    return selected && ofLoad.includes(selected) && !top.includes(selected) ? [...top, selected] : top;
+  })();
   const addable = canAdd && Boolean(courseId) && !loading && !state.failed && Boolean(onAdd);
-  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : courseId ? "Each date is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
+  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : courseId ? "The next three start dates are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
   return (
     <div>
-      <select id={id} value={intakes.some((i) => keyOf(i) === value) ? value : ""} disabled={disabled || !courseId || loading || (none && !addable)} aria-invalid={Boolean(error) || none}
+      {loadsOffered.length > 1 ? (
+        <div className="mb-2" role="radiogroup" aria-label="CoE or VoE" data-testid="intake-load">
+          <p className="mb-1 text-xs font-medium text-foreground-700">How will the student study?</p>
+          <div className="grid grid-cols-2 gap-2">
+            {loadsOffered.map((l) => (
+              <button key={l} type="button" role="radio" aria-checked={load === l} disabled={disabled}
+                onClick={() => { setPickedLoad(l); if (selected && selected.studyLoad !== l) onChange(null); }}
+                className={`rounded-lg border-2 px-3 py-2 text-left text-sm ${load === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
+                {LOAD_LABEL[l]}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <select id={id} value={shown.some((i) => keyOf(i) === value) ? value : ""} disabled={disabled || !courseId || loading || needsLoad || (none && !addable)} aria-invalid={Boolean(error) || none}
         aria-describedby={`${id}-help`} className={className} data-testid="intake-select"
         onChange={(e) => { if (e.target.value === ADD_INTAKE_VALUE) { onAdd?.(); return; } onChange(intakes.find((i) => keyOf(i) === e.target.value) ?? null); }}>
-        <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : fallback ? "Select a start month" : "Select a start date"}</option>
-        {intakes.map((intake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intake.option ?? `${intakeDates(intake)}${intake.running ? " (running now)" : ""}`}</option>)}
+        <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : needsLoad ? "Choose CoE or VoE first" : fallback ? "Select a start month" : "Select a start date"}</option>
+        {shown.map((intake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intake.option ?? `${intakeDates(intake)}${intake.running ? " (running now)" : ""}`}</option>)}
         {addable ? <option value={ADD_INTAKE_VALUE} data-testid="intake-add-option">+ Add new intake…</option> : null}
       </select>
       <p id={`${id}-help`} className={`mt-1 text-xs ${none || state.failed ? "text-primary-700" : "text-foreground-500"}`} role={none || state.failed ? "alert" : undefined} data-testid="intake-help">

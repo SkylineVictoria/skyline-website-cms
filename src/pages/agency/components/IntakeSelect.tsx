@@ -101,11 +101,13 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
     if (fallbackOnly(intakes) || loadsOffered.length === 0) return intakes;
     if (!load) return [];
     const ofLoad = intakes.filter((i) => i.studyLoad === load).sort((a, b) => (a.joinDate ?? a.startDate).localeCompare(b.joinDate ?? b.startDate));
-    const top = ofLoad.slice(0, UPCOMING_STARTS);
+    // The next three starts of EACH intake of that kind (a course can have several running at once).
+    const perIntake = new Map<string, number>();
+    const top = ofLoad.filter((i) => { const k = i.id ?? i.name; const n = perIntake.get(k) ?? 0; perIntake.set(k, n + 1); return n < UPCOMING_STARTS; });
     return selected && ofLoad.includes(selected) && !top.includes(selected) ? [...top, selected] : top;
   })();
   const addable = canAdd && Boolean(courseId) && !loading && !state.failed && Boolean(onAdd);
-  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : courseId ? "The next three start dates are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
+  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : courseId ? "The next three start dates of each intake are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
   return (
     <div>
       {loadsOffered.length > 1 ? (
@@ -126,7 +128,12 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
         aria-describedby={`${id}-help`} className={className} data-testid="intake-select"
         onChange={(e) => { if (e.target.value === ADD_INTAKE_VALUE) { onAdd?.(); return; } onChange(intakes.find((i) => keyOf(i) === e.target.value) ?? null); }}>
         <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : needsLoad ? "Choose CoE or VoE first" : fallback ? "Select a start month" : "Select a start date"}</option>
-        {shown.map((intake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intake.option ?? `${intakeDates(intake)}${intake.running ? " (running now)" : ""}`}</option>)}
+        {(() => {
+          const optionOf = (intake: OpenIntake) => <option key={keyOf(intake)} value={keyOf(intake)}>{intake.option ?? `${intakeDates(intake)}${intake.running ? " (running now)" : ""}`}</option>;
+          const groups = [...new Set(shown.map((i) => i.id ?? i.name))];
+          if (groups.length < 2) return shown.map(optionOf);
+          return groups.map((g) => { const list = shown.filter((i) => (i.id ?? i.name) === g); return <optgroup key={g} label={list[0].name}>{list.map(optionOf)}</optgroup>; });
+        })()}
         {addable ? <option value={ADD_INTAKE_VALUE} data-testid="intake-add-option">+ Add new intake…</option> : null}
       </select>
       <p id={`${id}-help`} className={`mt-1 text-xs ${none || state.failed ? "text-primary-700" : "text-foreground-500"}`} role={none || state.failed ? "alert" : undefined} data-testid="intake-help">

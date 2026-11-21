@@ -185,6 +185,12 @@ export async function allowedDomains(graph: Graph, plan: Plan): Promise<string[]
   }
   return verified.filter((d) => !d.endsWith(".onmicrosoft.com") && d === plan.domain);
 }
+/** Microsoft's error code and message of a failed Graph reply (for telling genuine "already a member" from other 400s). */
+async function graphReason(r: Response): Promise<{ code: string; message: string }> {
+  try { const b = await r.json() as { error?: { code?: string; message?: string } };
+    return { code: String(b?.error?.code ?? "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 100) || "unknown", message: String(b?.error?.message ?? "").slice(0, 300) };
+  } catch { return { code: "unknown", message: "" }; }
+}
 /** Microsoft's error code from a failed Graph reply (e.g. MailboxNotEnabledForRESTAPI), never its message text. */
 async function graphCode(r: Response): Promise<string> {
   try { const b = await r.json() as { error?: { code?: string } }; const c = String(b?.error?.code ?? "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 100); return `${r.status}:${c || "unknown"}`; }
@@ -460,9 +466,11 @@ async function addGroups(ports: Ports, graph: Graph, kind: PersonKind, personId:
   for (const id of ids) {
     const r = await graph("POST", `/groups/${encodeURIComponent(id)}/members/$ref`, { "@odata.id": `${GRAPH}/directoryObjects/${msUser}` });
     if (r.ok || r.status === 204) { await r.body?.cancel(); continue; }
-    const code = await graphCode(r);
-    if (/One or more added object references already exist/i.test(code) || r.status === 400 && code.includes("Request_BadRequest")) continue;
-    failed.push(`${id.slice(0, 8)}:${code}`);
+    // Only "already a member" may be skipped, and only by its exact message: the status:code pair alone says Request_BadRequest for
+    // that case AND for real failures (a bad group id, a malformed request), which must be recorded, not swallowed.
+    const g = await graphReason(r);
+    if (r.status === 400 && /already exist/i.test(g.message)) continue;
+    failed.push(`${id.slice(0, 8)}:${r.status}:${g.code}`);
   }
   await ports.rpc("o365_step", { p_kind: recordKind(kind), p_person: personId, p_step: "groups", p_ok: !failed.length, p_detail: failed.length ? failed.join(",").slice(0, 160) : String(ids.length) });
 }

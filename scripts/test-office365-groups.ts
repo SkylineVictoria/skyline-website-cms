@@ -16,8 +16,9 @@ const NEW_USER = "aaaaaaaa-0000-4000-8000-0000000000aa";
 const jsonReply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const notFound = () => new Response("{}", { status: 404 });
 
-/** The smallest fake tenant provision() needs: a token, verified domains, faculty seats, an existing sender, no matching users. */
-const world = (memberReplies: Array<() => Response>) => {
+/** The smallest fake tenant provision() needs: a token, verified domains, faculty seats, an existing sender, no matching users.
+ *  claimUpn: the claim refuses to take a new username and keeps this earlier reserved address instead. */
+const world = (memberReplies: Array<() => Response>, claimUpn?: string) => {
   const calls: string[] = []; const steps: string[] = [];
   let memberCall = 0;
   const request = (async (input: string | URL, init?: RequestInit) => {
@@ -39,8 +40,8 @@ const world = (memberReplies: Array<() => Response>) => {
   }) as typeof fetch;
   const rpc = async (name: string, args: Record<string, unknown>) => {
     if (name.endsWith("_prepare")) return { data: { fullName: "Asha Patel", recordEmail: "asha.personal@example.test", trainer: true, account: null }, error: null };
-    if (name.endsWith("_claim")) return { data: { conflict: false, upn: args.p_upn, msUserId: null }, error: null };
-    if (name.endsWith("_finish")) return { data: {}, error: null };
+    if (name.endsWith("_claim")) return { data: { conflict: false, upn: claimUpn ?? args.p_upn, msUserId: null }, error: null };
+    if (name.endsWith("_finish")) { steps.push(`finish:${args.p_ok}:${args.p_error ?? ""}`); return { data: {}, error: null }; }
     if (name === "o365_step") { steps.push(`${args.p_step}:${args.p_ok}:${args.p_detail ?? ""}`); return { data: {}, error: null }; }
     throw new Error(name);
   };
@@ -74,4 +75,15 @@ test("groups: a 403 is recorded with its code", async () => {
   const r = await prov.provision(w.ports, "employee", STAFF);
   assert.equal(r.status, 200);
   assert.ok(w.steps.some((s) => s.startsWith("groups:false:aaaaaaaa:403:Authorization_RequestDenied")), `steps: ${w.steps}`);
+});
+
+test("address_reserved: a new username while an earlier address is kept is refused with a clear, actionable message", async () => {
+  const w = world([ok, ok], "asha.patel@slit.edu.au");
+  const r = await prov.provision(w.ports, "employee", STAFF, { username: "asha.p" });
+  assert.deepEqual([r.status, r.body.code, r.body.email], [409, "address_reserved", "asha.patel@slit.edu.au"]);
+  const message = String(r.body.error);
+  assert.ok(message.includes("reserved asha.patel@slit.edu.au"), message);
+  assert.ok(!/database update/i.test(message), `no internal deployment notes: ${message}`);
+  assert.ok(w.steps.some((s) => s.startsWith("finish:false:address_reserved")), `the refusal recorded accurately: ${w.steps}`);
+  assert.ok(!w.calls.some((c) => c.startsWith("POST /users")), "no Microsoft user created");
 });

@@ -109,6 +109,7 @@ export const MESSAGES: Record<string, string> = {
   microsoft_unavailable: "Microsoft 365 could not be reached. Retry shortly.",
   staff_plan_invalid: "The staff domain or licence is set to the student one. Check EF_MICROSOFT365_STAFF_DOMAIN / EF_MICROSOFT365_STAFF_SKU.",
   address_in_use: "That email address is already in use in Microsoft 365. Choose another username.",
+  address_reserved: "An earlier attempt reserved a different address for this person. Use the reserved username, or ask the team to clear the reservation first.",
 };
 
 /** The username (part before the @) rules, the same on the Create Email screen (src/pages/admin/lib/microsoft365.ts). null = fine. */
@@ -396,8 +397,9 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
     if (claim.conflict) return { status: 409, body: { code: "address_in_use", email: upn0, error: `${upn0} is already reserved for another SLIT person. Choose another username.` } };
     // A failed earlier attempt keeps its reserved address unless the claim takes the new one (migration 20261121003517); never use another.
     if (wanted !== null && claim.upn !== upn0) {
-      await ports.rpc(set.finish, { [set.key]: personId, p_ms_user: claim.msUserId ?? "", p_ok: false, p_error: "address_in_use", p_sku: "", p_welcome: false });
-      return { status: 409, body: { code: "address_reserved", email: claim.upn, error: `An earlier attempt reserved ${claim.upn}. Use that username, or try again once the database update is released.` } };
+      await ports.rpc(set.finish, { [set.key]: personId, p_ms_user: claim.msUserId ?? "", p_ok: false, p_error: "address_reserved", p_sku: "", p_welcome: false });
+      return { status: 409, body: { code: "address_reserved", email: claim.upn,
+        error: `An earlier attempt reserved ${claim.upn} for this person. Use that username to finish the setup. If that address should not be kept, ask the team to clear the reservation first, then try the new username again.` } };
     }
     const upn = claim.upn; let msUser = claim.msUserId; let welcome = false; let welcomeError = "";
     try {

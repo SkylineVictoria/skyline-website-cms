@@ -1026,3 +1026,6 @@ Intake busy windows (INTAKE-BUSY-WINDOWS 2026-11-21, migration 20261121070000, A
 
 ### Intake created only when the course wizard finishes (2026-11-21)
 Migration 20261121080000 (APPLIED hosted): `course_intakes.wizard_pending`; `rto_intake_wizard` (mark / pending / finish, RTO Manager); intake_list and course_get hide pending intakes. The wizard makes the CoE and VoE intakes hidden (draft) and opens both when the VoE daily timetable is booked. Intake sheet tab "CoE / VoE timetables" shows both weekly calendars and both daily timetables.
+
+### Wizard intakes hidden until the wizard is finished (2026-11-21)
+Migration 20261121150000 (APPLIED hosted): `intake_save` with `wizard: true` creates the intake hidden (draft, `wizard_pending`) in the same statement; the Microsoft 365 group sync (`intake_group_m365_work`, `intake_groups_dispatch`) skips pending intakes, so no group is made until the wizard finishes; `intake_wizard_cleanup()` (cron `intake-wizard-cleanup`, hourly) deletes pending intakes older than the Business Rule `lms.wizard_draft_hours` (24) that hold no students, applications, assessments or certificates. Rolled-back probe: old one deleted, fresh one kept, pending group not in the Microsoft work list.

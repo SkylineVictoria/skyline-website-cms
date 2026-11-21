@@ -65,10 +65,16 @@ function splitHours(total: number, need: CourseNeed | null): Record<SessionType,
 const field = "h-8 rounded-md border border-background-300 bg-background-50 px-2 text-sm text-foreground-900 disabled:opacity-60";
 const th = "px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-foreground-500";
 
-export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved, saveLabel = "Book the week", footerStart }: {
-  intakeId: string; courseId: string; load: StudyLoad; canEdit: boolean;
-  onSaved?: (made: GenerateResult) => void; saveLabel?: string; footerStart?: ReactNode;
+/** One booked week (no intake yet): what the course wizard keeps until Finish, which then creates the intake and books it. */
+export interface DraftWeek { sessions: { weekday: number; startTime: string; endTime: string; type: SessionType; roomId: string; trainerId: string }[]; capacity: string; trainerIds: string[] }
+/** Draft mode: there is no intake yet. The week is only handed back (onDraft); `others` is another draft week (CoE for the VoE screen) whose rooms and trainers are taken. */
+export interface DraftMode { startDate: string; initial?: DraftWeek | null; others?: DraftWeek | null; onDraft: (week: DraftWeek) => void | Promise<void> }
+
+export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved, saveLabel = "Book the week", footerStart, draft }: {
+  intakeId: string | null; courseId: string; load: StudyLoad; canEdit: boolean;
+  onSaved?: (made: GenerateResult) => void; saveLabel?: string; footerStart?: ReactNode; draft?: DraftMode;
 }) {
+  const [draftReady, setDraftReady] = useState(false);
   const [detail, setDetail] = useState<IntakeDetail | null>(null);
   const [locations, setLocations] = useState<LocationRooms[]>([]);
   const [staff, setStaff] = useState<StaffOption[]>([]);
@@ -92,7 +98,19 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
 
   useEffect(() => {
     let live = true;
-    setDetail(null); setRows([]); setError(""); setDone(null);
+    setDetail(null); setRows([]); setError(""); setDone(null); setDraftReady(false);
+    if (draft || !intakeId) {
+      void Promise.all([rtoFlow<LocationRooms[]>("locations_rooms"), rto<StaffOption[]>("staff_list")]).then(([l, st]) => {
+        if (!live) return;
+        setLocations(l); setStaff(st);
+        const saved = (draft?.initial?.sessions ?? []).map(x => ({ key: `r${++seq}`, weekday: x.weekday, type: x.type, roomId: x.roomId ?? "", trainerId: x.trainerId ?? "", start: x.startTime.slice(0, 5), end: x.endTime.slice(0, 5) }));
+        setRows([1, 2, 3, 4, 5, 6, 7].flatMap(day => { const mine = saved.filter(r => r.weekday === day).sort((a, b) => a.start.localeCompare(b.start)); return mine.length ? mine : [blank(day)]; }));
+        setDraftReady(true);
+      }).catch(e => { if (live) setError(e instanceof Error ? e.message : "The rooms could not be read."); });
+      void loadCourseNeed(courseId).then(n => { if (live) setNeed(n); }).catch(() => undefined);
+      void supabase.rpc("rto_busy_windows_from", { p_start: draft?.startDate }).then(({ data }) => { if (live) setBusyWin((data as BusyMap | null) ?? { trainers: {}, rooms: {} }); });
+      return () => { live = false; };
+    }
     void Promise.all([rto<IntakeDetail>("intake_get", { intakeId }), rtoFlow<LocationRooms[]>("locations_rooms"), rto<StaffOption[]>("staff_list")])
       .then(([d, l, s]) => {
         if (!live) return;
@@ -104,7 +122,8 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     void loadCourseNeed(courseId).then(n => { if (live) setNeed(n); }).catch(() => undefined);
     void supabase.rpc("rto_intake_busy_windows", { p_intake: intakeId }).then(({ data }) => { if (live) setBusyWin((data as BusyMap | null) ?? { trainers: {}, rooms: {} }); });
     return () => { live = false; };
-  }, [intakeId, courseId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload only for another intake, course or start date
+  }, [intakeId, courseId, draft?.startDate]);
 
   const rooms = useMemo(() => locations.flatMap(l => l.rooms.filter(r => r.isActive).map(r => ({ id: r.id, kind: l.kind, label: `${r.name}${l.name ? ` · ${l.name}` : ""}${r.capacity ? ` (${r.capacity} seats)` : ""}`, capacity: r.capacity }))), [locations]);
   // Open hours and other intakes' classes of the rooms and trainers in use (Bookings); unreadable ones count as free.
@@ -132,6 +151,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     const s = toMin(r.start), e = toMin(r.end);
     const mine = list.find(o => o !== r && o.roomId === roomId && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
     if (mine) return `booked ${clock(mine.start)} – ${clock(mine.end)}`;
+    if (draft?.others?.sessions.some(o => o.roomId === roomId && o.weekday === r.weekday && toMin(o.startTime) < e && toMin(o.endTime) > s)) return "used by the other timetable then";
     const h = roomHours[roomId];
     if (h && h.avail.length && !covers(h.avail, r.weekday, s, e)) return "closed then";
     if (h && elsewhere(h.uses, r.weekday, s, e)) return "another intake then";
@@ -143,6 +163,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     if (s < 0 || e <= s) return "";
     const mine = list.find(o => o !== r && o.trainerId === trainerId && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
     if (mine) return `booked ${clock(mine.start)} – ${clock(mine.end)}`;
+    if (draft?.others?.sessions.some(o => o.trainerId === trainerId && o.weekday === r.weekday && toMin(o.startTime) < e && toMin(o.endTime) > s)) return "teaching the other timetable then";
     const h = trainerHours[trainerId];
     if (h && !covers(h.avail.length ? h.avail : TRAINER_DEFAULT, r.weekday, s, e)) return "not available then";
     if (h && elsewhere(h.uses, r.weekday, s, e)) return "teaching another intake";
@@ -296,11 +317,11 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
   // A week that was never booked fills itself once the rooms' and trainers' open hours are read.
   const hoursReady = !!busyWin && rooms.length > 0 && staff.length > 0 && rooms.every(r => roomHours[r.id]) && staff.every(x => trainerHours[x.id]);
   useEffect(() => {
-    if (autoDone.current || !canEdit || !detail || !hoursReady) return;
-    if ((detail.batches[0]?.sessions ?? []).length || rows.some(filled)) { autoDone.current = true; return; }
+    if (autoDone.current || !canEdit || (!detail && !draftReady) || !hoursReady) return;
+    if ((detail?.batches[0]?.sessions ?? []).length || rows.some(filled)) { autoDone.current = true; return; }
     autoDone.current = true; autoFill();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when everything it needs has loaded
-  }, [hoursReady, detail, canEdit]);
+  }, [hoursReady, detail, draftReady, canEdit]);
 
   const set = (key: string, patch: Partial<Row>) => { setRows(list => list.map(r => (r.key === key ? { ...r, ...patch } : r))); setDone(null); };
   const addClass = (weekday: number) => setRows(list => { const at = list.map(r => r.weekday).lastIndexOf(weekday); const next = [...list]; next.splice(at + 1, 0, blank(weekday)); return next; });
@@ -310,6 +331,14 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     if (busy || (list === sessions && why)) return;
     setBusy(true); setError(""); setDone(null);
     try {
+      if (draft || !intakeId) {
+        // No intake yet: keep the week; the course wizard creates the intake and books it at Finish.
+        const used = [...new Set(list.map(x => x.roomId))];
+        const seats = used.map(id => rooms.find(r => r.id === id)?.capacity ?? null);
+        const capacity = seats.length && seats.every(Boolean) ? String(Math.min(...(seats as number[]))) : "";
+        await draft?.onDraft({ sessions: list, capacity, trainerIds: [...new Set(list.map(x => x.trainerId))] });
+        return;
+      }
       // The intake is CoE or VoE as this screen books it.
       const loads = await loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>));
       if ((loads[intakeId] ?? "coe") !== load) await setIntakeLoad(intakeId, load);
@@ -330,7 +359,7 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     finally { setBusy(false); }
   };
 
-  if (!detail) return <p className="text-sm text-foreground-500">{error || "Loading the intake…"}</p>;
+  if (!detail && !draftReady) return <p className="text-sm text-foreground-500">{error || "Loading the intake…"}</p>;
   // Saturday and Sunday stay out of the way unless they have a class or are asked for.
   const vis = rows.filter(r => r.weekday <= 5 || showWeekend || filled(r));
   return <div className="space-y-3">
@@ -410,12 +439,13 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
 }
 
 /** Course setup: the CoE or VoE intake's weekly classes in a dialog. */
-export default function WeeklyClassBookingDialog({ title, intakeId, courseId, load, canEdit, onClose, onBack, backLabel, onSaved, saveLabel }: {
-  title: string; intakeId: string; courseId: string; load: StudyLoad; canEdit: boolean; onClose: () => void;
+export default function WeeklyClassBookingDialog({ title, intakeId, courseId, load, canEdit, onClose, onBack, backLabel, onSaved, saveLabel, draft }: {
+  draft?: DraftMode;
+  title: string; intakeId: string | null; courseId: string; load: StudyLoad; canEdit: boolean; onClose: () => void;
   onBack?: () => void; backLabel?: string; onSaved?: (made: GenerateResult) => void; saveLabel?: string;
 }) {
   return <Modal open keepOpen title={title} width="max-w-[96vw]" onClose={onClose}>
-    <WeeklyClassBooking intakeId={intakeId} courseId={courseId} load={load} canEdit={canEdit} onSaved={onSaved} saveLabel={saveLabel}
+    <WeeklyClassBooking intakeId={intakeId} courseId={courseId} load={load} canEdit={canEdit} onSaved={onSaved} saveLabel={saveLabel} draft={draft}
       footerStart={onBack ? <Button variant="outline" icon="ri-arrow-left-line" onClick={onBack}>{backLabel ?? "Back"}</Button> : null} />
   </Modal>;
 }

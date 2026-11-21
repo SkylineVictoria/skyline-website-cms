@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ListPane from "@/pages/admin/components/ListPane";
 import { paneGrid, useListPane, type Pane } from "@/pages/admin/lib/listPane";
-import { courseWeeksLabel, HOURS_PER_WEEK, intakeDefaultName, registeredWeeks, loadIntakeLoads, loadUnitHours, rto, setIntakeLoad, shownHours, type CourseDetail, type IntakeDetail, type RtoCourse, type StudyLoad, type UnitHours } from "@/pages/admin/lib/rto";
+import { courseWeeksLabel, generateClassSessions, HOURS_PER_WEEK, intakeDefaultName, registeredWeeks, loadIntakeLoads, loadUnitHours, rto, rtoFlow, setIntakeLoad, shownHours, type CourseDetail, type IntakeDetail, type RtoCourse, type StudyLoad, type UnitHours } from "@/pages/admin/lib/rto";
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -13,10 +13,9 @@ import LmsUnitsPage from "./LmsUnitsPage";
 import UnitHoursEditor from "./UnitHoursEditor";
 import StartDateBreaksEditor from "./StartDateBreaksEditor";
 import MasterTimetableTab from "./MasterTimetableTab";
-import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import VoeCalendarEditor, { VoeTab } from "./VoeCalendarEditor";
-import WeeklyClassBookingDialog from "@/pages/admin/components/rto/WeeklyClassBooking";
+import WeeklyClassBookingDialog, { type DraftWeek } from "@/pages/admin/components/rto/WeeklyClassBooking";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 
@@ -105,12 +104,11 @@ export default function LmsCoursesPage() {
   // hours (required), 4 the master timetable (start date and term breaks: every unit's dates are calculated), 5 its first
   // intake with its class timetable (the week grid, room and trainer). Students are added only through the enrolment wizard.
   // A step closed with X stays waiting (hidden): "Continue setup" on the unfinished course opens it again.
-  const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "voe" | "intake" | "classes"; intakeId?: string; hidden?: boolean; load?: StudyLoad } | null>(null);
+  const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "voe" | "classes"; intakeId?: string; startDate?: string; hidden?: boolean; load?: StudyLoad } | null>(null);
   const navigate = useNavigate();
   // Step 4 to 5 (owner, 2026-11-20: no intake screen): the intake is made by itself on the master timetable's dates, named
   // "Intake N", CoE (changed to VoE in the timetable form), and the weekly timetable opens. Without a saved master the old
   // intake form opens instead.
-  const makingIntake = useRef(false);
   // CoE / VoE, chosen first on step 4 and kept for the course's wizard (saved on the intake when it is made).
   const [wizardLoad, setWizardLoad] = useState<{ courseId: string; load: StudyLoad } | null>(null);
   const loadFor = (courseId: string) => (wizardLoad?.courseId === courseId ? wizardLoad.load : null);
@@ -128,36 +126,51 @@ export default function LmsCoursesPage() {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per step 4 of a course
   }, [wizard?.step, wizard?.courseId]);
-  /** Weekly classes (owner, 2026-11-20): one screen for the CoE intake, then one for the VoE intake; an intake of that kind is
-   *  made on the master timetable's dates when the course has none open. */
+  // One-time create (owner, 2026-11-21): the CoE and VoE intakes do not exist during the wizard. The two daily timetables are kept here (drafts) and
+  // Finish creates both intakes on the master timetable's start date, books their classes and opens them together.
+  const [drafts, setDrafts] = useState<{ courseId: string; coe?: DraftWeek; voe?: DraftWeek } | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  /** Daily timetable of one kind: an existing intake of that kind opens as before (editing); otherwise the draft screen opens. */
   const openClasses = async (courseId: string, load: StudyLoad) => {
     try {
       const [course, loads] = await Promise.all([rto<CourseDetail>("course_get", { courseId }), loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>))]);
-      const { data: pend } = await supabase.rpc("rto_intake_wizard", { p_action: "pending", p_data: { courseId } });
-      const pending = ((pend ?? []) as { id: string; load: string }[]).find(i => (i.load === "voe" ? "voe" : "coe") === load);
-      const open = pending ?? course.intakes.find(i => i.status !== "closed" && (loads[i.id] ?? "coe") === load);
-      if (open) setWizard({ courseId, step: "classes", intakeId: open.id, load });
-      else await startIntake(courseId, load);
-    } catch (e) { setDetailError(e instanceof Error ? e.message : "The intake could not be read."); }
-  };
-  const startIntake = async (courseId: string, load: StudyLoad | null = loadFor(courseId)) => {
-    if (makingIntake.current) return;
-    makingIntake.current = true;
-    try {
+      const open = course.intakes.find(i => i.status !== "closed" && (loads[i.id] ?? "coe") === load);
+      if (open) { setWizard({ courseId, step: "classes", intakeId: open.id, load }); return; }
       const { data } = await supabase.rpc("rto_master_timetable", { p_action: "get", p_data: { courseId } });
       const master = data as { saved?: boolean; startDate?: string | null } | null;
-      if (!master?.saved || !master.startDate) { setWizard({ courseId, step: "intake" }); return; }
+      if (!master?.saved || !master.startDate) { setTab("master"); setWizard({ courseId, step: "master" }); return; }
+      setWizard({ courseId, step: "classes", startDate: master.startDate, load });
+    } catch (e) { setDetailError(e instanceof Error ? e.message : "The intake could not be read."); }
+  };
+  /** Finish: both intakes are created now, each with its booked week and dated classes; nothing is left behind if a step fails. */
+  const finishWizard = async (courseId: string, startDate: string, weeks: { coe?: DraftWeek; voe?: DraftWeek }) => {
+    if (finishing) return;
+    setFinishing(true);
+    const discard = () => supabase.rpc("rto_intake_wizard", { p_action: "discard", p_data: { courseId } });
+    try {
+      await discard();
       const course = await rto<CourseDetail>("course_get", { courseId });
-      const name = nameFor(courseId) ?? intakeDefaultName(course.course.code, load ?? "coe", master.startDate, course.intakes.map(i => i.customName || i.name));
-      const out = await rto<IntakeDetail>("intake_save", { courseId, startDate: master.startDate, status: "open", generate: true, wizard: true, campus: course.course.campus ?? "", name });
-      if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
-      // Hidden until the whole wizard (weekly and daily timetables, CoE and VoE) is finished.
-      await supabase.rpc("rto_intake_wizard", { p_action: "mark", p_data: { intakeId: out.intake.id } });
-      setWizard({ courseId, step: "classes", intakeId: out.intake.id, load: load ?? "coe" });
+      const names = course.intakes.map(i => i.customName || i.name);
+      let firstId = "";
+      for (const load of ["coe", "voe"] as const) {
+        const week = weeks[load];
+        if (!week) continue;
+        const name = intakeDefaultName(course.course.code, load, startDate, names);
+        names.push(name);
+        const out = await rto<IntakeDetail>("intake_save", { courseId, startDate, status: "open", generate: true, wizard: true, campus: course.course.campus ?? "", name });
+        if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
+        const setup = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: null, intakeId: out.intake.id, sessions: week.sessions, capacity: week.capacity, trainerIds: week.trainerIds });
+        await generateClassSessions(setup.batchId);
+        if (!firstId) firstId = out.intake.id;
+      }
+      await supabase.rpc("rto_intake_wizard", { p_action: "finish", p_data: { courseId } });
+      setDrafts(null); setWizard(null); setReloadKey(k => k + 1);
+      if (firstId) navigate(`/admin/lms/intakes#${firstId}`);
     } catch (e) {
-      setDetailError(e instanceof Error ? e.message : "The intake was not created.");
-      setWizard({ courseId, step: "intake" });
-    } finally { makingIntake.current = false; setReloadKey(k => k + 1); }
+      await discard();
+      // Shown inside the timetable screen (it is open), which stays so the week can be changed.
+      throw new Error(`The intakes were not created: ${e instanceof Error ? e.message : "error"} Change the timetable and finish again; nothing was saved.`);
+    } finally { setFinishing(false); setReloadKey(k => k + 1); }
   };
 
   // Only the latest load picks the course: an older one finishing later must not switch back (it hid the wizard after Sync).
@@ -289,7 +302,7 @@ export default function LmsCoursesPage() {
   /** next: "units" opens Add units (then the first intake), "intake" opens New intake (units already chosen), "none" just shows it. */
   const reloadAfterAdd = (courseId: string, next: "units" | "intake" | "none" = "none") => {
     setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); setEditing(false); setSyncNote([]);
-    setTab(next === "none" ? "overview" : "units"); setWizard(next === "none" ? null : { courseId, step: next });
+    setTab(next === "none" ? "overview" : "units"); setWizard(next === "none" ? null : { courseId, step: next === "intake" ? "master" : next });
     setReloadKey(k => k + 1); void load(courseId);
   };
   // A new (inactive) course is finished only through the wizard (owner, 2026-11-20): units, their hours, the master timetable,
@@ -389,15 +402,11 @@ export default function LmsCoursesPage() {
         // Next: the daily timetables, the CoE intake's weekly classes then the VoE intake's (owner, 2026-11-21); or finish here.
         nextStep={{ label: "Save and next: CoE daily timetable", onClick: () => { setReloadKey(k => k + 1); void openClasses(wizard.courseId, "coe"); } }}
         dailyStep={{ label: "Save and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }} /> : null}
-    {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open requireFinished={false} courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
-      allowBatch={false} requireUnitSchedule title="Course setup · Intake" createLabel="Create and continue: rooms"
-      onClose={() => setWizard(null)}
-      onCreated={d => { setWizard({ courseId: wizard.courseId, step: "classes", intakeId: d.intake.id }); setReloadKey(k => k + 1); }} /> : null}
     {/* Last step, in the wizard itself: the intake's class timetable (the same form as Timetable › Create timetable). */}
     {/* Weekly classes, one screen for CoE then one for VoE: kind, room, trainer and times on one row, booked together. */}
-    {wizard?.step === "classes" && wizard.intakeId && canEdit ? <WeeklyClassBookingDialog key={wizard.intakeId}
+    {wizard?.step === "classes" && (wizard.intakeId || wizard.startDate) && canEdit ? <WeeklyClassBookingDialog key={wizard.intakeId ?? `${wizard.courseId}-${wizard.load}`}
       title={`Course setup · ${wizard.load === "voe" ? "VoE" : "CoE"} daily timetable · ${courses.find(c => c.id === wizard.courseId)?.code ?? ""}`}
-      intakeId={wizard.intakeId} courseId={wizard.courseId} load={wizard.load ?? "coe"} canEdit={canEdit}
+      intakeId={wizard.intakeId ?? null} draft={wizard.intakeId || !wizard.startDate ? undefined : { startDate: wizard.startDate, initial: wizard.load === "voe" ? drafts?.voe : drafts?.coe, others: wizard.load === "voe" && drafts?.courseId === wizard.courseId ? drafts.coe : undefined, onDraft: (week) => { const next = { ...(drafts?.courseId === wizard.courseId ? drafts : { courseId: wizard.courseId }), [wizard.load === "voe" ? "voe" : "coe"]: week }; setDrafts(next); if (wizard.load === "voe") return finishWizard(wizard.courseId, wizard.startDate as string, next); void openClasses(wizard.courseId, "voe"); } }} courseId={wizard.courseId} load={wizard.load ?? "coe"} canEdit={canEdit}
       saveLabel={wizard.load === "voe" ? "Book VoE week and finish" : "Book CoE week and next: VoE daily timetable"}
       backLabel={wizard.load === "voe" ? "Back: CoE daily timetable" : "Back: VoE weekly calendar"}
       onBack={() => { if (wizard.load === "voe") void openClasses(wizard.courseId, "coe"); else { setWizard({ courseId: wizard.courseId, step: "voe" }); setTab("voe"); } setReloadKey(k => k + 1); }}

@@ -126,59 +126,53 @@ export default function LmsCoursesPage() {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per step 4 of a course
   }, [wizard?.step, wizard?.courseId]);
-  // Drafts live in the database (owner, 2026-11-21): saving a daily timetable creates its intake hidden (wizard_pending)
-  // and books the week on it at once, so a closed tab or a crash loses nothing and the wizard can be resumed later.
-  // Finish then only opens the course's hidden intakes. Only one manager runs the wizard of a course at a time (the lock
-  // below), so Finish touching every hidden intake of the course cannot open another manager's drafts.
-  /** The course's hidden draft intakes (id, study load, classes booked?), for resuming the wizard. */
-  const pendingDrafts = async (courseId: string) => {
-    const { data } = await supabase.rpc("rto_intake_wizard", { p_action: "pending", p_data: { courseId } });
-    return (data as { id: string; load: string; classes: boolean }[] | null) ?? [];
-  };
-  /** Daily timetable of one kind: an existing intake of the kind opens as before (editing); a saved draft of the kind
-   *  reopens (its week is already booked on the hidden intake); otherwise the fresh-draft screen opens. */
+  // One-time create (owner, 2026-11-21): NO database drafts. The CoE and VoE intakes do not exist during the wizard: the two daily timetables are kept
+  // here in the browser and Finish creates both intakes on the master timetable's start date, books their classes and opens them together.
+  const [drafts, setDrafts] = useState<{ courseId: string; coe?: DraftWeek; voe?: DraftWeek } | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  /** Daily timetable of one kind: an existing intake of that kind opens as before (editing); otherwise the draft screen opens. */
   const openClasses = async (courseId: string, load: StudyLoad) => {
     try {
       if (!await acquireLock(courseId)) return; // another manager's wizard session holds the course
-      const [course, loads, drafts] = await Promise.all([
-        rto<CourseDetail>("course_get", { courseId }),
-        loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>)),
-        pendingDrafts(courseId).catch(() => [] as { id: string; load: string; classes: boolean }[]),
-      ]);
+      const [course, loads] = await Promise.all([rto<CourseDetail>("course_get", { courseId }), loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>))]);
       const open = course.intakes.find(i => i.status !== "closed" && (loads[i.id] ?? "coe") === load);
       if (open) { setWizard({ courseId, step: "classes", intakeId: open.id, load }); return; }
-      const draft = drafts.find(x => x.load === load);
-      if (draft) { setWizard({ courseId, step: "classes", intakeId: draft.id, load }); return; }
       const { data } = await supabase.rpc("rto_master_timetable", { p_action: "get", p_data: { courseId } });
       const master = data as { saved?: boolean; startDate?: string | null } | null;
       if (!master?.saved || !master.startDate) { setTab("master"); setWizard({ courseId, step: "master" }); return; }
       setWizard({ courseId, step: "classes", startDate: master.startDate, load });
     } catch (e) { setDetailError(e instanceof Error ? e.message : "The intake could not be read."); }
   };
-  /** Save draft: create the kind's hidden intake on the master timetable's start date and book the week on it. */
-  const saveDraft = async (courseId: string, startDate: string, load: StudyLoad, week: DraftWeek): Promise<string> => {
-    const course = await rto<CourseDetail>("course_get", { courseId });
-    const names = course.intakes.map(i => i.customName || i.name);
-    const name = intakeDefaultName(course.course.code, load, startDate, names);
-    const out = await rto<IntakeDetail>("intake_save", { courseId, startDate, status: "open", generate: true, wizard: true, campus: course.course.campus ?? "", name });
-    if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
-    const setup = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: null, intakeId: out.intake.id, sessions: week.sessions, capacity: week.capacity, trainerIds: week.trainerIds });
-    await generateClassSessions(setup.batchId);
-    return out.intake.id;
-  };
-  /** Finish the wizard: open the course's hidden draft intakes (both daily timetables are saved by now) and release the lock. */
-  const finishCourse = async (courseId: string, intakeId?: string): Promise<boolean> => {
+  /** Finish: both intakes are created now, each with its booked week and dated classes; nothing is left behind if a step fails. */
+  const finishWizard = async (courseId: string, startDate: string, weeks: { coe?: DraftWeek; voe?: DraftWeek }) => {
+    if (finishing) return;
+    setFinishing(true);
+    const discard = () => supabase.rpc("rto_intake_wizard", { p_action: "discard", p_data: { courseId } });
     try {
+      await discard();
+      const course = await rto<CourseDetail>("course_get", { courseId });
+      const names = course.intakes.map(i => i.customName || i.name);
+      let firstId = "";
+      for (const load of ["coe", "voe"] as const) {
+        const week = weeks[load];
+        if (!week) continue;
+        const name = intakeDefaultName(course.course.code, load, startDate, names);
+        names.push(name);
+        const out = await rto<IntakeDetail>("intake_save", { courseId, startDate, status: "open", generate: true, wizard: true, campus: course.course.campus ?? "", name });
+        if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
+        const setup = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: null, intakeId: out.intake.id, sessions: week.sessions, capacity: week.capacity, trainerIds: week.trainerIds });
+        await generateClassSessions(setup.batchId);
+        if (!firstId) firstId = out.intake.id;
+      }
       await supabase.rpc("rto_intake_wizard", { p_action: "finish", p_data: { courseId } });
+      await releaseLock();
+      setDrafts(null); setWizard(null); setReloadKey(k => k + 1);
+      if (firstId) navigate(`/admin/lms/intakes#${firstId}`);
     } catch (e) {
-      setDetailError(e instanceof Error ? e.message : "The wizard could not be finished.");
-      return false;
-    }
-    await releaseLock();
-    setWizard(null);
-    setReloadKey(k => k + 1);
-    navigate(`/admin/lms/intakes${intakeId ? `#${intakeId}` : ""}`);
-    return true;
+      await discard();
+      // Shown inside the timetable screen (it is open), which stays so the week can be changed.
+      throw new Error(`The intakes were not created: ${e instanceof Error ? e.message : "error"} Change the timetable and finish again; nothing was saved.`);
+    } finally { setFinishing(false); setReloadKey(k => k + 1); }
   };
   // Wizard lock: only one manager runs a course's wizard at a time (20261121180000). The page acquires the lock when the
   // wizard opens, pings while it is open and releases it on Finish or when the page closes; a crashed page stops pinging
@@ -186,7 +180,8 @@ export default function LmsCoursesPage() {
   const lockRef = useRef<string | null>(null);
   const [lockHeld, setLockHeld] = useState<{ by: string; since: string } | null>(null);
   const acquireLock = async (courseId: string): Promise<boolean> => {
-    const { data } = await supabase.rpc("rto_wizard_session", { p_action: "acquire", p_data: { courseId } });
+    const { data, error } = await supabase.rpc("rto_wizard_session", { p_action: "acquire", p_data: { courseId } });
+    if (error) return true; // the lock function is not on this database yet: the wizard still opens
     const d = data as { ok?: boolean; lockedBy?: string; since?: string } | null;
     if (d?.ok) { lockRef.current = courseId; setLockHeld(null); return true; }
     setLockHeld({ by: d?.lockedBy ?? "another manager", since: d?.since ?? "" });
@@ -195,12 +190,12 @@ export default function LmsCoursesPage() {
   const releaseLock = async () => {
     const courseId = lockRef.current;
     lockRef.current = null;
-    if (courseId) await supabase.rpc("rto_wizard_session", { p_action: "release", p_data: { courseId } }).then(() => undefined).catch(() => undefined);
+    if (courseId) await supabase.rpc("rto_wizard_session", { p_action: "release", p_data: { courseId } }).then(() => undefined, () => undefined);
   };
   useEffect(() => {
     if (!wizard || wizard.hidden) return;
     const courseId = wizard.courseId;
-    const t = window.setInterval(() => { void supabase.rpc("rto_wizard_session", { p_action: "ping", p_data: { courseId } }).then(() => undefined).catch(() => undefined); }, 60_000);
+    const t = window.setInterval(() => { void supabase.rpc("rto_wizard_session", { p_action: "ping", p_data: { courseId } }).then(() => undefined, () => undefined); }, 60_000);
     return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ping for as long as this wizard screen is open
   }, [wizard?.courseId, wizard?.hidden]);
@@ -424,24 +419,22 @@ export default function LmsCoursesPage() {
     {/* Weekly classes, one screen for CoE then one for VoE: kind, room, trainer and times on one row, booked together. */}
     {wizard?.step === "classes" && (wizard.intakeId || wizard.startDate) && canEdit ? <WeeklyClassBookingDialog key={wizard.intakeId ?? `${wizard.courseId}-${wizard.load}`}
       title={`Course setup · ${wizard.load === "voe" ? "VoE" : "CoE"} daily timetable · ${courses.find(c => c.id === wizard.courseId)?.code ?? ""}`}
-      intakeId={wizard.intakeId ?? null} draft={wizard.intakeId || !wizard.startDate ? undefined : { startDate: wizard.startDate, onDraft: async (week) => {
-        // Saving the draft creates the hidden intake and books the week on it, so nothing is kept in the browser.
-        const courseId = wizard.courseId, startDate = wizard.startDate as string, load = wizard.load ?? "coe";
-        const id = await saveDraft(courseId, startDate, load, week);
-        setReloadKey(k => k + 1);
-        if (load === "coe") { void openClasses(courseId, "voe"); return; }
-        if (!await finishCourse(courseId, id)) throw new Error("The wizard could not be finished.");
+      intakeId={wizard.intakeId ?? null} draft={wizard.intakeId || !wizard.startDate ? undefined : { startDate: wizard.startDate, initial: wizard.load === "voe" ? (drafts?.courseId === wizard.courseId ? drafts.voe : undefined) : (drafts?.courseId === wizard.courseId ? drafts.coe : undefined), others: wizard.load === "voe" && drafts?.courseId === wizard.courseId ? drafts.coe : undefined, onDraft: (week) => {
+        // Nothing is saved yet: the week is kept here; the VoE screen's Finish creates both intakes.
+        const next = { ...(drafts?.courseId === wizard.courseId ? drafts : { courseId: wizard.courseId }), [wizard.load === "voe" ? "voe" : "coe"]: week };
+        setDrafts(next);
+        if (wizard.load === "voe") return finishWizard(wizard.courseId, wizard.startDate as string, next);
+        void openClasses(wizard.courseId, "voe");
       } }} courseId={wizard.courseId} load={wizard.load ?? "coe"} canEdit={canEdit}
-      saveLabel={wizard.load === "voe" ? "Save VoE draft and finish" : "Save CoE draft and next: VoE daily timetable"}
+      saveLabel={wizard.load === "voe" ? "Finish: create the CoE and VoE intakes" : "Next: VoE daily timetable"}
       backLabel={wizard.load === "voe" ? "Back: CoE daily timetable" : "Back: VoE weekly calendar"}
       onBack={() => { if (wizard.load === "voe") void openClasses(wizard.courseId, "coe"); else { setWizard({ courseId: wizard.courseId, step: "voe" }); setTab("voe"); } setReloadKey(k => k + 1); }}
-      // Closed before the week is booked: the course stays unfinished and says so. A draft saved here stays in the
-      // database; the lock is released (the next open of the wizard re-acquires it).
+      // Closed before Finish: nothing was created; the course stays unfinished and says so. The lock is released.
       onClose={() => { void releaseLock(); setWizard(null); setReloadKey(k => k + 1); }}
       onSaved={() => {
         setReloadKey(k => k + 1);
         if (wizard.load !== "voe") { void openClasses(wizard.courseId, "voe"); return; }
-        void finishCourse(wizard.courseId, wizard.intakeId);
+        const id = wizard.intakeId; void releaseLock(); setWizard(null); if (id) navigate(`/admin/lms/intakes#${id}`);
       }} /> : null}
     {selected ? <DangerDialog open={deleteOpen} title={`Delete ${selected.code}?`} intro={selected.name} busy={saving} error={deleteError}
       items={[

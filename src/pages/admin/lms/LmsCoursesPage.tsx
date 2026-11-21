@@ -345,32 +345,13 @@ export default function LmsCoursesPage() {
   const setupStep: "units" | "hours" | "master" | "classes" | "done" | null = !detail || detail.course.id !== selectedId || masterSaved === null ? null
     : !units.length ? "units" : slit.some(h => !h?.confirmed) ? "hours" : !masterSaved ? "master" : !classesDone ? "classes" : "done";
   const SETUP_TEXT = { units: "Step 2 of 3 · Units", hours: "Step 3 of 3 · Hours", master: "CoE weekly calendar", classes: "CoE and VoE daily timetables" } as const;
-  /** The setup screens after the wizard, in order: the two weekly calendars, then the two daily timetables. */
+  /** Read-only progress: the single Continue setup button above opens the next unfinished screen. */
   const setupSteps = selected ? [
-    { key: "master", label: "CoE weekly calendar", done: !!masterSaved, ready: true, open: () => { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); } },
-    { key: "voe", label: "VoE weekly calendar", done: !!voeSaved, ready: !!masterSaved, open: () => { setTab("voe"); setWizard({ courseId: selected.id, step: "voe" }); } },
-    { key: "coeDaily", label: "CoE daily timetable", done: false, ready: !!masterSaved, open: () => void openClasses(selected.id, "coe") },
-    { key: "voeDaily", label: "VoE daily timetable", done: false, ready: !!masterSaved, open: () => void openClasses(selected.id, "voe") },
+    { key: "master", label: "CoE weekly calendar", done: !!masterSaved },
+    { key: "voe", label: "VoE weekly calendar", done: !!voeSaved },
+    { key: "coeDaily", label: "CoE daily timetable", done: false },
+    { key: "voeDaily", label: "VoE daily timetable", done: false },
   ] : [];
-  /** A weekly calendar tab opens the weekly calendar wizard until that calendar is saved (owner, 2026-11-21): CoE, then VoE. */
-  const openTab = (id: Tab) => {
-    setTab(id);
-    if (!selected || !canEdit) return;
-    if (id === "master" && masterSaved === false) setWizard({ courseId: selected.id, step: "master" });
-    else if (id === "voe" && masterSaved && voeSaved === false) setWizard({ courseId: selected.id, step: "voe" });
-    else if (id === "voe" && masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); }
-    else if (id === "coeDaily" || id === "voeDaily") {
-      // The daily timetable opens straight away (it needs the CoE weekly calendar first).
-      if (masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); }
-      else void openClasses(selected.id, id === "coeDaily" ? "coe" : "voe");
-    }
-  };
-  /** The top button while the wizard is unfinished: carries on with the wizard at the CoE daily timetable (owner, 2026-11-21). */
-  const finishWithWizard = () => {
-    if (!selected) return;
-    if (masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); return; }
-    setTab("coeDaily"); void openClasses(selected.id, "coe");
-  };
   const continueSetup = () => {
     if (!selected || !setupStep || setupStep === "done") return;
     const courseId = selected.id;
@@ -515,10 +496,10 @@ export default function LmsCoursesPage() {
             {canEdit ? <div className="relative flex items-center gap-2">
               {editing ? <span className="text-xs text-foreground-500" role="status">{saving ? "Saving…" : savedAt ? "Saved " + savedAt : "Changes save automatically"}</span> : null}
               {wizardUnfinished && !editing
-                ? <button type="button" onClick={() => { setMenuOpen(false); finishWithWizard(); }} disabled={!detail}
-                  title="Carries on with the course wizard: the CoE daily timetable opens, filled in for you"
+                ? <button type="button" onClick={() => { setMenuOpen(false); continueSetup(); }} disabled={!detail}
+                  title="Resume the course setup at its next unfinished step"
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
-                  <i className="ri-magic-line" aria-hidden="true" />Finish with wizard</button>
+                  <i className="ri-magic-line" aria-hidden="true" />Continue setup</button>
                 : <button type="button" onClick={() => { setEditing(v => !v); setMenuOpen(false); }} disabled={!detail}
                   className={"rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "bg-primary-600 text-white hover:bg-primary-700" : "border border-background-300 text-foreground-800 hover:bg-background-100")}>
                   {editing ? "Done" : "Edit"}</button>}
@@ -554,17 +535,14 @@ export default function LmsCoursesPage() {
           {lockHeld ? <div role="status" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
             The course wizard is open by <b>{lockHeld.by}</b>{lockHeld.since ? ` since ${new Date(lockHeld.since).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}` : ""}.
             You can view the course but not run its wizard until it is finished or the lock expires (Business Rules › lms.wizard_lock_minutes).</div> : null}
-          {selected && !selected.isActive && setupStep && setupStep !== "done" ? <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-            <span className="min-w-0 flex-1"><b>Setup not finished: {SETUP_TEXT[setupStep]}.</b> The course can be made active only after the new course wizard is finished.
-              {/* The four setup screens after the wizard (owner, 2026-11-21), each opened from here. */}
-              {setupStep === "master" || setupStep === "classes" ? <span className="mt-2 flex flex-wrap items-center gap-1.5">
-                {setupSteps.map((st, i) => <span key={st.key} className="inline-flex items-center gap-1.5">
-                  {i ? <i className="ri-arrow-right-s-line text-amber-700" aria-hidden="true" /> : null}
-                  <button type="button" disabled={!canEdit || !st.ready} onClick={st.open} title={st.ready ? undefined : "Save the CoE weekly calendar first"}
-                    className={"rounded-full border px-2.5 py-0.5 text-xs font-semibold disabled:opacity-50 " + (st.done ? "border-green-300 bg-green-50 text-green-800" : "border-amber-400 bg-background-50 text-amber-950 hover:bg-amber-100")}>
-                    {st.done ? <i className="ri-check-line mr-0.5" aria-hidden="true" /> : null}{st.label}</button></span>)}
-              </span> : null}</span>
-            {canEdit ? <button type="button" onClick={continueSetup} className="rounded-lg bg-primary-600 px-3 py-1.5 font-semibold text-white hover:bg-primary-700">Continue setup</button> : null}
+          {selected && !selected.isActive && setupStep && setupStep !== "done" ? <div role="status" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <p><b>Setup not finished: {SETUP_TEXT[setupStep]}.</b> Use <b>Continue setup</b> above. The course can be made active only after the wizard is finished.</p>
+            {setupStep === "master" || setupStep === "classes" ? <div aria-label="Course setup progress" className="mt-2 flex flex-wrap items-center gap-1.5">
+              {setupSteps.map((st, i) => <span key={st.key} className="inline-flex items-center gap-1.5">
+                {i ? <i className="ri-arrow-right-s-line text-amber-700" aria-hidden="true" /> : null}
+                <span className={"rounded-full border px-2.5 py-0.5 text-xs font-semibold " + (st.done ? "border-green-300 bg-green-50 text-green-800" : "border-amber-400 bg-background-50 text-amber-950")}>
+                  {st.done ? <i className="ri-check-line mr-0.5" aria-hidden="true" /> : null}{st.label}</span></span>)}
+            </div> : null}
           </div> : null}
 
           {editing && canEdit && detail ? <div className="mt-5 space-y-5">
@@ -572,7 +550,7 @@ export default function LmsCoursesPage() {
             <CricosCourseSection key={selectedId + ":edit"} courseId={selectedId} onSaved={() => { setReloadKey(k => k + 1); void load(selectedId); }} />
           </div> : <>
             <div role="tablist" aria-label="Course sections" className="mt-5 flex gap-5 border-b border-background-200">
-              {tabs.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => openTab(t.id)}
+              {tabs.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}
                 className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t.label}</button>)}
             </div>
             <div role="tabpanel" className="pt-4">
@@ -597,14 +575,12 @@ export default function LmsCoursesPage() {
               </section> : null}
               </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
-              {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} onDaily={() => void openClasses(selected.id, "coe")} /> : null}
+              {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} /> : null}
               {(tab === "coeDaily" || tab === "voeDaily") && selected ? <div className="space-y-3 rounded-lg border border-background-200 bg-background-50 p-5">
                 <h3 className="font-heading text-lg font-bold text-foreground-950">{tab === "coeDaily" ? "CoE" : "VoE"} daily timetable</h3>
-                <p className="text-sm text-foreground-600">The week's classes for {tab === "coeDaily" ? "CoE (20 hours a week)" : "VoE (40 hours a week)"} students: day, kind, room, trainer and times. It opens filled in for you from the course's hours, the rooms and the trainers who are free; change anything, then book the week.</p>
-                {masterSaved === false ? <p className="text-sm font-semibold text-amber-800">Save the CoE weekly calendar first.</p> : null}
-                <button type="button" disabled={!canEdit || masterSaved === false} onClick={() => void openClasses(selected.id, tab === "coeDaily" ? "coe" : "voe")}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
-                  <i className="ri-calendar-schedule-line" aria-hidden="true" />Open the {tab === "coeDaily" ? "CoE" : "VoE"} daily timetable</button>
+                <p className="text-sm text-foreground-600">The week's classes for {tab === "coeDaily" ? "CoE (20 hours a week)" : "VoE (40 hours a week)"} students: day, kind, room, trainer and times. The timetable is saved with the course setup.</p>
+                {wizardUnfinished ? <p className="text-sm font-semibold text-amber-800">Use <b>Continue setup</b> above to create or resume this timetable.</p>
+                  : <p className="text-sm text-foreground-600">The course setup is finished. Manage this timetable from its intake.</p>}
               </div> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
             </div>

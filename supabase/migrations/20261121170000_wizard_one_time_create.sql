@@ -1,6 +1,6 @@
 -- ONE-TIME CREATE AT FINISH (owner, 2026-11-21): the course wizard keeps the CoE and VoE daily timetables in the browser and creates both intakes
 -- only when the wizard is finished. This adds what that needs: the dated classes already booked from a start date (no intake to leave out),
--- and a discard of any leftover hidden intake if a Finish is repeated. The hourly clean-up job is no longer needed and is removed.
+-- and a discard of any leftover hidden intake if a Finish is repeated.
 create or replace function public.rto_busy_windows_from(p_start date) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare v_from date; v_to date; r jsonb;
@@ -25,13 +25,6 @@ end $$;
 revoke all on function public.rto_busy_windows_from(date) from public, anon;
 grant execute on function public.rto_busy_windows_from(date) to authenticated;
 grant execute on function public.rto_intake_busy_windows(uuid) to authenticated;
-
-do $$ begin
- if exists (select 1 from pg_extension where extname = 'pg_cron') then
-  perform cron.unschedule(jobid) from cron.job where jobname = 'intake-wizard-cleanup';
- end if;
-end $$;
-drop function if exists public.intake_wizard_cleanup();
 
 do $$
 declare d text; a constant text := 'elsif p_action = ''finish'' then';

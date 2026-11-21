@@ -35,7 +35,7 @@ import { formatExtractionCandidates } from "@/pages/agency/lib/documentExtractio
 import { formatExpiryDate, getDocumentExpiryStatus } from "@/pages/agency/lib/documentExpiry";
 import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
 import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardLock, WizardNotice } from "@/components/shared/wizard/WizardShell";
-import WizardStepper from "@/components/shared/wizard/WizardStepper";
+import WizardStages, { type WizardStage } from "@/components/shared/wizard/WizardStages";
 import { englishAlternatives, usiRequired } from "@/pages/agency/lib/admissionsRules";
 import EnglishAlternative, { ENGLISH_PATHWAY, EnglishNotMetDialog, type AusStudyAnswer, type CambridgeAnswer } from "@/pages/agency/components/EnglishAlternative";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
@@ -66,6 +66,14 @@ const AUS_STUDY_STEP: WizardStep | null = ACADEMIC_WIZARD_STEP
   : null;
 const LAST_STEP = DOC_STEPS + WIZARD_QUESTIONS.length - 1;
 const PASSPORT_STEP = WIZARD_STEPS.findIndex((step) => step.id === "passport");
+/** The wizard's steps in order (documents, then questions) and their grouping into four stages (the fourth, Review, follows the wizard). */
+const ALL_STEPS = [...WIZARD_STEPS, ...WIZARD_QUESTIONS];
+const STAGE_OF: Record<string, string> = { language: "about", usi: "about", emergency: "about", course: "course" };
+const STAGE_TITLES: Record<string, string> = { documents: "Documents", about: "About you", course: "Course" };
+const stageRanges = ["documents", "about", "course"].flatMap((id) => {
+  const idx = ALL_STEPS.map((item, i) => ((STAGE_OF[item.id] ?? "documents") === id ? i : -1)).filter((i) => i >= 0);
+  return idx.length ? [{ id, title: STAGE_TITLES[id], from: idx[0], to: idx[idx.length - 1] }] : [];
+});
 
 function wizardStepKey(applicationId: string): string {
   return `slit-portal-wizard-step:${portalScopeCacheKey()}:${applicationId}`;
@@ -613,6 +621,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const stepBusy = (target: WizardStep) =>
     pending.some((item) => item.category === target.category && !item.error) ||
     documents.some((doc) => doc.category === target.category && isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
+  const allSteps = ALL_STEPS;
+  const wizardStages: WizardStage[] = stageRanges.map((range) => ({ ...range, busy: WIZARD_STEPS.some((item, i) => i >= range.from && i <= range.to && stepBusy(item)) }));
   // While this step's file uploads or is read, the wizard is locked so nothing else can be clicked.
   const removingExpired = !expiredPassport?.error && stepDocs.some(isExpiredPassport);
   const removingWrong = !rejectedDocs[current.category]?.error && stepDocs.some(isWrongDocument);
@@ -733,11 +743,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       onClose={onCancel}
       closeLabel="Cancel and close the wizard"
       stepper={
-        <WizardStepper
-          items={[...WIZARD_STEPS, ...WIZARD_QUESTIONS].map((item) => ({ id: item.id, short: item.short, icon: item.icon, busy: "category" in item && stepBusy(item) }))}
-          current={step}
-          onSelect={goTo}
-        />
+        <WizardStages stages={wizardStages} current={step} total={WIZARD_STEPS.length + WIZARD_QUESTIONS.length} stepTitle={allSteps[step]?.title ?? ""} onSelect={goTo} after="Review" />
       }
       footerStart={
         <>

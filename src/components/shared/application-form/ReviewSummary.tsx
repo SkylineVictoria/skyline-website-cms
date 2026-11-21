@@ -9,6 +9,9 @@ export interface ReviewStep {
   rows: Array<{ key: string; label: string; value: string; note?: ReactNode }>;
 }
 
+/** The one line shown under a complete step's title: its first two filled answers. */
+const summaryOf = (step: ReviewStep) => step.rows.map((row) => row.value.trim()).filter((value) => value && value !== "—").slice(0, 2).join(" · ");
+
 export interface ReviewGroup { key: string; title: string; steps: ReviewStep[] }
 
 /** One missing or invalid item: Fix scrolls to the exact field and puts the cursor in it. */
@@ -72,15 +75,21 @@ export default function ReviewSummary({ groups, issues = [], meta, readOnly, onE
                   <div className="flex items-center gap-2 py-2">
                     <button type="button" aria-expanded={expanded} onClick={() => toggle(step.index)}
                       className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md py-0.5 text-left transition-colors duration-150 hover:text-foreground-950">
-                      {ok
-                        ? <i className="ri-check-line text-base leading-none text-emerald-700" aria-label="Complete" />
-                        : <i className="ri-error-warning-line text-base leading-none text-amber-600" aria-label="Needs attention" />}
-                      <span className="min-w-0 truncate text-sm text-foreground-900">{step.title}</span>
-                      {!ok ? <span className="hidden shrink-0 text-xs text-amber-700 sm:inline">{step.issues.length} to fix</span> : null}
+                      <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${ok ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                        {ok
+                          ? <i className="ri-check-line text-sm leading-none" aria-label="Complete" />
+                          : <i className="ri-error-warning-line text-sm leading-none" aria-label="Needs attention" />}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-foreground-900">{step.title}</span>
+                        <span className={`block truncate text-xs ${ok ? "text-foreground-500" : "text-amber-800"}`}>
+                          {ok ? summaryOf(step) || "Nothing entered on this step." : `${step.issues.length} to fix`}
+                        </span>
+                      </span>
                       <i className={`ml-auto text-base leading-none text-foreground-400 transition-transform duration-200 ri-arrow-down-s-line ${expanded ? "rotate-180" : ""}`} aria-hidden="true" />
                     </button>
                     {readOnly ? null : (
-                      <button type="button" onClick={() => onEdit(step.index)} className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-xs font-medium text-foreground-600 transition-colors duration-150 hover:bg-background-100 hover:text-foreground-900">
+                      <button type="button" onClick={() => onEdit(step.index)} className={`shrink-0 cursor-pointer rounded-md px-2.5 py-1 text-xs font-semibold transition-colors duration-150 ${ok ? "text-foreground-600 hover:bg-background-100 hover:text-foreground-900" : "border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"}`}>
                         {ok ? "Edit" : "Fix"}<span className="sr-only"> {step.title}</span>
                       </button>
                     )}

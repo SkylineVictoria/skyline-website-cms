@@ -344,7 +344,7 @@ export default function ApplicationDetailPage() {
             ) : undefined}
             onSaved={refreshAfterSave}
             onSubmitted={(reference, studentName) =>
-              navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName } })}
+              navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName, submittedPath: paths.detail(application.id) } })}
           />
         ) : null}
 

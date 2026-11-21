@@ -1205,7 +1205,7 @@ export default function ApplicationWorkspace({
     if (window.location.hash !== `#${keys[index]}`) navigate({ search: window.location.search, hash: keys[index] }, { replace: true });
   };
 
-  // A stage has opened (or the page is ready): incomplete steps open, complete ones are one line, and the cursor goes to the first
+  // A stage has opened (or the page is ready): the first incomplete step opens, the rest are one line, and the cursor goes to the first
   // incomplete step (or the step asked for). Through a ref, so only the stage change runs it.
   const stageOpened = () => {
     if (stage >= reviewStage) return;
@@ -1215,7 +1215,8 @@ export default function ApplicationWorkspace({
     const asked = pending ?? (fromHash >= 0 && stageOf(fromHash) === stage ? { section: fromHash } : null);
     const list = (stages[stage]?.sections ?? []).filter(sectionShown);
     const incomplete = list.filter((index) => sectionIssues(index).length > 0);
-    setExpanded(new Set([...incomplete, ...(asked ? [asked.section] : [])]));
+    // One step open at a time (the one asked for, else the first incomplete); the others are one line and open on click.
+    setExpanded(new Set(asked ? [asked.section] : incomplete.slice(0, 1)));
     const first = asked?.section ?? incomplete[0];
     if (first !== undefined) window.setTimeout(() => focusSection(first, asked?.field), 260);
   };

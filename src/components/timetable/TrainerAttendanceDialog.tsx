@@ -10,10 +10,12 @@ const TONE: Record<Mark, string> = { present: "bg-green-100 text-green-800 ring-
 
 /** Every student of a register not saved yet starts as Present, so the trainer only taps the exceptions. */
 function startingMarks(r: Pick<Register, "state" | "students">): Record<string, Mark> {
+  // rule-policy: technical ui-prefill A new register is only pre-filled on screen; nothing is saved until the trainer saves and the server checks every mark.
   return Object.fromEntries(r.students.flatMap((s) => (s.status ? [[s.enrolmentId, s.status]] : r.state === "new" ? [[s.enrolmentId, "present" as Mark]] : [])));
 }
 
 /** Trainer > My classes > a class: mark each student present / late / absent / excused, save a draft or the final register. */
+// rule-policy: technical saved-callback Tells the caller which state was saved so its badge can update.
 export default function TrainerAttendanceDialog({ sessionId, title, onClose, onSaved }: { sessionId: string; title: string; onClose: () => void; onSaved?: (state: "draft" | "final") => void }) {
   const [reg, setReg] = useState<Register | null>(null);
   const [marks, setMarks] = useState<Record<string, Mark>>({});
@@ -60,6 +62,7 @@ export default function TrainerAttendanceDialog({ sessionId, title, onClose, onS
           {!reg ? (!error ? <p className="text-sm text-foreground-500">Loading students…</p> : null) : !reg.students.length ? <p className="text-sm text-foreground-500">No students in this class on this day.</p> : (
             <>
               {locked ? <p className="mb-3 rounded-md bg-background-100 px-3 py-2 text-xs text-foreground-700">This register is final. Ask an RTO Manager if something needs changing.</p> : null}
+              {/* // rule-policy: technical prefill-hint Explains the on-screen pre-fill of a new register. */}
               {reg.state === "new" ? <p className="mb-3 rounded-md bg-primary-50 px-3 py-2 text-xs text-primary-900" data-testid="attendance-default-hint">Everyone starts as Present. Tap only the students who are absent, late or excused, then Save final.</p> : null}
               <div className="mb-2 flex justify-end"><button type="button" disabled={locked} className="text-xs font-semibold text-primary-700 hover:underline disabled:opacity-50"
                 onClick={() => setMarks(Object.fromEntries(reg.students.map((s) => [s.enrolmentId, "present" as Mark])))}>Mark all present</button></div>

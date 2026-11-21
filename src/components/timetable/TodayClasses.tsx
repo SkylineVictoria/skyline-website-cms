@@ -8,6 +8,7 @@ type RegState = "new" | "draft" | "final";
 
 /** Class days follow the college's clock (Melbourne), the same day the server uses to allow marking. */
 const melbourneToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
+// rule-policy: technical class-day-clock Current Melbourne time only highlights the class running now.
 const nowHm = () => new Date().toLocaleTimeString("en-GB", { timeZone: "Australia/Melbourne", hour: "2-digit", minute: "2-digit", hour12: false });
 const BADGE: Record<RegState, { label: string; tone: string }> = {
   new: { label: "Not taken", tone: "bg-amber-100 text-amber-800" },
@@ -24,13 +25,16 @@ export default function TodayClasses({ className = "" }: { className?: string })
     let live = true;
     const day = melbourneToday();
     const range = { p_from: day, p_to: day };
+    // rule-policy: technical today-classes-read Reads the trainer's own classes for today through the existing schedule RPCs.
     Promise.all([supabase.rpc("my_class_schedule", range), supabase.rpc("my_prereq_classes", range)]).then(async ([main, pre]) => {
       if (!live) return;
       const all = [...(main.error ? [] : ((main.data as { sessions?: Session[] } | null)?.sessions ?? [])), ...(pre.error ? [] : ((pre.data as Session[] | null) ?? []))]
+        // rule-policy: technical today-classes-filter Shows only classes that can take attendance (not cancelled, with a unit), as My classes does.
         .filter((s) => s.date === day && s.status !== "cancelled" && s.unitCode)
         .sort((a, b) => a.start.localeCompare(b.start));
       setRows(all);
       // One small read per class (a trainer has a handful a day) for the register state; a class that cannot be read shows no badge.
+      // rule-policy: technical register-state-read Reads the stored register state for the badge; the server still decides who may mark.
       const found = await Promise.all(all.map((s) => supabase.rpc("trainer_session_attendance", { p_session: s.id })
         .then(({ data, error }) => [s.id, error ? null : (data as { state: RegState }).state] as const)));
       if (live) setStates(Object.fromEntries(found.filter(([, st]) => st)));
@@ -61,12 +65,14 @@ export default function TodayClasses({ className = "" }: { className?: string })
               {st ? <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${BADGE[st].tone}`}>{BADGE[st].label}</span> : null}
               <button type="button" onClick={() => setMarking(s)}
                 className={st === "final" ? "rounded-md border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100" : "rounded-md bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-700"}>
+                {/* // rule-policy: technical button-label Label follows the stored register state. */}
                 <i className="ri-checkbox-circle-line" aria-hidden="true" /> {st === "final" ? "View attendance" : "Take attendance"}
               </button>
             </li>
           );
         })}
       </ul>
+      {/* // rule-policy: technical dialog-title Title text for the existing attendance dialog. */}
       {marking ? <TrainerAttendanceDialog sessionId={marking.id} title={`Today ${marking.start}–${marking.end} · ${marking.unitCode ?? ""} · Class ${marking.batchName}`}
         onSaved={(state) => setStates((x) => ({ ...x, [marking.id]: state }))} onClose={() => setMarking(null)} /> : null}
     </section>

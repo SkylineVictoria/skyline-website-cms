@@ -11,63 +11,78 @@ const day = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en
 /** What the dropdown shows: the intake's start and end dates ("19 Jan 2027 – 9 Nov 2029"); a fallback month keeps its month name. */
 const intakeDates = (i: OpenIntake) => (i.fallback || !i.startDate ? i.display : i.endDate ? `${day(i.startDate)} – ${day(i.endDate)}` : `Starts ${day(i.startDate)}`);
 
-interface CalendarUnit { unitCode: string; unitName: string; unitType: string | null; startDate: string; endDate: string | null; hours: number | null }
+interface WeekSlot { weekday: number; start: string; end: string; type: string | null }
+const DAY = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const monthLabel = (k: string) => new Date(`${k}-01T00:00:00Z`).toLocaleDateString("en-AU", { month: "long", year: "numeric", timeZone: "UTC" });
+const plusMonths = (k: string, n: number) => { const [y, m] = k.split("-").map(Number); const d = new Date(Date.UTC(y, m - 1 + n, 1)); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; };
 
-/** Read-only calendar of the chosen intake: every unit with its dates, month by month; the date the student joins is marked. */
-function IntakeCalendar({ intakeId, joinDate }: { intakeId: string; joinDate?: string }) {
-  const [open, setOpen] = useState(false);
-  const [units, setUnits] = useState<CalendarUnit[] | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => { setUnits(null); setFailed(false); setOpen(false); }, [intakeId]);
+/**
+ * The start-date calendar (replaces the intake dropdown once CoE or VoE is chosen): the coming year month by month. Each month lists the dates the student
+ * can start, with the unit that starts, and below them the weekly timetable (days and times) so the student can check the timing suits them. The only
+ * choice is the start date. Intake names are never shown.
+ */
+function StartCalendar({ options, value, onPick, disabled, keyOf }: { options: OpenIntake[]; value: string; onPick: (o: OpenIntake) => void; disabled?: boolean; keyOf: (o: OpenIntake) => string }) {
+  const [patterns, setPatterns] = useState<Record<string, WeekSlot[]> | null>(null);
+  const ids = [...new Set(options.map((o) => o.id).filter((x): x is string => !!x))];
+  const idsKey = ids.join(",");
   useEffect(() => {
-    if (!open || units) return;
+    if (!ids.length) { setPatterns({}); return; }
     let live = true;
-    void supabase.rpc("intake_unit_calendar", { p_intake: intakeId }).then(({ data, error }) => {
-      if (!live) return;
-      if (error) setFailed(true); else setUnits((data ?? []) as CalendarUnit[]);
-    });
+    void supabase.rpc("intake_week_pattern", { p_intakes: ids }).then(({ data }) => { if (live) setPatterns((data ?? {}) as Record<string, WeekSlot[]>); });
     return () => { live = false; };
-  }, [open, units, intakeId]);
-  // One month at a time (arrows), starting at the month the student joins: the units running in that month.
-  const monthsWithUnits = [...new Set((units ?? []).flatMap(u => {
-    const out: string[] = []; let [y, m] = u.startDate.split("-").map(Number); const [ey, em] = (u.endDate ?? u.startDate).split("-").map(Number);
-    while (y < ey || (y === ey && m <= em)) { out.push(`${y}-${String(m).padStart(2, "0")}`); m++; if (m > 12) { m = 1; y++; } }
-    return out;
-  }))].sort();
-  const firstMonth = (joinDate ?? units?.[0]?.startDate ?? "").slice(0, 7);
-  const [month, setMonth] = useState("");
-  useEffect(() => { setMonth(""); }, [intakeId]);
-  const current = monthsWithUnits.includes(month) ? month : monthsWithUnits.includes(firstMonth) ? firstMonth : monthsWithUnits[0] ?? "";
-  const at = monthsWithUnits.indexOf(current);
-  const inMonth = (units ?? []).filter(u => u.startDate.slice(0, 7) <= current && (u.endDate ?? u.startDate).slice(0, 7) >= current);
-  const monthName = (k: string) => new Date(`${k}-01T00:00:00Z`).toLocaleDateString("en-AU", { month: "long", year: "numeric", timeZone: "UTC" });
-  const arrow = "flex h-7 w-7 items-center justify-center rounded-md border border-background-300 text-foreground-700 hover:bg-background-100 disabled:opacity-40";
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the set of intakes changes
+  }, [idsKey]);
+  const dated = options.filter((o) => o.joinDate || o.startDate).map((o) => ({ o, date: (o.joinDate ?? o.startDate) as string })).sort((x, y) => x.date.localeCompare(y.date));
+  if (dated.length === 0) return <p className="text-sm text-foreground-500">No start dates are published for this study type yet.</p>;
+  const first = dated[0].date.slice(0, 7);
+  const months = Array.from({ length: 12 }, (_, i) => plusMonths(first, i));
   return (
-    <div className="mt-2">
-      <button type="button" onClick={() => setOpen(o => !o)} className="text-xs font-semibold text-primary-700 underline underline-offset-2" data-testid="intake-calendar-toggle">
-        {open ? "Hide the full calendar" : "View the full calendar"}
-      </button>
-      {open ? (
-        <div className="mt-2 rounded-lg border border-background-200 bg-background-50 p-3 text-sm" data-testid="intake-calendar">
-          {failed ? <p className="text-primary-700">The calendar could not be loaded.</p> : !units ? <p className="text-foreground-500">Loading…</p>
-            : monthsWithUnits.length === 0 ? <p className="text-foreground-500">No unit dates are published for this intake yet.</p>
-            : <>
-              <div className="mb-2 flex items-center justify-between">
-                <button type="button" className={arrow} disabled={at <= 0} onClick={() => setMonth(monthsWithUnits[at - 1])} aria-label="Previous month"><i className="ri-arrow-left-s-line" aria-hidden="true" /></button>
-                <p className="text-sm font-semibold text-foreground-800" data-testid="intake-calendar-month">{monthName(current)}</p>
-                <button type="button" className={arrow} disabled={at >= monthsWithUnits.length - 1} onClick={() => setMonth(monthsWithUnits[at + 1])} aria-label="Next month"><i className="ri-arrow-right-s-line" aria-hidden="true" /></button>
-              </div>
-              <ul className="space-y-1">
-                {inMonth.map(u => (
-                  <li key={`${u.unitCode}-${u.startDate}`} className={`flex flex-wrap justify-between gap-x-3 rounded px-2 py-1 ${joinDate === u.startDate ? "bg-primary-50 font-medium text-primary-800" : "text-foreground-700"}`}>
-                    <span>{u.unitCode} {u.unitName}{joinDate === u.startDate ? " · you start here" : ""}</span>
-                    <span className="text-foreground-500">{day(u.startDate)}{u.endDate ? ` – ${day(u.endDate)}` : ""}{u.hours ? ` · ${u.hours} h` : ""}</span>
-                  </li>
+    <div className="max-h-[32rem] space-y-4 overflow-y-auto rounded-lg border border-background-200 bg-background-50 p-3" data-testid="intake-calendar">
+      {months.map((m) => {
+        const starts = dated.filter((d) => d.date.slice(0, 7) === m);
+        // One weekly table per distinct pattern in the month, with the start dates it applies to.
+        const groups = new Map<string, { slots: WeekSlot[]; dates: string[] }>();
+        for (const { o, date } of starts) {
+          const slots = (o.id && patterns?.[o.id]) || [];
+          const k = JSON.stringify(slots.map((x) => [x.weekday, x.start, x.end]));
+          const g = groups.get(k) ?? { slots, dates: [] };
+          g.dates.push(day(date)); groups.set(k, g);
+        }
+        return (
+          <section key={m} aria-label={monthLabel(m)}>
+            <h4 className="mb-1.5 text-sm font-semibold text-foreground-800">{monthLabel(m)}</h4>
+            {starts.length === 0 ? <p className="text-xs text-foreground-400">No start dates this month.</p> : (
+              <>
+                <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label={`Start dates in ${monthLabel(m)}`}>
+                  {starts.map(({ o, date }) => {
+                    const on = keyOf(o) === value;
+                    return (
+                      <button key={keyOf(o)} type="button" role="radio" aria-checked={on} disabled={disabled} onClick={() => onPick(o)}
+                        className={`rounded-lg border-2 px-3 py-2 text-left text-sm ${on ? "border-primary-600 bg-primary-50 text-primary-900" : "border-background-300 bg-background-50 hover:border-primary-400"}`}>
+                        <span className="block font-semibold">{day(date)}</span>
+                        <span className="block text-xs text-foreground-600">{o.firstDay ? "Day one of the course" : [o.unitCode, o.unitName].filter(Boolean).join(" ") || "Next unit"}{o.prereqFirst ? " · missed prerequisites first" : ""}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {[...groups.values()].map((g, i) => g.slots.length === 0 ? null : (
+                  <div key={i} className="mt-2 overflow-x-auto">
+                    <p className="mb-1 text-xs text-foreground-500">Weekly timetable{groups.size > 1 ? ` for the start on ${g.dates.join(", ")}` : ""}</p>
+                    <table className="w-full min-w-[18rem] border-collapse text-left text-xs">
+                      <thead><tr className="text-foreground-500"><th className="border-b border-background-200 py-1 pr-3 font-medium">Day</th><th className="border-b border-background-200 py-1 pr-3 font-medium">Time</th><th className="border-b border-background-200 py-1 font-medium">Class</th></tr></thead>
+                      <tbody>
+                        {g.slots.map((x, j) => (
+                          <tr key={j} className="text-foreground-700"><td className="border-b border-background-100 py-1 pr-3">{DAY[x.weekday] ?? ""}</td><td className="border-b border-background-100 py-1 pr-3">{x.start} – {x.end}</td><td className="border-b border-background-100 py-1 capitalize">{x.type ?? ""}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 ))}
-              </ul>
-            </>}
-        </div>
-      ) : null}
+              </>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -119,8 +134,10 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
     const top = ofLoad.filter((i) => { const k = i.id ?? i.name; const n = perIntake.get(k) ?? 0; perIntake.set(k, n + 1); return n < UPCOMING_STARTS; });
     return selected && ofLoad.includes(selected) && !top.includes(selected) ? [...top, selected] : top;
   })();
+  // With CoE or VoE chosen the start date is picked on the calendar (month by month, with the weekly timetable) instead of a dropdown.
+  const calendarMode = loadsOffered.length > 0 && !fallbackOnly(intakes);
   const addable = canAdd && Boolean(courseId) && !loading && !state.failed && Boolean(onAdd);
-  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : courseId ? "The next three start dates of each intake are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
+  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : calendarMode ? (needsLoad ? "Choose CoE or VoE to see the start dates." : "Pick the date you want to start. Check the weekly timetable under each month to make sure the times suit you.") : courseId ? "The next three start dates of each intake are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
   return (
     <div>
       {loadsOffered.length > 1 ? (
@@ -137,7 +154,7 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
           </div>
         </div>
       ) : null}
-      <select id={id} value={shown.some((i) => keyOf(i) === value) ? value : ""} disabled={disabled || !courseId || loading || needsLoad || (none && !addable)} aria-invalid={Boolean(error) || none}
+      {calendarMode ? (needsLoad ? null : load ? <StartCalendar options={intakes.filter((i) => i.studyLoad === load)} value={value} disabled={disabled} keyOf={keyOf} onPick={(o) => onChange(o)} /> : null) : <select id={id} value={shown.some((i) => keyOf(i) === value) ? value : ""} disabled={disabled || !courseId || loading || needsLoad || (none && !addable)} aria-invalid={Boolean(error) || none}
         aria-describedby={`${id}-help`} className={className} data-testid="intake-select"
         onChange={(e) => { if (e.target.value === ADD_INTAKE_VALUE) { onAdd?.(); return; } onChange(intakes.find((i) => keyOf(i) === e.target.value) ?? null); }}>
         <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : needsLoad ? "Choose CoE or VoE first" : fallback ? "Select a start month" : "Select a start date"}</option>
@@ -148,12 +165,11 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
           return groups.map((g) => { const list = shown.filter((i) => (i.id ?? i.name) === g); return <optgroup key={g} label={list[0].name}>{list.map(optionOf)}</optgroup>; });
         })()}
         {addable ? <option value={ADD_INTAKE_VALUE} data-testid="intake-add-option">+ Add new intake…</option> : null}
-      </select>
+      </select>}
       <p id={`${id}-help`} className={`mt-1 text-xs ${none || state.failed ? "text-primary-700" : "text-foreground-500"}`} role={none || state.failed ? "alert" : undefined} data-testid="intake-help">
         {help}
         {none && addable ? <> <button type="button" onClick={onAdd} className="font-semibold text-primary-700 underline underline-offset-2" data-testid="intake-add-button">Add new intake</button></> : null}
       </p>
-      {(() => { const chosen = intakes.find((i) => keyOf(i) === value); return chosen?.id ? <IntakeCalendar intakeId={chosen.id} joinDate={chosen.joinDate} /> : null; })()}
     </div>
   );
 }

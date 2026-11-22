@@ -1,5 +1,6 @@
-// Courses whose last scheduled cycle ends within 12 months (owner, 2026-11-20). The dashboard shows a banner with Show for the
-// details; the popup no longer opens by itself on every admin page (admin request 2026-11-22). weeklyPopup is kept for reuse. From 3 months before the end the course is locked: no new intakes, enrolments or class time changes.
+// Courses whose last scheduled cycle ends within 12 months (owner, 2026-11-20). Every admin page opens the alert once a week
+// for each admin until more cycles are scheduled ("Remind me next week" records this week as seen, on the server); the dashboard
+// also shows a banner. From 3 months before the end the course is locked: no new intakes, enrolments or class time changes.
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Modal } from "@/pages/admin/components/ui";

@@ -486,8 +486,28 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         if (!a.length || !p.length || (a.length === p.length && a.every(token => p.includes(token)))) return [];
         return [{ filename: doc.filename, name }];
       }) : [];
+  const visaDocuments = documents.filter(doc => doc.category === "Visa" && !isWrongDocument(doc));
+  const visaExpiry = (doc: WizardDoc) => {
+    const v = doc.extracted ?? {};
+    const raw = v.visa_expiry_date || v.visa_expiry || v.expiry_date || v.expiration_date || v.date_of_expiry || "";
+    if (!raw) return { known: false, expired: false };
+    const parsed = /^\\d{4}-\\d{2}-\\d{2}$/.test(raw) ? new Date(raw + "T23:59:59") : new Date(raw);
+    return { known: !Number.isNaN(parsed.getTime()), expired: !Number.isNaN(parsed.getTime()) && parsed.getTime() < Date.now() };
+  };
+  const acceptableVisa = visaDocuments.filter(doc =>
+    !(ruleBool("admissions.visa_reject_expired", true) && doc.extraction === "done" && visaExpiry(doc).expired) &&
+    !(ruleBool("admissions.visa_require_expiry_date", false) && doc.extraction === "done" && !visaExpiry(doc).known) &&
+    !(ruleBool("admissions.visa_require_subclass", false) && doc.extraction === "done" && !String(doc.extracted?.visa_subclass ?? "").trim())
+  );
+  const visaNamesForReview = ruleBool("admissions.visa_passport_name_review", true) && passportName
+    ? visaDocuments.filter(doc => doc.extraction === "done").flatMap(doc => {
+        const name = extractedName(doc.extracted);
+        if (!name) return [];
+        const a = nameTokens(name), p = nameTokens(passportName);
+        return a.length && p.length && !(a.length === p.length && a.every(token => p.includes(token))) ? [{ filename: doc.filename, name }] : [];
+      }) : [];
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
-    || documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1);
+    || (item.id === "visa" ? acceptableVisa.length > 0 : documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1));
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && (!stepHasDoc(item) || (item.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && documents.some((doc) => doc.category === item.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date))));
   // Forward navigation cannot bypass documents marked required by the published admissions rule.
   const goTo = (index: number) => {
@@ -738,6 +758,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       <>
         {uploadRejections[current.category] ? <WizardNotice tone="error">{uploadRejections[current.category]}</WizardNotice> : null}
         {current.id === "english" && englishSaveError ? <WizardNotice tone="error">{englishSaveError}</WizardNotice> : null}
+        {current.id === "visa" && visaNamesForReview.length > 0 ? <WizardNotice tone="error">Visa name review needed: {visaNamesForReview.map(item => `${item.filename}: ${item.name}`).join("; ")} differs from passport name {passportName}. Ask SLIT to verify before approval.</WizardNotice> : null}
+        {current.id === "visa" && visaDocuments.some(doc => doc.extraction === "done" && visaExpiry(doc).expired) && ruleBool("admissions.visa_reject_expired", true) ? <WizardNotice tone="error">Expired visa evidence cannot satisfy the visa requirement. Upload valid evidence or request SLIT review.</WizardNotice> : null}
+        {current.id === "visa" && ruleBool("admissions.visa_vevo_review", false) ? <WizardNotice tone="info">SLIT staff must verify visa status through VEVO. This upload has not been verified with VEVO automatically.</WizardNotice> : null}
         {current.id === "academic" && academicNameReviews.length > 0 ? <WizardNotice tone="error">Name review needed: the academic document name differs from the passport ({academicNameReviews.map(item => `${item.filename}: ${item.name}`).join("; ")}). Passport name: {passportName}. Please have SLIT verify the documents before approval.</WizardNotice> : null}
         <WizardDocumentStep
           step={current}

@@ -46,6 +46,36 @@ function fromMenu(node: MenuNode): Entry {
   return { id: node.id, label: node.label, icon: menuIcon(node.icon_key), route: node.route ?? undefined, external: node.open_in_new_tab, configured: node, children };
 }
 
+// Group the visible menu for browsing. The configured tree still supplies destinations and permissions.
+const moduleGroups = [
+  { id: "admissions-records", label: "Admissions & Records", icon: "ri-team-line", members: ["admissions", "students", "agencies", "courses", "document_signing"] },
+  { id: "communications-support", label: "Communications & Support", icon: "ri-chat-3-line", members: ["communications", "email-management", "support_tickets"] },
+  // rule-policy: technical sidebar-system-group Organizes existing system links in the sidebar.
+  { id: "system-integrations", label: "Settings & Integrations", icon: "ri-settings-3-line", members: ["administration", "external_integrations", "audit", "automation"] },
+];
+
+function groupedModules(modules: Entry[]): Entry[] {
+  const groups = moduleGroups.flatMap(({ id, label, icon, members }) => {
+    const children = members.flatMap((member) => {
+      const entry = modules.find((item) => item.id === member);
+      if (!entry) return [];
+      // rule-policy: technical sidebar-container-display Shows existing destinations directly in their combined group.
+      const mergeContents = member === "admissions" || member === "communications" || member === "administration";
+      return mergeContents && !entry.route && entry.children?.length ? entry.children : [entry];
+    });
+    return children.length ? [{ id, label, icon, children }] : [];
+  });
+  const bookings = modules.find((item) => item.id === "bookings");
+  const learningGroup = bookings ? { ...learning, children: [...(learning.children ?? []), bookings] } : learning;
+  const website = modules.find((item) => item.id === "website");
+  const standalone = modules.filter((item) => item.id === "staff" || item.id === "finance");
+  const other = modules.filter((item) => item.id !== learning.id && item.id !== "website" && item.id !== "bookings"
+    && !standalone.includes(item) && !moduleGroups.some((group) => group.members.includes(item.id)));
+  return [learningGroup, ...groups, ...standalone, ...(website ? [website] : []), ...(other.length ? [
+    { id: "other-modules", label: "Other modules", icon: "ri-more-2-line", children: other },
+  ] : [])];
+}
+
 function isCurrent(entry: Entry, pathname: string, search: string): boolean {
   if (entry.children?.length) return entry.children.some((child) => isCurrent(child, pathname, search));
   if (entry.configured) return menuActive(entry.configured, pathname);
@@ -127,7 +157,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const main = nodes?.filter((entry) => entry.route !== "/") ?? [dashboard];
   const dashboardEntries = main.filter((entry) => entry.route === "/admin");
   const modules = [learning, ...main.filter((entry) => entry.route !== "/admin"), ...(nodes ? [email] : [])];
-  const allModules: Entry = { id: "all-modules", label: "All modules", icon: "ri-apps-2-line", children: modules };
+  const allModules: Entry = { id: "all-modules", label: "All modules", icon: "ri-apps-2-line", children: groupedModules(modules) };
   const footer = nodes?.filter((entry) => entry.route === "/") ?? [publicWebsite];
   const terms = collapsed ? [] : query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const matches = terms.length ? destinations([...dashboardEntries, ...modules, ...footer]).filter(({ entry, trail }) =>

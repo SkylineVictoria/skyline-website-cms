@@ -2683,7 +2683,7 @@ const completeDetails = {
   tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "default", super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "",
 };
 
-test("submit needs the details, citizenship, every required document with a current expiry date, and the bank details", () => {
+test("submit needs the details, citizenship and every required document with a current expiry date (documents only: no bank, tax or super)", () => {
   const now = new Date("2026-11-09T02:00:00Z");
   const today = "2026-11-09";
   const all = docs(today);
@@ -2701,24 +2701,22 @@ test("submit needs the details, citizenship, every required document with a curr
   assert.deepEqual(texts(completeDetails, [...without("Passport"), { ...all[0], expiryDate: null }]), ["Enter a current expiry date for your passport."], "a passport uploaded without its date still needs one before Submit");
   assert.deepEqual(texts(completeDetails, [...all, { ...all[0], id: "lic", category: "Driving Licence", expiryDate: "2020-01-01" }]), [], "the optional licence never blocks Submit");
   assert.deepEqual(texts({ ...completeDetails, is_australian_citizen: null }), ["Tell us whether you are an Australian citizen."]);
-  assert.deepEqual(texts(completeDetails, all, false), ["Enter your bank details."]);
+  assert.deepEqual(texts(completeDetails, all, false), [], "bank details are not asked on the link");
   assert.ok(!texts().some((p) => /role/i.test(p)), "no role is asked of an applicant");
   const blank = wizardLib.wizardProblems({ ...staffRules.EMPTY_STAFF_DETAILS }, [], false, now);
   assert.deepEqual(blank.map((p) => p.text), [
     "Tell us whether you are an Australian citizen.", "Enter your first name.", "Enter your last name.", "Enter your date of birth.", "Enter your mobile number.",
     "Enter the street address.", "Enter the suburb or city.", "Enter the country.", "Enter the emergency contact's name.", "Enter the emergency contact's phone number.",
     "Enter how they are related to you.", "Enter your nationality.", "Enter your passport number.",
-    "Tell us your residency status for tax purposes.", "Tell us whether you have a study or training support loan.", "Choose how your super is paid.",
     "A passport is required before you can submit.", "Upload your visa.", "Upload your English test result.", "Upload your academic results.", "Upload your health insurance.",
-    "Enter your bank details.",
   ], "everything missing, in the order the database checks it");
   // Each problem belongs to the step that fixes it; a step is complete (ticked) once it has none.
-  assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal", "tax", "bank"]);
-  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "tax", "review"], "Tax and super sits between Bank details and Review");
+  assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal"]);
+  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "review"], "documents only: no Bank details or Tax and super steps");
   assert.ok(!texts().some((p) => /tax file|tfn/i.test(p)) && !Object.keys(staffRules.EMPTY_STAFF_DETAILS).some((k) => /tfn|tax_file/.test(k)), "no tax file number is asked for anywhere");
   assert.equal(wizardLib.stepComplete("documents", blank), false);
   assert.equal(wizardLib.stepComplete("review", []), true);
-  assert.equal(wizardLib.stepComplete("review", wizardLib.wizardProblems(completeDetails, all, false, now)), false);
+  assert.equal(wizardLib.stepComplete("review", wizardLib.wizardProblems(completeDetails, without("Passport"), false, now)), false);
   // The address belongs to Personal details, or to Check details when an Australian licence gave it.
   const licence = { id: "lic", category: "Driving Licence", expiryDate: "2030-01-01", extractionStatus: "done" as const, extracted: { au_street: "9 Licence Rd" } };
   assert.equal(wizardLib.wizardProblems({ ...completeDetails, address_suburb: "" }, all, true, now)[0].step, "personal");
@@ -4328,7 +4326,7 @@ test("wizard: where each pre-filled value came from, what could not be read, and
   assert.equal(wizardLib.readerDate("03/02/1991"), "1991-02-03");
   assert.equal(wizardLib.isBeingRead({ ...passport, extractionStatus: "pending" as const }), true);
   assert.equal(wizardLib.isBeingRead({ ...passport, category: "Academic", extractionStatus: "pending" as const }), false, "academic results are never read");
-  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "tax", "review"]);
+  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "review"]);
   // What the server sends becomes the wizard's fields.
   const details = wizardLib.detailsOf({ first_name: "Jo", phone_e164: "+61400000111", emergency_phone_e164: null, is_australian_citizen: true, date_of_birth: null, passport_number: "N1234567" });
   assert.deepEqual([details.first_name, details.phone, details.emergency_phone, details.is_australian_citizen, details.date_of_birth, details.passport_number], ["Jo", "+61400000111", "", true, "", "N1234567"]);

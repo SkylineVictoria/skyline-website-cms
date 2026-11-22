@@ -97,8 +97,8 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
       <button type="button" onClick={showAdvanced} className="shrink-0 text-sm font-medium text-primary-700 hover:underline">Advanced rules</button>
     </div>
     {message && <p role="status" className="text-sm text-foreground-700">{message}</p>}
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(170px,210px)_minmax(0,1fr)]">
-      <nav className="rounded-xl border border-background-300 bg-background-50 p-2" aria-label="Student wizard steps">
+    <div className="grid grid-cols-1 gap-0 border-t border-background-200 lg:grid-cols-[minmax(170px,210px)_minmax(0,1fr)] lg:divide-x lg:divide-background-200">
+      <nav className="p-2 lg:pr-3" aria-label="Student wizard steps">
         <input aria-label="Find wizard step" placeholder="Search steps" value={search} onChange={e => setSearch(e.target.value)}
           className="mb-2 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" />
         {STEPS.filter(item => item.title.toLowerCase().includes(search.toLowerCase())).map(item =>
@@ -107,7 +107,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
             className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${selected === item.id ? "bg-primary-50 font-semibold text-primary-800" : "text-foreground-700 hover:bg-background-100"}`}>
             <i className={item.icon} aria-hidden="true" />{item.title}</button>)}
       </nav>
-      <section className="space-y-3 rounded-xl border border-background-300 bg-background-50 p-3 sm:p-4" aria-label={step.title + " rules"}>
+      <section className="min-w-0 space-y-3 p-3 sm:p-4 lg:pl-5" aria-label={step.title + " rules"}>
         <div><h3 className="font-semibold text-foreground-900">{step.title}</h3>
           <p className="text-xs text-foreground-600">Settings are saved and published through SLIT's existing rule service.</p></div>
         {step.docs.map(doc => <label key={doc} className="flex items-center justify-between gap-3 border-b border-background-200 py-3">
@@ -123,7 +123,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
           const type = version?.definition.value_type ?? "";
           const editable = Boolean(version && version.state === "published");
           const shown = edits[id] ?? (typeof value === "string" ? value : JSON.stringify(value ?? null, null, 2));
-          return <div key={id} className="grid gap-2 border-b border-background-200 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(160px,230px)] sm:items-center">
+          return <div key={id} className="grid gap-2 border-b border-background-200 py-3 xl:grid-cols-[minmax(0,1fr)_minmax(150px,230px)] xl:items-center">
             <label htmlFor={id} className="text-sm font-medium">{NAMES[id]}</label>
             {!rule || !version ? <p className="text-xs text-foreground-600">Rule not registered. Existing checks stay in force.</p> :
               <>

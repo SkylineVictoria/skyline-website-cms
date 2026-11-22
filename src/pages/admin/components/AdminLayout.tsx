@@ -63,18 +63,22 @@ export default function AdminLayout() {
   }
 
   const tenant = requestWebsiteDomain();
-  const sidebar = (collapsed: boolean) => (
-    <nav className="flex h-full flex-col" aria-label="Admin">
-      <div className={`flex items-center gap-2.5 border-b border-background-200 py-3.5 ${collapsed ? "justify-center px-2" : "px-4"}`}>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-500 text-background-50" title={collapsed ? "Skyline CMS" : undefined}>
-          <i className="ri-building-2-line text-lg" aria-hidden="true" />
+  const sidebar = (collapsed: boolean, mobile = false) => (
+    <nav className="admin-nav" data-collapsed={collapsed} aria-label="Admin"
+      onKeyDown={(event) => { if (mobile && event.key === "Escape") setMenuOpen(false); }}>
+      <div className="admin-nav-brand">
+        <span className="admin-nav-mark" title={collapsed ? "Skyline CMS" : undefined}>
+          <i className="ri-building-2-line" aria-hidden="true" />
         </span>
-        {collapsed ? null : (
-          <div className="min-w-0 leading-tight">
-            <p className="truncate font-heading text-sm font-bold text-foreground-950">{tenant ? `${data.settings.shortName || data.settings.name} CMS` : "Skyline CMS"}</p>
-            <p className="text-2xs text-foreground-500">Website Admin</p>
-          </div>
-        )}
+        {collapsed ? null : <div className="admin-nav-name" title={tenant ? data.settings.name : "Skyline CMS"}>
+          <span>{tenant ? data.settings.shortName || data.settings.name : "Skyline"}</span>
+          <small>Admin workspace</small>
+        </div>}
+        {collapsed ? null : <button type="button" className="admin-nav-toggle"
+          title={mobile ? "Close menu" : "Collapse sidebar"} aria-label={mobile ? "Close menu" : "Collapse sidebar"}
+          onClick={() => mobile ? setMenuOpen(false) : setPrefs({ sidebar: "icons" })}>
+          <i className={mobile ? "ri-close-line" : "ri-side-bar-line"} aria-hidden="true" />
+        </button>}
       </div>
       <AdminMenu close={() => setMenuOpen(false)} collapsed={collapsed} />
     </nav>
@@ -90,8 +94,8 @@ export default function AdminLayout() {
     <DraftProvider>
     <div className="min-h-screen bg-background-100 text-sm text-foreground-900" data-density={prefs.density}>
       <div className="flex">
-        {/* Desktop sidebar */}
-        <aside className={`sticky top-0 hidden h-[calc(100vh-44px)] shrink-0 border-r border-background-200 bg-background-50 transition-[width] duration-slow ease-out lg:block ${icons ? "w-16" : "w-[var(--sidebar-w)]"}`}>
+        {/* // rule-policy: technical sidebar-width Changes visual width when the sidebar uses icons. */}
+        <aside className={`sticky top-0 hidden h-[calc(100vh-44px)] shrink-0 bg-[#faf9f6] transition-[width] duration-slow ease-out lg:block ${icons ? "w-16" : "w-[var(--sidebar-w)]"}`}>
           {sidebar(icons)}
         </aside>
 
@@ -99,8 +103,8 @@ export default function AdminLayout() {
         {menuOpen ? (
           <div className="fixed inset-0 z-[70] lg:hidden">
             <div className="absolute inset-0 bg-foreground-950/40" onClick={() => setMenuOpen(false)} aria-hidden="true" />
-            <aside className="drawer-in-left absolute left-0 top-0 h-full w-[min(270px,85vw)] border-r border-background-200 bg-background-50">
-              {sidebar(false)}
+            <aside className="drawer-in-left absolute left-0 top-0 h-full w-[min(300px,85vw)] bg-[#faf9f6]">
+              {sidebar(false, true)}
             </aside>
           </div>
         ) : null}
@@ -108,15 +112,15 @@ export default function AdminLayout() {
         <div className="min-w-0 flex-1">
           <header className="sticky top-0 z-40 flex items-center justify-between border-b border-background-200 bg-background-50 px-4 py-2.5 md:px-6">
             <div className="flex items-center gap-3">
-              <button
+              {icons ? <button
                 type="button"
-                onClick={() => setPrefs({ sidebar: icons ? "full" : "icons" })}
-                aria-label={icons ? "Show the menu with labels" : "Show the menu as icons"}
-                title={icons ? "Show labels" : "Icons only"}
+                onClick={() => setPrefs({ sidebar: "full" })}
+                aria-label="Show the menu with labels"
+                title="Expand sidebar"
                 className="hidden h-8 w-8 cursor-pointer items-center justify-center rounded-md text-foreground-600 transition-colors duration-fast hover:bg-background-100 lg:flex"
               >
-                <i className={`${icons ? "ri-menu-unfold-line" : "ri-menu-fold-line"} text-lg`} aria-hidden="true" />
-              </button>
+                <i className="ri-menu-unfold-line text-lg" aria-hidden="true" />
+              </button> : null}
               <button
                 type="button"
                 onClick={() => setMenuOpen(true)}

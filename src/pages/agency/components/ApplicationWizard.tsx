@@ -1,3 +1,4 @@
+import { ruleBool } from "@/lib/businessRules";
 import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -103,6 +104,7 @@ function wizardDocs(rows: DocumentRow[]): WizardDoc[] {
 
 const isReading = (doc: WizardDoc) => doc.extraction === "queued" || doc.extraction === "processing";
 const isExpiredPassport = (doc: WizardDoc) =>
+  ruleBool("admissions.passport_reject_expired", true) &&
   doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && doc.extraction === "done" && !!doc.extracted &&
   getDocumentExpiryStatus("passport", doc.extracted).status === "expired";
 
@@ -368,7 +370,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   // An expired passport is not kept: once it is read as expired the file is deleted straight away, no confirmation.
   useEffect(() => {
-    documents.filter((doc) => isExpiredPassport(doc) && !discardingRef.current.has(doc.id)).forEach((doc) => {
+    documents.filter((doc) => ruleBool("admissions.passport_auto_delete_expired", true) && isExpiredPassport(doc) && !discardingRef.current.has(doc.id)).forEach((doc) => {
       discardingRef.current.add(doc.id);
       const date = getDocumentExpiryStatus("passport", doc.extracted ?? {}).date ?? "";
       setExpiredPassport({ filename: doc.filename, date });
@@ -469,7 +471,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const englishAltMet = englishAlt && ((alternatives.ausStudy && ausStudy === "Yes" && ausStudyDocs.length > 0) || (alternatives.cambridge && ausStudy === "No" && cambridge === "Yes"));
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
     || documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
-  const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && !stepHasDoc(item));
+  const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && (!stepHasDoc(item) || (item.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && documents.some((doc) => doc.category === item.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date))));
   // Forward navigation cannot bypass documents marked required by the published admissions rule.
   const goTo = (index: number) => {
     const bounded = Math.max(0, Math.min(index, LAST_STEP));
@@ -645,7 +647,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const rejectedHere = rejectedDocs[current.category];
   const stepCheck = STEP_CHECKS[current.category];
   const blockedByPassport = passportRequired && step === PASSPORT_STEP;
-  const blockedByRequiredDocument = !question && current.required && !stepHasDoc(current);
+  const passportMissingExpiry = current.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && current.required && documents.some((doc) => doc.category === current.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date);
+  const blockedByRequiredDocument = !question && ((current.required && !stepHasDoc(current)) || passportMissingExpiry);
   // The document notices below belong to document screens only.
   const onDocStep = !question;
 

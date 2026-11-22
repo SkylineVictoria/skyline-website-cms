@@ -457,10 +457,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   /* ------------------------------------------------------------ navigate */
 
-  // The passport is mandatory: the agent stays on the passport step until a current one is uploaded.
+  // Passport requirement is controlled by the published admissions.application_required_documents rule.
   const passportExpired = expiredPassport !== null || documents.some(isExpiredPassport);
   const hasPassport = documents.some((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && !isExpiredPassport(doc));
-  const passportRequired = PASSPORT_STEP >= 0 && (passportExpired || (!hasPassport && WIZARD_STEPS[PASSPORT_STEP].required));
+  const passportRequired = PASSPORT_STEP >= 0 && Boolean(WIZARD_STEPS[PASSPORT_STEP].required) && (passportExpired || !hasPassport);
   // Every required document must be uploaded before the agent can move past its step.
   const ausStudyDocs = AUS_STUDY_STEP ? documents.filter((doc) => doc.category === AUS_STUDY_STEP.category && !isWrongDocument(doc)) : [];
   /** The English requirement met without a test result: Australian study proof uploaded, or Yes to the Cambridge English course. */

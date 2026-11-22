@@ -2,17 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { loadBusinessRules } from "@/lib/businessRules";
 import { Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { AdminLoading, Badge, Button, Card, Field, Modal, PageHeader, SectionTabs, Select, TextInput } from "@/pages/admin/components/ui";
+import { AdminLoading, Badge, Button, Card, Field, Modal, PageHeader, Select, TextInput } from "@/pages/admin/components/ui";
 import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
 import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
 import SimpleSettings from "./SimpleSettings";
 import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Definition, type Rule, type Snapshot, isSystemRule } from "./model";
-
-const tabs = [
-  { id: "settings", label: "Settings", icon: "ri-equalizer-line" },
-  { id: "rules", label: "Advanced", icon: "ri-list-check" },
-];
 
 const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: "Australia/Melbourne" });
@@ -152,13 +147,13 @@ function RuleWorkspace() {
 
   return <>
     <PageHeader title="Settings & Policies" breadcrumb="Administration" description="How SLIT works: required documents, attendance, deposits, staff and agents." />
-    <SectionTabs tabs={tabs} active={tab === "history" ? "rules" : tab} onChange={id => setTab(id)} />
     {error && <div role="alert" className="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-900">{error}{!ready && <Button className="ml-2" size="sm" variant="outline" onClick={() => { setError(""); void reload().catch(() => setError(registrationError)); }}>Retry</Button>}</div>}
     {message && <p role="status" className="mb-3 rounded bg-primary-50 p-3">{message}</p>}
     {/* // rule-policy: technical page-copy Loading text for the settings page; no rule value. */}
     {!ready && !error && <AdminLoading label="Loading settings…" />}
     {ready && tab === "settings" && <SimpleSettings snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}
     {ready && tab !== "settings" && <div className="space-y-4">
+      <button type="button" className="text-sm font-medium text-primary-700 hover:underline" onClick={() => { setTab("settings"); filterMenu(""); }}><i className="ri-arrow-left-line" aria-hidden="true" /> Back to settings</button>
       <div className="flex flex-wrap items-center gap-2">
         <TextInput type="search" className="min-w-0 flex-1 sm:!w-72 sm:flex-none" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} />
         <Select className="!w-auto" aria-label="Area" value={area} onChange={e => setArea(e.target.value)}>

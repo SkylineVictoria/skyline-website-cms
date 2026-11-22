@@ -118,11 +118,21 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
     if (ok) { setEdits(old => { const next = { ...old }; delete next[s.id]; return next; }); setSaved(s.id); }
   };
 
+  // Owner (2026-11-22): less clutter. One area at a time; values read as plain text; a row opens its control only when clicked.
+  const [area, setArea] = useState(SECTIONS[0].title);
+  const [open, setOpen] = useState("");
+  const section = SECTIONS.find(x => x.title === area) ?? SECTIONS[0];
+  const close = (id: string) => { setOpen(""); setEdits(old => { const next = { ...old }; delete next[id]; return next; }); };
+
   return <div className="space-y-4">
-    <p className="text-sm text-foreground-600">The everyday settings, in plain words. A change takes effect as soon as you save it. Everything else is under <button type="button" className="font-medium text-primary-700 hover:underline" onClick={showAdvanced}>Advanced</button>.</p>
-    {SECTIONS.map(section => <Card key={section.title} className="p-4">
-      <h2 className="mb-3 flex items-center gap-2 font-heading text-base font-semibold"><i className={section.icon} aria-hidden="true" />{section.title}</h2>
-      <ul className="divide-y divide-background-200">{section.settings.map(s => {
+    <div className="flex flex-wrap gap-2" role="tablist" aria-label="Area">
+      {SECTIONS.map(x => <button key={x.title} type="button" role="tab" aria-selected={x.title === area} onClick={() => { setArea(x.title); setOpen(""); setSaved(""); }}
+        className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${x.title === area ? "border-primary-500 bg-primary-50 font-semibold text-primary-800" : "border-background-300 text-foreground-700 hover:bg-background-100"}`}>
+        <i className={x.icon} aria-hidden="true" />{x.title}
+      </button>)}
+    </div>
+    <Card className="overflow-hidden p-0">
+      <ul className="divide-y divide-background-100">{section.settings.map(s => {
         const rule = byId.get(s.id);
         const live = rule ? liveDefinition(rule) : undefined;
         // rule-policy: technical missing-rule A setting whose rule is not installed is simply not shown.
@@ -131,23 +141,38 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
         const value = s.id in edits ? edits[s.id] : stored;
         const changed = s.id in edits && !sameValue(edits[s.id], stored);
         const set = (v: unknown) => { setSaved(""); setEdits(old => ({ ...old, [s.id]: v })); };
-        return <li key={s.id} className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid={`setting-${s.id}`}>
-          <div className="min-w-0 sm:max-w-md">
-            <p className="text-sm font-medium text-foreground-900">{s.question}</p>
-            {s.help ? <p className="mt-0.5 text-xs text-foreground-500">{s.help}</p> : null}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Control setting={s} value={value} options={live.options} onChange={set} disabled={busy} />
-            {changed ? <>
-              <Button size="sm" disabled={busy} onClick={() => void save(s, rule, live)}>Save</Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEdits(old => { const next = { ...old }; delete next[s.id]; return next; })}>Cancel</Button>
-            {/* // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules. */}
-            </> : saved === s.id ? <span className="text-xs font-medium text-green-700" role="status">Saved</span> : null}
+        if (open !== s.id) return <li key={s.id} data-testid={`setting-${s.id}`}>
+          <button type="button" onClick={() => { setOpen(s.id); setSaved(""); }} className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left hover:bg-background-50">
+            <span className="text-sm text-foreground-900">{s.question}</span>
+            <span className="flex shrink-0 items-center gap-2 text-sm font-semibold text-foreground-900">
+              {/* // rule-policy: technical settings-catalogue Shows the stored value of an existing rule as text. */}
+              {saved === s.id ? <span className="text-xs font-medium text-green-700" role="status">Saved</span> : null}
+              <span className="max-w-[16rem] truncate">{shownValue(s, stored)}</span><i className="ri-pencil-line text-foreground-400" aria-hidden="true" />
+            </span>
+          </button>
+        </li>;
+        return <li key={s.id} className="space-y-3 bg-background-50 px-4 py-4" data-testid={`setting-${s.id}`}>
+          <div><p className="text-sm font-medium text-foreground-900">{s.question}</p>{s.help ? <p className="mt-0.5 text-xs text-foreground-500">{s.help}</p> : null}</div>
+          <Control setting={s} value={value} options={live.options} onChange={set} disabled={busy} />
+          <div className="flex gap-2">
+            <Button size="sm" disabled={busy || !changed} onClick={() => void save(s, rule, live).then(() => setOpen(""))}>Save</Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => close(s.id)}>Cancel</Button>
           </div>
         </li>;
       })}</ul>
-    </Card>)}
+    </Card>
+    <p className="text-xs text-foreground-500">Changes apply from today. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={showAdvanced}>All rules (for developers)</button></p>
   </div>;
+}
+
+function shownValue(setting: Setting, value: unknown): string {
+  const k = setting.kind;
+  if (k.type === "number") return value == null ? "Not set" : `${value}${k.unit === "%" ? "%" : k.unit ? ` ${k.unit}` : ""}`;
+  if (k.type === "yesno") return value === true ? k.on : k.off;
+  if (k.type === "choice") return String(value ?? "Not set");
+  const list = Array.isArray(value) ? (value as string[]) : [];
+  const labels: Record<string, string> = k.type === "staffDocs" ? STAFF_DOC_LABEL : k.labels ?? {};
+  return list.length ? list.map(o => labels[o] ?? o).join(", ") : "None";
 }
 
 function Control({ setting, value, options, onChange, disabled }: { setting: Setting; value: unknown; options: string[]; onChange: (v: unknown) => void; disabled: boolean }) {

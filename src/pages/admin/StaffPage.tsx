@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { useNavigate } from "react-router-dom";
-import { Badge, Button, Card, EmptyState, PageHeader, TextInput } from "@/pages/admin/components/ui";
+import { Badge, Button, Card, DangerDialog, EmptyState, Field, Modal, PageHeader, TextInput } from "@/pages/admin/components/ui";
 import { HrLink } from "@/pages/admin/components/Recruitment";
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import ResendLinkButton from "@/pages/admin/components/ResendLinkButton";
 import { EMPLOYEE_STATUS_LABEL, formatMobile, listEmployees, type Employee, type EmployeeStatus } from "@/lib/employeesApi";
-import { adminListStaff, type StaffListRow } from "@/lib/staffApi";
+import { adminDeleteStaff, adminEditStaff, adminListStaff, type StaffListRow } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL, STAFF_STATUS_TONE, type StaffStatus } from "@/lib/staffStatus";
 import { staffEmployeePath } from "@/pages/admin/lib/staffRoutes";
 
@@ -29,6 +29,10 @@ export default function StaffPage() {
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState("");
   const [reload, setReload] = useState(0);
+  const [editing, setEditing] = useState<StaffListRow | null>(null);
+  const [deleting, setDeleting] = useState<StaffListRow | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
     let current = true;
@@ -70,7 +74,7 @@ export default function StaffPage() {
           <table className="data-table w-full text-left text-sm" data-testid={status === "closed" ? "closed-table" : status === "" ? "all-staff-table" : "onboarding-table"}>
             <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
               {/* // rule-policy: technical table-headings Column headings per filter. */}
-              {["Name", "Email", "Job", "Documents approved", status === "onboarding" ? "Stage" : "Status", ...(status === "onboarding" ? ["Document link"] : [])].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
+              {["Name", "Email", "Job", "Documents approved", status === "onboarding" ? "Stage" : "Status", ...(status === "onboarding" ? ["Document link"] : []), "Actions"].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
             </tr></thead>
             <tbody>{onboarding.map((r) => (
               <tr key={r.id} className="border-b border-background-100 last:border-0" data-testid={`onboarding-row-${r.id}`}>
@@ -81,6 +85,11 @@ export default function StaffPage() {
                 {/* // rule-policy: technical status-label Shows each record's stored status; the document link column only on Onboarding. */}
                 <td data-label={status === "onboarding" ? "Stage" : "Status"} className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[r.status]}>{r.status === "rejected" ? "Rejected / Withdrawn" : STAFF_STATUS_LABEL[r.status]}</Badge>{r.emailFailed ? <span className="ml-1.5" data-testid="staff-email-failed-badge"><Badge tone="primary">Email failed</Badge></span> : null}</td>
                 {status !== "onboarding" ? null : <td data-label="Document link" className="px-4 py-3"><ResendLinkButton row={r} onDone={(m) => { setNotice(m); setReload((n) => n + 1); }} /></td>}
+                <td data-label="Actions" className="px-4 py-3"><div className="flex gap-1.5">
+                  <Button size="sm" variant="outline" icon="ri-edit-line" onClick={() => setEditing(r)} data-testid={`staff-edit-${r.id}`}>Edit</Button>
+                  {/* // rule-policy: security delete-guard Active staff cannot be deleted (the database refuses it too); set them Inactive first. */}
+                  <Button size="sm" variant="danger" icon="ri-delete-bin-line" disabled={r.status === "active"} title={r.status === "active" ? "Active staff cannot be deleted. Set them Inactive first." : undefined} onClick={() => { setDeleteError(""); setDeleting(r); }} data-testid={`staff-delete-${r.id}`}>Delete</Button>
+                </div></td>
               </tr>
             ))}</tbody>
           </table>
@@ -110,7 +119,53 @@ export default function StaffPage() {
           </table>
         </Card>
       ) : null}
+      {editing ? <StaffEditDialog row={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); setNotice("Details saved."); setReload((n) => n + 1); }} /> : null}
+      <DangerDialog open={!!deleting} title={`Delete ${deleting?.name || deleting?.email || "this person"}?`} intro="Use this for test records or people added by mistake."
+        items={["Their staff record and onboarding history", "Their uploaded documents and sign-in links", `The email ${deleting?.email ?? ""} becomes free to use again`]}
+        busy={deleteBusy} error={deleteError} onCancel={() => setDeleting(null)}
+        onConfirm={() => {
+          if (!deleting) return;
+          setDeleteBusy(true); setDeleteError("");
+          adminDeleteStaff(deleting.id).then((r) => {
+            setDeleting(null);
+            setNotice(r.filesLeft ? `${r.email} deleted. ${r.filesLeft} file(s) could not be removed from storage.` : `${r.email} deleted. The email can be used again.`);
+            setReload((n) => n + 1);
+          }, (e: Error) => setDeleteError(e.message)).finally(() => setDeleteBusy(false));
+        }} />
       {adding ? <EmployeeFormDialog onClose={() => setAdding(false)} onSaved={(id, result) => navigate(staffEmployeePath(id), { state: { message: result?.message ?? "Employee added. Upload their documents below." } })} /> : null}
     </div>
+  );
+}
+
+function StaffEditDialog({ row, onClose, onSaved }: { row: StaffListRow; onClose: () => void; onSaved: () => void }) {
+  const [first, ...rest] = (row.name || "").trim().split(/\s+/);
+  const [firstName, setFirstName] = useState(first ?? "");
+  const [lastName, setLastName] = useState(rest.join(" "));
+  const [email, setEmail] = useState(row.email);
+  const [phone, setPhone] = useState(row.phone ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const save = () => {
+    setBusy(true); setError("");
+    // rule-policy: technical form-submit Trims the typed values; the server checks them.
+    adminEditStaff(row.id, firstName.trim(), lastName.trim(), email.trim(), phone.trim()).then(onSaved, (e: Error) => setError(e.message)).finally(() => setBusy(false));
+  };
+  return (
+    <Modal open title="Edit staff details" onClose={onClose} footer={<>
+      <Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button>
+      <Button onClick={save} disabled={busy || !firstName.trim() || !lastName.trim() || !email.trim()} data-testid="staff-edit-save">{busy ? "Saving…" : "Save"}</Button>
+    </>}>
+      <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {/* // rule-policy: technical form-field Name fields of the edit form. */}
+          <Field label="First name" required><TextInput value={firstName} onChange={(e) => setFirstName(e.target.value)} autoComplete="off" /></Field>
+          <Field label="Last name" required><TextInput value={lastName} onChange={(e) => setLastName(e.target.value)} autoComplete="off" /></Field>
+        </div>
+        {/* // rule-policy: technical form-field Email field; the server refuses a change once the person has a login. */}
+        <Field label="Email" required hint="Cannot be changed once the person has signed in."><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" /></Field>
+        <Field label="Mobile" hint="Optional."><TextInput type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} autoComplete="off" /></Field>
+        {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
+      </div>
+    </Modal>
   );
 }

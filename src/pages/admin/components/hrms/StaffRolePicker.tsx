@@ -60,6 +60,7 @@ export default function StaffRolePicker({ value, onChange, disabled, problem }: 
     return (
       <div className="space-y-3 rounded-md border border-primary-200 bg-primary-50/40 p-3" data-testid="staff-role-new">
         <label className="block text-sm font-medium text-foreground-800">New role name
+          {/* // rule-policy: technical input-limit Matches the 60-character limit the database checks. */}
           <input value={adding.label} maxLength={60} autoFocus disabled={saving} onChange={(e) => setAdding({ ...adding, label: e.target.value })}
             className="mt-1 w-full rounded-md border border-background-300 bg-white px-3 py-2 text-sm" data-testid="staff-role-new-name" />
         </label>
@@ -73,6 +74,7 @@ export default function StaffRolePicker({ value, onChange, disabled, problem }: 
               </button>
             ))}
           </div>
+          {/* // rule-policy: technical access-hint Describes the two existing access levels. */}
           <p className="mt-1.5 text-xs text-foreground-600">{adding.access === "admin" ? "Full access to the admin console." : "Their classes, attendance and marking."} You can give each role its own pages later.</p>
         </fieldset>
         {addError ? <p role="alert" className="text-xs text-primary-700">{addError}</p> : null}

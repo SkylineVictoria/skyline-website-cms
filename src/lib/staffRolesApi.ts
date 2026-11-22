@@ -5,6 +5,7 @@ import type { StaffRole } from "@/lib/staffStatus";
 export interface StaffRoleType { key: string; label: string; access: StaffRole; system: boolean }
 
 export async function listStaffRoleTypes(): Promise<StaffRoleType[]> {
+  // rule-policy: technical role-list-read Reads the role list through hr_admin_role_types (Admins only).
   const { data, error } = await supabase.rpc("hr_admin_role_types");
   if (error) throw new Error(error.message);
   return (data ?? []) as StaffRoleType[];
@@ -12,6 +13,7 @@ export async function listStaffRoleTypes(): Promise<StaffRoleType[]> {
 
 /** Adds a role, or returns the existing one with that name (existing: true). */
 export async function addStaffRoleType(label: string, access: StaffRole): Promise<StaffRoleType & { existing: boolean }> {
+  // rule-policy: technical role-add Adds a role through hr_admin_role_type_add, which checks the name and access.
   const { data, error } = await supabase.rpc("hr_admin_role_type_add", { p_label: label, p_access: access });
   if (error) throw new Error(error.message);
   return data as StaffRoleType & { existing: boolean };

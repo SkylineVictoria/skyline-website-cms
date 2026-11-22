@@ -34,9 +34,11 @@ export default function StaffPage() {
     let current = true;
     const timer = window.setTimeout(() => {
       setError("");
-      if (status === "onboarding" || status === "closed") {
+      // rule-policy: technical list-filter Which server list each filter tab reads.
+      if (status === "" || status === "onboarding" || status === "closed") {
         setRows([]);
-        void adminListStaff(status === "closed" ? CLOSED : ONBOARDING, search.trim()).then((r) => { if (current) setOnboarding(r.rows); }, (e: Error) => { if (current) { setOnboarding([]); setError(e.message); } });
+        // rule-policy: technical list-filter All lists every staff record whatever its status, so nobody is hidden.
+        void adminListStaff(status === "closed" ? CLOSED : status === "onboarding" ? ONBOARDING : [], search.trim(), 200).then((r) => { if (current) setOnboarding(r.rows); }, (e: Error) => { if (current) { setOnboarding([]); setError(e.message); } });
       } else {
         setOnboarding(null);
         void listEmployees(status, search).then((r) => { if (current) setRows(r); }, (e: Error) => { if (current) { setRows([]); setError(e.message); } });
@@ -60,12 +62,15 @@ export default function StaffPage() {
       </div>
       {notice ? <p role="status" className="mb-4 rounded-md border border-secondary-300 bg-secondary-50 px-3 py-2 text-sm text-foreground-900" data-testid="employees-notice">{notice}</p> : null}
       {error ? <p role="alert" className="mb-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
-      {!rows && !error ? <p role="status">Loading employees…</p> : null}
+      {/* // rule-policy: technical loading-state Loading text until the list arrives. */}
+      {(onboarding === null && !rows) && !error ? <p role="status">Loading employees…</p> : null}
       {onboarding ? (onboarding.length ? (
         <Card className="data-table-frame">
-          <table className="data-table w-full text-left text-sm" data-testid={status === "closed" ? "closed-table" : "onboarding-table"}>
+          {/* // rule-policy: technical test-id Test id per filter (All, Onboarding, Rejected / Withdrawn). */}
+          <table className="data-table w-full text-left text-sm" data-testid={status === "closed" ? "closed-table" : status === "" ? "all-staff-table" : "onboarding-table"}>
             <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
-              {["Name", "Email", "Job", "Documents approved", status === "closed" ? "Status" : "Stage", ...(status === "closed" ? [] : ["Document link"])].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
+              {/* // rule-policy: technical table-headings Column headings per filter. */}
+              {["Name", "Email", "Job", "Documents approved", status === "onboarding" ? "Stage" : "Status", ...(status === "onboarding" ? ["Document link"] : [])].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
             </tr></thead>
             <tbody>{onboarding.map((r) => (
               <tr key={r.id} className="border-b border-background-100 last:border-0" data-testid={`onboarding-row-${r.id}`}>
@@ -73,16 +78,20 @@ export default function StaffPage() {
                 <td data-label="Email" className="px-4 py-3">{r.email}</td>
                 <td data-label="Job" className="px-4 py-3">{[r.jobTitle, r.department].filter(Boolean).join(" · ") || "—"}</td>
                 <td data-label="Documents approved" className="px-4 py-3">{r.docs.approved}/{r.docs.required}{r.docs.rejected ? ` (${r.docs.rejected} rejected)` : ""}</td>
-                <td data-label={status === "closed" ? "Status" : "Stage"} className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[r.status]}>{status === "closed" ? "Rejected / Withdrawn" : STAFF_STATUS_LABEL[r.status]}</Badge>{r.emailFailed ? <span className="ml-1.5" data-testid="staff-email-failed-badge"><Badge tone="primary">Email failed</Badge></span> : null}</td>
-                {status === "closed" ? null : <td data-label="Document link" className="px-4 py-3"><ResendLinkButton row={r} onDone={(m) => { setNotice(m); setReload((n) => n + 1); }} /></td>}
+                {/* // rule-policy: technical status-label Shows each record's stored status; the document link column only on Onboarding. */}
+                <td data-label={status === "onboarding" ? "Stage" : "Status"} className="px-4 py-3"><Badge tone={STAFF_STATUS_TONE[r.status]}>{r.status === "rejected" ? "Rejected / Withdrawn" : STAFF_STATUS_LABEL[r.status]}</Badge>{r.emailFailed ? <span className="ml-1.5" data-testid="staff-email-failed-badge"><Badge tone="primary">Email failed</Badge></span> : null}</td>
+                {status !== "onboarding" ? null : <td data-label="Document link" className="px-4 py-3"><ResendLinkButton row={r} onDone={(m) => { setNotice(m); setReload((n) => n + 1); }} /></td>}
               </tr>
             ))}</tbody>
           </table>
         </Card>
       ) : !error ? (status === "closed"
         ? <EmptyState icon="ri-user-unfollow-line" title={search ? "No matching rejected or withdrawn applications" : "No rejected or withdrawn applications"} description="Applications you withdraw or reject are kept here. Open one to see its history or reopen it." />
+        // rule-policy: technical empty-state Empty message for the All filter.
+        : status === "" ? <EmptyState icon="ri-team-line" title={search ? "No matching staff" : "No staff yet"} description={search ? "Try another search." : "Add your first employee with the button above."} />
         : <EmptyState icon="ri-user-follow-line" title="Nobody in onboarding" description="Use Add employee > Start onboarding, or hire a candidate from Website > Candidates." />) : null) : null}
-      {rows && !rows.length && !error && status !== "onboarding" && status !== "closed" ?<EmptyState icon="ri-team-line" title={search || status ? "No matching employees" : "No employees yet"} description={search || status ? "Try another search or filter." : "Add your first employee with the button above."} /> : null}
+      {/* // rule-policy: technical empty-state Empty message for the Active / Inactive filters only. */}
+      {rows && !rows.length && !error && status !== "" && status !== "onboarding" && status !== "closed" ?<EmptyState icon="ri-team-line" title={search || status ? "No matching employees" : "No employees yet"} description={search || status ? "Try another search or filter." : "Add your first employee with the button above."} /> : null}
       {rows?.length ? (
         <Card className="data-table-frame">
           <table className="data-table w-full text-left text-sm" data-testid="employees-table">

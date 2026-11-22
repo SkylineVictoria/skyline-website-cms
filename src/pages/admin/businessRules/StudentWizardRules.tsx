@@ -91,23 +91,23 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
   const requiredRule = find("admissions.application_required_documents");
   const requiredValue = requiredRule && active(requiredRule)?.definition.value;
   const required = Array.isArray(requiredValue) ? requiredValue : ["Passport", "English test", "Academic results", "Visa"];
-  return <div className="space-y-4">
+  return <div className="space-y-5 rounded-2xl border border-background-200 bg-white p-3 shadow-sm sm:p-5">
     <div className="flex items-center justify-between gap-3">
-      <div><h2 className="text-lg font-semibold text-foreground-900">Wizard rules</h2><p className="text-xs text-foreground-600">Select a page, then edit its settings.</p></div>
+      <div><h2 className="text-lg font-semibold text-foreground-900">Student Wizard — Application Rules</h2><p className="text-xs text-foreground-600">Choose a wizard page to manage its validation rules. Changes use the existing published business-rule service.</p></div>
       <button type="button" onClick={showAdvanced} className="shrink-0 text-sm font-medium text-primary-700 hover:underline">Advanced rules</button>
     </div>
     {message && <p role="status" className="text-sm text-foreground-700">{message}</p>}
-    <div className="grid grid-cols-1 gap-0 border-t border-background-200 lg:grid-cols-[minmax(170px,210px)_minmax(0,1fr)] lg:divide-x lg:divide-background-200">
-      <nav className="p-2 lg:pr-3" aria-label="Student wizard steps">
+    <div className="space-y-4">
+      <nav className="rounded-xl bg-background-50 p-3" aria-label="Student wizard steps">
         <input aria-label="Find wizard step" placeholder="Search steps" value={search} onChange={e => setSearch(e.target.value)}
-          className="mb-2 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" />
-        {STEPS.filter(item => item.title.toLowerCase().includes(search.toLowerCase())).map(item =>
+          className="mb-3 w-full rounded-lg border border-background-300 bg-white px-3 py-2 text-sm sm:max-w-xs" />
+        <div className="flex flex-wrap gap-2">{STEPS.filter(item => item.title.toLowerCase().includes(search.toLowerCase())).map(item =>
           <button type="button" key={item.id} onClick={() => { setSelected(item.id); setMessage(""); }}
             aria-current={selected === item.id ? "step" : undefined}
-            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${selected === item.id ? "bg-primary-50 font-semibold text-primary-800" : "text-foreground-700 hover:bg-background-100"}`}>
-            <i className={item.icon} aria-hidden="true" />{item.title}</button>)}
+            className={`inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 py-2 text-left text-sm transition-colors ${selected === item.id ? "border-primary-500 bg-primary-50 font-semibold text-primary-800 shadow-sm" : "border-background-300 bg-white text-foreground-700 hover:border-primary-300 hover:bg-background-100"}`}>
+            <i className={item.icon} aria-hidden="true" />{item.title}</button>)}</div>
       </nav>
-      <section className="min-w-0 space-y-3 p-3 sm:p-4 lg:pl-5" aria-label={step.title + " rules"}>
+      <section className="min-w-0 space-y-3 rounded-xl border border-background-200 bg-white p-3 sm:p-5" aria-label={step.title + " rules"}>
         <div><h3 className="font-semibold text-foreground-900">{step.title}</h3>
           <p className="text-xs text-foreground-600">Settings are saved and published through SLIT's existing rule service.</p></div>
         {step.docs.map(doc => <label key={doc} className="flex items-center justify-between gap-3 border-b border-background-200 py-3">
@@ -123,7 +123,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
           const type = version?.definition.value_type ?? "";
           const editable = Boolean(version && version.state === "published");
           const shown = edits[id] ?? (typeof value === "string" ? value : JSON.stringify(value ?? null, null, 2));
-          return <div key={id} className="grid gap-2 border-b border-background-200 py-3 xl:grid-cols-[minmax(0,1fr)_minmax(150px,230px)] xl:items-center">
+          return <div key={id} className="grid min-w-0 gap-3 rounded-xl border border-background-200 bg-background-50 p-3 sm:p-4 xl:grid-cols-[minmax(0,1fr)_minmax(180px,280px)] xl:items-center">
             <label htmlFor={id} className="text-sm font-medium">{NAMES[id]}</label>
             {!rule || !version ? <p className="text-xs text-foreground-600">Rule not registered. Existing checks stay in force.</p> :
               <>
@@ -161,7 +161,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
                   <select id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
                     {version.definition.options.map(option => <option key={option} value={option}>{option}</option>)}
                   </select> :
-                  <textarea id={id} rows={typeof value === "object" ? 5 : 2} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 font-mono text-xs" />}
+                  <textarea id={id} rows={typeof value === "object" ? 5 : 2} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full min-w-0 rounded-lg border border-background-300 bg-white px-3 py-2 text-sm" />}
                 {edits[id] !== undefined && <div className="flex justify-end gap-2 sm:col-span-2"><button type="button" onClick={() => setEdits(old => { const next = { ...old }; delete next[id]; return next; })} className="px-3 py-1.5 text-xs text-foreground-600">Cancel</button><button type="button" disabled={busy || !editable} onClick={() => void saveRule(id)} className="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Publish change</button></div>}
               </>}
           </div>;

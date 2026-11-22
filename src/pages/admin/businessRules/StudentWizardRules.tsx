@@ -119,7 +119,31 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
             <label htmlFor={id} className="block text-sm font-medium">{NAMES[id]}</label>
             {!rule || !version ? <p className="text-xs text-foreground-600">Rule not registered. Existing checks stay in force.</p> :
               <>
-                {type === "boolean" ?
+                {id === "admissions.english_minimum_scores" && value && typeof value === "object" && !Array.isArray(value) ?
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    {Object.entries(value as Record<string, unknown>).map(([test, original]) => {
+                      const draft = edits[id] === undefined ? value as Record<string, unknown> : (() => { try { return JSON.parse(edits[id]) as Record<string, unknown>; } catch { return value as Record<string, unknown>; } })();
+                      return <label key={test} className="block text-sm font-medium">{test} minimum score
+                        <input type="number" min="0" step="any" disabled={busy || !editable}
+                          value={String(draft[test] ?? original ?? "")}
+                          onChange={e => setEdits(old => ({ ...old, [id]: JSON.stringify({ ...draft, [test]: e.target.value === "" ? null : Number(e.target.value) }) }))}
+                          className="mt-1 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" />
+                      </label>;
+                    })}
+                  </div> :
+                  id === "admissions.english_test_alternatives" && Array.isArray(value) ?
+                  <div className="space-y-2">
+                    <p className="text-xs text-foreground-600">Tick the alternatives SLIT accepts instead of an English test result.</p>
+                    {Array.from(new Set([...(value as string[]), "At least 2 years of study in Australia", "Cambridge English course with Skyline"])).map(option => {
+                      const chosen: string[] = edits[id] === undefined ? value as string[] : (() => { try { return JSON.parse(edits[id]) as string[]; } catch { return value as string[]; } })();
+                      return <label key={option} className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" checked={chosen.includes(option)} disabled={busy || !editable}
+                          onChange={e => setEdits(old => ({ ...old, [id]: JSON.stringify(e.target.checked ? [...chosen, option] : chosen.filter(x => x !== option)) }))}
+                          className="h-4 w-4 accent-primary-600" />{option}
+                      </label>;
+                    })}
+                  </div> :
+                  type === "boolean" ?
                   <select id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
                     <option value="true">Yes</option><option value="false">No</option>
                   </select> :
@@ -131,7 +155,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
                   </select> :
                   <textarea id={id} rows={typeof value === "object" ? 5 : 2} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 font-mono text-xs" />}
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-foreground-500">{type === "json" || typeof value === "object" ? "Structured value (JSON)" : type}</span>
+                  <span className="text-xs text-foreground-500">{type === "json" || typeof value === "object" ? "Settings" : type}</span>
                   <button type="button" disabled={busy || !editable || edits[id] === undefined} onClick={() => void saveRule(id)} className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">Publish change</button>
                 </div>
               </>}

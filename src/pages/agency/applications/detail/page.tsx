@@ -25,6 +25,7 @@ import {
   type StatusHistoryRow,
 } from "@/pages/agency/lib/portalApplications";
 import ApplicationWorkspace from "@/pages/agency/components/ApplicationWorkspace";
+import { WIZARD_STEPS } from "@/pages/agency/lib/wizardConfig";
 import NotificationGateBanner from "@/pages/admin/components/NotificationGateBanner";
 import NotificationLogTable from "@/pages/admin/components/NotificationLogTable";
 import { downloadApplicationPdf, logAdminAccess } from "@/pages/agency/lib/applicationPdf";
@@ -82,6 +83,8 @@ export default function ApplicationDetailPage() {
     setSearchParams(next, { replace: true });
   }, [id, searchParams, setSearchParams]);
   const [workspaceKey, setWorkspaceKey] = useState(0);
+  // The form's own figure once it has loaded; the saved one (written on save, 0 on drafts made by the staff wizard) until then.
+  const [liveCompletion, setLiveCompletion] = useState<number | null>(null);
   const [documentBusy, setDocumentBusy] = useState("");
 
   const isSlit = role === "slit_admin";
@@ -207,8 +210,12 @@ export default function ApplicationDetailPage() {
   const readOnly = !isEditableStatus(workflow, application.status);
   const agentName = application.agentName || profile?.fullName || "";
   const agencyName = application.agencyName || agency?.name || "";
-  const outstanding =
-    ((application.data?.wizard as { outstanding?: string[] } | undefined)?.outstanding ?? []).filter(Boolean);
+  // The wizard saved this list once, when it finished; drop an item once its document has been uploaded since, so the box is never stale.
+  const uploadedCategories = new Set(documents.map((doc) => doc.category));
+  const outstanding = ((application.data?.wizard as { outstanding?: string[] } | undefined)?.outstanding ?? []).filter(Boolean).filter((item) => {
+    const step = WIZARD_STEPS.find((candidate) => item.startsWith(`${candidate.title} not provided`));
+    return !step || !uploadedCategories.has(step.category);
+  });
 
   return (
     <div>
@@ -275,9 +282,9 @@ export default function ApplicationDetailPage() {
         </div>
         <div className="shrink-0 rounded-card border border-background-200 bg-background-50 px-5 py-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Completion</p>
-          <p className="mt-1 font-heading text-2xl font-bold text-foreground-950">{application.completion}%</p>
+          <p className="mt-1 font-heading text-2xl font-bold text-foreground-950">{liveCompletion ?? application.completion}%</p>
           <div className="mt-2 h-1.5 w-32 overflow-hidden rounded-full bg-background-200">
-            <div className="h-full rounded-full bg-accent-500" style={{ width: `${application.completion}%` }} />
+            <div className="h-full rounded-full bg-accent-500" style={{ width: `${liveCompletion ?? application.completion}%` }} />
           </div>
         </div>
       </header>
@@ -332,6 +339,7 @@ export default function ApplicationDetailPage() {
           <ApplicationWorkspace
             key={workspaceKey}
             application={application}
+            onProgress={setLiveCompletion}
             agentName={agentName}
             agentEmail={application.agentEmail || (role === "agent" ? profile?.email ?? "" : "")}
             agentPhone={application.agentPhone || (role === "agent" ? profile?.phone ?? "" : "")}

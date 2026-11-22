@@ -7,6 +7,8 @@ const STEPS = [
   { id: "english", title: "English evidence", icon: "ri-translate-2", docs: ["English test"], rules: ["admissions.application_required_documents", "admissions.english_minimum_scores", "admissions.english_result_valid_years", "admissions.english_test_alternatives"] },
   { id: "academic", title: "Academic results", icon: "ri-graduation-cap-line", docs: ["Academic results"], rules: ["admissions.application_required_documents"] },
   { id: "visa", title: "Visa", icon: "ri-id-card-line", docs: ["Visa"], rules: ["admissions.application_required_documents", "admissions.document_expiry_warning_months"] },
+  { id: "licence", title: "Driving licence", icon: "ri-profile-line", docs: ["Driving licence"], rules: ["admissions.application_required_documents"] },
+  { id: "language", title: "Language spoken at home", icon: "ri-chat-3-line", docs: [], rules: [] },
   { id: "usi", title: "USI", icon: "ri-fingerprint-line", docs: [], rules: ["admissions.usi_required"] },
   { id: "emergency", title: "Emergency contact", icon: "ri-phone-line", docs: [], rules: ["admissions.emergency_contact_required_details"] },
   { id: "course", title: "Course & intake", icon: "ri-book-open-line", docs: [], rules: [] },
@@ -80,7 +82,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
   return <div className="space-y-4">
     <div className="flex items-start justify-between gap-3">
       <div><h2 className="text-lg font-semibold text-foreground-900">Student wizard validation</h2>
-        <p className="text-sm text-foreground-600">Choose a step to manage its existing published rules. This screen does not create duplicate rules.</p></div>
+        <p className="text-sm text-foreground-600">Choose a step to manage its existing published rules. Only existing registered rules can be published here; student-only progression controls are not yet connected.</p></div>
       <button type="button" onClick={showAdvanced} className="shrink-0 text-sm font-medium text-primary-700 hover:underline">Advanced rules</button>
     </div>
     {message && <p role="status" className="text-sm text-foreground-700">{message}</p>}
@@ -108,7 +110,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
           const version = rule && active(rule);
           const value = version?.definition.value;
           const type = version?.definition.value_type ?? "";
-          const editable = Boolean(version && !["reference"].includes(version.state));
+          const editable = Boolean(version && version.state === "published");
           const shown = edits[id] ?? (typeof value === "string" ? value : JSON.stringify(value ?? null, null, 2));
           return <div key={id} className="space-y-2 rounded-lg border border-background-200 p-3">
             <label htmlFor={id} className="block text-sm font-medium">{NAMES[id]}</label>

@@ -198,22 +198,25 @@ export const staffDocTakesExpiry = (category: string): boolean => (STAFF_DOC_EXP
 /** Several academic records unless Business Rules says one (hrms.staff_multiple_academic_documents; hr.staff_doc_allows_many). */
 export const staffDocAllowsMany = (category: string): boolean =>
   category === "Academic" && hrText("hrms.staff_multiple_academic_documents", "Several academic records allowed") !== "One academic record only";
-/** REQUIRED types (x/N), from Business Rules (hrms.applicant_document_checklist; hr.staff_required_categories). By default Passport,
- * Academic results and a void cheque, plus Visa for non-citizens (or while unanswered); Driving Licence is optional. */
+/** REQUIRED types (x/N), from Business Rules (hrms.applicant_document_checklist; hr.staff_required_categories). By default only the
+ * Passport (admin request 2026-11-22); visa, driving licence, void cheque and academic results are asked for but optional. */
 export function requiredStaffCategories(isAustralianCitizen: boolean | null): StaffDocCategory[] {
-  const citizen: StaffDocCategory[] = ["Passport", "Academic", "Void Cheque"];
-  const other: StaffDocCategory[] = ["Passport", "Visa", "Academic", "Void Cheque"];
+  const citizen: StaffDocCategory[] = ["Passport"];
+  const other: StaffDocCategory[] = ["Passport"];
   const rule = hrObject<Record<string, unknown>>("hrms.applicant_document_checklist", { citizen, other });
   return isAustralianCitizen === true ? docList(rule.citizen, citizen) : docList(rule.other, other);
 }
 
 /**
- * The document kinds shown to a person, in wizard order: every required type, the optional Driving Licence, and any other type
+ * The document kinds shown to a person, in wizard order: every required type, the offered screens (passport, visa for non-citizens,
+ * driving licence, void cheque, academic results), and any other type
  * they already uploaded (e.g. a visa a citizen added before answering the citizenship question).
  */
 export function staffDocKinds(isAustralianCitizen: boolean | null, uploaded: readonly { category: string }[] = []): DocumentKind[] {
   const required = requiredStaffCategories(isAustralianCitizen);
-  return STAFF_DOC_CATEGORIES.filter((c) => required.includes(c) || c === "Driving Licence" || uploaded.some((d) => d.category === c))
+  // rule-policy: technical wizard-screens The wizard always offers these screens (visa only to non-citizens); the rule decides which are required.
+  const offered: StaffDocCategory[] = ["Passport", ...(isAustralianCitizen === true ? [] : ["Visa" as const]), "Driving Licence", "Void Cheque", "Academic"];
+  return STAFF_DOC_CATEGORIES.filter((c) => required.includes(c) || offered.includes(c) || uploaded.some((d) => d.category === c))
     .map((c) => ({ category: c, label: STAFF_DOC_LABEL[c], required: required.includes(c), expiry: STAFF_DOC_EXPIRY[c], multiple: staffDocAllowsMany(c) }));
 }
 

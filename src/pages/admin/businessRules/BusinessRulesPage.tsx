@@ -43,8 +43,8 @@ function RuleWorkspace() {
   const scope = params.get("menu") ?? "";
   const [snapshot, setSnapshot] = useState<Snapshot>(empty);
   const [menu, setMenu] = useState<AdminMenuItem[]>([]);
-  // Owner (2026-11-22): the plain-language Settings tab opens first; a menu filter (from a page's Manage rules link) opens Advanced.
-  const [tab, setTab] = useState(scope ? "rules" : "settings");
+  // A page-specific Manage rules link opens Advanced with its menu filter.
+  const [tab, setTab] = useState(scope ? "rules" : "wizard");
   const [search, setSearch] = useState("");
   // Owner (2026-11-22): system rules (sizes, formats, workflow steps, wording) are hidden until asked for.
   const [showSystem, setShowSystem] = useState(false);

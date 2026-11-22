@@ -9,7 +9,7 @@ import { requiredDocumentSteps, usiRequired } from "@/pages/agency/lib/admission
  */
 
 /** "health" is a staff-only screen (health insurance); it is never read automatically. */
-export type WizardStepId = ScanType | "health";
+export type WizardStepId = ScanType | "health" | "cheque";
 
 export interface WizardStep {
   id: WizardStepId;
@@ -199,10 +199,15 @@ export type Registrant = "student" | "staff";
 export const STAFF_WIZARD_STEPS: WizardStep[] = [
   { id: "passport", title: "Passport", short: "Passport", subtitle: "Upload the photo page (PDF, JPG or PNG). We read your name, date of birth, nationality, passport number and its expiry date from it.", icon: "ri-id-card-line", category: "Passport", noun: "passport", skipLabel: "", required: true },
   { id: "visa", title: "Visa", short: "Visa", subtitle: "Upload your visa grant notice or VEVO record. We read the visa subclass and its expiry date from it.", icon: "ri-passport-line", category: "Visa", noun: "visa", skipLabel: "", required: true },
-  { id: "english", title: "English test result", short: "English", subtitle: "Upload your IELTS, PTE, TOEFL or other accepted proof of English proficiency.", icon: "ri-translate-2", category: "English", noun: "English test result", skipLabel: "", required: true },
-  { id: "academic", title: "Academic results", short: "Academic", subtitle: "Upload transcripts, certificates or diplomas; several files are fine.", icon: "ri-file-paper-2-line", category: "Academic", noun: "academic result", skipLabel: "", multiple: true, required: true },
   { id: "licence", title: "Driving licence", short: "Driving licence", subtitle: "Upload your driving licence; an Australian licence fills in your address.", icon: "ri-profile-line", category: "Driving Licence", noun: "licence", skipLabel: "" },
-  { id: "health", title: "Health insurance", short: "Health insurance", subtitle: "Upload your health insurance certificate or policy.", icon: "ri-heart-pulse-line", category: "Health Insurance", noun: "health insurance", skipLabel: "", required: true },
+  // rule-policy: technical screen-text Void cheque screen; whether it is required comes from the Business Rule hrms.applicant_document_checklist.
+  { id: "cheque", title: "Void cheque", short: "Void cheque", subtitle: "Upload a void cheque or a bank letter showing your account name, BSB and account number, for your pay.", icon: "ri-bank-card-line", category: "Void Cheque", noun: "void cheque", skipLabel: "", required: true },
+  // rule-policy: technical screen-text Screen text; required-ness comes from the Business Rule hrms.applicant_document_checklist.
+  { id: "academic", title: "Academic results", short: "Academic", subtitle: "Upload transcripts, certificates or diplomas; several files are fine.", icon: "ri-file-paper-2-line", category: "Academic", noun: "academic result", skipLabel: "", multiple: true, required: true },
+  // No longer asked (2026-11-22); kept so a document uploaded before still shows.
+  { id: "english", title: "English test result", short: "English", subtitle: "Upload your IELTS, PTE, TOEFL or other accepted proof of English proficiency.", icon: "ri-translate-2", category: "English", noun: "English test result", skipLabel: "" },
+  // rule-policy: technical legacy-screen Shown only for a health insurance document uploaded before 2026-11-22.
+  { id: "health", title: "Health insurance", short: "Health insurance", subtitle: "Upload your health insurance certificate or policy.", icon: "ri-heart-pulse-line", category: "Health Insurance", noun: "health insurance", skipLabel: "" },
 ];
 
 export const wizardStepsFor = (registrant: Registrant): WizardStep[] => (registrant === "staff" ? STAFF_WIZARD_STEPS : WIZARD_STEPS);

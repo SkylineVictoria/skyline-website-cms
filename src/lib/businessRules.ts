@@ -86,6 +86,8 @@ export const SCREEN_RULES = [
   "admissions.passport_reject_expired",
   "admissions.passport_auto_delete_expired",
   "admissions.passport_require_expiry_date",
+  "admissions.academic_minimum_documents",
+  "admissions.academic_reject_mismatched",
   "admissions.usi_required",
   "admissions.offer_accept_in_portal",
   "admissions.offer_accept_portal_roles",

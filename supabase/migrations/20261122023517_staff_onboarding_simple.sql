@@ -15,6 +15,7 @@ create table if not exists hr.staff_role_types (
  key text primary key check (key ~ '^[a-z0-9_]{2,40}$'),
  label text not null check (char_length(btrim(label)) between 2 and 60 and label !~ '[[:cntrl:]<>]'),
  access text not null check (access in ('trainer', 'admin')),
+ -- rule-policy: technical column-default New roles are not built in; Trainer and Admin rows set is_system.
  is_system boolean not null default false,
  created_by uuid,
  created_at timestamptz not null default now()
@@ -73,6 +74,7 @@ begin
  if exists (select 1 from hr.staff_profiles s where s.email = v_email or (v_phone is not null and s.phone_e164 = v_phone)) then
   raise exception 'This email or mobile already has a staff record. Open it from Employees.' using errcode = '23505',
    hint = case when exists (select 1 from hr.staff_profiles s where s.email = v_email) then 'email_taken' else '' end; end if;
+ -- rule-policy: technical audit-context Records who added the person in the existing staff history.
  perform set_config('hr.actor', v_admin::text, true); perform set_config('hr.actor_kind', 'admin', true); perform set_config('hr.note', 'Added by an administrator', true);
  insert into hr.staff_profiles(first_name, last_name, email, phone_e164) values (v_first, v_last, v_email, v_phone) returning * into p;
  insert into hr.staff_applications(profile_id, role_type, requested_role) values (p.id, t.key, t.access);
@@ -108,19 +110,23 @@ begin
  end if;
  foreach c in array hr.staff_required_categories(p.is_australian_citizen) loop
   if not exists (select 1 from hr.staff_documents d where d.profile_id = p.id and d.category = c and d.is_current) then
+   -- rule-policy: technical existing-check Same required documents as before; only bank, tax and super were removed.
    raise exception '%', case c when 'Passport' then 'A passport is required before you can submit.' else 'Upload your ' || hr.staff_doc_label(c) || '.' end
     using errcode = '23514'; end if;
   if exists (select 1 from hr.staff_documents d where d.profile_id = p.id and d.category = c and d.is_current
      and ((d.expiry_date is null and hr.staff_doc_needs_expiry(c)) or d.expiry_date < current_date)) then
    raise exception 'Enter a current expiry date for your %.', hr.staff_doc_label(c) using errcode = '23514'; end if;
  end loop;
+ -- rule-policy: technical existing-check Unchanged re-upload rule.
  if exists (select 1 from hr.staff_documents d where d.profile_id = p.id and d.is_current and d.status = 'rejected') then
   raise exception 'Replace every document we asked you to upload again.' using errcode = '23514'; end if;
  perform set_config('hr.actor_kind', 'applicant', true);
  perform set_config('hr.note', case when i.purpose = 'reupload' then 'Documents uploaded again' else 'Documents submitted' end, true);
+ -- rule-policy: technical existing-transition Unchanged: submitting moves the person to Documents submitted.
  update hr.staff_profiles set status = 'documents_submitted' where id = p.id;
  update hr.staff_applications set submitted_at = now() where profile_id = p.id;
  update hr.staff_invites set used_at = now() where id = i.id returning * into i;
+ -- rule-policy: technical existing-email Unchanged admin notice that documents were submitted.
  perform hr.queue_email(p.id, 'admin_documents_submitted', 'admin', jsonb_build_object('reupload', i.purpose = 'reupload'));
  return hr.staff_applicant_view(i);
 end $function$;

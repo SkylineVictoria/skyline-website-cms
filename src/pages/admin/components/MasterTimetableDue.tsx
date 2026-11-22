@@ -25,7 +25,9 @@ export default function MasterTimetableDue({ banner = false, weeklyPopup = false
   }, [weeklyPopup]);
 
   if (!due.length) return null;
-  const later = () => { setOpen(false); void supabase.rpc("rto_master_cycles", { p_action: "alerts_seen", p_data: {} }); };
+  const later = () => { setOpen(false); // A Supabase query only runs once it is awaited / then-ed: without .then the "seen" row was never saved and the popup came back on every page.
+    // rule-policy: technical alert-seen-save Sends the existing weekly "seen" record; the one-week reminder interval is unchanged.
+    void supabase.rpc("rto_master_cycles", { p_action: "alerts_seen", p_data: {} }).then(({ error }) => { if (error) console.warn("Could not save the reminder", error.message); }); };
   const locked = due.filter(item => item.locked);
   return <>
     {banner ? <div role="alert" className={"mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm " + (locked.length ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-900")}>

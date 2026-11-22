@@ -58,6 +58,9 @@ import { useToast } from "@/components/shared/application-form/useToast";
 import { stepTitle } from "@/components/shared/application-form/stepTitle";
 import { usiRequired } from "@/pages/agency/lib/admissionsRules";
 
+/** "AUR40226 - Certificate IV ... (36 weeks)" -> "AUR40226". */
+const courseCodeOf = (label: string) => label.split(" - ")[0].trim().toUpperCase();
+
 const FORM_ID = "portal-application-form";
 const STUDENT_CONTACT_FIELDS = new Set(["mobile", "email", "confirm_email", "email_note"]);
 const AUSTRALIAN_ADDRESS: Record<string, string> = { address_type: "Australian Address", au_country: "Australia" };
@@ -228,14 +231,17 @@ export default function ApplicationWorkspace({
   // A course saved on the draft that is not on offer any more still shows as selected (read-only, with a hint), so the draft stays readable.
   const legacyCourses = useMemo(() => {
     const saved = ((application.data as { values?: DraftValues } | null)?.values?.[COURSE_FIELD] as string[] | undefined) ?? [];
-    return courseChoices ? saved.filter(label => !courseChoices.some(c => c.label === label)) : [];
+    return courseChoices ? saved.filter(label => !courseChoices.some(c => c.label === label || c.row.code.toUpperCase() === courseCodeOf(label))) : [];
   }, [application.data, courseChoices]);
   const courseLabels = useMemo(() => courseChoices ? [...courseChoices.map(c => c.label), ...legacyCourses] : [], [courseChoices, legacyCourses]);
   const sections = useMemo(() => portalSections.map(section => ({ ...section, fields: section.fields.map(field => field.name === COURSE_FIELD ? { ...field, options: courseLabels } : field) })), [courseLabels]);
   const resolveCourse = useCallback((label: string): ApplicationCourseRow => {
+    // The staff form saves "CODE - Name (duration)", this page lists "CODE - Name": match on the course code when the text differs.
+    const code = courseCodeOf(label);
     const course = courseChoices?.find(item => item.label === label)?.row
+      ?? courseChoices?.find(item => item.row.code.toUpperCase() === code)?.row
       // An old draft's course keeps the row (and id) the application already holds.
-      ?? application.courses?.find(item => `${item.code} - ${item.title}` === label);
+      ?? application.courses?.find(item => `${item.code} - ${item.title}` === label || item.code.toUpperCase() === code);
     if (!course) throw new Error("This course is no longer offered. Choose a current course.");
     return course;
   }, [courseChoices, application.courses]);
@@ -388,8 +394,11 @@ export default function ApplicationWorkspace({
 
   useEffect(() => {
     if (!courseLabels.length || !formRef.current) return;
-    applyFormValues(formRef.current, { [COURSE_FIELD]: initialCoursesRef.current });
-  }, [courseLabels]);
+    // A saved label in another format ("CODE - Name (36 weeks)") shows as the course's current label.
+    const saved = initialCoursesRef.current;
+    const current = (Array.isArray(saved) ? saved : [saved].filter(Boolean)).map(label => courseChoices?.find(c => c.label === label || c.row.code.toUpperCase() === courseCodeOf(label))?.label ?? label);
+    applyFormValues(formRef.current, { [COURSE_FIELD]: current });
+  }, [courseLabels, courseChoices]);
 
   useEffect(() => {
     progressRef.current = progress;

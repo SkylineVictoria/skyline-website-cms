@@ -6,10 +6,12 @@ import { AdminLoading, Badge, Button, Card, Field, PageHeader, SectionTabs, Text
 import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
 import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
-import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Rule, type RuleLocation, type Snapshot } from "./model";
+import SimpleSettings from "./SimpleSettings";
+import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Definition, type Rule, type RuleLocation, type Snapshot } from "./model";
 
 const tabs = [
-  { id: "rules", label: "Rules", icon: "ri-list-check" },
+  { id: "settings", label: "Settings", icon: "ri-equalizer-line" },
+  { id: "rules", label: "Advanced (all rules)", icon: "ri-list-check" },
   { id: "history", label: "Rule History", icon: "ri-history-line" },
   { id: "effective", label: "Effective Changes", icon: "ri-calendar-line" },
   { id: "compliance", label: "Compliance & Notes", icon: "ri-shield-check-line" },
@@ -43,7 +45,8 @@ function RuleWorkspace() {
   const scope = params.get("menu") ?? "";
   const [snapshot, setSnapshot] = useState<Snapshot>(empty);
   const [menu, setMenu] = useState<AdminMenuItem[]>([]);
-  const [tab, setTab] = useState("rules");
+  // Owner (2026-11-22): the plain-language Settings tab opens first; a menu filter (from a page's Manage rules link) opens Advanced.
+  const [tab, setTab] = useState(scope ? "rules" : "settings");
   const [search, setSearch] = useState("");
   const [menuSearch, setMenuSearch] = useState("");
   const [category, setCategory] = useState("");
@@ -90,6 +93,30 @@ function RuleWorkspace() {
     } finally { setBusy(false); }
   };
 
+  /** Settings tab: save the new value as a draft of the rule, then publish that exact draft from today. */
+  const publishSetting = async (rule: Rule, definition: Definition, why: string): Promise<boolean> => {
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const first = await supabase.rpc("business_rules_admin", { p_command: "save", p_payload: { rule_id: rule.id, expected_version: rule.versions[0].id, reason: why, definition } });
+      if (first.error) throw first.error;
+      const list = await supabase.rpc("business_rules_admin", { p_command: "list" });
+      if (list.error) throw list.error;
+      const draft = (list.data as Snapshot).rules.find(r => r.id === rule.id)?.versions[0];
+      if (!draft || draft.state !== "draft") throw new Error(registrationError);
+      const second = await supabase.rpc("business_rules_admin", { p_command: "publish", p_payload: { rule_id: rule.id, expected_version: draft.id, reason: why, definition: draft.definition } });
+      if (second.error) throw second.error;
+      await reload();
+      void loadBusinessRules(true);
+      return true;
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      // rule-policy: technical error-text Shows the database's own message for expected refusals.
+      setError(err.code && ["22023", "42501", "23505", "40001"].includes(err.code) ? err.message ?? registrationError : registrationError);
+      await reload().catch(() => undefined);
+      return false;
+    } finally { setBusy(false); }
+  };
+
   const locations = ruleLocations(menu);
   const current = snapshot.rules.find(r => r.id === selected);
   const version = current?.versions[0];
@@ -128,12 +155,15 @@ function RuleWorkspace() {
   const editor = tab === "rules" && selected && (selected === "new" || version);
 
   return <>
-    <PageHeader title="Business Rules & Policies" breadcrumb="Administration" description="Manage SLIT policies, test changes and publish approved versions." />
+    {/* // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules. */}
+    <PageHeader title="Settings & Policies" breadcrumb="Administration" description="How SLIT works: required documents, attendance, deposits, staff and agents." />
     <SectionTabs tabs={tabs} active={tab} onChange={id => { setTab(id); if (id === "history") setHistoryId(""); }} />
     {error && <div role="alert" className="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-900">{error}{!ready && <Button className="ml-2" size="sm" variant="outline" onClick={() => { setError(""); void reload().catch(() => setError(registrationError)); }}>Retry</Button>}</div>}
     {message && <p role="status" className="mb-3 rounded bg-primary-50 p-3">{message}</p>}
     {!ready && !error && <AdminLoading label="Loading business rules…" />}
-    {ready && <div className={`grid items-start gap-3 lg:grid-cols-[13rem_minmax(0,1fr)] ${editor ? "xl:grid-cols-[13rem_minmax(0,1fr)_21rem]" : ""}`}>
+    {ready && tab === "settings" && <SimpleSettings snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}
+    // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules.
+    {ready && tab !== "settings" && <div className={`grid items-start gap-3 lg:grid-cols-[13rem_minmax(0,1fr)] ${editor ? "xl:grid-cols-[13rem_minmax(0,1fr)_21rem]" : ""}`}>
       <Card className="p-3">
         <h2 className="mb-2 font-bold">Admin menu</h2>
         <TextInput type="search" className="mb-2" aria-label="Search Admin menus" placeholder="Search menus" value={menuSearch} onChange={e => setMenuSearch(e.target.value)} />

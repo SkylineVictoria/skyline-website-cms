@@ -8,6 +8,7 @@ import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
 import SimpleSettings from "./SimpleSettings";
 import StudentWizardRules from "./StudentWizardRules";
+import EmployeeWizardRules from "./EmployeeWizardRules";
 import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Definition, type Rule, type Snapshot, isSystemRule } from "./model";
 
 const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -152,13 +153,15 @@ function RuleWorkspace() {
     {message && <p role="status" className="mb-3 rounded bg-primary-50 p-3">{message}</p>}
     {/* // rule-policy: technical page-copy Loading text for the settings page; no rule value. */}
     {!ready && !error && <AdminLoading label="Loading settings…" />}
-    {ready && (tab === "settings" || tab === "wizard") && <div className="mb-4 flex flex-wrap gap-2" role="navigation" aria-label="Settings sections">
+    {ready && (tab === "settings" || tab === "wizard" || tab === "employee-wizard") && <div className="mb-4 flex flex-wrap gap-2" role="navigation" aria-label="Settings sections">
       <button type="button" aria-current={tab === "settings" ? "page" : undefined} onClick={() => setTab("settings")} className={`rounded-lg px-3 py-2 text-sm font-medium ${tab === "settings" ? "bg-primary-50 text-primary-800" : "border border-background-300 text-foreground-700"}`}>General settings</button>
       <button type="button" aria-current={tab === "wizard" ? "page" : undefined} onClick={() => setTab("wizard")} className={`rounded-lg px-3 py-2 text-sm font-medium ${tab === "wizard" ? "bg-primary-50 text-primary-800" : "border border-background-300 text-foreground-700"}`}>Student wizard validation</button>
+      <button type="button" aria-current={tab === "employee-wizard" ? "page" : undefined} onClick={() => setTab("employee-wizard")} className={`rounded-lg px-3 py-2 text-sm font-medium ${tab === "employee-wizard" ? "bg-primary-50 text-primary-800" : "border border-background-300 text-foreground-700"}`}>Employee wizard validation</button>
     </div>}
     {ready && tab === "settings" && <SimpleSettings snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}
     {ready && tab === "wizard" && <StudentWizardRules snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}
-    {ready && tab !== "settings" && tab !== "wizard" && <div className="space-y-4">
+    {ready && tab === "employee-wizard" && <EmployeeWizardRules snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}
+    {ready && tab !== "settings" && tab !== "wizard" && tab !== "employee-wizard" && <div className="space-y-4">
       <button type="button" className="text-sm font-medium text-primary-700 hover:underline" onClick={() => { setTab("settings"); filterMenu(""); }}><i className="ri-arrow-left-line" aria-hidden="true" /> Back to settings</button>
       <div className="flex flex-wrap items-center gap-2">
         <TextInput type="search" className="min-w-0 flex-1 sm:!w-72 sm:flex-none" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} />

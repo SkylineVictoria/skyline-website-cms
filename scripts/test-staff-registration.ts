@@ -2691,10 +2691,10 @@ test("submit needs the details, citizenship and every required document with a c
   const texts = (details = completeDetails, documents = all, bank = true) => wizardLib.wizardProblems(details, documents, bank, now).map((p) => p.text);
   assert.deepEqual(texts(), []);
   assert.deepEqual(texts(completeDetails, without("Passport")), ["A passport is required before you can submit."]);
-  assert.deepEqual(texts(completeDetails, without("Visa")), ["Upload your visa."]);
-  assert.deepEqual(texts(completeDetails, without("Void Cheque")), ["Upload your void cheque."]);
+  assert.deepEqual(texts(completeDetails, without("Visa")), [], "the visa is optional");
+  assert.deepEqual(texts(completeDetails, without("Void Cheque")), [], "the void cheque is optional");
   assert.deepEqual(texts({ ...completeDetails, is_australian_citizen: true, visa_subclass: "" }, without("Visa")), [], "a citizen needs no visa and no visa subclass");
-  assert.deepEqual(texts(completeDetails, without("Academic")), ["Upload your academic results."]);
+  assert.deepEqual(texts(completeDetails, without("Academic")), [], "academic results are optional");
   assert.deepEqual(texts(completeDetails, docs("2026-11-08")), ["Enter a current expiry date for your passport."]);
   assert.deepEqual(texts(completeDetails, [...all, { ...all[0], id: "en", category: "English", expiryDate: "2020-01-01" }, { ...all[0], id: "hi", category: "Health Insurance", expiryDate: "2020-01-01" }]), [], "English and health insurance are no longer asked: an old upload never blocks Submit");
   assert.deepEqual(texts(completeDetails, [...without("Passport"), { ...all[0], expiryDate: null }]), ["Enter a current expiry date for your passport."], "a passport uploaded without its date still needs one before Submit");
@@ -2707,7 +2707,7 @@ test("submit needs the details, citizenship and every required document with a c
     "Tell us whether you are an Australian citizen.", "Enter your first name.", "Enter your last name.", "Enter your date of birth.", "Enter your mobile number.",
     "Enter the street address.", "Enter the suburb or city.", "Enter the country.", "Enter the emergency contact's name.", "Enter the emergency contact's phone number.",
     "Enter how they are related to you.", "Enter your nationality.", "Enter your passport number.",
-    "A passport is required before you can submit.", "Upload your visa.", "Upload your academic results.", "Upload your void cheque.",
+    "A passport is required before you can submit.",
   ], "everything missing, in the order the database checks it");
   // Each problem belongs to the step that fixes it; a step is complete (ticked) once it has none.
   assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal"]);
@@ -2727,10 +2727,11 @@ test("submit needs the details, citizenship and every required document with a c
 test("the document rules match the database", () => {
   const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
   const voidCheque = read("supabase/migrations/20261122033517_staff_void_cheque_documents.sql");
-  assert.deepEqual(status.requiredStaffCategories(true), ["Passport", "Academic", "Void Cheque"], "x/3 for citizens");
-  assert.deepEqual(status.requiredStaffCategories(false), ["Passport", "Visa", "Academic", "Void Cheque"], "x/4 for non-citizens");
+  const passportOnly = read("supabase/migrations/20261122053517_staff_docs_passport_only.sql");
+  assert.deepEqual(status.requiredStaffCategories(true), ["Passport"], "only the passport for citizens");
+  assert.deepEqual(status.requiredStaffCategories(false), ["Passport"], "only the passport for non-citizens");
+  assert.ok(passportOnly.includes("'citizen', jsonb_build_array('Passport'), 'other', jsonb_build_array('Passport')"), "the published rule lists only the passport");
   assert.deepEqual(status.requiredStaffCategories(null), status.requiredStaffCategories(false), "unanswered counts as a non-citizen");
-  assert.ok(voidCheque.includes("array['Passport','Academic','Void Cheque'])") && voidCheque.includes("array['Passport','Visa','Academic','Void Cheque'])"), "the SQL lists the same required types");
   assert.ok(!status.requiredStaffCategories(false).includes("Driving Licence" as never), "the licence is never required");
   assert.ok(voidCheque.includes("check (category = any (array['Passport','Visa','English','Academic','Driving Licence','Health Insurance','Void Cheque']))"), "the allowed list has the seven types");
   assert.deepEqual([...status.STAFF_DOC_CATEGORIES].sort(), ["Academic", "Driving Licence", "English", "Health Insurance", "Passport", "Visa", "Void Cheque"]);
@@ -2760,10 +2761,10 @@ test("expiry states, the shown document kinds and the checklist", () => {
   assert.equal(status.expiryState("2026-12-10", today), "ok");
   // One screen each, in this order: passport, visa (non-citizens), the optional licence, void cheque, academic results; a visa a citizen
   // uploaded anyway is shown as optional.
-  assert.deepEqual(status.staffDocKinds(true).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Driving Licence:false", "Void Cheque:true", "Academic:true"]);
-  assert.deepEqual(status.staffDocKinds(true, [{ category: "Visa" }]).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Visa:false", "Driving Licence:false", "Void Cheque:true", "Academic:true"]);
+  assert.deepEqual(status.staffDocKinds(true).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Driving Licence:false", "Void Cheque:false", "Academic:false"]);
+  assert.deepEqual(status.staffDocKinds(true, [{ category: "Visa" }]).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Visa:false", "Driving Licence:false", "Void Cheque:false", "Academic:false"]);
   assert.deepEqual(status.staffDocKinds(false).map((k) => `${k.category}:${k.required}:${k.expiry}`),
-    ["Passport:true:required", "Visa:true:required", "Driving Licence:false:required", "Void Cheque:true:none", "Academic:true:none"]);
+    ["Passport:true:required", "Visa:false:required", "Driving Licence:false:required", "Void Cheque:false:none", "Academic:false:none"]);
   const list = status.staffChecklist([
     { category: "Passport", status: "approved", expiryDate: "2026-11-20" },
     { category: "Academic", status: "approved", expiryDate: null }, { category: "Academic", status: "rejected", expiryDate: null, reviewNote: "Unreadable" },
@@ -2772,9 +2773,9 @@ test("expiry states, the shown document kinds and the checklist", () => {
   ], true, today);
   assert.deepEqual(list.map((i) => [i.kind.category, i.state, i.files, i.expiry]), [["Passport", "approved", 1, "soon"], ["Driving Licence", "pending", 1, "ok"], ["Void Cheque", "pending", 1, "none"], ["Academic", "rejected", 2, "none"]]);
   assert.deepEqual(list[3].notes, ["Unreadable"]);
-  assert.deepEqual(checklistLib.approvedCount(list), { approved: 1, required: 3 }, "x/N counts required types only (the licence is not counted)");
+  assert.deepEqual(checklistLib.approvedCount(list), { approved: 1, required: 1 }, "x/N counts required types only (only the passport)");
   assert.deepEqual(status.staffChecklist([], false, today).map((i) => i.state).join(","), "missing,missing,missing,missing,missing");
-  assert.deepEqual(checklistLib.approvedCount(status.staffChecklist([], false, today)), { approved: 0, required: 4 });
+  assert.deepEqual(checklistLib.approvedCount(status.staffChecklist([], false, today)), { approved: 0, required: 1 });
 });
 
 test("an applicant can never write review fields or grant themselves access", () => {

@@ -153,10 +153,11 @@ function RuleWorkspace() {
     {message && <p role="status" className="mb-3 rounded bg-primary-50 p-3">{message}</p>}
     {/* // rule-policy: technical page-copy Loading text for the settings page; no rule value. */}
     {!ready && !error && <AdminLoading label="Loading settings…" />}
-    {ready && (tab === "settings" || tab === "wizard" || tab === "employee-wizard") && <div className="mb-4 flex flex-wrap gap-2" role="navigation" aria-label="Settings sections">
+    {ready && <div className="mb-4 flex flex-wrap gap-2" role="navigation" aria-label="Settings sections">
       <button type="button" aria-current={tab === "settings" ? "page" : undefined} onClick={() => setTab("settings")} className={`rounded-lg px-3 py-2 text-sm font-medium ${tab === "settings" ? "bg-primary-50 text-primary-800" : "border border-background-300 text-foreground-700"}`}>General settings</button>
       <button type="button" aria-current={tab === "wizard" ? "page" : undefined} onClick={() => setTab("wizard")} className={`rounded-lg px-3 py-2 text-sm font-medium ${tab === "wizard" ? "bg-primary-50 text-primary-800" : "border border-background-300 text-foreground-700"}`}>Student wizard validation</button>
       <button type="button" aria-current={tab === "employee-wizard" ? "page" : undefined} onClick={() => setTab("employee-wizard")} className={`rounded-lg px-3 py-2 text-sm font-medium ${tab === "employee-wizard" ? "bg-primary-50 text-primary-800" : "border border-background-300 text-foreground-700"}`}>Employee wizard validation</button>
+      {tab === "rules" && <span className="rounded-lg bg-primary-50 px-3 py-2 text-sm font-medium text-primary-800">Advanced rules</span>}
     </div>}
     {ready && tab === "settings" && <SimpleSettings snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}
     {ready && tab === "wizard" && <StudentWizardRules snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}

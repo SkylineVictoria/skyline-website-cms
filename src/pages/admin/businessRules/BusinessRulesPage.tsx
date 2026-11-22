@@ -2,12 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { loadBusinessRules } from "@/lib/businessRules";
 import { Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { AdminLoading, Badge, Button, Card, Field, PageHeader, SectionTabs, TextInput } from "@/pages/admin/components/ui";
+import { AdminLoading, Badge, Button, Card, Field, Modal, PageHeader, SectionTabs, Select, TextInput } from "@/pages/admin/components/ui";
 import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
 import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
 import SimpleSettings from "./SimpleSettings";
-import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Definition, type Rule, type RuleLocation, type Snapshot, isSystemRule } from "./model";
+import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Definition, type Rule, type Snapshot, isSystemRule } from "./model";
 
 const tabs = [
   { id: "settings", label: "Settings", icon: "ri-equalizer-line" },
@@ -18,7 +18,11 @@ const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Austra
 const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: "Australia/Melbourne" });
 const empty: Snapshot = { rules: [], categories: [], fields: [], history: [] };
 // rule-policy: technical table-labels Displays labels for persisted rule metadata.
-const ruleColumns = ["Rule", "Category", "Type", "Value", "Status", "Effective date", "Last modified", "Actions"];
+const AREAS: Record<string, string> = {
+  admissions: "Students & admissions", students: "Students & admissions", lms: "Classes & courses", assessment: "Assessments",
+  hrms: "Staff", agents: "Agents", finance: "Fees & payments", booking: "Bookings", support: "Support tickets", auth: "Sign-in",
+  comms: "Messages", office365: "Email accounts", signing: "Document signing", cms: "Website", website: "Website", admin: "Website",
+};
 
 // rule-policy: technical reference-caption Explains that source records do not configure workflow behavior.
 const referenceCaption = "This reference records a setting, default, or template term found in the source. Existing workflows continue to use their current implementation or saved settings.";
@@ -47,12 +51,11 @@ function RuleWorkspace() {
   const [search, setSearch] = useState("");
   // Owner (2026-11-22): system rules (sizes, formats, workflow steps, wording) are hidden until asked for.
   const [showSystem, setShowSystem] = useState(false);
-  const [menuSearch, setMenuSearch] = useState("");
+  const [area, setArea] = useState("");
   const [category, setCategory] = useState("");
   const [selected, setSelected] = useState("");
   const [historyId, setHistoryId] = useState("");
   const [reason, setReason] = useState("");
-  const [categoryEdit, setCategoryEdit] = useState<Category | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [ready, setReady] = useState(false);
@@ -82,7 +85,6 @@ function RuleWorkspace() {
         await reload();
         if (command === "publish") void loadBusinessRules(true);
         if (command === "save") setSelected(data.rule_id);
-        if (command === "category") setCategoryEdit(null);
         setMessage(command === "rollback" ? "Rollback draft created. Publish it to apply the change." : "Change saved.");
       }
       return data;
@@ -138,111 +140,89 @@ function RuleWorkspace() {
   const open = (id: string) => { setSelected(id); setTab("rules"); };
   const filterMenu = (id: string) => { setParams(id ? { menu: id } : {}); setSelected(""); setHistoryId(""); setCategory(""); };
   const add = () => open("new");
-  const matchingLocations = locations.filter(item => !menuSearch.trim() || locationLabel(locations, item.id).toLowerCase().includes(menuSearch.trim().toLowerCase()));
-  const renderLocation = (loc: RuleLocation, depth: number) => {
-    const children = matchingLocations.filter(item => item.parent === loc.id);
-    const count = snapshot.rules.filter(rule => appliesTo(locations, rule.versions[0].definition.scope, loc.id)).length
-      + Number(appliesTo(locations, timetableRulesScope, loc.id));
-    return <li key={loc.id}>
-      <button type="button" onClick={() => filterMenu(loc.id)} aria-current={scope === loc.id ? "true" : undefined}
-        className={`flex w-full items-center justify-between gap-1 rounded px-2 py-1.5 text-left text-xs ${scope === loc.id ? "bg-primary-100 font-semibold" : "hover:bg-background-100"}`}
-        style={{ paddingInlineStart: `${depth * 0.75 + 0.5}rem` }}>
-        <span>{menuSearch.trim() ? locationLabel(locations, loc.id) : loc.label}</span><span className="rounded-full bg-background-200 px-1.5 text-foreground-600">{count}</span>
-      </button>
-      {!!children.length && !menuSearch.trim() && <ul>{children.map(child => renderLocation(child, depth + 1))}</ul>}
-    </li>;
-  };
-  const editor = tab === "rules" && selected && (selected === "new" || version);
+  // Owner (2026-11-22): no side menus. One search box and an area filter; rules grouped by area; editing opens in a window.
+  const areaOf = (rule: Rule) => AREAS[rule.identifier.split(".")[0]] ?? "Other";
+  const visible = filtered.filter(rule => !area || areaOf(rule) === area);
+  const groups = [...new Set(Object.values(AREAS).concat("Other"))]
+    .map(name => ({ name, rules: visible.filter(rule => areaOf(rule) === name) }))
+    .filter(g => g.rules.length || (g.name === "Classes & courses" && showRescheduling && (!area || area === g.name)));
+  const areaNames = [...new Set(scoped.filter(rule => showSystem || !isSystemRule(rule)).map(areaOf))].sort();
+  const editor = selected && (selected === "new" || version);
+  const closeEditor = () => setSelected("");
 
   return <>
-    {/* // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules. */}
     <PageHeader title="Settings & Policies" breadcrumb="Administration" description="How SLIT works: required documents, attendance, deposits, staff and agents." />
     <SectionTabs tabs={tabs} active={tab === "history" ? "rules" : tab} onChange={id => setTab(id)} />
     {error && <div role="alert" className="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-900">{error}{!ready && <Button className="ml-2" size="sm" variant="outline" onClick={() => { setError(""); void reload().catch(() => setError(registrationError)); }}>Retry</Button>}</div>}
     {message && <p role="status" className="mb-3 rounded bg-primary-50 p-3">{message}</p>}
-    {!ready && !error && <AdminLoading label="Loading business rules…" />}
+    {/* // rule-policy: technical page-copy Loading text for the settings page; no rule value. */}
+    {!ready && !error && <AdminLoading label="Loading settings…" />}
     {ready && tab === "settings" && <SimpleSettings snapshot={snapshot} publish={publishSetting} busy={busy} showAdvanced={() => setTab("rules")} />}
-    // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules.
-    {ready && tab !== "settings" && <div className={`grid items-start gap-3 lg:grid-cols-[13rem_minmax(0,1fr)] ${editor ? "xl:grid-cols-[13rem_minmax(0,1fr)_21rem]" : ""}`}>
-      <Card className="p-3">
-        <h2 className="mb-2 font-bold">Admin menu</h2>
-        <TextInput type="search" className="mb-2" aria-label="Search Admin menus" placeholder="Search menus" value={menuSearch} onChange={e => setMenuSearch(e.target.value)} />
-        <div className="max-h-72 overflow-auto">
-          <button type="button" onClick={() => filterMenu("")} className={`w-full rounded px-2 py-1.5 text-left ${!scope ? "bg-primary-100 font-semibold" : "hover:bg-background-100"}`}>All Rules</button>
-          <ul>{matchingLocations.filter(item => menuSearch.trim() || !item.parent || !locations.some(loc => loc.id === item.parent)).map(item => renderLocation(item, 0))}</ul>
+    {ready && tab !== "settings" && <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <TextInput type="search" className="min-w-0 flex-1 sm:!w-72 sm:flex-none" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} />
+        <Select className="!w-auto" aria-label="Area" value={area} onChange={e => setArea(e.target.value)}>
+          <option value="">All areas</option>{areaNames.map(n => <option key={n}>{n}</option>)}
+        </Select>
+        <div className="ml-auto flex gap-2">
+          <Button size="sm" variant="outline" icon="ri-history-line" onClick={() => showHistory("")}>Change history</Button>
+          {showSystem && <Button size="sm" variant="outline" icon="ri-add-line" onClick={add}>Add rule</Button>}
         </div>
-        <div className="mb-2 mt-4 flex items-center justify-between border-t border-background-200 pt-3"><h2 className="font-bold">Categories</h2><Button size="sm" variant="ghost" aria-label="Add category" onClick={() => setCategoryEdit({ id: "", name: "" })}>+</Button></div>
-        <button type="button" onClick={() => setCategory("")} className={`block w-full rounded px-2 py-1 text-left ${!category ? "bg-primary-100" : ""}`}>All categories</button>
-        {snapshot.categories.map(c => <div key={c.id} className={`flex items-center rounded ${category === c.id ? "bg-primary-100" : ""}`}>
-          <button type="button" onClick={() => setCategory(c.id)} className="flex-1 px-2 py-1 text-left text-xs">{c.name}</button>
-          <button type="button" onClick={() => setCategoryEdit(c)} aria-label={`Rename ${c.name}`} className="p-1 text-foreground-500"><i className="ri-pencil-line" aria-hidden="true" /></button>
-        </div>)}
-        {categoryEdit && <form className="mt-3 space-y-2" onSubmit={e => { e.preventDefault(); void submit("category", categoryEdit); }}>
-          <Field label="Category name"><TextInput value={categoryEdit.name} required onChange={e => setCategoryEdit({ ...categoryEdit, name: e.target.value })} /></Field>
-          <Button size="sm" type="submit" disabled={busy}>Save</Button> <Button size="sm" variant="ghost" onClick={() => setCategoryEdit(null)}>Cancel</Button>
-        </form>}
-      </Card>
-      <Card className="min-w-0 p-4">
-        {tab === "rules" && <>
-          <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="mr-auto font-bold">{scope ? locationLabel(locations, scope) : "All Rules"} ({filtered.length + Number(showRescheduling)})</h2>
-            <TextInput className="!w-44" type="search" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} /><Button size="sm" variant="outline" icon="ri-history-line" onClick={() => showHistory("")}>Change history</Button><Button size="sm" icon="ri-add-line" onClick={add}>Add Rule</Button></div>
-          <div className="overflow-x-auto"><table className="w-full text-left text-xs">
-            <thead className="bg-background-100"><tr>{ruleColumns.map(label => <th key={label} scope="col" className="p-2">{label}</th>)}</tr></thead>
-            <tbody>
-              {showRescheduling && <tr className="border-b border-background-200 align-top">
-                <th scope="row" className="p-2 font-medium">
-                  <Link to={reschedulingRulesRoute} className="text-primary-700 hover:underline">{reschedulingTitle}</Link>
-                  <div className="mt-1 text-foreground-500">{locationLabel(locations, timetableRulesScope)}</div>
-                </th>
-                <td className="p-2">Timetable</td>
-                <td className="p-2">Rule set</td>
-                <td className="p-2">All courses and per-course overrides</td>
-                <td className="p-2">Existing settings</td>
-                <td className="p-2">—</td>
-                <td className="p-2">—</td>
-                <td className="p-2"><Link to={reschedulingRulesRoute} className="text-primary-700 hover:underline">Edit</Link></td>
-              </tr>}
-              {filtered.map(rule => {
-              const latest = rule.versions[0], live = effective(rule), next = published(rule).find(v => v.definition.starts_on > today);
-              const active = live?.definition.enabled;
-              const awaiting = awaitingIntegration(rule);
-              // rule-policy: technical status-labels Describes each stored version and registration state.
-              const label = awaiting ? "Reference" : active ? "Active" : live ? "Inactive" : next ? "Scheduled" : latest.state === "draft" ? "Draft" : "Expired";
-              return <tr key={rule.id} className="border-b border-background-200 align-top">
-                <th scope="row" className="p-2 font-medium"><button type="button" onClick={() => open(rule.id)} className="text-left text-primary-700">{latest.definition.name}</button><div className="mt-1 text-foreground-500">{locationLabel(locations, latest.definition.scope)}</div></th>
-                <td className="p-2">{snapshot.categories.find(c => c.id === latest.definition.category_id)?.name}</td><td className="p-2">{latest.definition.value_type}</td>
-                <td className="max-w-40 break-words p-2"><span className="line-clamp-2">{definitionSummary((live ?? next ?? latest).definition)}</span></td>
-                <td className="p-2"><Badge tone={active ? "success" : "muted"}>{label}</Badge>{latest.state === "draft" && active && <div className="mt-1">Draft pending</div>}</td>
-                <td className="p-2">{awaiting ? "—" : (live ?? next ?? latest).definition.starts_on}</td><td className="p-2">{dateTime(latest.created_at)}</td>
-                <td className="space-y-1 p-2"><button type="button" className="block text-primary-700" onClick={() => open(rule.id)}>{awaiting ? "View" : "Edit"}</button><button type="button" className="block text-primary-700" onClick={() => showHistory(rule.id)}>History</button></td>
-              </tr>;
-            })}</tbody>
-          </table>{!filtered.length && !showRescheduling && <p className="p-4 text-foreground-500">No rules match this view. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => { setSearch(""); filterMenu(""); }}>Show all rules</button></p>}</div>
-          {systemCount > 0 && <p className="mt-3 border-t border-background-200 pt-3 text-xs text-foreground-500">
-            {showSystem ? "Showing system rules too." : `${systemCount} system rules are hidden (file sizes, formats, workflow steps, letter wording). They keep working as they are.`}{" "}
-            <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => setShowSystem(v => !v)} data-testid="toggle-system-rules">{showSystem ? "Hide system rules" : "Show system rules"}</button></p>}
-        </>}
-        {tab === "history" && <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">{historyRule ? `Change history: ${historyRule.versions[0].definition.name}` : "Change history"}</h2><div className="flex gap-2">{historyId && <Button size="sm" variant="outline" onClick={() => showHistory("")}>All changes</Button>}<Button size="sm" variant="ghost" onClick={() => setTab("rules")}>Back to rules</Button></div></div>
-          {historyRule && <><Field label="Reason for rollback"><TextInput value={reason} onChange={e => setReason(e.target.value)} /></Field>
-            {historyRule.versions.map(v => <div key={v.id} className="flex items-center justify-between gap-2 border-b border-background-200 pb-2"><span>Version {v.version} · {v.state} · {valueSummary(v.definition.value)}</span>
-              {v.published_at && <Button size="sm" variant="outline" disabled={busy || !reason.trim()} onClick={() => void submit("rollback", { rule_id: historyId, expected_version: historyRule.versions[0].id, target_version: v.id, reason })}>Restore as draft</Button>}</div>)}</>}
-          {!history.length && <p>No recorded changes.</p>}
-          {history.map(event => <details key={event.id} className="rounded border border-background-200 p-2"><summary className="cursor-pointer">{event.after_data?.name ?? event.before_data?.name} · {event.action} · {dateTime(event.created_at)}</summary>
-            <p className="py-2">{event.reason}</p><p className="text-xs">Changed by {event.actor || "Migration"}</p><pre className="mt-2 overflow-x-auto text-xs">{JSON.stringify({ previous: event.before_data, updated: event.after_data }, null, 2)}</pre></details>)}
-        </div>}
-      </Card>
-      {editor && current && version && awaitingIntegration(current) ? <Card className="space-y-3 p-4">
-        <div className="flex items-center justify-between gap-2"><h2 className="font-bold">{version.definition.name}</h2><Button size="sm" variant="ghost" onClick={() => setSelected("")}>Close</Button></div>
-        <Badge tone="muted">Reference</Badge>
-        {typeof version.definition.value === "object"
-          ? <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-background-100 p-2 text-xs">{JSON.stringify(version.definition.value, null, 2)}</pre>
-          : <p className="text-lg font-semibold">{definitionSummary(version.definition)}</p>}
-        <p>{version.definition.description}</p>
-        <p className="text-foreground-600">{referenceCaption}</p>
-        {version.definition.source_url && <a className="font-medium text-primary-700 hover:underline" href={version.definition.source_url} target="_blank" rel="noreferrer">View source</a>}
-      </Card> : editor && <RuleEditor key={version?.id ?? "new"} initial={version?.definition ?? { ...newDefinition(scope, category), starts_on: today }}
-        rule={current} version={version} existingApprovalRequired={!!current && !!effective(current)?.definition.approval_required} categories={snapshot.categories} locations={locations} fields={snapshot.fields} busy={busy} close={() => setSelected("")} submit={submit} />}
+      </div>
+      {scope && <p className="text-sm text-foreground-600">Showing rules for <b>{locationLabel(locations, scope)}</b>. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => filterMenu("")}>Show all</button></p>}
+      {groups.map(g => <Card key={g.name} className="p-0">
+        <h2 className="border-b border-background-200 px-4 py-2.5 font-heading text-sm font-semibold text-foreground-900">{g.name}</h2>
+        <ul className="divide-y divide-background-100">
+          {g.name === "Classes & courses" && showRescheduling && <li className="flex items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0"><p className="text-sm font-medium text-foreground-900">{reschedulingTitle}</p><p className="truncate text-xs text-foreground-500">What happens when a class can't run. Has its own page.</p></div>
+            <Link to={reschedulingRulesRoute} className="shrink-0 text-sm font-medium text-primary-700 hover:underline">Open</Link>
+          </li>}
+          {g.rules.map(rule => {
+            const latest = rule.versions[0], live = effective(rule), next = published(rule).find(v => v.definition.starts_on > today);
+            const shown = (live ?? next ?? latest).definition;
+            return <li key={rule.id}>
+              <button type="button" onClick={() => open(rule.id)} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-background-50" data-testid={`rule-row-${rule.identifier}`}>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-foreground-900">{shown.name}{latest.state === "draft" ? <span className="ml-2"><Badge tone="primary">Unpublished change</Badge></span> : null}{live && !live.definition.enabled ? <span className="ml-2"><Badge tone="muted">Off</Badge></span> : null}</p>
+                  {shown.description ? <p className="truncate text-xs text-foreground-500">{shown.description}</p> : null}
+                </div>
+                <span className="max-w-[45%] shrink-0 truncate rounded-md bg-background-100 px-2 py-1 text-xs font-medium text-foreground-800">{definitionSummary(shown)}</span>
+              </button>
+            </li>;
+          })}
+        </ul>
+      </Card>)}
+      {!groups.length && <Card className="p-6 text-center text-sm text-foreground-500">No rules match. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => { setSearch(""); setArea(""); filterMenu(""); }}>Clear search</button></Card>}
+      <p className="text-xs text-foreground-500">
+        {showSystem ? "Developer mode: system rules and Add rule are shown." : `${systemCount} system rules (file sizes, formats, workflow steps, letter wording) are hidden and keep working as they are.`}{" "}
+        <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => setShowSystem(v => !v)} data-testid="toggle-system-rules">{showSystem ? "Hide them" : "Show them (developers)"}</button>
+      </p>
     </div>}
+
+    {ready && editor && <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-foreground-950/40 p-4" onClick={closeEditor}>
+      <div className="my-6 w-full max-w-xl" onClick={e => e.stopPropagation()}>
+        {current && version && awaitingIntegration(current) ? <Card className="space-y-3 p-4">
+          <div className="flex items-center justify-between gap-2"><h2 className="font-bold">{version.definition.name}</h2><Button size="sm" variant="ghost" onClick={closeEditor}>Close</Button></div>
+          <p className="text-lg font-semibold">{definitionSummary(version.definition)}</p>
+          <p>{version.definition.description}</p>
+          <p className="text-foreground-600">{referenceCaption}</p>
+        </Card> : <>
+          <RuleEditor key={version?.id ?? "new"} initial={version?.definition ?? { ...newDefinition(scope, category), starts_on: today }}
+            rule={current} version={version} existingApprovalRequired={!!current && !!effective(current)?.definition.approval_required} categories={snapshot.categories} locations={locations} fields={snapshot.fields} busy={busy} close={closeEditor} submit={submit} />
+          {current && <div className="mt-2 text-right"><button type="button" className="text-sm font-medium text-background-50 hover:underline" onClick={() => { closeEditor(); showHistory(current.id); }}>Change history for this rule</button></div>}
+        </>}
+      </div>
+    </div>}
+
+    <Modal open={ready && tab === "history"} title={historyRule ? `Change history: ${historyRule.versions[0].definition.name}` : "Change history"} onClose={() => setTab("rules")} width="max-w-2xl">
+      <div className="space-y-3 text-sm">
+        {historyRule && <><Field label="Reason for going back to an earlier version"><TextInput value={reason} onChange={e => setReason(e.target.value)} /></Field>
+          {historyRule.versions.map(v => <div key={v.id} className="flex items-center justify-between gap-2 border-b border-background-200 pb-2"><span>Version {v.version} · {v.state} · {valueSummary(v.definition.value)}</span>
+            {v.published_at && <Button size="sm" variant="outline" disabled={busy || !reason.trim()} onClick={() => void submit("rollback", { rule_id: historyId, expected_version: historyRule.versions[0].id, target_version: v.id, reason })}>Use this version</Button>}</div>)}</>}
+        {!history.length && <p className="text-foreground-500">No recorded changes.</p>}
+        {history.map(event => <details key={event.id} className="rounded border border-background-200 p-2"><summary className="cursor-pointer">{event.after_data?.name ?? event.before_data?.name} · {event.action} · {dateTime(event.created_at)}</summary>
+          <p className="py-2">{event.reason}</p><p className="text-xs text-foreground-500">Changed by {event.actor || "System"}</p></details>)}
+      </div>
+    </Modal>
   </>;
 }

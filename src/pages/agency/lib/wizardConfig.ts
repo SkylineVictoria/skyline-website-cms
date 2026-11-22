@@ -91,7 +91,7 @@ export const WIZARD_STEPS: WizardStep[] = [
 // English, academic results and visa today). The step's "Required." / "Optional." subtitle follows the same rule.
 for (const step of WIZARD_STEPS) {
   const detail = step.subtitle.replace(/^(Required|Optional)\. /, "");
-  Object.defineProperty(step, "required", { get: () => step.id === "passport" || requiredDocumentSteps().has(step.id), enumerable: true, configurable: true });
+  Object.defineProperty(step, "required", { get: () => requiredDocumentSteps().has(step.id), enumerable: true, configurable: true });
   Object.defineProperty(step, "subtitle", { get: () => `${step.required ? "Required" : "Optional"}. ${detail}`, enumerable: true, configurable: true });
 }
 

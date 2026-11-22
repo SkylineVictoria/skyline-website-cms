@@ -15,7 +15,7 @@ const STEPS = [
 ] as const;
 
 const NAMES: Record<string, string> = {
-  "admissions.application_required_documents": "Document required before submission",
+  "admissions.application_required_documents": "Document required before Next",
   "admissions.document_expiry_warning_months": "Document expiry warning period",
   "admissions.english_minimum_scores": "Minimum English scores",
   "admissions.english_result_valid_years": "English test validity",
@@ -82,7 +82,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
   return <div className="space-y-4">
     <div className="flex items-start justify-between gap-3">
       <div><h2 className="text-lg font-semibold text-foreground-900">Student wizard validation</h2>
-        <p className="text-sm text-foreground-600">Choose a step to manage its existing published rules. Only existing registered rules can be published here; student-only progression controls are not yet connected.</p></div>
+        <p className="text-sm text-foreground-600">Choose a step to manage its existing published rules. Published document requirements now control Next and forward navigation in the shared application document wizard. Other field checks continue to use their existing validation.</p></div>
       <button type="button" onClick={showAdvanced} className="shrink-0 text-sm font-medium text-primary-700 hover:underline">Advanced rules</button>
     </div>
     {message && <p role="status" className="text-sm text-foreground-700">{message}</p>}
@@ -101,7 +101,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
           <p className="text-xs text-foreground-600">Settings are saved and published through SLIT's existing rule service.</p></div>
         {step.docs.map(doc => <label key={doc} className="flex items-center justify-between gap-3 rounded-lg border border-background-200 p-3">
           <span><span className="block text-sm font-medium">Require {doc}</span>
-            <span className="block text-xs text-foreground-600">Required for application submission; page progression may have additional checks.</span></span>
+            <span className="block text-xs text-foreground-600">When enabled, the application wizard blocks Next until valid evidence is uploaded.</span></span>
           <input type="checkbox" checked={required.includes(doc)} disabled={busy || !requiredRule}
             onChange={e => void changeRequired(doc, e.target.checked)} className="h-4 w-4 accent-primary-600" />
         </label>)}

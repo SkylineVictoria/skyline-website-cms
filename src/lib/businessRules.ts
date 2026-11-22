@@ -11,6 +11,7 @@ export const SCREEN_RULES = [
   "finance.course_total_excluded_default",
   "support.ticket_attachment_limit_mib",
   "lms.attendance_alert_threshold",
+  "lms.attendance_alert_min_marks",
   "lms.attendance_mark_treatment",
   "lms.unit_duration_weekly_hours",
   "lms.unit_duration_rounding_weeks",

@@ -5,7 +5,7 @@ import type { Definition, Rule, Snapshot } from "./model";
 const STEPS = [
   { id: "passport", title: "Passport", icon: "ri-passport-line", docs: ["Passport"], rules: ["admissions.application_required_documents", "admissions.document_expiry_warning_months", "admissions.passport_reject_expired", "admissions.passport_auto_delete_expired", "admissions.passport_require_expiry_date"] },
   { id: "english", title: "English evidence", icon: "ri-translate-2", docs: ["English test"], rules: ["admissions.application_required_documents", "admissions.english_minimum_scores", "admissions.english_result_valid_years", "admissions.english_test_alternatives"] },
-  { id: "academic", title: "Academic results", icon: "ri-graduation-cap-line", docs: ["Academic results"], rules: ["admissions.application_required_documents", "admissions.academic_minimum_documents", "admissions.academic_reject_mismatched"] },
+  { id: "academic", title: "Academic results", icon: "ri-graduation-cap-line", docs: ["Academic results"], rules: ["admissions.application_required_documents", "admissions.academic_minimum_documents", "admissions.academic_reject_mismatched", "admissions.academic_passport_name_review"] },
   { id: "visa", title: "Visa", icon: "ri-id-card-line", docs: ["Visa"], rules: ["admissions.application_required_documents", "admissions.document_expiry_warning_months"] },
   { id: "licence", title: "Driving licence", icon: "ri-profile-line", docs: ["Driving licence"], rules: ["admissions.application_required_documents"] },
   { id: "language", title: "Language spoken at home", icon: "ri-chat-3-line", docs: [], rules: [] },
@@ -21,6 +21,7 @@ const NAMES: Record<string, string> = {
   "admissions.passport_require_expiry_date": "Require extracted expiry date",
   "admissions.document_expiry_warning_months": "Document expiry warning period",
   "admissions.academic_minimum_documents": "Minimum academic files required",
+  "admissions.academic_passport_name_review": "Review academic name against passport",
   "admissions.academic_reject_mismatched": "Reject files identified as non-academic",
   "admissions.english_minimum_scores": "Minimum English scores",
   "admissions.english_result_valid_years": "English test validity",

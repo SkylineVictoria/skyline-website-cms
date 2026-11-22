@@ -469,6 +469,23 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // Business Rules admissions.english_test_alternatives: only the ways SLIT accepts count.
   const alternatives = englishAlternatives();
   const englishAltMet = englishAlt && ((alternatives.ausStudy && ausStudy === "Yes" && ausStudyDocs.length > 0) || (alternatives.cambridge && ausStudy === "No" && cambridge === "Yes"));
+  // Compare names extracted from the academic evidence and passport; preserve originals for review.
+  // Missing OCR names are unknown, not mismatches. Never delete academic evidence for a name difference.
+  const extractedName = (values?: Record<string, string>) => {
+    if (!values) return "";
+    const combined = ["full_name", "student_name", "name", "candidate_name", "holder_name"].map(key => values[key]).find(Boolean);
+    return combined || [values.first_name || values.given_names || values.given_name, values.middle_name, values.last_name || values.surname || values.family_name].filter(Boolean).join(" ");
+  };
+  const nameTokens = (name: string) => name.normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase().replace(/[^a-z\\s]/g, " ").split(/\\s+/).filter(Boolean);
+  const passportName = documents.filter(doc => doc.category === "Passport" && doc.extraction === "done").map(doc => extractedName(doc.extracted)).find(Boolean) || "";
+  const academicNameReviews = ruleBool("admissions.academic_passport_name_review", true) && passportName
+    ? documents.filter(doc => doc.category === "Academic" && doc.extraction === "done").flatMap(doc => {
+        const name = extractedName(doc.extracted);
+        if (!name) return [];
+        const a = nameTokens(name), p = nameTokens(passportName);
+        if (!a.length || !p.length || (a.length === p.length && a.every(token => p.includes(token)))) return [];
+        return [{ filename: doc.filename, name }];
+      }) : [];
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
     || documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1);
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && (!stepHasDoc(item) || (item.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && documents.some((doc) => doc.category === item.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date))));
@@ -721,6 +738,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       <>
         {uploadRejections[current.category] ? <WizardNotice tone="error">{uploadRejections[current.category]}</WizardNotice> : null}
         {current.id === "english" && englishSaveError ? <WizardNotice tone="error">{englishSaveError}</WizardNotice> : null}
+        {current.id === "academic" && academicNameReviews.length > 0 ? <WizardNotice tone="error">Name review needed: the academic document name differs from the passport ({academicNameReviews.map(item => `${item.filename}: ${item.name}`).join("; ")}). Passport name: {passportName}. Please have SLIT verify the documents before approval.</WizardNotice> : null}
         <WizardDocumentStep
           step={current}
           docs={stepDocs}

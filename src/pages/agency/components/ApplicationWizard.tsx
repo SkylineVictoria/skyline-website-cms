@@ -1,4 +1,4 @@
-import { ruleBool } from "@/lib/businessRules";
+import { ruleBool, ruleNumber } from "@/lib/businessRules";
 import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -122,10 +122,10 @@ const isWrongDocument = (doc: WizardDoc) => {
   const check = STEP_CHECKS[doc.category];
   if (!check) return false;
   // An academic file with nothing to read (a marksheet page, say) is kept; only one read as another kind is wrong.
-  if (doc.extraction === "empty") return check.keys.length > 0 || Boolean(doc.mismatch);
-  if (doc.extraction === "failed") return Boolean(doc.mismatch);
+  if (doc.extraction === "empty") return (doc.category !== "Academic" || ruleBool("admissions.academic_reject_mismatched", true)) && (check.keys.length > 0 || Boolean(doc.mismatch));
+  if (doc.extraction === "failed") return (doc.category !== "Academic" || ruleBool("admissions.academic_reject_mismatched", true)) && Boolean(doc.mismatch);
   if (doc.extraction !== "done") return false;
-  return Boolean(doc.mismatch) || (check.keys.length > 0 && !check.keys.some((key) => String(doc.extracted?.[key] ?? "").trim()));
+  return (doc.category === "Academic" ? ruleBool("admissions.academic_reject_mismatched", true) : true) && (Boolean(doc.mismatch) || (check.keys.length > 0 && !check.keys.some((key) => String(doc.extracted?.[key] ?? "").trim())));
 };
 // A file still being read after this long no longer locks the wizard; the step says so and Next waits for the result.
 const SLOW_READ_MS = 90_000;
@@ -470,7 +470,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const alternatives = englishAlternatives();
   const englishAltMet = englishAlt && ((alternatives.ausStudy && ausStudy === "Yes" && ausStudyDocs.length > 0) || (alternatives.cambridge && ausStudy === "No" && cambridge === "Yes"));
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
-    || documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
+    || documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1);
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && (!stepHasDoc(item) || (item.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && documents.some((doc) => doc.category === item.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date))));
   // Forward navigation cannot bypass documents marked required by the published admissions rule.
   const goTo = (index: number) => {

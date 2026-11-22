@@ -151,7 +151,10 @@
 .admin-nav-label { min-width: 0; flex: 1; }
 .admin-nav-label small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .admin-nav-chevron { flex: none; margin-left: auto; color: var(--nav-muted); font-size: .9rem; }
-/* Expanded module headings have no hover action. */
+.admin-nav-module { font-weight: 700; }
+.admin-nav-module .admin-nav-label { white-space: normal; }
+.admin-nav-module[aria-expanded="true"] .admin-nav-chevron { rotate: 90deg; }
+/* Subgroups are visible while their main module is open. */
 .admin-nav-group, .admin-nav-group:hover {
   margin-top: .4rem;
   background: transparent;

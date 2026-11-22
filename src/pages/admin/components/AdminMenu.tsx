@@ -27,7 +27,7 @@ const timetable: Entry = {
   children: timetableEntries.map((entry) => ({ ...entry, id: `lms-${entry.id}` })),
 };
 const learning: Entry = {
-  id: "learning-management", label: "Learning Management", icon: "ri-graduation-cap-line",
+  id: "learning-management", label: "Learning Management System", icon: "ri-graduation-cap-line",
   children: LMS_MENU.flatMap((entry) => {
     if (!entry.parent) return [{ ...entry, id: `lms-${entry.id}` }];
     return entry === timetableEntries[0] ? [timetable] : [];
@@ -71,7 +71,7 @@ function groupedModules(modules: Entry[]): Entry[] {
   const standalone = modules.filter((item) => item.id === "staff" || item.id === "finance");
   const other = modules.filter((item) => item.id !== learning.id && item.id !== "website" && item.id !== "bookings"
     && !standalone.includes(item) && !moduleGroups.some((group) => group.members.includes(item.id)));
-  return [learningGroup, ...groups, ...standalone, ...(website ? [website] : []), ...(other.length ? [
+  return [learningGroup, ...groups, ...standalone.map((item) => item.id === "staff" ? { ...item, label: "HRMS" } : item), ...(website ? [website] : []), ...(other.length ? [
     { id: "other-modules", label: "Other modules", icon: "ri-more-2-line", children: other },
   ] : [])];
 }
@@ -88,7 +88,9 @@ function isCurrent(entry: Entry, pathname: string, search: string): boolean {
   return Array.from(expected).every(([key, value]) => actual.get(key) === value);
 }
 
-function MenuEntry({ entry, close, trail }: { entry: Entry; close: () => void; trail?: string }) {
+function MenuEntry({ entry, close, trail, expanded = true, onToggle }: {
+  entry: Entry; close: () => void; trail?: string; expanded?: boolean; onToggle?: () => void;
+}) {
   const { pathname, search } = useLocation();
   const current = isCurrent(entry, pathname, search);
   const content = <>
@@ -99,12 +101,18 @@ function MenuEntry({ entry, close, trail }: { entry: Entry; close: () => void; t
     <li>
       {entry.children?.length ? (
         <>
-          <div className="admin-nav-item admin-nav-group" data-current-branch={current} title={entry.label}>
-            {content}
-          </div>
-          <ul className="admin-nav-children" aria-label={entry.label}>
+          {onToggle ? (
+            <button type="button" className="admin-nav-item admin-nav-module" aria-expanded={expanded}
+              data-current-branch={current} title={entry.label} onClick={onToggle}>
+              {content}
+              <i className="ri-arrow-right-s-line admin-nav-chevron" aria-hidden="true" />
+            </button>
+          ) : (
+            <div className="admin-nav-item admin-nav-group" data-current-branch={current} title={entry.label}>{content}</div>
+          )}
+          {expanded ? <ul className="admin-nav-children" aria-label={entry.label}>
             {entry.children.map((child) => <MenuEntry entry={child} key={child.id} close={close} />)}
-          </ul>
+          </ul> : null}
         </>
       ) : entry.route ? (
         <Link to={entry.route} className="admin-nav-item" aria-current={current ? "page" : undefined} title={entry.label} onClick={close}
@@ -126,6 +134,7 @@ function destinations(entries: Entry[], parents: string[] = []): { entry: Entry;
 export default function AdminMenu({ close, collapsed = false }: { close: () => void; collapsed?: boolean }) {
   const { user } = useAuth();
   const [query, setQuery] = useState("");
+  const [openModule, setOpenModule] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ identity: string; rows: AdminMenuItem[] } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -138,6 +147,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
     setFailed(false);
     setResult(null);
     setQuery("");
+    setOpenModule(null);
     void (async () => {
       try {
         // rule-policy: security menu-read Uses the existing permission-filtered menu query.
@@ -159,9 +169,9 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const menu = [...dashboardEntries, ...groupedModules(modules)];
   const footer = nodes?.filter((entry) => entry.route === "/") ?? [publicWebsite];
   const terms = collapsed ? [] : query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  const matches = terms.length ? destinations([...dashboardEntries, ...modules, ...footer]).filter(({ entry, trail }) =>
+  const matches = terms.length ? destinations([...dashboardEntries, ...modules.map((item) => item.id === "staff" ? { ...item, label: "HRMS / Staff" } : item), ...footer]).filter(({ entry, trail }) =>
     terms.every((term) => `${entry.label} ${trail}`.toLowerCase().includes(term))) : [];
-  const open = () => { setQuery(""); close(); };
+  const open = () => { setQuery(""); setOpenModule(null); close(); };
 
   return (
     <>
@@ -184,7 +194,8 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
           matches.length
             ? <ul aria-label="Search results">{matches.map(({ entry, trail }) => <MenuEntry entry={entry} key={entry.id} close={open} trail={trail} />)}</ul>
             : <p className="admin-nav-message" role="status">No pages found.</p> // rule-policy: technical menu-search-empty Reports no matches in navigation search.
-        ) : <ul>{menu.map((entry) => <MenuEntry entry={entry} key={entry.id} close={open} />)}</ul>}
+        ) : <ul>{menu.map((entry) => <MenuEntry entry={entry} key={entry.id} close={open}
+          expanded={openModule === entry.id} onToggle={() => setOpenModule((current) => current === entry.id ? null : entry.id)} />)}</ul>}
         {nodes ? null : <>
           {/* // rule-policy: technical menu-load-feedback Reports a loading or failed request for navigation items. */}
           <p role="status" className="admin-nav-message">{failed ? "Menu unavailable." : "Loading menu…"}</p>

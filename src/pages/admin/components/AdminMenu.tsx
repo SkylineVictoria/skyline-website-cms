@@ -91,8 +91,6 @@ function isCurrent(entry: Entry, pathname: string, search: string): boolean {
 function MenuEntry({ entry, close, trail }: { entry: Entry; close: () => void; trail?: string }) {
   const { pathname, search } = useLocation();
   const current = isCurrent(entry, pathname, search);
-  const [expanded, setExpanded] = useState(current);
-  useEffect(() => { if (current) setExpanded(true); }, [current, pathname, search]);
   const content = <>
     <i className={`${entry.icon} admin-nav-icon`} aria-hidden="true" />
     <span className="admin-nav-label">{entry.label}{trail ? <small>{trail}</small> : null}</span>
@@ -101,11 +99,12 @@ function MenuEntry({ entry, close, trail }: { entry: Entry; close: () => void; t
     <li>
       {entry.children?.length ? (
         <>
-          <button type="button" className="admin-nav-item" aria-expanded={expanded} data-current-branch={current} title={entry.label} onClick={() => setExpanded((value) => !value)}>
+          <div className="admin-nav-item admin-nav-group" data-current-branch={current} title={entry.label}>
             {content}
-            <i className="ri-arrow-right-s-line admin-nav-chevron" aria-hidden="true" />
-          </button>
-          {expanded ? <ul className="admin-nav-children">{entry.children.map((child) => <MenuEntry entry={child} key={child.id} close={close} />)}</ul> : null}
+          </div>
+          <ul className="admin-nav-children" aria-label={entry.label}>
+            {entry.children.map((child) => <MenuEntry entry={child} key={child.id} close={close} />)}
+          </ul>
         </>
       ) : entry.route ? (
         <Link to={entry.route} className="admin-nav-item" aria-current={current ? "page" : undefined} title={entry.label} onClick={close}
@@ -157,25 +156,12 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const main = nodes?.filter((entry) => entry.route !== "/") ?? [dashboard];
   const dashboardEntries = main.filter((entry) => entry.route === "/admin");
   const modules = [learning, ...main.filter((entry) => entry.route !== "/admin"), ...(nodes ? [email] : [])];
-  const allModules: Entry = { id: "all-modules", label: "All modules", icon: "ri-apps-2-line", children: groupedModules(modules) };
+  const menu = [...dashboardEntries, ...groupedModules(modules)];
   const footer = nodes?.filter((entry) => entry.route === "/") ?? [publicWebsite];
   const terms = collapsed ? [] : query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const matches = terms.length ? destinations([...dashboardEntries, ...modules, ...footer]).filter(({ entry, trail }) =>
     terms.every((term) => `${entry.label} ${trail}`.toLowerCase().includes(term))) : [];
   const open = () => { setQuery(""); close(); };
-
-  const [levels, setLevels] = useState<string[]>([]);
-  let visible = [...dashboardEntries, allModules];
-  const path: Entry[] = [];
-  for (const id of levels) {
-    const parent = visible.find((item) => item.id === id);
-    if (!parent?.children?.length) break;
-    path.push(parent);
-    visible = parent.children;
-  }
-  const parent = path[path.length - 1];
-  const { pathname, search } = useLocation();
-  const goBack = () => setLevels(path.slice(0, -1).map((item) => item.id));
 
   return (
     <>
@@ -198,19 +184,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
           matches.length
             ? <ul aria-label="Search results">{matches.map(({ entry, trail }) => <MenuEntry entry={entry} key={entry.id} close={open} trail={trail} />)}</ul>
             : <p className="admin-nav-message" role="status">No pages found.</p> // rule-policy: technical menu-search-empty Reports no matches in navigation search.
-        ) : <>
-          {parent ? <button type="button" className="admin-nav-item" title="Back" aria-label="Back" onClick={goBack}>
-            <i className="ri-arrow-left-line admin-nav-icon" aria-hidden="true" /><span className="admin-nav-label">Back</span>
-          </button> : null}
-          {!collapsed && parent ? <h2 className="admin-nav-section">{parent.label}</h2> : null}
-          <ul>{visible.map((entry) => entry.children?.length ? <li key={entry.id}>
-            <button type="button" className="admin-nav-item" title={entry.label} data-current-branch={isCurrent(entry, pathname, search)}
-              onClick={() => setLevels([...path.map((item) => item.id), entry.id])}>
-              <i className={entry.icon + " admin-nav-icon"} aria-hidden="true" /><span className="admin-nav-label">{entry.label}</span>
-              <i className="ri-arrow-right-s-line admin-nav-chevron" aria-hidden="true" />
-            </button>
-          </li> : <MenuEntry entry={entry} key={entry.id} close={open} />)}</ul>
-        </>}
+        ) : <ul>{menu.map((entry) => <MenuEntry entry={entry} key={entry.id} close={open} />)}</ul>}
         {nodes ? null : <>
           {/* // rule-policy: technical menu-load-feedback Reports a loading or failed request for navigation items. */}
           <p role="status" className="admin-nav-message">{failed ? "Menu unavailable." : "Loading menu…"}</p>

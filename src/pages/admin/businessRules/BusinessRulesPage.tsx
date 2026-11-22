@@ -7,14 +7,11 @@ import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
 import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
 import SimpleSettings from "./SimpleSettings";
-import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Definition, type Rule, type RuleLocation, type Snapshot } from "./model";
+import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Definition, type Rule, type RuleLocation, type Snapshot, isSystemRule } from "./model";
 
 const tabs = [
   { id: "settings", label: "Settings", icon: "ri-equalizer-line" },
-  { id: "rules", label: "Advanced (all rules)", icon: "ri-list-check" },
-  { id: "history", label: "Rule History", icon: "ri-history-line" },
-  { id: "effective", label: "Effective Changes", icon: "ri-calendar-line" },
-  { id: "compliance", label: "Compliance & Notes", icon: "ri-shield-check-line" },
+  { id: "rules", label: "Advanced", icon: "ri-list-check" },
 ];
 
 const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -48,6 +45,8 @@ function RuleWorkspace() {
   // Owner (2026-11-22): the plain-language Settings tab opens first; a menu filter (from a page's Manage rules link) opens Advanced.
   const [tab, setTab] = useState(scope ? "rules" : "settings");
   const [search, setSearch] = useState("");
+  // Owner (2026-11-22): system rules (sizes, formats, workflow steps, wording) are hidden until asked for.
+  const [showSystem, setShowSystem] = useState(false);
   const [menuSearch, setMenuSearch] = useState("");
   const [category, setCategory] = useState("");
   const [selected, setSelected] = useState("");
@@ -125,7 +124,8 @@ function RuleWorkspace() {
     b.definition.starts_on.localeCompare(a.definition.starts_on) || b.definition.priority - a.definition.priority || b.version - a.version);
   const effective = (rule: Rule) => published(rule).find(v => v.definition.starts_on <= today && (!v.definition.ends_on || v.definition.ends_on >= today));
   const scoped = snapshot.rules.filter(rule => !scope || appliesTo(locations, rule.versions[0].definition.scope, scope));
-  const filtered = scoped.filter(rule => {
+  const systemCount = scoped.filter(isSystemRule).length;
+  const filtered = scoped.filter(rule => showSystem || !isSystemRule(rule)).filter(rule => {
     const d = rule.versions[0].definition;
     const categoryName = snapshot.categories.find(item => item.id === d.category_id)?.name ?? "";
     return (!category || d.category_id === category) && `${d.name} ${d.identifier} ${d.description} ${categoryName}`.toLowerCase().includes(search.trim().toLowerCase());
@@ -157,7 +157,7 @@ function RuleWorkspace() {
   return <>
     {/* // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules. */}
     <PageHeader title="Settings & Policies" breadcrumb="Administration" description="How SLIT works: required documents, attendance, deposits, staff and agents." />
-    <SectionTabs tabs={tabs} active={tab} onChange={id => { setTab(id); if (id === "history") setHistoryId(""); }} />
+    <SectionTabs tabs={tabs} active={tab === "history" ? "rules" : tab} onChange={id => setTab(id)} />
     {error && <div role="alert" className="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-900">{error}{!ready && <Button className="ml-2" size="sm" variant="outline" onClick={() => { setError(""); void reload().catch(() => setError(registrationError)); }}>Retry</Button>}</div>}
     {message && <p role="status" className="mb-3 rounded bg-primary-50 p-3">{message}</p>}
     {!ready && !error && <AdminLoading label="Loading business rules…" />}
@@ -185,7 +185,7 @@ function RuleWorkspace() {
       <Card className="min-w-0 p-4">
         {tab === "rules" && <>
           <div className="mb-3 flex flex-wrap items-center gap-2"><h2 className="mr-auto font-bold">{scope ? locationLabel(locations, scope) : "All Rules"} ({filtered.length + Number(showRescheduling)})</h2>
-            <TextInput className="!w-44" type="search" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} /><Button size="sm" icon="ri-add-line" onClick={add}>Add Rule</Button></div>
+            <TextInput className="!w-44" type="search" aria-label="Search rules" placeholder="Search rules" value={search} onChange={e => setSearch(e.target.value)} /><Button size="sm" variant="outline" icon="ri-history-line" onClick={() => showHistory("")}>Change history</Button><Button size="sm" icon="ri-add-line" onClick={add}>Add Rule</Button></div>
           <div className="overflow-x-auto"><table className="w-full text-left text-xs">
             <thead className="bg-background-100"><tr>{ruleColumns.map(label => <th key={label} scope="col" className="p-2">{label}</th>)}</tr></thead>
             <tbody>
@@ -218,28 +218,18 @@ function RuleWorkspace() {
               </tr>;
             })}</tbody>
           </table>{!filtered.length && !showRescheduling && <p className="p-4 text-foreground-500">No rules match this view. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => { setSearch(""); filterMenu(""); }}>Show all rules</button></p>}</div>
+          {systemCount > 0 && <p className="mt-3 border-t border-background-200 pt-3 text-xs text-foreground-500">
+            {showSystem ? "Showing system rules too." : `${systemCount} system rules are hidden (file sizes, formats, workflow steps, letter wording). They keep working as they are.`}{" "}
+            <button type="button" className="font-medium text-primary-700 hover:underline" onClick={() => setShowSystem(v => !v)} data-testid="toggle-system-rules">{showSystem ? "Hide system rules" : "Show system rules"}</button></p>}
         </>}
         {tab === "history" && <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">{historyRule?.versions[0].definition.name ?? "Rule history"}</h2>{historyId && <Button size="sm" variant="outline" onClick={() => showHistory("")}>All history</Button>}</div>
+          <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-bold">{historyRule ? `Change history: ${historyRule.versions[0].definition.name}` : "Change history"}</h2><div className="flex gap-2">{historyId && <Button size="sm" variant="outline" onClick={() => showHistory("")}>All changes</Button>}<Button size="sm" variant="ghost" onClick={() => setTab("rules")}>Back to rules</Button></div></div>
           {historyRule && <><Field label="Reason for rollback"><TextInput value={reason} onChange={e => setReason(e.target.value)} /></Field>
             {historyRule.versions.map(v => <div key={v.id} className="flex items-center justify-between gap-2 border-b border-background-200 pb-2"><span>Version {v.version} · {v.state} · {valueSummary(v.definition.value)}</span>
               {v.published_at && <Button size="sm" variant="outline" disabled={busy || !reason.trim()} onClick={() => void submit("rollback", { rule_id: historyId, expected_version: historyRule.versions[0].id, target_version: v.id, reason })}>Restore as draft</Button>}</div>)}</>}
           {!history.length && <p>No recorded changes.</p>}
           {history.map(event => <details key={event.id} className="rounded border border-background-200 p-2"><summary className="cursor-pointer">{event.after_data?.name ?? event.before_data?.name} · {event.action} · {dateTime(event.created_at)}</summary>
             <p className="py-2">{event.reason}</p><p className="text-xs">Changed by {event.actor || "Migration"}</p><pre className="mt-2 overflow-x-auto text-xs">{JSON.stringify({ previous: event.before_data, updated: event.after_data }, null, 2)}</pre></details>)}
-        </div>}
-        {tab === "effective" && <div className="space-y-2"><h2 className="font-bold">Published changes</h2>
-          {scoped.flatMap(rule => published(rule).map(v => <div key={v.id} className="border-b border-background-200 py-2">
-            <button type="button" className="text-primary-700" onClick={() => open(rule.id)}>{v.definition.name}</button>
-            <p>{v.definition.starts_on}{v.definition.ends_on ? ` to ${v.definition.ends_on}` : ""} · {v.definition.starts_on > today ? "Scheduled" : v.definition.ends_on && v.definition.ends_on < today ? "Ended" : "Effective"} · {v.definition.enabled ? "Active" : "Inactive"}</p>
-          </div>))}{!scoped.some(rule => published(rule).length > 0) && <p>No published changes.</p>}
-        </div>}
-        {tab === "compliance" && <div className="space-y-3"><h2 className="font-bold">Compliance & Notes</h2><p>Authentication, data access, infrastructure limits and mandatory controls are enforced independently. Record authoritative sources and review notes on each version.</p>
-          {scoped.filter(rule => rule.versions[0].definition.notes || rule.versions[0].definition.source_url).map(rule => {
-            const d = rule.versions[0].definition;
-            return <div key={rule.id} className="border-b border-background-200 py-2"><button type="button" className="text-primary-700" onClick={() => open(rule.id)}>{d.name}</button><p>{d.notes}</p>
-              {d.source_url && <a className="text-primary-700" href={d.source_url} target="_blank" rel="noreferrer">Open source</a>}</div>;
-          })}
         </div>}
       </Card>
       {editor && current && version && awaitingIntegration(current) ? <Card className="space-y-3 p-4">

@@ -194,6 +194,8 @@ interface WorkspaceProps {
   /** Administrators: opening a document is written to the audit log. */
   auditAccess?: boolean;
   onSaved?: () => void;
+  /** The live completion percentage of the form, for the page header. */
+  onProgress?: (overall: number) => void;
   /** Called once the application is submitted (e.g. to go back to the list). */
   onSubmitted?: (reference: string, studentName: string) => void;
   /** Staff: the status, what is needed next and Take action, at the bottom of Review. */
@@ -212,6 +214,7 @@ export default function ApplicationWorkspace({
   readOnly,
   auditAccess = false,
   onSaved,
+  onProgress,
   onSubmitted,
   reviewBar,
 }: WorkspaceProps) {
@@ -401,8 +404,10 @@ export default function ApplicationWorkspace({
   }, [courseLabels, courseChoices]);
 
   useEffect(() => {
+    // The first value is the empty placeholder before the form is read: the header keeps the saved figure until then.
+    if (progressRef.current !== progress) onProgress?.(progress.overall);
     progressRef.current = progress;
-  }, [progress]);
+  }, [progress, onProgress]);
 
   /**
    * Reading or removing a document changes the application on the server, which raises its draft version; saving with

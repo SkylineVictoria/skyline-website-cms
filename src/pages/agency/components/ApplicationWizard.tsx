@@ -20,7 +20,7 @@ import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
-import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, wizardFinishedKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
 import {
@@ -441,7 +441,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       };
       await saveDocumentReview({ applicationId, values: {}, provenance: {}, confirmed: [], wizard: meta as unknown as Record<string, unknown>, studentName: studentName || undefined });
       // The full form opens on its Student declaration page (step 14).
-      try { window.sessionStorage.setItem(openDeclarationKey(applicationId), "1"); } catch { /* session storage unavailable */ }
+      try { window.sessionStorage.setItem(openDeclarationKey(applicationId), "1"); window.sessionStorage.setItem(wizardFinishedKey(applicationId), "1"); } catch { /* session storage unavailable */ }
       onFinish();
     } catch (error) {
       setFinishError(error instanceof Error ? error.message : "We could not open the application form.");

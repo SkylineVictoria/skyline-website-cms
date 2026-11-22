@@ -151,7 +151,14 @@
 .admin-nav-label { min-width: 0; flex: 1; }
 .admin-nav-label small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .admin-nav-chevron { flex: none; margin-left: auto; color: var(--nav-muted); font-size: .9rem; }
-.admin-nav-item[aria-expanded="true"] .admin-nav-chevron { rotate: 90deg; }
+/* Expanded module headings have no hover action. */
+.admin-nav-group, .admin-nav-group:hover {
+  margin-top: .4rem;
+  background: transparent;
+  color: var(--nav-text);
+  font-weight: 700;
+}
+.admin-nav-group[data-current-branch="true"] { color: var(--nav-accent); }
 .admin-nav-children { margin: 0 0 .3rem 1.1rem; padding-left: .35rem; border-left: 1px solid var(--nav-line); }
 .admin-nav-children .admin-nav-item { font-size: .775rem; }
 .admin-nav-footer { flex: none; padding: .55rem .5rem; border-top: 1px solid var(--nav-line); }
@@ -180,5 +187,3 @@
 .admin-nav-brand { padding-block: 1.2rem; }
 .admin-nav-children .admin-nav-item { min-height: 2.15rem; font-weight: 450; }
 .admin-nav-item[aria-current="page"] { font-weight: 650; }
-
-.admin-nav-section { padding: .55rem; font-size: .875rem; font-weight: 700; }

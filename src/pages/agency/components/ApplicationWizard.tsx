@@ -470,8 +470,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
     || documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && !stepHasDoc(item));
-  // Steps never block each other: Next always moves on, and missing documents are only noted on their own step.
-  const goTo = (index: number) => setStep(Math.max(0, Math.min(index, LAST_STEP)));
+  // Forward navigation cannot bypass documents marked required by the published admissions rule.
+  const goTo = (index: number) => {
+    const bounded = Math.max(0, Math.min(index, LAST_STEP));
+    const missing = bounded > step ? firstMissingBefore(bounded) : -1;
+    setStep(missing >= 0 ? missing : bounded);
+  };
 
   /** Saves how the English requirement is met, then moves on from the English step. */
   const nextFromEnglish = async () => {
@@ -641,6 +645,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const rejectedHere = rejectedDocs[current.category];
   const stepCheck = STEP_CHECKS[current.category];
   const blockedByPassport = passportRequired && step === PASSPORT_STEP;
+  const blockedByRequiredDocument = !question && current.required && !stepHasDoc(current);
   // The document notices below belong to document screens only.
   const onDocStep = !question;
 
@@ -807,11 +812,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             ) : (
               current.id === "english" ? (
                 <button type="button" onClick={() => void nextFromEnglish()}
-                  disabled={locked || savingEnglish || pending.some((item) => !item.error)} className={primaryClass}>
+                  disabled={locked || blockedByRequiredDocument || savingEnglish || pending.some((item) => !item.error)} className={primaryClass}>
                   {savingEnglish ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
                 </button>
               ) : (
-                <button type="button" onClick={() => goTo(step + 1)} disabled={locked || pending.some((item) => !item.error)} className={primaryClass}>
+                <button type="button" onClick={() => goTo(step + 1)} disabled={locked || blockedByRequiredDocument || pending.some((item) => !item.error)} className={primaryClass}>
                   Next
                   <i className="ri-arrow-right-line" aria-hidden="true" />
                 </button>

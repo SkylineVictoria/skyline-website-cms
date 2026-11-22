@@ -31,6 +31,7 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
   const [selected, setSelected] = useState<string>("passport");
   const [message, setMessage] = useState("");
   const [search, setSearch] = useState("");
+  const [edits, setEdits] = useState<Record<string, string>>({});
   const step = STEPS.find(item => item.id === selected) ?? STEPS[0];
   const find = (id: string) => snapshot.rules.find(rule => rule.identifier === id);
   const active = (rule: Rule) => rule.versions.find(v => v.state === "published") ?? rule.versions[0];
@@ -43,6 +44,35 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
     setMessage("");
     const ok = await publish(rule, { ...version.definition, value: next }, `Student wizard: ${doc} ${checked ? "required" : "optional"}`);
     setMessage(ok ? "Published successfully." : "Could not publish. Review the error above.");
+  };
+  const saveRule = async (id: string) => {
+    const rule = find(id);
+    const version = rule && active(rule);
+    if (!rule || !version) return;
+    const raw = edits[id];
+    if (raw === undefined) return;
+    let value: unknown;
+    try {
+      if (version.definition.value_type === "boolean") {
+        if (raw !== "true" && raw !== "false") throw new Error("Choose Yes or No");
+        value = raw === "true";
+      } else if (["number", "percentage", "days", "hours", "weeks", "currency"].includes(version.definition.value_type)) {
+        if (!raw.trim() || !Number.isFinite(Number(raw))) throw new Error("Enter a valid number");
+        value = Number(raw);
+      } else if (version.definition.value_type === "text" || version.definition.value_type === "dropdown") {
+        value = raw;
+      } else {
+        value = JSON.parse(raw);
+        if (Array.isArray(version.definition.value) && !Array.isArray(value)) throw new Error("Enter a JSON array");
+        if (version.definition.value && typeof version.definition.value === "object" && !Array.isArray(version.definition.value) && (value === null || Array.isArray(value) || typeof value !== "object")) throw new Error("Enter a JSON object");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Invalid value");
+      return;
+    }
+    const ok = await publish(rule, { ...version.definition, value }, "Student wizard validation: " + id);
+    setMessage(ok ? "Rule published." : "Could not publish. Review the error above.");
+    if (ok) setEdits(old => { const next = { ...old }; delete next[id]; return next; });
   };
   const requiredRule = find("admissions.application_required_documents");
   const requiredValue = requiredRule && active(requiredRule)?.definition.value;
@@ -75,10 +105,31 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
         </label>)}
         {step.rules.filter(id => id !== "admissions.application_required_documents").map(id => {
           const rule = find(id);
-          const value = rule && active(rule)?.definition.value;
-          return <div key={id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-background-200 p-3">
-            <div><p className="text-sm font-medium">{NAMES[id]}</p><p className="text-xs text-foreground-600">{rule ? "Published value: " + JSON.stringify(value ?? "Not set") : "Rule not registered"}</p></div>
-            <button type="button" onClick={showAdvanced} className="text-sm font-medium text-primary-700 hover:underline">Edit rule</button>
+          const version = rule && active(rule);
+          const value = version?.definition.value;
+          const type = version?.definition.value_type ?? "";
+          const editable = Boolean(version && !["reference"].includes(version.state));
+          const shown = edits[id] ?? (typeof value === "string" ? value : JSON.stringify(value ?? null, null, 2));
+          return <div key={id} className="space-y-2 rounded-lg border border-background-200 p-3">
+            <label htmlFor={id} className="block text-sm font-medium">{NAMES[id]}</label>
+            {!rule || !version ? <p className="text-xs text-foreground-600">Rule not registered. Existing checks stay in force.</p> :
+              <>
+                {type === "boolean" ?
+                  <select id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
+                    <option value="true">Yes</option><option value="false">No</option>
+                  </select> :
+                  ["number", "percentage", "days", "hours", "weeks", "currency"].includes(type) ?
+                  <input id={id} type="number" disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" /> :
+                  type === "dropdown" && version.definition.options.length ?
+                  <select id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
+                    {version.definition.options.map(option => <option key={option} value={option}>{option}</option>)}
+                  </select> :
+                  <textarea id={id} rows={typeof value === "object" ? 5 : 2} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 font-mono text-xs" />}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-foreground-500">{type === "json" || typeof value === "object" ? "Structured value (JSON)" : type}</span>
+                  <button type="button" disabled={busy || !editable || edits[id] === undefined} onClick={() => void saveRule(id)} className="rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-40">Publish change</button>
+                </div>
+              </>}
           </div>;
         })}
         {!step.rules.length && <p className="text-sm text-foreground-600">No independently configurable validation rule is registered for this step yet. Existing application checks remain active.</p>}

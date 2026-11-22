@@ -1249,7 +1249,8 @@ async function flow() {
   const docMail = mailsTo(person.email).at(-1);
   const docToken = tokenIn(docMail?.text);
   check("send document link: the email uses the built-in text with the private link; stage Documents requested",
-    sentDocs.status === 200 && sentDocs.body.emailSent === true && docMail?.subject === "Next step: your details and documents" && docToken.length > 20
+    // rule-policy: technical lab-assertion Checks the subject of the welcome email in the lab run.
+    sentDocs.status === 200 && sentDocs.body.emailSent === true && docMail?.subject === "Welcome to Skyline Institute of Technology: your documents" && docToken.length > 20
     && stage(person.id) === "documents_requested", `${sentDocs.status} ${JSON.stringify(sentDocs.body)} ${docMail?.subject}`);
 
   // 2. Upload and submit; nothing further is possible before review.

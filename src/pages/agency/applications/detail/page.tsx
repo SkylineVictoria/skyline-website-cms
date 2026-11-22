@@ -25,7 +25,7 @@ import {
   type StatusHistoryRow,
 } from "@/pages/agency/lib/portalApplications";
 import ApplicationWorkspace from "@/pages/agency/components/ApplicationWorkspace";
-import { WIZARD_STEPS } from "@/pages/agency/lib/wizardConfig";
+import { WIZARD_STEPS, wizardFinishedKey } from "@/pages/agency/lib/wizardConfig";
 import NotificationGateBanner from "@/pages/admin/components/NotificationGateBanner";
 import NotificationLogTable from "@/pages/admin/components/NotificationLogTable";
 import { downloadApplicationPdf, logAdminAccess } from "@/pages/agency/lib/applicationPdf";
@@ -119,8 +119,19 @@ export default function ApplicationDetailPage() {
 
   const refreshAfterSave = useCallback(() => { void getApplication(id, false).then(detail => { if (detail) setApplication(detail); }).catch(e => setActionError(e.message)); }, [id]);
 
+  // Just back from the document wizard: list what is still missing at once, before the form opens further down the page.
+  const [justFinished, setJustFinished] = useState(() => {
+    // Read once: the flag is for this arrival only, never a later visit.
+    try { const set = window.sessionStorage.getItem(wizardFinishedKey(id)) === "1"; window.sessionStorage.removeItem(wizardFinishedKey(id)); return set; } catch { return false; }
+  });
+  const dismissFinished = useCallback(() => {
+    try { window.sessionStorage.removeItem(wizardFinishedKey(id)); } catch { /* session storage unavailable */ }
+    setJustFinished(false);
+  }, [id]);
+
   const openWizard = useCallback(() => {
     try { window.localStorage.setItem(wizardOpenKey(id), "1"); } catch { /* session storage unavailable */ }
+    setJustFinished(false);
     setWizardOpen(true);
   }, [id]);
 
@@ -179,6 +190,7 @@ export default function ApplicationDetailPage() {
     setTab("form");
     setWorkspaceKey((key) => key + 1);
     await load();
+    setJustFinished(true);
   };
 
   // Do not unmount an open wizard during a background detail refresh. Its
@@ -317,6 +329,23 @@ export default function ApplicationDetailPage() {
         </div>
       ) : null}
 
+      {justFinished && !wizardOpen && outstanding.length > 0 ? (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-foreground-950/40 p-4" role="presentation" onClick={dismissFinished}>
+          <div role="dialog" aria-modal="true" aria-label="Still needed" data-testid="wizard-outstanding-dialog" onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-xl border border-background-200 bg-background-50 shadow-xl">
+            <div className="border-b border-background-200 px-5 py-3.5">
+              <h2 className="flex items-center gap-2 font-heading text-base font-semibold text-foreground-950"><i className="ri-flag-line text-accent-600" aria-hidden="true" />Still needed before you can submit</h2>
+            </div>
+            <ul className="space-y-2 px-5 py-4 text-sm text-foreground-800">
+              {outstanding.map((item) => <li key={item} className="flex gap-2"><i className="ri-close-circle-line mt-0.5 text-red-600" aria-hidden="true" />{item}</li>)}
+            </ul>
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-background-200 px-5 py-3">
+              <button type="button" onClick={dismissFinished} className="rounded-md border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">Continue to the form</button>
+              <button type="button" onClick={() => { dismissFinished(); openWizard(); }} className="rounded-md bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-700">Upload now</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {outstanding.length > 0 ? (
         <div className="mt-4 rounded-card border border-accent-200 bg-accent-50 p-4">
           <p className="flex items-center gap-2 text-sm font-semibold text-accent-900">

@@ -124,6 +124,8 @@ export const OTHER_LANGUAGE = "Yes, language other than English";
 
 /** Set when the wizard finishes: the full form then opens on its Student declaration page. */
 export const openDeclarationKey = (applicationId: string) => `slit-open-declaration:${applicationId}`;
+/** Set when the document wizard finishes: the application page then lists what is still missing straight away. */
+export const wizardFinishedKey = (applicationId: string) => `slit-wizard-finished:${applicationId}`;
 
 export type WizardExtractionState = "queued" | "processing" | "done" | "empty" | "failed";
 

@@ -658,16 +658,6 @@ function Wizard({ view, token, onChange, onError }: Props) {
               {row("Phone", formatPhone(details.emergency_phone))}
             </dl>
           </ReviewCard>
-          <ReviewCard icon="ri-bank-line" title="Bank details" edit={edits("bank", "Bank details")}>
-            <dl className="mt-3 space-y-2" data-testid="staff-review-bank">
-              {view.bank ? <>{row("Account name", view.bank.accountName)}{row("BSB", view.bank.bsb)}{row("Account number", view.bank.accountNumber)}</> : row("Bank details", "Not entered yet")}
-            </dl>
-          </ReviewCard>
-          <ReviewCard icon="ri-government-line" title="Tax and super" edit={edits("tax", "Tax and super")}>
-            <dl className="mt-3 space-y-2" data-testid="staff-review-tax">
-              {taxSuperRows(details).map(([label, value]) => row(label, value))}
-            </dl>
-          </ReviewCard>
           {view.employment ? (
             <ReviewCard icon="ri-briefcase-line" title="Your role (as recorded by HR)">
               <dl className="mt-3 space-y-2" data-testid="staff-review-role">

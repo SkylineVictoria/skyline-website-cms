@@ -9,6 +9,8 @@ import {
 import { staffAdminActions } from "@/lib/staffApi";
 import { toE164 } from "@/lib/staffPhone";
 import EmailField from "@/components/identity/EmailField";
+import StaffRolePicker from "@/pages/admin/components/hrms/StaffRolePicker";
+import type { StaffRoleType } from "@/lib/staffRolesApi";
 import { isEmailTakenError } from "@/lib/identity/email";
 
 type Problems = Partial<Record<keyof EmployeeForm, string>>;
@@ -38,6 +40,10 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
   const [emailBlocking, setEmailBlocking] = useState(false);
   // Once the person is saved, a retry (e.g. after a bank details error) edits them instead of adding them twice.
   const [savedId, setSavedId] = useState<string | null>(id ?? null);
+  // Onboarding asks only name, email and role: the person adds their mobile and documents through the link.
+  const [role, setRole] = useState<StaffRoleType | null>(null);
+  const [roleProblem, setRoleProblem] = useState("");
+  const simple = !id && mode === "onboard";
 
   // Saved bank details are shown masked and changed on the "Bank details" card (with its audited Reveal), never loaded into this form.
   useEffect(() => { if (id) setBankLoaded(true); }, [id]);
@@ -45,16 +51,22 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
   const patch = (next: Partial<EmployeeForm>) => {
     const value = { ...form, ...next };
     setForm(value);
-    if (touched) setProblems(employeeProblems(value));
+    if (touched) setProblems(problemsFor(value));
+  };
+  const problemsFor = (value: EmployeeForm) => {
+    const found = employeeProblems(value);
+    if (simple) delete found.phone;
+    return found;
   };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (busy || emailBlocking) return;
-    const found = employeeProblems(form);
-    const foundBank = id ? {} : bankProblems(bank);
-    setTouched(true); setProblems(found); setBankIssues(foundBank); setError(""); setEmailError(null);
-    if (Object.keys(found).length || Object.keys(foundBank).length) return;
+    const found = problemsFor(form);
+    const foundBank = id || simple ? {} : bankProblems(bank);
+    const missingRole = simple && !role ? "Choose a role." : "";
+    setTouched(true); setProblems(found); setBankIssues(foundBank); setRoleProblem(missingRole); setError(""); setEmailError(null);
+    if (Object.keys(found).length || Object.keys(foundBank).length || missingRole) return;
     setBusy(true);
     let personId = savedId;
     let message = id ? "Details saved." : "";
@@ -62,9 +74,9 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
       if (!personId && mode === "onboard") {
         // HR-02 "Add staff member": creates their application and emails the document link (staff-admin).
         try {
-          const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: toE164(form.phone) ?? form.phone.trim() });
+          const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), roleType: role?.key ?? null });
           personId = result.profileId ?? null;
-          message = result.link ? "Onboarding started. Email is switched off: copy the document link on this page and send it to them." : "Onboarding started: the document link was emailed. Next: review their documents, then send the offer letter.";
+          message = result.link ? "Onboarding started. Email is switched off: copy the document link on this page and send it to them." : `Welcome email sent to ${form.email.trim().toLowerCase()} with their document link. Next: review their documents, then send the offer letter.`;
         } catch (err) {
           const created = (err as { result?: { profileId?: string } }).result?.profileId;
           if (!created) throw err;
@@ -77,7 +89,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
         if (!id) message = "Employee added as Active. Upload their documents below.";
       }
       setSavedId(personId);
-      if (!id && !bankIsEmpty(bank)) {
+      if (!id && !simple && !bankIsEmpty(bank)) {
         try { await saveEmployeeBank(personId, bank); }
         catch (err) { setError(`${id ? "Details" : "The employee"} saved, but the bank details were not: ${err instanceof Error ? err.message : "please try again"}.`); return; }
       }
@@ -110,12 +122,12 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
     <Modal open width="max-w-2xl" title={id ? "Edit employee" : "Add employee"} onClose={() => { if (!busy) onClose(); }}
       footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
         <Button type="submit" form="employee-form" disabled={busy || !bankLoaded || emailBlocking} data-testid="employee-save">
-          {busy ? "Saving…" : id ? "Save" : mode === "onboard" ? "Add and send document link" : "Add employee"}</Button></>}>
+          {busy ? "Saving…" : id ? "Save" : mode === "onboard" ? "Save and send link" : "Add employee"}</Button></>}>
       <form id="employee-form" noValidate className="space-y-4" onSubmit={(e) => void submit(e)}>
         {!id ? (
           <fieldset className="grid gap-2 sm:grid-cols-2" data-testid="employee-mode">
             <legend className="mb-1.5 text-label font-medium text-foreground-800">How do you want to add them?</legend>
-            {option("onboard", "Start onboarding", "Email a private link to add their details and documents. Then send the offer letter to sign, and activate them.")}
+            {option("onboard", "Start onboarding", "Just their name, email and role. We email them a welcome with a private link to upload their documents.")}
             {option("active", "Add as Active now", "No emails. They are Active straight away and you upload their documents yourself.")}
           </fieldset>
         ) : null}
@@ -144,6 +156,13 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
           </Field>
           {problems.email ? <p role="alert" className="mt-1 text-xs text-primary-700">{problems.email}</p> : null}
         </div>
+        {simple ? (
+          <div>
+            <p className="mb-1.5 text-label font-medium text-foreground-800">Role <span className="text-primary-600">*</span></p>
+            <StaffRolePicker value={role} onChange={(next) => { setRole(next); if (next) setRoleProblem(""); }} disabled={busy || Boolean(savedId)} problem={roleProblem} />
+          </div>
+        ) : null}
+        {simple ? null : <>
         {/* The same phone field as the student and agent forms: country code + number, formatted and checked as you type. */}
         <div data-testid="employee-phone" onInput={(e) => { const t = e.target as HTMLInputElement; if (t.name === "employee_phone") patch({ phone: t.value }); }}>
           <p className="mb-1.5 text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>
@@ -159,6 +178,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
           )}
           <p className="mt-2 text-xs text-foreground-500">Only Admins can see these. Their other documents come from the onboarding link or your uploads.</p>
         </fieldset>
+        </>}
         {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
       </form>
     </Modal>

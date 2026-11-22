@@ -226,7 +226,7 @@ export const staffAdminActions = {
   resendActivation: (profileId: string) => staffAdmin({ action: "resend_activation", profileId }),
   retryEmail: (emailId: number) => staffAdmin({ action: "retry_email", emailId }),
   /** HR-02i: an application on the person's behalf, then the document link at once. */
-  add: (person: { firstName: string; lastName: string; email: string; phone: string }) => staffAdmin({ action: "add", ...person }),
+  add: (person: { firstName: string; lastName: string; email: string; phone?: string; roleType?: string | null }) => staffAdmin({ action: "add", ...person }),
   /** HR-02j Candidates: "Hire and send document link" for a candidate application (selected stage); answers like sendLink, plus profileId. */
   hire: (applicationId: string) => staffAdmin({ action: "hire", applicationId }),
   /** HR-02j: a manual candidate's resume or cover letter, checked by content and stored by the function. */

@@ -59,7 +59,6 @@ const SECTIONS: Section[] = [
     { id: "lms.join_dates", question: "Start dates a student may choose", kind: { type: "choice" } },
     // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules.
     { id: "lms.optional_holidays_stop_classes", question: "No classes on optional public holidays", kind: { type: "yesno", on: "Yes", off: "No" } },
-    { id: "lms.auto_intake_create", question: "Create the next intake automatically when none is on offer", kind: { type: "yesno", on: "Yes", off: "No" } },
   ] },
   { title: "Staff", icon: "ri-team-line", settings: [
     { id: "hrms.applicant_document_checklist", question: "Documents new staff must upload", help: "The others are still asked for, but can be skipped.", kind: { type: "staffDocs" } },

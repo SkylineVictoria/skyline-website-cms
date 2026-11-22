@@ -1,36 +1,102 @@
+import { useEffect, useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { emailSections } from "@/pages/admin/lib/emailMenu";
 import { LMS_MENU } from "@/pages/admin/lms/lmsConfig";
-import { useEffect, useState } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
-import { supabase } from '@/pages/admin/lib/supabase';
-import { useAuth } from '@/pages/admin/lib/authContext';
-import { menuActive, menuIcon, menuTree, type AdminMenuItem, type MenuNode } from '@/pages/admin/lib/adminMenu';
+import { supabase } from "@/pages/admin/lib/supabase";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { menuActive, menuIcon, menuTree, type AdminMenuItem, type MenuNode } from "@/pages/admin/lib/adminMenu";
+import "./AdminMenu.css";
 
-const linkClass = 'mb-0.5 flex items-center gap-2.5 rounded-md px-3 py-[calc(var(--control-py)*0.9)] text-label font-medium transition-colors duration-fast';
-function MenuEntry({ node, close, collapsed }: { node: MenuNode; close: () => void; collapsed: boolean }) {
-  const { pathname } = useLocation();
-  const active = menuActive(node, pathname);
-  const [expanded, setExpanded] = useState(active);
-  useEffect(() => { if (active) setExpanded(true); }, [active, pathname]);
-  // Icons only: the label becomes the tooltip and the accessible name; a group's items follow it, set off by a line.
-  const content = <><i className={`${menuIcon(node.icon_key)} text-lg`} aria-hidden="true" />{collapsed ? <span className="sr-only">{node.label}</span> : <span className="truncate">{node.label}</span>}</>;
-  const shape = collapsed ? 'justify-center px-0' : '';
-  return <li>
-    {node.children.length ? <>
-      <button type="button" aria-expanded={expanded} title={collapsed ? node.label : undefined} onClick={() => setExpanded(v => !v)} className={`${linkClass} ${shape} w-full ${collapsed && active ? 'text-primary-600' : 'text-foreground-700'} hover:bg-background-100`}>
-        {content}{collapsed ? null : <i className={expanded ? 'ri-arrow-up-s-line ml-auto' : 'ri-arrow-down-s-line ml-auto'} aria-hidden="true" />}
-      </button>
-      {expanded ? <ul className={collapsed ? 'mb-1 border-b border-background-200 pb-1' : 'ml-3 border-l border-background-200 pl-2'}>{node.children.map(child => <MenuEntry key={child.id} node={child} close={close} collapsed={collapsed} />)}{node.id === "communications" && !node.children.some(child => child.route === "/admin/communication") ? <li><NavLink to="/admin/communication" onClick={close} className={linkClass + " text-foreground-700 hover:bg-background-100"}><i className="ri-chat-3-line text-lg" aria-hidden="true" />{collapsed ? <span className="sr-only">Communication Hub</span> : "Communication Hub"}</NavLink></li> : null}</ul> : null}
-    </> : node.route ? <NavLink to={node.route} end={node.route === '/admin' || node.route === '/'} onClick={close}
-      target={node.open_in_new_tab ? '_blank' : undefined} rel={node.open_in_new_tab ? 'noopener noreferrer' : undefined} title={collapsed ? node.label : undefined}
-      className={() => `${linkClass} ${shape} ${pathname === node.route ? 'bg-primary-500 text-background-50' : 'text-foreground-700 hover:bg-background-100'}`}>
-      {content}
-    </NavLink> : null}
-  </li>;
+type Entry = {
+  id: string;
+  label: string;
+  icon: string;
+  route?: string;
+  external?: boolean;
+  configured?: MenuNode;
+  children?: Entry[];
+};
+
+const dashboard: Entry = { id: "dashboard", label: "Dashboard", icon: "ri-dashboard-3-line", route: "/admin" };
+const publicWebsite: Entry = { id: "public_website", label: "View public website", icon: "ri-global-line", route: "/" };
+const communicationHub: Entry = { id: "shortcut-communication", label: "Communication Hub", icon: "ri-chat-3-line", route: "/admin/communication" };
+
+const timetableEntries = LMS_MENU.filter((entry) => entry.parent === "timetable");
+const timetable: Entry = {
+  id: "timetable", label: "Timetable", icon: "ri-calendar-2-line",
+  children: timetableEntries.map((entry) => ({ ...entry, id: `lms-${entry.id}` })),
+};
+const learning: Entry = {
+  id: "learning-management", label: "Learning Management", icon: "ri-graduation-cap-line",
+  children: LMS_MENU.flatMap((entry) => {
+    if (!entry.parent) return [{ ...entry, id: `lms-${entry.id}` }];
+    return entry === timetableEntries[0] ? [timetable] : [];
+  }),
+};
+const email: Entry = {
+  id: "email-management", label: "Email Management", icon: "ri-mail-settings-line",
+  children: emailSections.map((section) => ({ ...section, id: `email-${section.id}`, route: `/admin/email-management?section=${section.id}` })),
+};
+
+function fromMenu(node: MenuNode): Entry {
+  const children = node.children.map(fromMenu);
+  if (node.id === "communications" && children.length && !children.some(({ route }) => route === communicationHub.route)) {
+    children.push(communicationHub);
+  }
+  return { id: node.id, label: node.label, icon: menuIcon(node.icon_key), route: node.route ?? undefined, external: node.open_in_new_tab, configured: node, children };
+}
+
+function isCurrent(entry: Entry, pathname: string, search: string): boolean {
+  if (entry.children?.length) return entry.children.some((child) => isCurrent(child, pathname, search));
+  if (entry.configured) return menuActive(entry.configured, pathname);
+  const [path, query] = (entry.route ?? "").split("?");
+  if (path !== pathname) return false;
+  const actual = new URLSearchParams(search);
+  if (!query) return entry.id !== "lms-tt-calendar" || actual.get("view") !== "students";
+  const expected = new URLSearchParams(query);
+  if (path === "/admin/email-management") return expected.get("section") === (actual.get("section") || "accounts");
+  return Array.from(expected).every(([key, value]) => actual.get(key) === value);
+}
+
+function MenuEntry({ entry, close, trail }: { entry: Entry; close: () => void; trail?: string }) {
+  const { pathname, search } = useLocation();
+  const current = isCurrent(entry, pathname, search);
+  const [expanded, setExpanded] = useState(current);
+  useEffect(() => { if (current) setExpanded(true); }, [current, pathname, search]);
+  const content = <>
+    <i className={`${entry.icon} admin-nav-icon`} aria-hidden="true" />
+    <span className="admin-nav-label">{entry.label}{trail ? <small>{trail}</small> : null}</span>
+  </>;
+  return (
+    <li>
+      {entry.children?.length ? (
+        <>
+          <button type="button" className="admin-nav-item" aria-expanded={expanded} data-current-branch={current} title={entry.label} onClick={() => setExpanded((value) => !value)}>
+            {content}
+            <i className="ri-arrow-right-s-line admin-nav-chevron" aria-hidden="true" />
+          </button>
+          {expanded ? <ul className="admin-nav-children">{entry.children.map((child) => <MenuEntry entry={child} key={child.id} close={close} />)}</ul> : null}
+        </>
+      ) : entry.route ? (
+        <Link to={entry.route} className="admin-nav-item" aria-current={current ? "page" : undefined} title={entry.label} onClick={close}
+          target={entry.external ? "_blank" : undefined} rel={entry.external ? "noopener noreferrer" : undefined}>
+          {content}
+          {entry.external ? <i className="ri-arrow-right-up-line admin-nav-chevron" aria-hidden="true" /> : null}
+        </Link>
+      ) : null}
+    </li>
+  );
+}
+
+function destinations(entries: Entry[], parents: string[] = []): { entry: Entry; trail: string }[] {
+  return entries.flatMap((entry) => entry.children?.length
+    ? destinations(entry.children, [...parents, entry.label])
+    : entry.route ? [{ entry, trail: parents.join(" › ") }] : []);
 }
 
 export default function AdminMenu({ close, collapsed = false }: { close: () => void; collapsed?: boolean }) {
   const { user } = useAuth();
+  const [query, setQuery] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ identity: string; rows: AdminMenuItem[] } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -42,11 +108,13 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
     const timer = window.setTimeout(() => controller.abort(), 10000);
     setFailed(false);
     setResult(null);
+    setQuery("");
     void (async () => {
       try {
-        const { data, error } = await supabase.from('admin_menu_items')
-          .select('id,parent_id,label,route,icon_key,sort_order,is_enabled,open_in_new_tab')
-          .order('sort_order').abortSignal(controller.signal);
+        // rule-policy: security menu-read Uses the existing permission-filtered menu query.
+        const { data, error } = await supabase.from("admin_menu_items")
+          .select("id,parent_id,label,route,icon_key,sort_order,is_enabled,open_in_new_tab")
+          .order("sort_order").abortSignal(controller.signal);
         if (error) throw error;
         if (!cancelled) setResult({ identity, rows: data ?? [] });
       } catch { if (!cancelled) setFailed(true); }
@@ -54,93 +122,74 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
     })();
     return () => { cancelled = true; controller.abort(); window.clearTimeout(timer); };
   }, [identity, attempt, user]);
-  const nodes = result?.identity === identity ? menuTree(result.rows) : null;
-  return <>
-    <div className={`flex-1 overflow-y-auto py-3 ${collapsed ? 'px-2' : 'px-3'}`}>
-      <LmsNavigation close={close} collapsed={collapsed} />
-      {nodes ? <><ul className="mt-3 border-t border-background-200 pt-3">{nodes.filter(n => n.route !== '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul><EmailManagementNavigation close={close} collapsed={collapsed} /></> : <>
-        <NavLink to="/admin" end onClick={close} className={linkClass}><i className="ri-dashboard-3-line" aria-hidden="true" />Dashboard</NavLink>
-        <p role="status" className="px-3 text-xs text-foreground-500">{failed ? 'Menu unavailable.' : 'Loading menu…'}</p>
-        {failed ? <button type="button" onClick={() => setAttempt(v => v + 1)} className={linkClass}>Retry menu</button> : null}
-      </>}
-    </div>
-    <div className={`border-t border-background-200 py-3 ${collapsed ? 'px-2' : 'px-3'}`}>
-      {nodes ? <ul>{nodes.filter(n => n.route === '/').map(node => <MenuEntry key={node.id} node={node} close={close} collapsed={collapsed} />)}</ul> :
-        <NavLink to="/" onClick={close} className={linkClass}>View public website</NavLink>}
-    </div>
-  </>;
-}
 
-/** LMS is additive navigation; it does not mutate the DB-driven Master Data menu. */
-function LmsNavigation({ close, collapsed }: { close: () => void; collapsed: boolean }) {
-  const { pathname, search } = useLocation();
-  // A menu route may carry ?view= (the Timetable views): it is current when the path and the view both match.
-  const isCurrent = (route: string) => {
-    const [path, query = ""] = route.split("?");
-    // A route without ?view= (the calendar) is current for every view of its page: the views are tabs inside it.
-    if (!query) return pathname === path;
-    const want = new URLSearchParams(query), have = new URLSearchParams(search);
-    // Room / trainer availability (Bookings ?who=): current only for its own who.
-    if (want.has("who")) return pathname === path && have.get("who") === want.get("who");
-    return pathname === path && (have.get("view") ?? "") === (want.get("view") ?? "");
-  };
-  const [expanded, setExpanded] = useState(() => pathname.startsWith("/admin/lms"));
-  useEffect(() => { if (pathname.startsWith("/admin/lms")) setExpanded(true); }, [pathname]);
-  const timetableOpen = LMS_MENU.some(i => i.parent === "timetable" && isCurrent(i.route));
-  const [timetable, setTimetable] = useState(timetableOpen);
-  useEffect(() => { if (timetableOpen) setTimetable(true); }, [timetableOpen]);
-  const link = (item: (typeof LMS_MENU)[number]) => <NavLink to={item.route} end onClick={close}
-    title={collapsed ? item.label : undefined}
-    className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (isCurrent(item.route) ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
-    <i className={item.icon + " text-lg"} aria-hidden="true" />
-    {collapsed ? <span className="sr-only">{item.label}</span> : <span className="truncate">{item.label}</span>}
-  </NavLink>;
-  const firstChild = LMS_MENU.findIndex(i => i.parent === "timetable");
-  return <div>
-    <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}
-      title={collapsed ? "Learning Management" : undefined}
-      className={linkClass + " w-full " + (collapsed ? "justify-center px-0" : "")}>
-      <i className="ri-graduation-cap-line text-lg" aria-hidden="true" />
-      {collapsed ? <span className="sr-only">Learning Management</span> : <><span className="flex-1 text-left">Learning Management</span><i className={expanded ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" /></>}
-    </button>
-    {expanded ? <ul className={collapsed ? "border-b border-background-200 pb-1" : "ml-3 border-l border-background-200 pl-2"}>
-      {LMS_MENU.map((item, index) => item.parent ? (index === firstChild ? <li key="timetable-group">
-        <button type="button" aria-expanded={timetable} onClick={() => setTimetable(v => !v)} title={collapsed ? "Timetable" : undefined}
-          className={linkClass + " w-full " + (collapsed ? "justify-center px-0 " : "") + (timetableOpen && !timetable ? "text-primary-600" : "text-foreground-700 hover:bg-background-100")}>
-          <i className="ri-calendar-2-line text-lg" aria-hidden="true" />
-          {collapsed ? <span className="sr-only">Timetable</span> : <><span className="flex-1 truncate text-left">Timetable</span><i className={timetable ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" /></>}
-        </button>
-        {timetable ? <ul className={collapsed ? "border-b border-background-200 pb-1" : "ml-3 border-l border-background-200 pl-2"}>
-          {LMS_MENU.filter(i => i.parent === "timetable").map(child => <li key={child.id}>{link(child)}</li>)}
-        </ul> : null}
-      </li> : null) : <li key={item.id}>{link(item)}</li>)}
-    </ul> : null}
-  </div>;
-}
+  const nodes = result?.identity === identity ? menuTree(result.rows).map(fromMenu) : null;
+  const main = nodes?.filter((entry) => entry.route !== "/") ?? [dashboard];
+  const dashboardEntries = main.filter((entry) => entry.route === "/admin");
+  const modules = [learning, ...main.filter((entry) => entry.route !== "/admin"), ...(nodes ? [email] : [])];
+  const allModules: Entry = { id: "all-modules", label: "All modules", icon: "ri-apps-2-line", children: modules };
+  const footer = nodes?.filter((entry) => entry.route === "/") ?? [publicWebsite];
+  const terms = collapsed ? [] : query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  const matches = terms.length ? destinations([...dashboardEntries, ...modules, ...footer]).filter(({ entry, trail }) =>
+    terms.every((term) => `${entry.label} ${trail}`.toLowerCase().includes(term))) : [];
+  const open = () => { setQuery(""); close(); };
 
-/** Email Management subpages live in the sidebar, not a page-level tab menu. */
-function EmailManagementNavigation({ close, collapsed }: { close: () => void; collapsed: boolean }) {
+  const [levels, setLevels] = useState<string[]>([]);
+  let visible = [...dashboardEntries, allModules];
+  const path: Entry[] = [];
+  for (const id of levels) {
+    const parent = visible.find((item) => item.id === id);
+    if (!parent?.children?.length) break;
+    path.push(parent);
+    visible = parent.children;
+  }
+  const parent = path[path.length - 1];
   const { pathname, search } = useLocation();
-  const active = pathname === "/admin/email-management";
-  const [expanded, setExpanded] = useState(active);
-  useEffect(() => { if (active) setExpanded(true); }, [active]);
-  return <div className="mt-3 border-t border-background-200 pt-3">
-    <button type="button" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}
-      title={collapsed ? "Email Management" : undefined}
-      className={linkClass + " w-full " + (collapsed ? "justify-center px-0" : "")}>
-      <i className="ri-mail-settings-line text-lg" aria-hidden="true" />
-      {collapsed ? <span className="sr-only">Email Management</span> : <><span className="flex-1 text-left">Email Management</span><i className={expanded ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" /></>}
-    </button>
-    {expanded ? <ul className={collapsed ? "border-b border-background-200 pb-1" : "ml-3 border-l border-background-200 pl-2"}>
-      {emailSections.map(section => <li key={section.id}>
-        <NavLink to={`/admin/email-management?section=${section.id}`} onClick={close}
-          title={collapsed ? section.label : undefined}
-          aria-current={active && new URLSearchParams(search).get("section") === section.id ? "page" : undefined}
-          className={linkClass + " " + (collapsed ? "justify-center px-0 " : "") + (active && (new URLSearchParams(search).get("section") || "accounts") === section.id ? "bg-primary-500 text-background-50" : "text-foreground-700 hover:bg-background-100")}>
-          <i className={section.icon + " text-lg"} aria-hidden="true" />
-          {collapsed ? <span className="sr-only">{section.label}</span> : <span className="truncate">{section.label}</span>}
-        </NavLink>
-      </li>)}
-    </ul> : null}
-  </div>;
+  const goBack = () => setLevels(path.slice(0, -1).map((item) => item.id));
+
+  return (
+    <>
+      {collapsed ? null : (
+        <div className="admin-nav-search">
+          <i className="ri-search-line" aria-hidden="true" />
+          <input type="search" aria-label="Search navigation" placeholder="Find a page…" value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && query) {
+                event.stopPropagation();
+                setQuery("");
+              }
+            }} />
+          {query ? <button type="button" aria-label="Clear search" onClick={() => setQuery("")}><i className="ri-close-line" aria-hidden="true" /></button> : null}
+        </div>
+      )}
+      <div className="admin-nav-scroll">
+        {terms.length ? (
+          matches.length
+            ? <ul aria-label="Search results">{matches.map(({ entry, trail }) => <MenuEntry entry={entry} key={entry.id} close={open} trail={trail} />)}</ul>
+            : <p className="admin-nav-message" role="status">No pages found.</p> // rule-policy: technical menu-search-empty Reports no matches in navigation search.
+        ) : <>
+          {parent ? <button type="button" className="admin-nav-item" title="Back" aria-label="Back" onClick={goBack}>
+            <i className="ri-arrow-left-line admin-nav-icon" aria-hidden="true" /><span className="admin-nav-label">Back</span>
+          </button> : null}
+          {!collapsed && parent ? <h2 className="admin-nav-section">{parent.label}</h2> : null}
+          <ul>{visible.map((entry) => entry.children?.length ? <li key={entry.id}>
+            <button type="button" className="admin-nav-item" title={entry.label} data-current-branch={isCurrent(entry, pathname, search)}
+              onClick={() => setLevels([...path.map((item) => item.id), entry.id])}>
+              <i className={entry.icon + " admin-nav-icon"} aria-hidden="true" /><span className="admin-nav-label">{entry.label}</span>
+              <i className="ri-arrow-right-s-line admin-nav-chevron" aria-hidden="true" />
+            </button>
+          </li> : <MenuEntry entry={entry} key={entry.id} close={open} />)}</ul>
+        </>}
+        {nodes ? null : <>
+          {/* // rule-policy: technical menu-load-feedback Reports a loading or failed request for navigation items. */}
+          <p role="status" className="admin-nav-message">{failed ? "Menu unavailable." : "Loading menu…"}</p>
+          {failed ? <button type="button" className="admin-nav-item" title="Retry menu" onClick={() => setAttempt((value) => value + 1)}>
+            <i className="ri-refresh-line admin-nav-icon" aria-hidden="true" /><span className="admin-nav-label">Retry menu</span>
+          </button> : null}
+        </>}
+      </div>
+      {footer.length ? <ul className="admin-nav-footer">{footer.map((entry) => <MenuEntry entry={entry} key={entry.id} close={open} />)}</ul> : null}
+    </>
+  );
 }

@@ -1,5 +1,8 @@
+import { existsSync, readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { createAdmin, createAuthUser, createStudentLogin, person, signInAsAdmin, signInThroughTheForm, signOutEverywhere, sql } from "./support";
+import { createAdmin, createAuthUser, createStudentLogin, person, shot, signInAsAdmin, signInThroughTheForm, signOutEverywhere, sql } from "./support";
 
 /**
  * Assessment Management (ASM-01) in the browser, against the LOCAL lab only: an Admin builds and publishes an assessment with two
@@ -18,6 +21,11 @@ let otherBatchId = "";
 let courseId = ""; let unitId = ""; let batchId = "";
 let assessmentUrl = "";
 
+/** Places a student in an intake as the system's planner does (manual placements are refused by intake_enrolments_auto_only). */
+function enrol(intakeId: string, studentId: string): void {
+  sql(`begin; select set_config('rto.carry_over_planning', 'on', true); insert into public.intake_enrolments(intake_id, student_id) values ('${intakeId}', '${studentId}'); commit;`);
+}
+
 async function signInStaff(page: Page, email: string, path: string): Promise<void> {
   await signOutEverywhere(page);
   await signInThroughTheForm(page, email);
@@ -34,27 +42,30 @@ test.beforeAll(async () => {
   sql(`insert into public.cms_course_units(id, course_id, code, name) values ('${unitId}', '${courseId}', 'E2EU1', 'Work safely in the lab')`);
   const intakeId = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${courseId}', date '2026-01-05', date '2026-12-18', 'Jan 2026') returning id`).split("\n")[0];
   sql(`insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('${intakeId}', '${unitId}', date '2026-01-05', date '2026-12-18')`);
-  batchId = sql(`insert into public.batches(intake_id, name) values ('${intakeId}', 'G1') returning id`).split("\n")[0];
+  // INTAKE-REPLACES-BATCH (2026-11-19): the intake is the class group (G1); a second intake of the course is G2
+  batchId = intakeId;
+  sql(`update public.course_intakes set label = 'G1' where id = '${intakeId}'`);
   student = await createStudentLogin("asm-student");
-  sql(`insert into public.batch_enrolments(batch_id, student_id) values ('${batchId}', '${student.student}')`);
+  enrol(batchId, student.student);
   const t = person("asm-trainer");
   const trainerAuth = await createAuthUser(t.email);
   const profileId = sql(`alter table hr.staff_profiles disable trigger staff_status_guard;
     insert into hr.staff_profiles(auth_user_id, first_name, last_name, email, phone_e164, status) values ('${trainerAuth}', 'Tara', 'Trainer', '${t.email}', '${t.phone}', 'active') returning id;
     alter table hr.staff_profiles enable trigger staff_status_guard;`).split("\n").find((l) => /^[0-9a-f-]{36}$/.test(l)) ?? "";
   trainer = { email: t.email, profileId };
-  sql(`insert into public.batch_trainers(batch_id, staff_id) values ('${batchId}', '${profileId}')`);
+  sql(`insert into public.intake_trainers(intake_id, staff_id) values ('${batchId}', '${profileId}')`);
   // D-22: marking needs the trainer role on the staff record (require_trainer_role defaults to true)
   sql(`insert into hr.staff_roles(profile_id, role, granted_by) values ('${profileId}', 'trainer', '${trainerAuth}')`);
   // a second batch on the same intake with its own trainer, who must never reach G1's work
-  otherBatchId = sql(`insert into public.batches(intake_id, name) values ('${intakeId}', 'G2') returning id`).split("\n")[0];
+  otherBatchId = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${courseId}', date '2026-01-05', date '2026-12-18', 'G2') returning id`).split("\n")[0];
+  sql(`insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('${otherBatchId}', '${unitId}', date '2026-01-05', date '2026-12-18')`);
   const o = person("asm-trainer-other");
   const otherAuth = await createAuthUser(o.email);
   const otherProfile = sql(`alter table hr.staff_profiles disable trigger staff_status_guard;
     insert into hr.staff_profiles(auth_user_id, first_name, last_name, email, phone_e164, status) values ('${otherAuth}', 'Tom', 'Trainer', '${o.email}', '${o.phone}', 'active') returning id;
     alter table hr.staff_profiles enable trigger staff_status_guard;`).split("\n").find((l) => /^[0-9a-f-]{36}$/.test(l)) ?? "";
   otherTrainer = { email: o.email, profileId: otherProfile };
-  sql(`insert into public.batch_trainers(batch_id, staff_id) values ('${otherBatchId}', '${otherProfile}')`);
+  sql(`insert into public.intake_trainers(intake_id, staff_id) values ('${otherBatchId}', '${otherProfile}')`);
   sql(`insert into hr.staff_roles(profile_id, role, granted_by) values ('${otherProfile}', 'trainer', '${otherAuth}')`);
 });
 
@@ -224,4 +235,220 @@ test("reassessment: the admin reopens, the student resubmits, the trainer return
   await expect(page.getByText(/Results to acknowledge/)).toHaveCount(0, { timeout: 15_000 });
   await expect(page.getByText(/Attempt 3 in progress/)).toBeVisible();
   expect(sql(`select (acknowledged_at is not null)::text from public.asm_attempts where student_id = '${student.student}' and attempt_no = 2`)).toBe("true");
+});
+
+/**
+ * ASM-WORKBOOK walkthrough (owner, 2026-11-23): the RIICWD525E student workbook (PDF, not in the repo: ASM_WORKBOOK=<path> or the
+ * Downloads folder) goes through the Add assessment wizard, is published and assigned; the student reads the information pages,
+ * sees the details filled in, answers and submits with an evidence file; the trainer marks with S / NS per question, records a
+ * reasonable adjustment and returns it Not Satisfactory; the second attempt is marked Satisfactory; the trainer and the student
+ * export the workbook PDF. Screenshots go to E2E_SHOTS_DIR when it is set.
+ */
+test.describe("ASM-WORKBOOK walkthrough", () => {
+  const workbook = [process.env.ASM_WORKBOOK, `${process.env.USERPROFILE ?? process.env.HOME}/Downloads/DNT_RII50520_RIICWD525E_Select Pavement surfacing.pdf`].find((p) => p && existsSync(p)) ?? "";
+  let wbStudent: { email: string; student: string };
+  let wbTrainer: { email: string };
+  let wbIntake = ""; let wbAssessment = "";
+  const PDFS = process.env.E2E_SHOTS_DIR ?? os.tmpdir();
+
+  test.beforeAll(async () => {
+    test.skip(!workbook, "the RIICWD525E workbook PDF is not on this machine (set ASM_WORKBOOK)");
+    const course = sql(`select id from public.cms_courses where code = 'RII50520'`) || `course-e2e-rii-${RUN}`;
+    sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${course}', 'e2e-rii-${RUN}', 'RII50520', 'Diploma of Civil Construction Design', 'Published') on conflict (id) do nothing`);
+    // an earlier run leaves the course and unit in the lab: reuse them
+    const unit = sql(`select id from public.cms_course_units where course_id = '${course}' and code = 'RIICWD525E'`) || `unit-e2e-riicwd525e-${RUN}`;
+    sql(`insert into public.cms_course_units(id, course_id, code, name) values ('${unit}', '${course}', 'RIICWD525E', 'Select Pavement surfacing') on conflict (id) do nothing`);
+    wbIntake = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${course}', date '2026-01-05', date '2026-12-18', 'WB ${RUN}') returning id`).split("\n")[0];
+    sql(`insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('${wbIntake}', '${unit}', date '2026-01-05', date '2026-12-18')`);
+    wbStudent = await createStudentLogin("wb-student");
+    enrol(wbIntake, wbStudent.student);
+    const t = person("wb-trainer");
+    const auth = await createAuthUser(t.email);
+    const profile = sql(`alter table hr.staff_profiles disable trigger staff_status_guard;
+      insert into hr.staff_profiles(auth_user_id, first_name, last_name, email, phone_e164, status) values ('${auth}', 'Wendy', 'Workbook', '${t.email}', '${t.phone}', 'active') returning id;
+      alter table hr.staff_profiles enable trigger staff_status_guard;`).split("\n").find((l) => /^[0-9a-f-]{36}$/.test(l)) ?? "";
+    sql(`insert into public.intake_trainers(intake_id, staff_id) values ('${wbIntake}', '${profile}')`);
+    sql(`insert into hr.staff_roles(profile_id, role, granted_by) values ('${profile}', 'trainer', '${auth}')`);
+    wbTrainer = { email: t.email };
+  });
+
+  /** Answers every visible field of the current task (text, dates, numbers, first radio of each group, the declaration). */
+  async function answerVisible(page: Page, tag: string): Promise<void> {
+    const form = page.locator("[data-question]");
+    for (const box of await form.locator("textarea:visible").all()) if (!(await box.inputValue())) await box.fill(`${tag} answer`);
+    for (const box of await form.locator("input[type=text]:visible, input:not([type]):visible").all()) if (!(await box.inputValue())) await box.fill(`${tag}`);
+    for (const box of await form.locator("input[type=date]:visible").all()) await box.fill("2026-11-20");
+    for (const box of await form.locator("input[type=number]:visible").all()) if (!(await box.inputValue())) await box.fill("1");
+    const seen = new Set<string>();
+    for (const radio of await form.locator("input[type=radio]:visible").all()) { const name = (await radio.getAttribute("name")) ?? ""; if (!seen.has(name)) { seen.add(name); await radio.check(); } }
+    for (const box of await form.locator("input[type=checkbox]:visible").all()) await box.check();
+  }
+
+  /** Every task of the open attempt answered, then submitted with the declaration. */
+  async function answerAndSubmit(page: Page, tag: string): Promise<void> {
+    const tabs = page.getByRole("button", { name: /^Task \d/ });
+    const count = Math.max(1, await tabs.count());
+    for (let i = 0; i < count; i += 1) { if (await tabs.count()) await tabs.nth(i).click(); await answerVisible(page, tag); }
+    await expect(page.getByText("Everything required is answered")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Submit assessment" }).click();
+    await page.getByLabel(/I have read and agree/).last().check();
+    await page.getByLabel(/Type your full name/).last().fill("Wanda Student");
+    await page.getByRole("button", { name: "Submit", exact: true }).click();
+    await expect(page.getByText(/Receipt ASM-\d{4}-\d{6}/)).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Done" }).click();
+  }
+
+  /** Clicks Export as workbook PDF and returns the text of the downloaded file (pdf.js), saved next to the screenshots. */
+  async function exportPdf(page: Page, button: ReturnType<Page["getByRole"]>, name: string): Promise<{ text: string; pages: number; file: string }> {
+    const [download] = await Promise.all([page.waitForEvent("download", { timeout: 60_000 }), button.click()]);
+    const file = path.join(PDFS, name);
+    await download.saveAs(file);
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), verbosity: 0 }).promise;
+    const texts: string[] = [];
+    for (let p = 1; p <= doc.numPages; p += 1) texts.push(((await (await doc.getPage(p)).getTextContent()).items as { str: string }[]).map((x) => x.str).join(" ").replace(/\s+/g, " "));
+    return { text: texts.join("\n"), pages: doc.numPages, file };
+  }
+
+  test("the admin creates it from the workbook in the wizard, publishes and assigns it", async ({ page }) => {
+    test.setTimeout(240_000);
+    await signInAsAdmin(page, admin.email);
+    await page.goto("/admin/lms/assessments");
+    await page.getByRole("button", { name: /RII50520/ }).first().click();
+    await page.getByRole("button", { name: /RIICWD525E/ }).first().click();
+    await page.getByRole("button", { name: "+ Add assessment" }).click();
+    const wizard = page.getByRole("dialog");
+    await expect(wizard.getByTestId("wizard-filing")).toContainText("RII50520 › RIICWD525E");
+    await shot(page, "wb-01-start");
+    await wizard.getByRole("button", { name: /Upload workbook \(Word or PDF\)/ }).click();
+    await wizard.locator("input[type=file]").first().setInputFiles(workbook);
+    await expect(wizard.getByText(/2 tasks · \d+ questions/)).toBeVisible({ timeout: 90_000 });
+    await shot(page, "wb-02-uploaded");
+    // the workbook's unit is the page's unit: no Qualification & unit step
+    await expect(wizard.getByText("Qualification & unit")).toHaveCount(0);
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await expect(wizard.getByText("Review & edit").first()).toBeVisible();
+    await expect(wizard.getByText(/\d+ to check/)).toBeVisible();
+    await shot(page, "wb-03-review");
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Continue anyway" }).click();
+    await expect(wizard.getByText(/Exactly what the student sees/)).toBeVisible();
+    await wizard.getByRole("button", { name: /Task 2:/ }).click();
+    await expect(wizard.locator("table").first()).toBeVisible();
+    await expect(wizard.locator("figure img").first()).toBeVisible();
+    await wizard.getByLabel("Trainer view").check();
+    await shot(page, "wb-04-preview-trainer-view");
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await expect(wizard.getByLabel("Title")).toHaveValue(/Select Pavement surfacing/);
+    await shot(page, "wb-05-save");
+    await wizard.getByRole("button", { name: "Publish" }).click();
+    await page.getByRole("button", { name: "Publish", exact: true }).last().click();
+    await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/, { timeout: 30_000 });
+    wbAssessment = page.url().match(/assessments\/([0-9a-f-]{36})/)?.[1] ?? "";
+    expect(sql(`select string_agg(v.status, ',') from public.asm_versions v where v.assessment_id = '${wbAssessment}'`)).toBe("published");
+    expect(sql(`select (definition->>'instructions') ~ 'Plagiarism' and (definition::text ~ 'adjustment_record') from public.asm_versions where assessment_id = '${wbAssessment}'`)).toBe("t");
+    await page.getByRole("button", { name: "Assignments" }).click();
+    await page.getByRole("button", { name: "Assign to intakes" }).click();
+    await page.getByLabel(new RegExp(`WB ${RUN}`)).check();
+    await page.getByLabel(/^Due/).fill("2026-12-20T17:00");
+    await page.getByRole("button", { name: "Assign", exact: true }).click();
+    await expect.poll(() => sql(`select count(*) from public.asm_assignments where assessment_id = '${wbAssessment}'`), { timeout: 15_000 }).toBe("1");
+  });
+
+  test("the student reads the information first, sees the details filled in, and submits with an evidence file", async ({ page }) => {
+    test.setTimeout(300_000);
+    await signInStaff(page, wbStudent.email, "/agency/assessments");
+    await page.getByRole("button", { name: "Start" }).first().click();
+    await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
+    await expect(page.getByTestId("before-you-start")).toContainText("Plagiarism");
+    await expect(page.getByTestId("before-you-start")).toContainText("Assessment appeals process");
+    await expect(page.getByTestId("assessment-details")).toContainText("RIICWD525E Select Pavement surfacing");
+    await expect(page.getByTestId("assessment-details")).toContainText("Wendy Workbook");
+    await shot(page, "wb-06-student-before-you-start");
+    await page.getByRole("button", { name: /I have read this – start the assessment/ }).click();
+    await page.getByRole("button", { name: /^Task 2/ }).click();
+    await page.locator("[data-attachments] input[type=file]").first().setInputFiles({ name: "risk-worksheet.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF") });
+    await expect(page.getByText("risk-worksheet.pdf").first()).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: /^Task 1/ }).click();
+    await answerAndSubmit(page, "Attempt one");
+    await shot(page, "wb-07-student-submitted");
+    expect(sql(`select state from public.asm_attempts where student_id = '${wbStudent.student}'`)).toBe("submitted");
+    expect(sql(`select count(*) from public.asm_evidence_files f join public.asm_attempts a on a.id = f.attempt_id where a.student_id = '${wbStudent.student}'`)).toBe("1");
+  });
+
+  test("the trainer marks S / NS per question, records a reasonable adjustment, returns it Not Satisfactory and exports the PDF", async ({ page }) => {
+    test.setTimeout(300_000);
+    await signInStaff(page, wbTrainer.email, "/staff/assessments");
+    await page.getByRole("button", { name: "Mark", exact: true }).first().click();
+    await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
+    await page.getByLabel("Observed", { exact: true }).first().waitFor({ timeout: 30_000 }); // the marking view has loaded
+    for (const r of await page.getByLabel("Observed", { exact: true }).all()) await r.check();
+    const ra = page.locator("[data-adjustment]");
+    await ra.locator("input[type=radio]").first().check();
+    await ra.getByLabel("Verbal assessment").check();
+    await ra.locator("input[type=text], input:not([type])").first().fill("Task 1 written questions");
+    await ra.locator("textarea").first().fill("The student answered two questions orally.");
+    await ra.locator("input[type=text], input:not([type])").last().fill("Wendy Workbook");
+    await ra.locator("input[type=date]").fill("2026-11-21");
+    await ra.locator("input[type=checkbox]").last().check();
+    const picks = page.getByRole("button", { name: "Satisfactory", exact: true });
+    const n = await picks.count();
+    for (let i = 0; i < n; i += 1) if (await picks.nth(i).isEnabled()) await picks.nth(i).click();
+    // task 2 and the decision: Not Satisfactory
+    const taskPicks = page.locator("button[name^='task-']").filter({ hasText: "Not yet satisfactory" });
+    await taskPicks.last().click();
+    await page.locator("button[name='decision']").filter({ hasText: "Not yet satisfactory" }).click();
+    await shot(page, "wb-08-trainer-marking");
+    await page.getByRole("button", { name: "Return for reassessment" }).click();
+    await expect(page.getByText(/a reassessment attempt is open for the student/)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("results-sheet")).toContainText("Not Satisfactory");
+    await shot(page, "wb-09-trainer-results-sheet");
+    const pdf = await exportPdf(page, page.getByRole("button", { name: "Export as workbook PDF" }), "wb-attempt1-trainer.pdf");
+    expect(pdf.text).toContain("Unit Code: RIICWD525E");
+    expect(pdf.text).toContain("Appendix A – Reasonable Adjustments");
+    expect(pdf.text).toContain("The student answered two questions orally.");
+    expect(pdf.text).toContain("Assessment Task - 2 - Results Sheet");
+    expect(pdf.text).toContain(`Page ${pdf.pages} of ${pdf.pages}`);
+    expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${wbStudent.student}'`)).toBe("1:returned:NYS,2:draft:-");
+  });
+
+  test("the second attempt is marked Satisfactory; the trainer's and the student's exports show both attempts", async ({ page }) => {
+    test.setTimeout(300_000);
+    await signInStaff(page, wbStudent.email, "/agency/assessments");
+    await page.getByRole("button", { name: /^(Open|Start|Continue)/ }).first().click();
+    await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
+    const start = page.getByRole("button", { name: /I have read this – start the assessment/ });
+    if (await start.isVisible()) await start.click();
+    await answerAndSubmit(page, "Attempt two");
+
+    await signInStaff(page, wbTrainer.email, "/staff/assessments");
+    await page.getByRole("button", { name: "Mark", exact: true }).first().click();
+    await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
+    await page.getByLabel("Observed", { exact: true }).first().waitFor({ timeout: 30_000 }); // the marking view has loaded
+    for (const r of await page.getByLabel("Observed", { exact: true }).all()) await r.check();
+    const ra = page.locator("[data-adjustment]");
+    await ra.locator("input[type=radio]").last().check(); // No adjustment this time
+    await ra.locator("input[type=text], input:not([type])").last().fill("Wendy Workbook");
+    const picks = page.getByRole("button", { name: "Satisfactory", exact: true });
+    const n = await picks.count();
+    for (let i = 0; i < n; i += 1) if (await picks.nth(i).isEnabled()) await picks.nth(i).click();
+    await page.getByRole("button", { name: "Return as Satisfactory" }).click();
+    await expect(page.getByText("Returned as Satisfactory.")).toBeVisible({ timeout: 20_000 });
+    await shot(page, "wb-10-trainer-second-attempt");
+    const pdf = await exportPdf(page, page.getByRole("button", { name: "Export as workbook PDF" }), "wb-attempt2-trainer.pdf");
+    expect(pdf.text).toMatch(/First attempt Second attempt Third attempt/);
+    expect(pdf.text).toContain("Wendy Workbook");
+    expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${wbStudent.student}'`)).toBe("1:returned:NYS,2:final:S");
+
+    // the student: results sheet, and Export only for the final attempt
+    await signInStaff(page, wbStudent.email, "/agency/assessments");
+    await page.getByRole("button", { name: "Open", exact: true }).first().click();
+    await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
+    await expect(page.getByTestId("results-sheet")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Export as workbook PDF" })).toHaveCount(1);
+    await shot(page, "wb-11-student-results");
+    const own = await exportPdf(page, page.getByRole("button", { name: "Export as workbook PDF" }), "wb-attempt2-student.pdf");
+    expect(own.text).toContain("Student Full Name");
+    expect(own.text).toContain("Assessment Task - 1 - Results Sheet");
+  });
 });

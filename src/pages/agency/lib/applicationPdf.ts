@@ -5,7 +5,7 @@ import { currentPortalScope } from "@/lib/portalScope";
 import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
 
 /** The browser can turn a WebP, GIF or SVG logo into a PNG through a canvas (the Edge runtime cannot). null when it cannot be drawn. */
-async function rasteriseLogo(bytes: Uint8Array, format: LogoFormat): Promise<ImageData | null> {
+export async function rasteriseLogo(bytes: Uint8Array, format: LogoFormat): Promise<ImageData | null> {
   const type = format === "svg" ? "image/svg+xml" : format === "webp" ? "image/webp" : "image/gif";
   const url = URL.createObjectURL(new Blob([bytes as unknown as ArrayBuffer], { type }));
   try {

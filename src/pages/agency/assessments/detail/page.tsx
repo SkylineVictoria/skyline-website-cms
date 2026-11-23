@@ -2,9 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Badge, Button, Modal, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
-import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
+import AssessmentRenderer, { AssessmentInfo } from "@/components/assessment/AssessmentRenderer";
+import AssessmentDetails from "@/components/assessment/AssessmentDetails";
+import ResultsSheet from "@/components/assessment/ResultsSheet";
+import { historyFromAttempts } from "@/lib/assessment/resultsSheet";
+import { downloadWorkbookPdf } from "@/lib/assessment/workbookExport";
+import { useAttemptHistory } from "@/components/assessment/useAttemptHistory";
 import { asmStudent, evidenceUrl, fmtDateTime, OUTCOME_LABEL, removeEvidenceObject, STATE_LABEL, uploadEvidence } from "@/lib/assessment/api";
 import { validateResponses } from "@/lib/assessment/validate";
+import { attachmentSettings } from "@/lib/assessment/registry";
 import type { Attempt, Definition, EvidenceFile, Question, Responses, ValidationError } from "@/lib/assessment/types";
 
 interface Opened {
@@ -52,7 +58,7 @@ export default function StudentAssessmentPage() {
 
   const onUpload = async (q: Question, files: FileList) => {
     if (!attempt || !data) return;
-    const maxMb = Number((q.config?.maxMb as number | undefined) ?? data.settings.evidenceMaxMb);
+    const maxMb = Number((q.config?.maxMb as number | undefined) ?? (q.type !== "file_upload" ? attachmentSettings(q)?.maxMb : undefined) ?? data.settings.evidenceMaxMb);
     for (const file of Array.from(files)) {
       if (file.size > maxMb * 1024 * 1024) { setError(`${file.name} is larger than ${maxMb} MB.`); continue; }
       try { const { path, sha256 } = await uploadEvidence(attempt.id, q.id, file); await asmStudent("evidence_register", { attemptId: attempt.id, questionId: q.id, path, fileName: file.name, mime: file.type, bytes: file.size, sha256 }); }
@@ -75,6 +81,22 @@ export default function StudentAssessmentPage() {
   };
   const requestReassessment = async (a: Attempt) => { try { await asmStudent("reassessment_request", { attemptId: a.id, reason }); setReason(""); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Not sent."); } };
   const [message, setMessage] = useState("");
+  // the results sheet (ASM-WORKBOOK item 6): every attempt, decided ones only, with the assessor's name once asm_attempt_history is released;
+  // the same history fills in the student / trainer / unit details (item 3)
+  const decidedAttempts = useMemo(() => (data ? [...data.history, data.attempt] : []).filter((a) => a.state === "returned" || a.state === "final").sort((a, b) => a.attemptNo - b.attemptNo), [data]);
+  const sheetHistory = useAttemptHistory(data?.attempt.id, decidedAttempts, null, decidedAttempts.map((a) => a.id + a.state).join());
+  // ASM-WORKBOOK item 1: the assessment's information pages come first; the form opens with "Start the assessment" (or straight away
+  // once the student has answered something)
+  const [started, setStarted] = useState(false);
+  const [exporting, setExporting] = useState<string | null>(null);
+  // item 8 for students: their own submission, once marked and final
+  const exportPdf = async (a: Attempt) => {
+    if (!data) return;
+    setExporting(a.id);
+    try { await downloadWorkbookPdf({ definition: data.version.definition, attempt: a, history: sheetHistory ?? historyFromAttempts(decidedAttempts), title: data.assignment.title, maxAttempts: data.settings.maxAttempts }); }
+    catch (e) { setError(e instanceof Error ? `The PDF was not made: ${e.message}` : "The PDF was not made."); }
+    finally { setExporting(null); }
+  };
   const sendMessage = async () => { if (!attempt) return; try { await asmStudent("feedback_post", { attemptId: attempt.id, body: message }); setMessage(""); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Not sent."); } };
 
   if (error && !data) return <div><PageHeading eyebrow="Assessments" title="Assessment" /><PortalError message={error} onRetry={() => void load()} /><Link className="mt-3 inline-block text-sm underline" to="/agency/assessments">Back to my assessments</Link></div>;
@@ -94,8 +116,23 @@ export default function StudentAssessmentPage() {
       </div>
       {error ? <div className="mt-3"><PortalError message={error} /></div> : null}
       {data.settings.instructions ? <div className="mt-4 rounded-card border border-background-200 bg-background-100 p-4 text-sm text-foreground-800 whitespace-pre-wrap">{data.settings.instructions}</div> : null}
+      <AssessmentDetails history={sheetHistory} definition={definition} unit={{ code: data.assignment.unitCode, name: data.assignment.unitName }} />
 
-      {editable ? (
+      {editable && definition.instructions && !started && !Object.keys(responses).length ? (
+        <div className="mt-5 space-y-4" data-testid="before-you-start">
+          <h2 className="font-heading text-lg font-bold text-foreground-950">Before you start</h2>
+          <p className="text-sm text-foreground-700">Read how this assessment works: submission, plagiarism and collusion, outcomes, reassessment, appeals and the declaration you will sign.</p>
+          <AssessmentInfo text={definition.instructions} />
+          <Button icon="ri-play-line" onClick={() => setStarted(true)}>I have read this – start the assessment</Button>
+        </div>
+      ) : editable ? (
+        <>
+        {definition.instructions ? (
+          <details className="mt-5 rounded-card border border-background-200 bg-background-50 p-3">
+            <summary className="cursor-pointer text-sm font-semibold text-foreground-900">Assessment information (submission, plagiarism, outcomes, appeals…)</summary>
+            <AssessmentInfo text={definition.instructions} className="mt-3" />
+          </details>
+        ) : null}
         <div className="mt-5 space-y-5">
           {tasks.length > 1 ? <div className="flex flex-wrap gap-2">{tasks.map((t, i) => <button key={t.id} type="button" onClick={() => setTaskIndex(i)} className={`rounded-full border px-3.5 py-1.5 text-label font-medium ${i === taskIndex ? "border-primary-500 bg-primary-500 text-background-50" : "border-background-300 bg-background-50 text-foreground-700"}`}>Task {i + 1}{errors.some((e) => t.sections.some((s) => s.questions.some((q) => e.questionId.startsWith(q.id)))) ? " !" : ""}</button>)}</div> : null}
           <AssessmentRenderer definition={definition} responses={responses} onChange={onChange} mode="student" taskId={task?.id} evidence={attempt.evidence} onUpload={onUpload} onRemoveEvidence={onRemoveEvidence} openEvidence={(f) => void openEvidence(f)} errors={errors} declarationText={data.settings.declarationText} />
@@ -104,18 +141,20 @@ export default function StudentAssessmentPage() {
             <div className="flex items-center gap-3"><span className="text-xs text-foreground-600">{liveErrors.length ? `${liveErrors.length} question${liveErrors.length === 1 ? "" : "s"} still need${liveErrors.length === 1 ? "s" : ""} an answer` : "Everything required is answered"}</span><Button icon="ri-send-plane-line" onClick={() => setSubmitOpen(true)}>Submit assessment</Button></div>
           </div>
         </div>
+        </>
       ) : (
         <div className="mt-5 rounded-card border border-background-200 bg-background-50 p-4 text-sm text-foreground-800">
           {attempt.state === "draft" ? <p>This assessment is closed.</p> : attempt.state === "submitted" || attempt.state === "marking" ? <p><i className="ri-time-line mr-1" aria-hidden="true" />Submitted {fmtDateTime(attempt.submittedAt)} · receipt <strong>{attempt.receiptNo}</strong>. Your assessor is marking it; you will be notified.</p> : <p>Attempt {attempt.attemptNo} is {STATE_LABEL[attempt.state]?.toLowerCase()}{attempt.outcome ? `: ${OUTCOME_LABEL[attempt.outcome]}` : ""}.</p>}
         </div>
       )}
 
+      {sheetHistory && decidedAttempts.length ? <div className="mt-6"><ResultsSheet definition={definition} history={sheetHistory} maxAttempts={data.settings.maxAttempts} audience="student" /></div> : null}
       {historyAll.length ? (
         <div className="mt-6">
           <h2 className="font-heading text-base font-semibold text-foreground-950">Submissions, results and feedback</h2>
           <ul className="mt-2 space-y-2">{historyAll.map((a) => (
             <li key={a.id} className="rounded-card border border-background-200 bg-background-50 p-3 text-sm">
-              <div className="flex flex-wrap items-center gap-2"><span className="font-medium text-foreground-900">Attempt {a.attemptNo}</span><Badge tone={a.state === "final" ? (a.outcome === "S" ? "success" : "warn") : a.state === "returned" ? "warn" : "primary"}>{STATE_LABEL[a.state] ?? a.state}{a.outcome && (a.state === "returned" || a.state === "final") ? ` · ${OUTCOME_LABEL[a.outcome]}` : ""}</Badge><span className="text-xs text-foreground-600">submitted {fmtDateTime(a.submittedAt)} · receipt {a.receiptNo}</span><span className="flex-1" /><Button size="sm" variant="outline" onClick={() => setViewing(a)}>View</Button></div>
+              <div className="flex flex-wrap items-center gap-2"><span className="font-medium text-foreground-900">Attempt {a.attemptNo}</span><Badge tone={a.state === "final" ? (a.outcome === "S" ? "success" : "warn") : a.state === "returned" ? "warn" : "primary"}>{STATE_LABEL[a.state] ?? a.state}{a.outcome && (a.state === "returned" || a.state === "final") ? ` · ${OUTCOME_LABEL[a.outcome]}` : ""}</Badge><span className="text-xs text-foreground-600">submitted {fmtDateTime(a.submittedAt)} · receipt {a.receiptNo}</span><span className="flex-1" />{a.state === "final" ? <Button size="sm" variant="outline" icon="ri-file-pdf-2-line" disabled={exporting !== null} onClick={() => void exportPdf(a)}>{exporting === a.id ? "Making the PDF…" : "Export as workbook PDF"}</Button> : null}<Button size="sm" variant="outline" onClick={() => setViewing(a)}>View</Button></div>
               {a.overallFeedback ? <p className="mt-2 whitespace-pre-wrap text-foreground-800"><span className="font-medium">Assessor feedback: </span>{a.overallFeedback}</p> : null}
               {a.taskResults.length ? <ul className="mt-1 flex flex-wrap gap-1.5">{a.taskResults.map((t) => <li key={t.taskId}><Badge tone={t.outcome === "S" ? "success" : t.outcome === "NYS" ? "warn" : "muted"}>{definition.tasks.find((x) => x.id === t.taskId)?.title ?? t.taskId}: {t.outcome ? OUTCOME_LABEL[t.outcome] : "–"}</Badge></li>)}</ul> : null}
               {a.state === "final" && a.outcome === "NYS" && !a.reassessments.some((r) => r.state === "requested") ? <div className="mt-2 flex flex-wrap items-center gap-2"><TextInput className="min-w-[12rem] flex-1" placeholder="Why you are asking for a reassessment" value={reason} onChange={(e) => setReason(e.target.value)} /><Button size="sm" variant="outline" onClick={() => void requestReassessment(a)}>Request reassessment</Button></div> : null}

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ListPane from "@/pages/admin/components/ListPane";
 import { useListPane } from "@/pages/admin/lib/listPane";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
+import AssessmentWizard from "@/pages/admin/assessments/AssessmentWizard";
 
 
 /** LMS assessment-only workspace. Reuses authoritative assessment records and creation dialog. */
@@ -17,17 +18,9 @@ export default function LmsAssessmentsPage() {
   const [unitId,setUnitId] = useState("");
   const [search,setSearch] = useState(["",""]);
   const [creating,setCreating] = useState(false);
-  const [title,setTitle] = useState("");
-  const [code,setCode] = useState("");
-  const [description,setDescription] = useState("");
-  const [saving,setSaving] = useState(false);
   const [error,setError] = useState("");
-  const [dialogError,setDialogError] = useState("");
   const [notice,setNotice] = useState("");
-  const [source,setSource] = useState<"blank"|"upload"|"template">("blank");
-  const [fromId,setFromId] = useState("");
-  const [uploadText,setUploadText] = useState("");
-  const [uploadName,setUploadName] = useState("");
+  const navigate = useNavigate();
   const load=useCallback(async()=>{
     try {
       const [c,a] = await Promise.all([
@@ -45,50 +38,10 @@ export default function LmsAssessmentsPage() {
     rto<CourseDetail>("course_get",{courseId}).then(detail=>{if(active){setUnits(detail.units??[]);setError("");}}).catch(e=>{if(active){setUnits([]);setError(e instanceof Error?e.message:"Unable to load course units");}}).finally(()=>{if(active)setUnitsLoading(false);});
     return ()=>{active=false;};
   },[courseId]);
-  const unitOptions=units.map(u=>({id:u.id??"",label:`${u.code} — ${u.name}${u.isActive===false?" (Inactive)":""}`}));
-  useEffect(()=>{setUnitId(old=>unitOptions.some(u=>u.id===old&&!!u.id)?old:unitOptions.find(u=>!!u.id)?.id??"");},[units]);
-  const closeCreate=()=>{setCreating(false);setTitle("");setCode("");setDescription("");setSource("blank");setFromId("");setUploadText("");setUploadName("");setDialogError("");};
-  const readUpload=async(file:File|undefined)=>{
-    setUploadText("");setUploadName("");setDialogError("");
-    if(!file)return;
-    if(!file.name.toLowerCase().endsWith(".json")){setDialogError("Choose a JSON export from the Assessments editor. PDF, Word and other formats are unsupported.");return;}
-    try{
-      const text=await file.text();
-      const parsed=JSON.parse(text) as {title?:string;code?:string;description?:string;definition?:{tasks?:unknown}};
-      if(!Array.isArray(parsed?.definition?.tasks))throw new Error("no definition");
-      setUploadText(text);setUploadName(file.name);
-      setTitle(t=>t||parsed.title||"");setCode(c=>c||parsed.code||"");setDescription(d=>d||parsed.description||"");
-    }catch{setDialogError("That file is not an assessment JSON export. It must contain an assessment definition.");}
-  };
-  const create=async()=>{
-    if(!courseId||!unitId||saving)return;
-    if(source==="upload"&&!uploadText)return;
-    if(source==="template"&&!fromId)return;
-    const name=title.trim()||(source==="template"?templates.find(t=>t.id===fromId)?.title??"":"");
-    if(!name)return;
-    setSaving(true);setDialogError("");setNotice("");
-    try{
-      const result=await asmAdmin<{id?:string;ok?:boolean;errors?:{message:string}[]}>("assessment_create",{
-        courseId,unitId,title:name,code:code.trim()||null,description,
-        fromAssessmentId:source==="template"?fromId:undefined,
-        import:source==="upload"?JSON.parse(uploadText):undefined,
-      });
-      if(result.ok===false)throw new Error(result.errors?.map(e=>e.message).join(" ")||"Unable to create assessment");
-      if(!result.id)throw new Error("Assessment creation did not return an ID");
-      let message=`"${name}" created as a draft.`;
-      if(source!=="blank"){
-        const pub=await asmAdmin<{ok:boolean;errors?:{message:string}[]}>("version_publish",{assessmentId:result.id});
-        message=pub.ok?`"${name}" created and published. Open it to assign it to intakes.`:`"${name}" created as a draft but not published: ${pub.errors?.map(e=>e.message).join(" ")??""} Open it to fix and publish.`;
-      }
-      closeCreate();setNotice(message);
-      await load();
-    }catch(e){setDialogError(e instanceof Error?e.message:"Unable to create assessment");}
-    finally{setSaving(false);}
-  };
-  const templates=useMemo(()=>assessments.filter(a=>a.currentVersionNo!==null&&!a.archivedAt).sort((a,b)=>Number(b.isTemplate)-Number(a.isTemplate)||Number(b.unitId===unitId)-Number(a.unitId===unitId)||a.title.localeCompare(b.title)),[assessments,unitId]);
+  const unitOptions=useMemo(()=>units.map(u=>({id:u.id??"",label:`${u.code} — ${u.name}${u.isActive===false?" (Inactive)":""}`})),[units]);
+  useEffect(()=>{setUnitId(old=>unitOptions.some(u=>u.id===old&&!!u.id)?old:unitOptions.find(u=>!!u.id)?.id??"");},[unitOptions]);
   const shown=assessments.filter(a=>a.courseId===courseId&&(!unitId||a.unitId===unitId));
   const card="rounded-2xl border border-background-200 bg-background-50 shadow-sm";
-  const field="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm";
   const searchField="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm";
   const sectionTitle="text-xs font-semibold uppercase tracking-wide text-foreground-500";
   const row=(active:boolean)=>"flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors disabled:opacity-50 "+(active?"bg-primary-50 ring-1 ring-primary-300":"hover:bg-background-100");
@@ -134,18 +87,6 @@ export default function LmsAssessmentsPage() {
         :<p className="py-10 text-center text-sm text-foreground-500">No assessments for this unit.</p>}
       </section>
     </div>
-    {creating&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="presentation"><div role="dialog" aria-modal="true" aria-label="Add assessment" className="max-h-[92vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-2xl border border-background-200 bg-background-50 p-5 shadow-xl">
-      <h2 className="font-heading text-xl font-bold text-foreground-950">Add assessment</h2>
-      <p className="text-sm text-foreground-500">{courses.find(c=>c.id===courseId)?.label}<br/>{unitOptions.find(u=>u.id===unitId)?.label}</p>
-      <div role="group" aria-label="Start from" className="grid grid-cols-3 gap-1 rounded-lg border border-background-200 p-1">{([["blank","Blank","ri-file-add-line"],["upload","Upload file","ri-upload-2-line"],["template","Use template","ri-file-copy-line"]] as const).map(([v,label,icon])=><button type="button" key={v} aria-pressed={source===v} onClick={()=>{setSource(v);setDialogError("");}} className={"rounded-md px-2 py-1.5 text-sm font-semibold "+(source===v?"bg-primary-600 text-white":"text-foreground-700 hover:bg-background-100")}><i className={icon+" mr-1"} aria-hidden="true"/>{label}</button>)}</div>
-      {source==="upload"&&<div><label className="block text-sm font-semibold">Assessment file (.json)<input className={field+" mt-1"} type="file" accept=".json,application/json" onChange={e=>{void readUpload(e.currentTarget.files?.[0]);e.currentTarget.value="";}}/></label><p className="mt-1 text-xs text-foreground-500">A JSON export from the Assessments editor.</p>{uploadName&&<p className="mt-2 break-all text-sm" role="status">Selected file · {uploadName}</p>}</div>}
-      {source==="template"&&<label className="block text-sm font-semibold">Copy from template or assessment<select className={field+" mt-1"} value={fromId} onChange={e=>{const id=e.target.value;setFromId(id);const t=templates.find(x=>x.id===id);if(t)setTitle(old=>old||t.title);}}><option value="">Select template…</option>{templates.map(t=><option key={t.id} value={t.id}>{t.isTemplate?"[Template] ":""}{t.unitCode?t.unitCode+" — ":""}{t.title} ({t.courseName})</option>)}</select>{!templates.length&&<span className="mt-1 block text-xs font-normal text-foreground-600">No templates or assessments to copy yet.</span>}</label>}
-      <label className="block text-sm font-semibold">Assessment title<input className={field+" mt-1"} value={title} onChange={e=>setTitle(e.target.value)} placeholder="Assessment title" autoFocus /></label>
-      <label className="block text-sm font-semibold">Code (optional)<input className={field+" mt-1"} value={code} onChange={e=>setCode(e.target.value)} /></label>
-      <label className="block text-sm font-semibold">Description<textarea className={field+" mt-1"} value={description} onChange={e=>setDescription(e.target.value)} rows={3}/></label>
-      <p className="text-xs text-foreground-500">{source==="blank"?"A blank assessment is created as a draft; add tasks and publish it before assigning.":"The assessment is created under this unit and published, ready to assign to intakes."}</p>
-      {dialogError&&<p role="alert" className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{dialogError}</p>}
-      <div className="flex justify-end gap-2"><button type="button" className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100" onClick={closeCreate}>Cancel</button><button type="button" className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" disabled={saving||(source==="blank"&&!title.trim())||(source==="upload"&&(!uploadText||!title.trim()))||(source==="template"&&!fromId)} onClick={()=>void create()}>{saving?"Saving…":source==="blank"?"Create assessment":"Create & publish"}</button></div>
-    </div></div>}
+    {creating&&<AssessmentWizard courses={courses} pageCourseId={courseId} pageUnitId={unitId} pageUnits={units} onClose={()=>setCreating(false)} onSaved={(id)=>{setCreating(false);navigate(`/admin/assessments/${id}`);}}/>}
   </div>;
 }

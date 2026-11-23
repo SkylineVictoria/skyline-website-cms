@@ -60,11 +60,26 @@ export interface Question {
   showIf?: Condition;
   /** Case study and repeating group hold nested questions. */
   children?: Question[];
+  /** Set by the workbook import (Word / PDF): where the question came from and whether the admin should check it. Never shown to students. */
+  importMeta?: ImportMeta;
 }
+
+export interface ImportMeta { page?: number | null; confidence: "high" | "low"; note?: string }
 
 export interface Section { id: string; title: string; description?: string; showIf?: Condition; questions: Question[] }
 export interface Task { id: string; title: string; instructions?: string; sections: Section[] }
-export interface Definition { instructions?: string; tasks: Task[] }
+/**
+ * Where an imported definition came from (ASM-WORKBOOK, 2026-11-23): the workbook's qualification, unit, version and file name,
+ * printed on the cover and in the footer of "Export as workbook PDF". Never assessor data; ignored by the validators.
+ */
+export interface DefinitionSource {
+  qualification?: { code: string; name: string } | null;
+  unit?: { code: string; name: string } | null;
+  /** "Version Number: 1.0" in the workbook's footer. */
+  version?: string | null;
+  fileName?: string | null;
+}
+export interface Definition { instructions?: string; tasks: Task[]; source?: DefinitionSource }
 
 export type Responses = Record<string, unknown>;
 

@@ -25,7 +25,10 @@ import { isAnswerable, newQuestion, withSchema } from "@/lib/assessment/registry
 import type { Definition, Question, QuestionKey, Section, Task } from "@/lib/assessment/types";
 import type { ImportResult } from "@/lib/assessment/workbookImport";
 import { readWorkbook } from "@/lib/assessment/workbookFile";
-import { blankWorkbookPdf, workbookLetterhead, type WorkbookLetterhead } from "@/lib/assessment/workbookExport";
+import { blankWorkbookPdf } from "@/lib/assessment/workbookExport";
+import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetterhead";
+import WorkbookHeaderPicker from "@/components/assessment/WorkbookHeaderPicker";
+import { WorkbookHeader } from "@/components/assessment/WorkbookTables";
 import { autoTitle, decideFiling, filingCourseId, needsUnitStep, type FilingDecision } from "@/lib/assessment/workbookFiling";
 import { asmAdmin, type Settings } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
@@ -90,7 +93,10 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
   const [previewTask, setPreviewTask] = useState(0);
   const [trainerView, setTrainerView] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
-  const [letterhead, setLetterhead] = useState<WorkbookLetterhead | null>(null);
+  // ASM-HEADER: the header picture + address block, kept in step with Assessments > Settings
+  const { head: letterhead, setting: headerSetting } = useWorkbookLetterhead();
+  /** No header picture set yet (and the database has the setting): the Upload step asks for it, once. */
+  const headerMissing = Boolean(headerSetting?.available && !headerSetting.url);
   const [pdf, setPdf] = useState<{ bytes: Uint8Array; key: string } | null>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState("");
@@ -137,10 +143,9 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
   const docDefinition = useMemo<Definition>(() => ({ ...definition, source: { ...(definition.source ?? {}), unit: docUnit, qualification: docQualification } }), [definition, docUnit?.code, docUnit?.name, docQualification?.code, docQualification?.name]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { void asmAdmin<Settings>("settings_get").then(setSettings).catch(() => setSettings(null)); }, []);
-  useEffect(() => { void workbookLetterhead().then(setLetterhead).catch(() => setLetterhead(null)); }, []);
 
   // the Workbook (PDF) view: the blank workbook, built again when the draft changed since the last one
-  const pdfKey = useMemo(() => JSON.stringify([docDefinition, finalTitle]), [docDefinition, finalTitle]);
+  const pdfKey = useMemo(() => JSON.stringify([docDefinition, finalTitle, letterhead?.logoUrl ?? null]), [docDefinition, finalTitle, letterhead?.logoUrl]);
   useEffect(() => {
     if (current !== "review" || view !== "pdf" || pdf?.key === pdfKey) return;
     let live = true;
@@ -177,7 +182,7 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
   };
   const canLeave = (id: StepId): boolean => {
     if (id === "start") return mode !== null;
-    if (id === "upload") return Boolean(result) && !reading;
+    if (id === "upload") return Boolean(result) && !reading && !headerMissing;
     if (id === "unit") return Boolean(courseId && unitId);
     if (id === "review") return definition.tasks.length > 0;
     return true;
@@ -297,6 +302,8 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
       tone = "warn"; text = decision.message;
     } else if (decision.source === "page") {
       tone = "info"; text = decision.message;
+    } else if (!pageUnit) {
+      text = <>It will be filed under {target ?? wbUnit?.code}, as the workbook says. The next step lets you check or change it.</>;
     } else {
       text = <>Matches the unit selected on the page{target ? ` (${target})` : ""}.</>;
     }
@@ -306,8 +313,8 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
         <dl className="grid gap-2 rounded-lg border border-background-200 p-3 text-sm sm:grid-cols-2">
           <div><dt className="text-2xs font-semibold uppercase tracking-wide text-foreground-500">The workbook is for</dt>
             <dd className="mt-0.5 text-foreground-900">{wbUnit ? <><strong>{wbUnit.code}</strong> {wbUnit.name}</> : <span className="text-foreground-500">No unit named</span>}{result.qualification ? <span className="block text-xs text-foreground-600">{result.qualification.code} {result.qualification.name}</span> : null}</dd></div>
-          <div><dt className="text-2xs font-semibold uppercase tracking-wide text-foreground-500">Selected on the page</dt>
-            <dd className="mt-0.5 text-foreground-900">{pageUnit ? <><strong>{pageUnit.code}</strong> {pageUnit.name}</> : <span className="text-foreground-500">No unit</span>}{pageCourse ? <span className="block text-xs text-foreground-600">{pageCourse.code} {pageCourse.name}</span> : null}</dd></div>
+          {pageUnit ? <div><dt className="text-2xs font-semibold uppercase tracking-wide text-foreground-500">Selected on the page</dt>
+            <dd className="mt-0.5 text-foreground-900"><strong>{pageUnit.code}</strong> {pageUnit.name}{pageCourse ? <span className="block text-xs text-foreground-600">{pageCourse.code} {pageCourse.name}</span> : null}</dd></div> : null}
         </dl>
         <p role={tone === "warn" ? "alert" : "status"} data-testid={tone === "warn" ? "filing-mismatch" : "filing-match"} className={`flex items-start gap-2 rounded-md border px-3 py-2 text-sm ${style}`}>
           <i className={`${tone === "warn" ? "ri-error-warning-line" : tone === "ok" ? "ri-checkbox-circle-line" : "ri-information-line"} mt-0.5`} aria-hidden="true" /><span>{text}</span>
@@ -351,6 +358,8 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
           ) : null}
         </div>
         {!reading ? filingCheck() : null}
+        {/* ASM-HEADER: asked once, while no workbook header is set; saved to Assessments > Settings */}
+        {!reading && result && headerMissing ? <WorkbookHeaderPicker head={letterhead} current={null} title="Choose the workbook header (asked once)" /> : null}
       </div>
     );
 
@@ -425,6 +434,7 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
 
           {view === "student" ? (
             <div className="space-y-4" data-testid="review-student-view">
+              <WorkbookHeader head={letterhead} className="rounded-t-md bg-white px-4 pt-3" />
               <p className="text-xs text-foreground-600">{trainerView ? "As the trainer sees it: the assessor checklists are shown." : "Exactly what the student sees. Answers typed here are not kept."}</p>
               <AssessmentDetails preview history={null} definition={docDefinition} />
               {definition.instructions ? <BeforeYouStart instructions={definition.instructions} action={<span className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-md bg-primary-500/60 px-4 py-2 text-sm font-semibold text-background-50" aria-disabled="true"><i className="ri-play-line" aria-hidden="true" />I have read this – start the assessment</span>} /> : settings?.instructions ? <div className="rounded-card border border-background-200 bg-background-100 p-4 text-sm text-foreground-800 whitespace-pre-wrap">{settings.instructions}</div> : null}
@@ -494,6 +504,7 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
         <>
           {current === "upload" && readError ? <WizardNotice tone="error">{readError}</WizardNotice> : null}
           {current === "upload" && !result && !readError && !reading ? <WizardNotice tone="info">Upload the workbook to continue.</WizardNotice> : null}
+          {current === "upload" && result && !reading && headerMissing ? <WizardNotice tone="info">Choose the workbook header to continue (upload one, or use the current Skyline logo). You are asked only once.</WizardNotice> : null}
           {current === "unit" && !(courseId && unitId) ? <WizardNotice tone="info">Choose the qualification and the unit to continue.</WizardNotice> : null}
           {saveError ? <WizardNotice tone="error">{saveError}</WizardNotice> : null}
           <div className="border-t border-background-200 px-5 py-3 text-center md:px-6"><p className="text-2xs text-foreground-400">Nothing is saved until you press Save as draft or Publish. Model answers stay visible to assessors only.</p></div>

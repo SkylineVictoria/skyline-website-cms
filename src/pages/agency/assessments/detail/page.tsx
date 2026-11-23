@@ -4,6 +4,8 @@ import { Badge, Button, Modal, TextArea, TextInput } from "@/pages/admin/compone
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import AssessmentRenderer, { AssessmentInfo } from "@/components/assessment/AssessmentRenderer";
 import BeforeYouStart from "@/components/assessment/BeforeYouStart";
+import { WorkbookHeader } from "@/components/assessment/WorkbookTables";
+import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetterhead";
 import AssessmentDetails from "@/components/assessment/AssessmentDetails";
 import ResultsSheet from "@/components/assessment/ResultsSheet";
 import { historyFromAttempts } from "@/lib/assessment/resultsSheet";
@@ -89,6 +91,7 @@ export default function StudentAssessmentPage() {
   // ASM-WORKBOOK item 1: the assessment's information pages come first; the form opens with "Start the assessment" (or straight away
   // once the student has answered something)
   const [started, setStarted] = useState(false);
+  const { head: letterhead } = useWorkbookLetterhead();
   const [exporting, setExporting] = useState<string | null>(null);
   // item 8 for students: their own submission, once marked and final
   const exportPdf = async (a: Attempt) => {
@@ -117,6 +120,8 @@ export default function StudentAssessmentPage() {
       </div>
       {error ? <div className="mt-3"><PortalError message={error} /></div> : null}
       {data.settings.instructions ? <div className="mt-4 rounded-card border border-background-200 bg-background-100 p-4 text-sm text-foreground-800 whitespace-pre-wrap">{data.settings.instructions}</div> : null}
+      {/* ASM-HEADER: the workbook header, as the PDF and the wizard show it */}
+      <WorkbookHeader head={letterhead} className="mt-4 rounded-t-card bg-white px-4 pt-3" />
       <AssessmentDetails history={sheetHistory} definition={definition} unit={{ code: data.assignment.unitCode, name: data.assignment.unitName }} />
 
       {editable && definition.instructions && !started && !Object.keys(responses).length ? (

@@ -15,8 +15,8 @@ import QuestionEditor from "./builder/QuestionEditor";
 import { earlierQuestionIds } from "@/lib/assessment/definition";
 import { GROUP_LABEL, newId, QUESTION_TYPES, questionType, type TypeGroup } from "@/lib/assessment/registry";
 import type { Definition, Question, QuestionKey, Section, Task } from "@/lib/assessment/types";
-import { AdjustmentSheet, DetailsTables } from "@/components/assessment/WorkbookTables";
-import { CONTENT_TYPES, footerParts, helpRepeatsLabel, INFO_HEADING, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering, type QuestionNumber, type WorkbookUnitInfo } from "@/lib/assessment/workbookLayout";
+import { AdjustmentSheet, DetailsTables, WorkbookCover, WorkbookHeader } from "@/components/assessment/WorkbookTables";
+import { CONTENT_TYPES, footerParts, titleSubline, helpRepeatsLabel, INFO_HEADING, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering, type QuestionNumber, type WorkbookUnitInfo } from "@/lib/assessment/workbookLayout";
 import type { WorkbookLetterhead } from "@/lib/assessment/workbookExport";
 
 export interface ReviewActions {
@@ -58,13 +58,8 @@ function InlineText({ value, onChange, label, className = "", placeholder, autoF
 function Sheet({ head, footer, children, testId }: { head: WorkbookLetterhead | null; footer: [string, string, string]; children: ReactNode; testId?: string }) {
   return (
     <section data-testid={testId} className="mx-auto w-full max-w-[52rem] rounded-sm border border-background-200 bg-white text-[13px] leading-relaxed text-neutral-900 shadow-md">
-      <header className="flex items-start justify-between gap-4 border-b border-neutral-300 px-6 pb-3 pt-5 sm:px-10">
-        <div className="min-h-[2.75rem] min-w-0">{head?.logoUrl ? <img src={head.logoUrl} alt={head.name} className="max-h-14 max-w-[11rem] object-contain" /> : null}</div>
-        <div className="min-w-0 text-right">
-          <p className="text-sm font-bold text-neutral-900">{head?.name ?? "Skyline Institute of Technology"}</p>
-          {(head?.lines ?? []).map((l) => <p key={l} className="text-[11px] leading-snug text-neutral-500">{l}</p>)}
-        </div>
-      </header>
+      {/* ASM-HEADER: the master workbook's header, as the PDF prints it */}
+      <WorkbookHeader head={head} className="mx-6 pt-5 sm:mx-10" />
       <div className="space-y-4 px-6 py-6 sm:px-10">{children}</div>
       <footer className="grid grid-cols-3 gap-2 border-t border-neutral-300 px-6 py-2.5 text-[11px] text-neutral-500 sm:px-10">
         <span>{footer[0]}</span><span className="text-center">{footer[1]}</span><span className="text-right">{footer[2]}</span>
@@ -251,10 +246,14 @@ export default function ReviewDocument({ definition, title, onTitle, unit, quali
   return (
     <div className="space-y-6 rounded-lg bg-background-200/60 p-3 sm:p-5" data-testid="review-document">
       {/* cover */}
+      {/* ASM-COVER: the workbook's first page (the same coverLayout as the PDF), not numbered */}
+      <section className="mx-auto w-full max-w-[52rem] overflow-hidden rounded-sm border border-background-200 shadow-md" data-testid="review-cover-page">
+        <WorkbookCover unit={unit} title={title} logoUrl={letterhead?.logoUrl ?? null} />
+      </section>
       <Sheet head={letterhead} footer={footer(1)} testId="review-cover">
         <div className="pt-4">
           <InlineText label="Assessment title" multiline={false} value={title} onChange={onTitle} className="text-2xl font-bold leading-tight" placeholder="Assessment title" />
-          {unit ? <p className="mt-1 text-base text-neutral-500">{unit.code} {unit.name}</p> : null}
+          {titleSubline(title, unit) ? <p className="mt-1 text-base text-neutral-500">{titleSubline(title, unit)}</p> : null}
           <p className="text-sm text-neutral-500">Student Assessment Pack</p>
         </div>
         {/* item 3: the same tables as the student's page and the PDF; the student and trainer are filled in for each student */}

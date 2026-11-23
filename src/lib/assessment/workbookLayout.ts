@@ -64,6 +64,57 @@ export function helpRepeatsLabel(q: Question): boolean {
   return q.helpText.replace(/\s+/g, " ").trim().startsWith(q.label.replace(/\s+/g, " ").trim().slice(0, 60));
 }
 
+/* ------------------------------------------------------------------ ASM-COVER: the workbook's first page */
+
+/** A4 in points; the cover is laid out in these units, y measured from the top. */
+export const PAGE_W = 595.28;
+export const PAGE_H = 841.89;
+
+export interface CoverShape { kind: "rect"; x: number; y: number; w: number; h: number; fill: string }
+export interface CoverLayout {
+  shapes: CoverShape[];
+  /** The wave under the band: an SVG path in page points (y down), filled. */
+  wave: { path: string; fill: string };
+  lines: { x1: number; y1: number; x2: number; y2: number; stroke: string; width: number }[];
+  /** The header picture top-left, on a white panel (the picture keeps its proportions inside the box). */
+  logo: { x: number; y: number; w: number; h: number; pad: number };
+  band: { text: string; y: number; size: number; color: string; spacing: number };
+  title: { text: string; y: number; size: number; color: string };
+  table: { x: number; y: number; w: number; labelW: number; rowH: number; rows: [string, string][]; label: string; value: string; border: string };
+}
+
+/**
+ * The master workbook's cover ("STUDENT WORKBOOK"): dark slate page, the logo top-left, a grey band with the words, the wave, the unit
+ * code and name in white, and the Student Name / Student ID table at the bottom (filled in on a student's export).
+ */
+export function coverLayout(input: { unit: WorkbookUnitInfo | null; title: string; student?: { name: string; ref: string } | null }): CoverLayout {
+  const W = PAGE_W; const H = PAGE_H;
+  return {
+    shapes: [
+      { kind: "rect", x: 0, y: 0, w: W, h: 323, fill: "#5b6979" },
+      { kind: "rect", x: 0, y: 323, w: W, h: 54, fill: "#a1a7b0" },
+      { kind: "rect", x: 0, y: 377, w: W, h: H - 377, fill: "#4a5767" },
+    ],
+    wave: { path: `M 0 475 C 110 470 190 545 300 557 C 420 570 520 505 ${W} 475 L ${W} ${H} L 0 ${H} Z`, fill: "#b1b8c0" },
+    lines: [
+      { x1: 0, y1: 323, x2: W, y2: 323, stroke: "#ffffff", width: 1.5 },
+      { x1: 0, y1: 377, x2: W, y2: 377, stroke: "#ffffff", width: 1.5 },
+      { x1: 0, y1: 595, x2: W, y2: 595, stroke: "#8f979f", width: 0.6 },
+    ],
+    logo: { x: 34, y: 30, w: 200, h: 58, pad: 6 },
+    band: { text: "STUDENT WORKBOOK", y: 357, size: 17, color: "#1f3a5f", spacing: 3 },
+    title: { text: input.unit ? `${input.unit.code} ${input.unit.name}`.trim() : input.title, y: 652, size: 15, color: "#ffffff" },
+    table: { x: 43, y: 730, w: W - 86, labelW: 135, rowH: 26, rows: [["Student Name:", input.student?.name ?? ""], ["Student ID:", input.student?.ref ?? ""]], label: "#e2e5e9", value: "#f8fafc", border: "#1f2937" },
+  };
+}
+
+/** Under the title on the details page: the unit line only when the title does not already say it (no "unit name" twice). */
+export function titleSubline(title: string, unit: WorkbookUnitInfo | null): string | null {
+  if (!unit) return null;
+  const t = title.toLowerCase();
+  return t.includes(unit.code.toLowerCase()) || (unit.name && t.includes(unit.name.toLowerCase())) ? null : `${unit.code} ${unit.name}`.trim();
+}
+
 /* ------------------------------------------------------------------ item 1: the information (compliance) pages */
 
 /** The heading of the information pages (submission, plagiarism, appeals …) in the page view, the student page and the PDF. */

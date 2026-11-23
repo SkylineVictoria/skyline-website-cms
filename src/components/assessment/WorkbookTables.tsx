@@ -5,7 +5,52 @@
  */
 import type { ReactNode } from "react";
 import type { Question } from "@/lib/assessment/types";
-import { adjustmentLayout, detailRows, qualificationRows, type LayoutCell, type WorkbookDetails } from "@/lib/assessment/workbookLayout";
+import { adjustmentLayout, coverLayout, detailRows, PAGE_H, PAGE_W, qualificationRows, type LayoutCell, type WorkbookDetails, type WorkbookUnitInfo } from "@/lib/assessment/workbookLayout";
+import type { WorkbookLetterhead } from "@/lib/assessment/workbookExport";
+
+/**
+ * ASM-HEADER: the master workbook's page header: the header picture on the left, the address block on the right, a line under it.
+ * The same header the PDF prints (Assessments > Settings > Workbook header; no legal-name line).
+ */
+export function WorkbookHeader({ head, className = "" }: { head: WorkbookLetterhead | null; className?: string }) {
+  return (
+    <header className={`flex items-start justify-between gap-4 border-b border-neutral-300 pb-3 ${className}`} data-testid="workbook-header">
+      <div className="min-h-[3.5rem] min-w-0 flex-1">{head?.logoUrl ? <img src={head.logoUrl} alt={head.name} className="max-h-16 max-w-[min(17rem,100%)] object-contain object-left" /> : null}</div>
+      <div className="shrink-0 text-right text-[11px] leading-snug text-neutral-500">{(head?.lines ?? []).map((l) => <p key={l}>{l}</p>)}</div>
+    </header>
+  );
+}
+
+/** ASM-COVER: the workbook's first page, drawn from the same coverLayout the PDF uses (as SVG, in page points). */
+export function WorkbookCover({ unit, title, logoUrl, student }: { unit: WorkbookUnitInfo | null; title: string; logoUrl: string | null; student?: { name: string; ref: string } | null }) {
+  const c = coverLayout({ unit, title, student });
+  const t = c.table;
+  return (
+    <svg viewBox={`0 0 ${PAGE_W} ${PAGE_H}`} className="block h-auto w-full" role="img" aria-label={`Cover: Student workbook, ${c.title.text}`} data-testid="workbook-cover">
+      {c.shapes.map((r, i) => <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} fill={r.fill} />)}
+      <path d={c.wave.path} fill={c.wave.fill} />
+      {c.lines.map((l, i) => <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={l.stroke} strokeWidth={l.width} />)}
+      {logoUrl ? <>
+        <rect x={c.logo.x} y={c.logo.y} width={c.logo.w} height={c.logo.h} fill="#ffffff" />
+        <image href={logoUrl} x={c.logo.x + c.logo.pad} y={c.logo.y + c.logo.pad} width={c.logo.w - 2 * c.logo.pad} height={c.logo.h - 2 * c.logo.pad} preserveAspectRatio="xMinYMid meet" />
+      </> : null}
+      <text x={PAGE_W / 2} y={c.band.y} textAnchor="middle" dominantBaseline="middle" fontFamily="Helvetica, Arial, sans-serif" fontWeight="700" fontSize={c.band.size} letterSpacing={c.band.spacing} fill={c.band.color}>{c.band.text}</text>
+      <text x={PAGE_W / 2} y={c.title.y} textAnchor="middle" fontFamily="Helvetica, Arial, sans-serif" fontWeight="700" fontSize={c.title.size} fill={c.title.color}>{c.title.text}</text>
+      {t.rows.map(([label, value], i) => {
+        const y = t.y + i * t.rowH;
+        return (
+          <g key={label}>
+            <rect x={t.x} y={y} width={t.labelW} height={t.rowH} fill={t.label} stroke={t.border} strokeWidth={0.8} />
+            <rect x={t.x + t.labelW} y={y} width={t.w - t.labelW} height={t.rowH} fill={t.value} stroke={t.border} strokeWidth={0.8} />
+            <text x={t.x + 8} y={y + t.rowH / 2 + 3.5} fontFamily="Helvetica, Arial, sans-serif" fontWeight="700" fontSize={10} fill="#1a1c21">{label}</text>
+            {value ? <text x={t.x + t.labelW + 8} y={y + t.rowH / 2 + 3.5} fontFamily="Helvetica, Arial, sans-serif" fontSize={10} fill="#1a1c21">{value}</text>
+              : <line x1={t.x + t.labelW + 8} y1={y + t.rowH - 7} x2={t.x + t.w - 8} y2={y + t.rowH - 7} stroke="#1a1c21" strokeWidth={0.6} />}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
 
 /** A workbook tick box ("☐ Yes"), drawn, not a font glyph. */
 export function TickBox({ on = false }: { on?: boolean }) {

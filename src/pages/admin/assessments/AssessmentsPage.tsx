@@ -11,8 +11,10 @@ import { questionType } from "@/lib/assessment/registry";
 import { asmAdmin, downloadCsv, type AssessmentRow, type AuditRow, type BankRow, type BatchOption, type OutcomeRow, type Overview, type Settings, attemptsRange } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import AttemptDrawer from "./panels/AttemptDrawer";
-import { WorkbookPicker, WorkbookSummary } from "./WorkbookImport";
-import type { ImportResult } from "@/lib/assessment/workbookImport";
+import NewAssessmentDialog from "./NewAssessmentDialog";
+import WorkbookHeaderPicker from "@/components/assessment/WorkbookHeaderPicker";
+import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetterhead";
+import { WORKBOOK_HEADER_HINT } from "@/lib/assessment/workbookExport";
 
 const TABS = [
   { id: "library", label: "Library", icon: "ri-book-2-line" }, { id: "submissions", label: "Submissions", icon: "ri-inbox-line" }, { id: "outcomes", label: "Outcomes", icon: "ri-award-line" },
@@ -74,63 +76,8 @@ function Library() {
             {r.archivedAt ? <Badge tone="muted">archived</Badge> : null}
           </li>))}</ul>
       )}
-      {creating ? <CreateDialog courses={courses} templates={(rows ?? []).filter((r) => r.isTemplate || r.currentVersionNo)} onClose={() => setCreating(false)} onCreated={(id) => navigate(`/admin/assessments/${id}`)} /> : null}
+      {creating ? <NewAssessmentDialog courses={courses} onClose={() => setCreating(false)} onSaved={(id) => { setCreating(false); navigate(`/admin/assessments/${id}`); }} /> : null}
     </div>
-  );
-}
-
-export function CreateDialog({ courses, templates, onClose, onCreated }: { courses: RtoCourse[]; templates: AssessmentRow[]; onClose: () => void; onCreated: (id: string) => void }) {
-  const [courseId, setCourseId] = useState(courses[0]?.id ?? ""); const [unitId, setUnitId] = useState(""); const [title, setTitle] = useState(""); const [code, setCode] = useState(""); const [description, setDescription] = useState("");
-  const [source, setSource] = useState<"blank" | "clone" | "import" | "workbook">("blank"); const [fromId, setFromId] = useState(""); const [importText, setImportText] = useState("");
-  const [workbook, setWorkbook] = useState<ImportResult | null>(null);
-  const [units, setUnits] = useState<{ id: string; code: string; name: string }[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  useEffect(() => { if (!courseId) return; rto<CourseDetail>("course_get", { courseId }).then((c) => setUnits(c.units.filter((u) => u.isActive).map((u) => ({ id: u.id ?? "", code: u.code, name: u.name })))).catch(() => setUnits([])); }, [courseId]);
-  const create = async () => {
-    setBusy(true); setError("");
-    try {
-      let imported: unknown;
-      if (source === "import") { try { imported = JSON.parse(importText); } catch { setError("That is not valid JSON."); setBusy(false); return; } }
-      // a workbook: the draft definition, and model answers / guidance only as assessor keys (asm_question_keys)
-      if (source === "workbook") { if (!workbook) { setError("Choose the workbook first."); setBusy(false); return; } imported = { title: workbook.title, definition: workbook.definition, keys: workbook.keys }; }
-      const out = await asmAdmin<{ id?: string; ok?: boolean; errors?: { message: string }[] }>("assessment_create", { courseId, unitId: unitId || null, title: title || (imported as { title?: string } | undefined)?.title, code: code || null, description, fromAssessmentId: source === "clone" ? fromId : undefined, import: source === "import" || source === "workbook" ? imported : undefined });
-      if (out.ok === false) { setError(out.errors?.map((e) => e.message).join(" ") ?? "Not created."); return; }
-      if (out.id) onCreated(out.id);
-    } catch (e) { setError(fail(e)); } finally { setBusy(false); }
-  };
-  return (
-    <Modal open title="New assessment" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !courseId || (!title && source !== "import" && !(source === "workbook" && workbook)) || (source === "clone" && !fromId) || (source === "workbook" && !workbook)} onClick={() => void create()}>Create</Button></>}>
-      <div className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Course" required><Select value={courseId} onChange={(e) => { setCourseId(e.target.value); setUnitId(""); }}>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</Select></Field>
-          <Field label="Unit of competency"><Select value={unitId} onChange={(e) => setUnitId(e.target.value)}><option value="">Choose later</option>{units.map((u) => <option key={u.id} value={u.id}>{u.code} {u.name}</option>)}</Select></Field>
-          <Field label="Title" required><TextInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Work safely: knowledge and practical" /></Field>
-          <Field label="Code"><TextInput value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. CPCCWHS2001-A1" /></Field>
-        </div>
-        <Field label="Description for students"><TextArea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
-        <Field label="Start from"><Select value={source} onChange={(e) => setSource(e.target.value as typeof source)}><option value="blank">Blank</option><option value="clone">A copy of an existing assessment or template</option><option value="import">A JSON export</option><option value="workbook">A Word or PDF workbook</option></Select></Field>
-        {source === "workbook" ? (
-          <div className="space-y-2">
-            <WorkbookPicker onParsed={(r, err) => {
-              setWorkbook(r); setError(err ?? "");
-              if (r && !title) setTitle(r.title);
-              if (r?.unitCode && !unitId) { const u = units.find((x) => x.code.toUpperCase() === r.unitCode); if (u) setUnitId(u.id); }
-            }} />
-            {(() => {
-              // ASM-REVIEW bug 5: the same check as the wizard's Upload step, against the unit chosen here
-              const wbCode = workbook?.unit?.code ?? workbook?.unitCode ?? null;
-              const chosen = units.find((u) => u.id === unitId);
-              return wbCode && chosen && chosen.code.toUpperCase() !== wbCode.toUpperCase()
-                ? <p role="alert" data-testid="filing-mismatch" className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"><i className="ri-error-warning-line mt-0.5" aria-hidden="true" /><span><strong>This workbook is for {wbCode}{workbook?.unit?.name ? ` ${workbook.unit.name}` : ""}, not {chosen.code} {chosen.name}.</strong> Choose its unit above, or upload the workbook for {chosen.code}.</span></p>
-                : null;
-            })()}
-            {workbook ? <WorkbookSummary result={workbook} /> : null}
-          </div>
-        ) : null}
-        {source === "clone" ? <Field label="Copy from"><Select value={fromId} onChange={(e) => setFromId(e.target.value)}><option value="">Choose…</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.isTemplate ? "[Template] " : ""}{t.title} ({t.courseName})</option>)}</Select></Field> : null}
-        {source === "import" ? <Field label="Paste the JSON export" hint="Keys and mappings in the file are restored; mapped elements are created on the unit by code."><TextArea rows={6} value={importText} onChange={(e) => setImportText(e.target.value)} /></Field> : null}
-        {error ? <p className="text-sm text-primary-700" role="alert">{error}</p> : null}
-      </div>
-    </Modal>
   );
 }
 
@@ -285,6 +232,7 @@ function Reports() {
 
 function SettingsTab() {
   const { push } = useToast();
+  const { head, setting } = useWorkbookLetterhead();
   const [s, setS] = useState<Settings | null>(null); const [error, setError] = useState("");
   useEffect(() => { void asmAdmin<Settings>("settings_get").then(setS).catch((e) => setError(fail(e))); }, []);
   if (error) return <ErrorNote text={error} />;
@@ -307,6 +255,10 @@ function SettingsTab() {
       <Field label="Instructions shown on every assessment"><TextArea rows={3} value={s.instructions} onChange={(e) => setS({ ...s, instructions: e.target.value })} /></Field>
       <Field label="Allowed evidence types (MIME, one per line)"><TextArea rows={4} value={s.evidence_allowed_types.join("\n")} onChange={(e) => setS({ ...s, evidence_allowed_types: e.target.value.split("\n").map((x) => x.trim()).filter(Boolean) })} /></Field>
       <Button icon="ri-save-line" onClick={() => void save()}>Save settings</Button>
+      {/* ASM-HEADER: the workbook header picture (saved on its own, at once) */}
+      {setting?.available === false
+        ? <p className="rounded-md border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-700" role="note"><strong>Workbook header</strong>: available once migration 20261123235917 is applied. Until then workbooks use the Skyline logo. Recommended picture: {WORKBOOK_HEADER_HINT}.</p>
+        : <WorkbookHeaderPicker head={head} current={setting?.url ?? null} onSaved={() => push("Workbook header saved.")} />}
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { useListPane } from "@/pages/admin/lib/listPane";
 import { Link, useNavigate } from "react-router-dom";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
-import AssessmentWizard from "@/pages/admin/assessments/AssessmentWizard";
+import NewAssessmentDialog from "@/pages/admin/assessments/NewAssessmentDialog";
 
 
 /** LMS assessment-only workspace. Reuses authoritative assessment records and creation dialog. */
@@ -87,6 +87,6 @@ export default function LmsAssessmentsPage() {
         :<p className="py-10 text-center text-sm text-foreground-500">No assessments for this unit.</p>}
       </section>
     </div>
-    {creating&&<AssessmentWizard courses={courses} pageCourseId={courseId} pageUnitId={unitId} pageUnits={units} onClose={()=>setCreating(false)} onSaved={(id)=>{setCreating(false);navigate(`/admin/assessments/${id}`);}}/>}
+    {creating&&<NewAssessmentDialog courses={courses} courseId={courseId} unitId={unitId} units={units} onClose={()=>setCreating(false)} onSaved={(id)=>{setCreating(false);navigate(`/admin/assessments/${id}`);}}/>}
   </div>;
 }

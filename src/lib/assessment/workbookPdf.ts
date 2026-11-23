@@ -16,7 +16,7 @@
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { buildResultsSheet, type AttemptHistory, type SheetCell } from "./resultsSheet";
 import type { Definition, EvidenceFile, Outcome, Question, Responses, ResultRow } from "./types";
-import { adjustmentLayout, CONTENT_TYPES, detailRows, footerParts, INFO_HEADING, workbookDetails, helpRepeatsLabel, htmlToBlocks, qualificationRows, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering } from "./workbookLayout";
+import { adjustmentLayout, CONTENT_TYPES, coverLayout, titleSubline, type CoverLayout, detailRows, footerParts, INFO_HEADING, workbookDetails, helpRepeatsLabel, htmlToBlocks, qualificationRows, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering } from "./workbookLayout";
 
 export interface WorkbookInstitution {
   name: string;
@@ -71,7 +71,38 @@ class Layout {
   async init() {
     const logo = this.input.institution.logo;
     if (logo?.bytes.length) { try { this.logo = logo.type === "png" ? await this.pdf.embedPng(logo.bytes) : await this.pdf.embedJpg(logo.bytes); } catch { this.logo = null; } }
-    this.newPage();
+  }
+  /** ASM-COVER: the master workbook's first page (shared coverLayout; no header, no footer, not numbered). */
+  cover(c: CoverLayout) {
+    const page = this.pdf.addPage([W, H]);
+    this.pages.push(page);
+    const col = (hex: string) => rgb(parseInt(hex.slice(1, 3), 16) / 255, parseInt(hex.slice(3, 5), 16) / 255, parseInt(hex.slice(5, 7), 16) / 255);
+    for (const r of c.shapes) page.drawRectangle({ x: r.x, y: H - r.y - r.h, width: r.w, height: r.h, color: col(r.fill) });
+    page.drawSvgPath(c.wave.path, { x: 0, y: H, color: col(c.wave.fill) });
+    for (const l of c.lines) page.drawLine({ start: { x: l.x1, y: H - l.y1 }, end: { x: l.x2, y: H - l.y2 }, thickness: l.width, color: col(l.stroke) });
+    if (this.logo) {
+      const box = c.logo; const scale = Math.min((box.w - 2 * box.pad) / this.logo.width, (box.h - 2 * box.pad) / this.logo.height);
+      const w = this.logo.width * scale; const h = this.logo.height * scale;
+      page.drawRectangle({ x: box.x, y: H - box.y - (h + 2 * box.pad), width: w + 2 * box.pad, height: h + 2 * box.pad, color: rgb(1, 1, 1) });
+      page.drawImage(this.logo, { x: box.x + box.pad, y: H - box.y - box.pad - h, width: w, height: h });
+    }
+    // the band's words, letter-spaced and centred
+    const band = this.clean(c.band.text);
+    const bandW = [...band].reduce((n, ch) => n + this.bold.widthOfTextAtSize(ch, c.band.size) + c.band.spacing, -c.band.spacing);
+    let bx = (W - bandW) / 2;
+    for (const ch of band) { page.drawText(ch, { x: bx, y: H - c.band.y - c.band.size * 0.35, size: c.band.size, font: this.bold, color: col(c.band.color) }); bx += this.bold.widthOfTextAtSize(ch, c.band.size) + c.band.spacing; }
+    for (const [k, line] of this.wrap(c.title.text, W - 120, c.title.size, true).entries()) {
+      page.drawText(line, { x: (W - this.width(line, c.title.size, true)) / 2, y: H - c.title.y - k * c.title.size * 1.3, size: c.title.size, font: this.bold, color: col(c.title.color) });
+    }
+    const t = c.table;
+    t.rows.forEach(([label, value], i) => {
+      const y = H - t.y - (i + 1) * t.rowH;
+      page.drawRectangle({ x: t.x, y, width: t.labelW, height: t.rowH, color: col(t.label), borderColor: col(t.border), borderWidth: 0.8 });
+      page.drawRectangle({ x: t.x + t.labelW, y, width: t.w - t.labelW, height: t.rowH, color: col(t.value), borderColor: col(t.border), borderWidth: 0.8 });
+      page.drawText(this.clean(label), { x: t.x + 8, y: y + t.rowH / 2 - 3.5, size: 10, font: this.bold, color: INK });
+      if (value) page.drawText(this.clean(value), { x: t.x + t.labelW + 8, y: y + t.rowH / 2 - 3.5, size: 10, font: this.font, color: INK });
+      else page.drawLine({ start: { x: t.x + t.labelW + 8, y: y + 7 }, end: { x: t.x + t.w - 8, y: y + 7 }, thickness: 0.6, color: INK });
+    });
   }
   get page() { return this.pages[this.pages.length - 1]; }
   /** Characters Helvetica (WinAnsi) cannot print lose their accents, else become "?"; never a broken document. */
@@ -113,18 +144,17 @@ class Layout {
   newPage() {
     const page = this.pdf.addPage([W, H]);
     this.pages.push(page);
-    // header: logo left, institution right
+    // ASM-HEADER: the master workbook's header: the header picture on the left, the address block on the right (no name line)
     if (this.logo) {
-      const scale = Math.min(150 / this.logo.width, 52 / this.logo.height, 1);
-      page.drawImage(this.logo, { x: M, y: H - 30 - this.logo.height * scale, width: this.logo.width * scale, height: this.logo.height * scale });
+      const scale = Math.min(240 / this.logo.width, 58 / this.logo.height);
+      page.drawImage(this.logo, { x: M, y: H - 28 - this.logo.height * scale, width: this.logo.width * scale, height: this.logo.height * scale });
     }
     let y = H - 34;
-    const lines = [this.input.institution.name, ...this.input.institution.lines].filter(Boolean);
-    lines.forEach((l, i) => {
-      const t = this.clean(l); const size = i === 0 ? 10 : 8; const f = i === 0 ? this.bold : this.font;
-      page.drawText(t, { x: W - M - f.widthOfTextAtSize(t, size), y, size, font: f, color: i === 0 ? INK : GREY });
-      y -= i === 0 ? 12 : 10;
-    });
+    for (const l of this.input.institution.lines.filter(Boolean)) {
+      const t = this.clean(l);
+      page.drawText(t, { x: W - M - this.font.widthOfTextAtSize(t, 8.5), y, size: 8.5, font: this.font, color: GREY });
+      y -= 11;
+    }
     page.drawLine({ start: { x: M, y: HEADER_BOTTOM + 8 }, end: { x: W - M, y: HEADER_BOTTOM + 8 }, thickness: 0.8, color: LINE });
     this.y = HEADER_BOTTOM - 4;
   }
@@ -303,10 +333,13 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
   const L = new Layout(pdf, await pdf.embedFont(StandardFonts.Helvetica), await pdf.embedFont(StandardFonts.HelveticaBold), input);
   await L.init();
 
-  /* ---- cover */
+  /* ---- ASM-COVER: the "STUDENT WORKBOOK" page, then the details page (page 1) */
+  L.cover(coverLayout({ unit, title: input.title, student: details.student ? { name: details.student.name, ref: details.student.ref } : null }));
+  L.newPage();
   L.gap(16);
   L.text(input.title, { size: 20, bold: true, lead: 25 });
-  if (unit) L.text(`${unit.code} ${unit.name}`, { size: 12, color: GREY, lead: 16 });
+  const subline = titleSubline(input.title, unit);
+  if (subline) L.text(subline, { size: 12, color: GREY, lead: 16 });
   L.text("Student Assessment Pack", { size: 11, color: GREY, lead: 16 });
   L.gap(14);
   L.heading("1. Student and trainer details", 11);
@@ -432,9 +465,11 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
     ["Date", date(decided?.finalisedAt ?? decided?.returnedAt)],
   ], [0.3, 0.7], { labelColumn: true });
 
-  /* ---- footers, now that the page count is known */
-  const total = L.pages.length;
-  L.pages.forEach((page, i) => {
+  /* ---- footers, now that the page count is known; the cover is not numbered (as the master workbook: "Page 1" follows it) */
+  const total = L.pages.length - 1;
+  L.pages.forEach((page, k) => {
+    if (k === 0) return;
+    const i = k - 1;
     page.drawLine({ start: { x: M, y: FOOTER_TOP }, end: { x: W - M, y: FOOTER_TOP }, thickness: 0.6, color: LINE });
     const [a, b, right] = footerParts(version, unit, i + 1, total); const left = L.clean(a); const mid = L.clean(b);
     page.drawText(left, { x: M, y: FOOTER_TOP - 14, size: 8, font: L.font, color: GREY });

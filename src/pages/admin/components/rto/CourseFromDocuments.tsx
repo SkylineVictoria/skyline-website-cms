@@ -127,6 +127,8 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
   const [checking, setChecking] = useState(false);
   const [includeOutside, setIncludeOutside] = useState(false);
   const [mapping, setMapping] = useState<Record<string, string>>({});
+  /** Staff confirm the packaging rules the system cannot check by itself (as in Add units). */
+  const [attested, setAttested] = useState(false);
   const [syncing, setSyncing] = useState("");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -165,10 +167,11 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
     }
     return out;
   }, [files, mapping, unitSet]);
+  const uncheckedRules = useMemo(() => (review ? parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups ?? {}), groupSizes(review.electives)).unchecked : []), [review]);
   const mappedCount = [...docsByUnit.values()].reduce((n, l) => n + l.length, 0);
 
   function reset() {
-    setFiles([]); setQualification(""); setReview(null); setError(""); setNote(""); setIncludeOutside(false); setMapping({});
+    setFiles([]); setQualification(""); setReview(null); setError(""); setNote(""); setIncludeOutside(false); setMapping({}); setAttested(false);
   }
 
   async function addFiles(list: FileList | null) {
@@ -197,6 +200,21 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
     try { setReview(await tga<Review>({ action: "details", code: value })); }
     catch (e) { setError(e instanceof Error ? e.message : "Training.gov.au could not be read."); }
     finally { setChecking(false); }
+  }
+
+  /** The prerequisite unit codes of each unit, from Training.gov.au, eight at a time (unreadable units have none). */
+  async function readPrerequisites(list: string[]): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    const queue = [...new Set(list)];
+    const worker = async () => {
+      while (queue.length) {
+        const code = queue.shift()!;
+        try { out.set(code, (await tga<{ prerequisiteCodes?: string[] }>({ action: "unit_lookup", code })).prerequisiteCodes ?? []); }
+        catch { out.set(code, []); }
+      }
+    };
+    await Promise.all(Array.from({ length: 8 }, worker));
+    return out;
   }
 
   /** Each mapped document into its unit's Learning content (staff only); a file already there by name is not added again. */
@@ -264,36 +282,53 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
     try {
       setSyncing(existing ? "Checking the course…" : "Creating the course…");
       if (!courseId) courseId = (await tga<{ courseId: string }>({ action: "create_core", code: review.code })).courseId;
-      // Electives: the documents often list every elective option, more than the packaging rules allow. When the course's
-      // electives already meet the rules nothing is added; otherwise the rules pick from the electives found (those with their
-      // own documents first), as Pick for me does. The Add units step opens only when no such set exists.
+      // Electives, as "Let AI select them" in Add units does: every unit's prerequisites are read from Training.gov.au, the
+      // packaging rules pick a set (electives with their own documents first, then the others found in the documents, then
+      // the rest of the qualification), and prerequisites from outside the qualification are added with them. A course whose
+      // electives already meet the rules gets nothing added. Add units opens only when no set can be found or saved.
       const before = await rto<CourseDetail>("course_get", { courseId });
       const official = new Map(review.electives.map(u => [norm(u.code), u]));
+      const coreCodes = new Set(review.core.map(u => norm(u.code)));
       const isActive = (code: string) => before.units.some(u => u.isActive && norm(u.code) === norm(code));
       const current: ElectiveUnit[] = before.units.filter(u => u.isActive && u.unitType !== "core")
         .map(u => ({ code: norm(u.code), groups: official.get(norm(u.code))?.groups ?? null }));
       const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups ?? {}), groupSizes(review.electives));
-      const imported = includeOutside ? sorted.outside.filter(code => !isActive(code)) : [];
       let next: FromDocsNext = "master";
-      let picks: string[] | null = [];
+      let codes: string[] = []; let outside: string[] = []; let stuck = "";
       if (!checkElectives(rules, current).complete) {
-        const found = sorted.electives.map(u => u.code).filter(code => !isActive(code));
-        const ordered = [...found.filter(code => docsByUnit.has(code)), ...found.filter(code => !docsByUnit.has(code))];
-        picks = autoPickElectives(rules, ordered.map(code => ({ code, groups: official.get(code)?.groups ?? [], prerequisites: [] })), current, isActive);
-      }
-      const codes = picks ?? [];
-      if (codes.length || imported.length) {
-        setSyncing("Adding the units…");
-        let done = false; let failure = "";
-        for (const extra of imported.length ? [imported, []] : [[]]) {
-          if (!codes.length && !extra.length) continue;
-          try { await tga({ action: "add_units", courseId, codes, imported: extra }); done = true; lines.push(`${review.code}: core units and ${codes.length + extra.length} elective${codes.length + extra.length === 1 ? "" : "s"} from the documents saved.`); break; }
-          catch (e) { failure = e instanceof Error ? e.message : "error"; }
+        setSyncing("Reading the units' prerequisites…");
+        const prereqs = await readPrerequisites(review.electives.map(u => norm(u.code)));
+        const found = sorted.electives.map(u => u.code);
+        const ordered = [...new Set([...found.filter(c => docsByUnit.has(c)), ...found, ...review.electives.map(u => norm(u.code))])].filter(c => !isActive(c));
+        const picks = autoPickElectives(rules, ordered.map(code => ({ code, groups: official.get(code)?.groups ?? [], prerequisites: prereqs.get(code) ?? [] })), current, isActive);
+        if (!picks) stuck = `the packaging rules could not be met from ${review.code}'s electives`;
+        else {
+          codes = picks;
+          // Prerequisites of the picked units that are neither in the qualification nor on the course: added as outside units.
+          const have = (code: string) => isActive(code) || coreCodes.has(code) || codes.includes(code) || outside.includes(code);
+          let queue = picks.flatMap(c => prereqs.get(c) ?? []).map(norm);
+          for (let round = 0; queue.length && round < 4; round++) {
+            const extra = [...new Set(queue.filter(c => !have(c) && !official.has(c)))];
+            outside = [...outside, ...extra];
+            queue = [...(await readPrerequisites(extra)).values()].flat().map(norm);
+          }
         }
-        if (!done) { next = "units"; lines.push(`${review.code}: core units saved; the electives were not added (${failure}) Choose them in the Add units step.`); }
-      } else if (picks === null) {
-        next = "units"; lines.push(`${review.code}: core units saved. The electives in the documents do not make a set that meets the packaging rules: choose them in the Add units step.`);
-      } else lines.push(`${review.code}: units saved (the course's electives already meet the packaging rules).`);
+      }
+      const chosenOutside = includeOutside ? sorted.outside.filter(c => !isActive(c) && !outside.includes(c)) : [];
+      if (!stuck && (codes.length || outside.length || chosenOutside.length)) {
+        setSyncing("Adding the units…");
+        let failure = "";
+        for (const extra of chosenOutside.length ? [chosenOutside, []] : [[]]) {
+          try {
+            await tga({ action: "add_units", courseId, codes, imported: [...outside, ...extra], attested: rules.unchecked.length > 0 && attested });
+            const n = codes.length + outside.length + extra.length;
+            lines.push(`${review.code}: core units and ${n} elective${n === 1 ? "" : "s"} saved (${[...codes, ...outside, ...extra].join(", ")}).`);
+            failure = ""; break;
+          } catch (e) { failure = e instanceof Error ? e.message : "error"; }
+        }
+        if (failure) stuck = failure;
+      } else if (!stuck) lines.push(`${review.code}: units saved (the course's electives already meet the packaging rules).`);
+      if (stuck) { next = "units"; lines.push(`${review.code}: core units saved; electives not added: ${stuck}. Choose them in the Add units step.`); }
       const detail = await rto<CourseDetail>("course_get", { courseId });
       if (mappedCount) {
         setSyncing("Saving the documents to their units…");
@@ -364,6 +399,9 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
         </div>
         {sorted.outside.length ? <label className="flex items-center gap-2"><input type="checkbox" checked={includeOutside} disabled={!!syncing} onChange={e => setIncludeOutside(e.target.checked)} />
           Also add {sorted.outside.join(", ")} (outside the qualification) as imported elective{sorted.outside.length === 1 ? "" : "s"}, checked on Training.gov.au</label> : null}
+        {uncheckedRules.length ? <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">
+          <input type="checkbox" className="mt-0.5" checked={attested} disabled={!!syncing} onChange={e => setAttested(e.target.checked)} />
+          <span>Part of the packaging rules cannot be checked automatically ({uncheckedRules.join(" ")}). I confirm the electives follow the official packaging rules.</span></label> : null}
       </div> : null}
 
       {files.length ? <div className="space-y-1">

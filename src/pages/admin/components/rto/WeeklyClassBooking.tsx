@@ -191,6 +191,14 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
     const day = DAY_NAMES[r.weekday - 1];
     const same = list.find(o => o !== r && filled(o) && o.weekday === r.weekday && o.start && o.end && toMin(o.start) < e && toMin(o.end) > s);
     if (same) return `Overlaps the other class on ${day} (${clock(same.start)} – ${clock(same.end)}).`;
+    // The other draft week (the CoE week, on the VoE screen) runs on the same dates: its rooms and trainers are taken then.
+    // Without this the VoE auto-fill reused the CoE room / trainer and Finish failed on the server (owner, 2026-11-23).
+    const other = draft?.others?.sessions ?? [];
+    const otherAt = (match: (o: (typeof other)[number]) => boolean) => other.find(o => match(o) && o.weekday === r.weekday && toMin(o.startTime) < e && toMin(o.endTime) > s);
+    const roomOther = otherAt(o => o.roomId === r.roomId);
+    if (roomOther) return `The room is used by the CoE timetable on ${day} ${clock(roomOther.startTime.slice(0, 5))} – ${clock(roomOther.endTime.slice(0, 5))}.`;
+    const trainerOther = otherAt(o => o.trainerId === r.trainerId);
+    if (trainerOther) return `The trainer teaches the CoE timetable on ${day} ${clock(trainerOther.startTime.slice(0, 5))} – ${clock(trainerOther.endTime.slice(0, 5))}.`;
     const rh = roomHours[r.roomId];
     if (rh && rh.avail.length && !covers(rh.avail, r.weekday, s, e)) return `The room is not open on ${day} ${clock(r.start)} – ${clock(r.end)} (Bookings › Availability).`;
     if (rh && elsewhere(rh.uses, r.weekday, s, e)) return `Another intake uses the room on ${day} then.`;

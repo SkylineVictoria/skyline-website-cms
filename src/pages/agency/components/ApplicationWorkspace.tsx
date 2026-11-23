@@ -1,5 +1,6 @@
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, useLayoutEffect } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, useLayoutEffect } from "react";
+import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import AddressSearch from "@/components/shared/wizard/AddressSearch";
 import { useLocation, useNavigate } from "react-router-dom";
 import { openDeclarationKey } from "@/pages/agency/lib/wizardConfig";
@@ -595,6 +596,21 @@ export default function ApplicationWorkspace({
     await flushApplicationEdits(application.id);
   }, [enqueueSave, application.id]);
 
+  /** A form control's current text (uncontrolled form). */
+  const fieldValue = (name: string) => String((formRef.current?.elements.namedItem(name) as HTMLInputElement | null)?.value ?? "");
+  /** Puts a USI found or created by the USI Registry into the USI field as if typed (the draft saves it; has_usi becomes Yes). */
+  const fillUsi = useCallback((found: string) => {
+    const form = formRef.current;
+    const yes = form?.querySelector<HTMLInputElement>('input[name="has_usi"][value="Yes"]');
+    if (yes && !yes.checked) yes.click();
+    const input = form?.elements.namedItem("usi_number") as HTMLInputElement | null;
+    if (input) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, found);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    setValues((prev) => ({ ...prev, usi_number: found, has_usi: "Yes" }));
+  }, []);
+
   useEffect(() => {
     const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(flushSave());
     window.addEventListener("portal-before-scope-switch", flush);
@@ -645,7 +661,7 @@ export default function ApplicationWorkspace({
       && (documentFields.has(editedName) || derivedFields.has(editedName) || prefilledFields.has(editedName))) {
       setUnlockedFields((prev) => (prev.has(editedName) ? prev : new Set(prev).add(editedName)));
     }
-    if (target?.name && (target.type === "radio" || target.type === "select-one")) {
+    if (target?.name && (target.type === "radio" || target.type === "select-one" || target.name === "usi_number")) {
       setValues((prev) => ({ ...prev, [target.name]: target.value }));
     }
     window.requestAnimationFrame(() => computeProgress());
@@ -1538,6 +1554,16 @@ export default function ApplicationWorkspace({
       return <input key={field.name} type="hidden" name={field.name} defaultValue={Array.isArray(kept) ? kept.join(", ") : String(kept ?? "")} />;
     }
     const autoFilled = !readOnly && !fixedAustralia && field.type !== "file" && isAutoFilled(field.name);
+    // USI-SERVICE: Verify / find / create the USI right under the field (the server reads the saved name and date of birth).
+    if (field.name === "usi_number" && !hiddenField(field.name)) {
+      return (
+        <Fragment key={field.name}>
+          {renderFieldBody(field, locked, autoFilled, fixedAustralia, marks, false)}
+          <UsiPanel applicationId={application.id} usi={values.usi_number ?? ""} onUsi={fillUsi} readOnly={readOnly} beforeCall={readOnly ? undefined : flushSave}
+            documentPrefill={() => ({ visa: { PassportNumber: fieldValue("passport_number") } })} />
+        </Fragment>
+      );
+    }
     return renderFieldBody(field, locked, autoFilled, fixedAustralia, marks, hiddenField(field.name));
   };
 

@@ -623,10 +623,12 @@ function parsePassportVisual(text: string): Record<string, string> {
   );
   if (expiry) out.passport_expiry = expiry;
 
-  const birthCountry = matchCountry(
-    valueFor(/place\s*of\s*birth|lieu\s*de\s*naissance|geburtsort|lugar\s*de\s*nacimiento|luogo\s*di\s*nascita|geboorteplaats/i),
-  );
+  const placeOfBirth = valueFor(/place\s*of\s*birth|lieu\s*de\s*naissance|geburtsort|lugar\s*de\s*nacimiento|luogo\s*di\s*nascita|geboorteplaats/i);
+  const birthCountry = matchCountry(placeOfBirth);
   if (birthCountry) out.birth_country = birthCountry;
+  // The town as printed ("AHMEDABAD, GUJARAT"), unless the line is only a country: the USI needs the town or city of birth.
+  const place = placeOfBirth.replace(/\s+/g, " ").trim();
+  if (place && (!birthCountry || place.includes(","))) out.place_of_birth = place.slice(0, 80);
 
   const sexRaw = valueFor(/\bsex\b|sexe|geschlecht|sexo|sesso|geslacht/i).toUpperCase();
   if (/^M\b/.test(sexRaw) || /\bMALE\b/.test(sexRaw)) {

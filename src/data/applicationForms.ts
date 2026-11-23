@@ -111,6 +111,8 @@ export const enrolSections: AppSection[] = [
       { name: "citizenship", label: "Country of Citizenship", type: "select", required: true, options: countries },
       { name: "nationality", label: "Nationality", type: "select", required: true, options: countries },
       { name: "birth_country", label: "Country of Birth", type: "select", required: true, options: countries },
+      // USI-SERVICE (2026-11-23): finding or creating a USI needs the town or city of birth (passport scans fill place_of_birth).
+      { name: "place_of_birth", label: "Town / City of Birth", type: "text", description: "As on the passport. Needed to find or create the student's USI." },
       { name: "passport_number", label: "Passport Number", type: "text", required: true },
       { name: "passport_expiry", label: "Passport Expiry Date", type: "date", required: true },
     ],

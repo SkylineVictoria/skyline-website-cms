@@ -714,7 +714,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         <>
           <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
             <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
-              onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} />
+              onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId} />
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>
         </>

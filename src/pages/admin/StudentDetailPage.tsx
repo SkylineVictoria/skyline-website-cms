@@ -13,6 +13,7 @@ import StudentOffice365Panel from "@/pages/admin/components/StudentOffice365Pane
 import StudentProgressPanel from "@/pages/admin/assessments/panels/StudentProgressPanel";
 import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import ApplicationsList from "@/pages/admin/components/ApplicationsList";
+import ReAddToIntake from "@/pages/admin/components/ReAddToIntake";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import { getStudent, sendStudentInvitation, studentLoginLabel, type StudentDetail } from "@/pages/admin/lib/businessData";
 import { formatDate } from "@/pages/agency/lib/portalData";
@@ -24,6 +25,7 @@ export default function StudentDetailPage() {
   const [student, setStudent] = useState<StudentDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [error, setError] = useState("");
+  const [studyKey, setStudyKey] = useState(0);
   const [inviting, setInviting] = useState(false);
   const [reload, setReload] = useState(0);
 
@@ -102,7 +104,9 @@ export default function StudentDetailPage() {
           </dl>
         </Card>
       </div>
-      <div className="mt-4"><StudentStudyPanel studentId={id} /></div>
+      {/* Re-add to intake (20261123191517): after a course was deleted and created again, or to join another intake. */}
+      <div className="mt-4 flex justify-end"><ReAddToIntake studentId={id} onDone={() => setStudyKey((k) => k + 1)} /></div>
+      <div className="mt-2"><StudentStudyPanel key={studyKey} studentId={id} /></div>
       <div className="mt-4"><StudentTimelinePanel studentId={id} /></div>
       <div className="mt-4"><Card className="p-5"><h2 className="mb-2 font-heading text-base font-semibold text-foreground-900">Attendance</h2><AttendanceSummary studentId={id} /></Card></div>
       <div className="mt-4"><StudentProgressPanel studentId={id} /></div>

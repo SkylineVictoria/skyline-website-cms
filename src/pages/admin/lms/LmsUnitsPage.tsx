@@ -135,7 +135,10 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
       // A queued file belongs to the unit the AI named (its code on this course), else to its only matching unit.
       const byCode = new Map((details.find(d => d.course.id === courseId)?.units ?? []).filter(u => u.id).map(u => [u.code.trim().toUpperCase(), u.id as string]));
       for (const file of pending) {
-        const unitId = (file.result?.unitCode && byCode.get(file.result.unitCode.trim().toUpperCase())) || (file.matches?.length === 1 ? file.matches[0].id : "");
+        // A file the AI has not read yet has no unit code: the unit code in its file or folder name is used instead.
+        const fromPath = `${file.source_path ?? ""}/${file.name}`.toUpperCase().match(/(?<![A-Z0-9])[A-Z]{5,8}\d{3,4}[A-Z]?(?![A-Z0-9])/g)?.find(code => byCode.has(code));
+        const unitId = (file.result?.unitCode && byCode.get(file.result.unitCode.trim().toUpperCase())) || (file.matches?.length === 1 ? file.matches[0].id : "")
+          || (fromPath ? byCode.get(fromPath) ?? "" : "");
         if (unitId) out[unitId]?.pending.push({ name: file.result?.title || file.name, state: file.state });
       }
       setDocs(out);

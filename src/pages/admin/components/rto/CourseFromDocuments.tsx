@@ -11,7 +11,7 @@ import { Button, Modal } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { autoPickElectives, checkElectives, groupSizes, parseElectiveRules, type ElectiveUnit } from "../../../../../supabase/functions/tga-course-import/packaging";
-import { bulkAdmin, bulkBucket, categories, categoryLabel, type Audience, type BulkPolicy, type Category, type ImportFile } from "@/pages/admin/lib/bulkResources";
+import { bulkAdmin, categories, categoryLabel, type BulkPolicy, type Category } from "@/pages/admin/lib/bulkResources";
 import { loadUnitHours, rto, saveUnitHours, suggestHours, weeksForHours, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 
 interface Review {
@@ -121,12 +121,8 @@ function guessCategory(path: string): Category {
   if (/assess|task|quiz|test|exam|project|portfolio/.test(name)) return "assessment";
   return "learning";
 }
-/** Who may see a resource of each category: learners see learning material and self-assessments; assessment packs staff;
- *  assessor material assessors only (the server holds anything not student-safe for assessors whatever is sent). */
-const AUDIENCE: Record<Category, Audience> = { learning: "student_staff", self_assessment: "student_staff", assessment: "staff", assessor: "assessor" };
-const pause = (ms: number) => new Promise(done => window.setTimeout(done, ms));
-/** How long Sync waits for the AI reader before leaving the rest for AI Bulk Upload. */
-const AI_WAIT_MS = 4 * 60 * 1000;
+/** Students see learning material and self-assessments; assessment packs and assessor material stay staff only. */
+const STUDENT_VISIBLE: Record<Category, boolean> = { learning: true, self_assessment: true, assessment: false, assessor: false };
 
 /** The unit a document belongs to: a unit code in its file or folder name (the deepest wins), else the one unit its text is
  *  about (mentioned at least twice and twice as often as any other). A document naming many units is a course document. */
@@ -259,60 +255,6 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
   }
 
   /** Each mapped document into its unit's Learning content (staff only); a file already there by name is not added again. */
-  /** The documents as unit Resources under their categories (the AI Bulk Upload pipeline): sent, read by the AI reader,
-   *  then approved with the unit and category chosen here. A file the reader has not finished within AI_WAIT_MS is left in
-   *  AI Bulk Upload to approve (the Units list shows it as Not approved yet). */
-  async function saveResources(targets: { f: ReadFile; code: string; unitId: string }[], out: Outcome[]) {
-    if (!policy) return;
-    const fits = targets.filter(t => t.f.bytes && policy.formats.includes((t.f.path.split(".").pop() ?? "").toLowerCase())
-      && t.f.bytes.byteLength > 0 && t.f.bytes.byteLength <= Math.min(25, policy.max_mib) * 1048576);
-    for (const t of targets.filter(t => !fits.includes(t))) out.push({ file: t.f.path, unit: t.code, status: "failed", reason: "file type or size is outside the AI Bulk Upload policy" });
-    for (let start = 0; start < fits.length; start += Math.max(1, policy.max_files)) {
-      const batch = fits.slice(start, start + Math.max(1, policy.max_files));
-      setSyncing(`Uploading ${batch.length} document${batch.length === 1 ? "" : "s"}…`);
-      const job = await bulkAdmin<{ id: string; files: ImportFile[] }>("begin", { files: batch.map(t => ({ name: baseName(t.f.path), path: t.f.path, bytes: t.f.bytes!.byteLength })) });
-      const rowFor = new Map(job.files.map((row, i) => [row.id, batch[i]]));
-      const queue = [...job.files];
-      const failed = new Set<string>();
-      await Promise.all(Array.from({ length: 3 }, async () => {
-        while (queue.length) {
-          const row = queue.shift()!;
-          const t = rowFor.get(row.id)!;
-          try {
-            const up = await supabase.storage.from(bulkBucket).upload(row.object_path, new Blob([t.f.bytes!.slice()]), { upsert: false, contentType: "application/octet-stream" });
-            if (up.error) throw up.error;
-            await bulkAdmin("uploaded", { job: job.id, id: row.id });
-          } catch (e) { failed.add(row.id); out.push({ file: t.f.path, unit: t.code, status: "failed", reason: e instanceof Error ? e.message : "upload failed" }); }
-        }
-      }));
-      // Wait for the AI reader (it runs every minute on the server).
-      const until = Date.now() + AI_WAIT_MS;
-      let rows: ImportFile[] = [];
-      for (;;) {
-        rows = await bulkAdmin<ImportFile[]>("detail", { job: job.id });
-        const waiting = rows.filter(r => !failed.has(r.id) && !["review", "failed", "excluded", "imported"].includes(r.state));
-        setSyncing(`The AI reader is reading the documents: ${rows.length - waiting.length - failed.size} of ${rows.length - failed.size} done…`);
-        if (!waiting.length || Date.now() > until) break;
-        await pause(5000);
-      }
-      const ready = rows.filter(r => r.state === "review");
-      const items = ready.map(r => { const t = rowFor.get(r.id)!; const cat = categoryOf(t.f); return { id: r.id, unit: t.unitId, category: cat, audience: AUDIENCE[cat], reviewed: true, skipExisting: true }; });
-      const results = items.length ? await bulkAdmin<{ id: string; ok: boolean; error?: string }[]>("approve", { job: job.id, items }) : [];
-      const byId = new Map(results.map(r => [r.id, r]));
-      for (const r of rows) {
-        if (failed.has(r.id)) continue;
-        const t = rowFor.get(r.id)!;
-        const label = categoryLabel(categoryOf(t.f), policy);
-        const result = byId.get(r.id);
-        if (result?.ok) out.push({ file: t.f.path, unit: t.code, status: "saved", reason: label });
-        else if (result) out.push({ file: t.f.path, unit: t.code, status: "failed", reason: result.error ?? "not approved" });
-        else if (r.state === "failed") out.push({ file: t.f.path, unit: t.code, status: "failed", reason: `the AI reader could not read it${r.failure ? ` (${r.failure})` : ""}: retry in AI Bulk Upload` });
-        else if (r.state === "imported" || r.state === "excluded") out.push({ file: t.f.path, unit: t.code, status: "already" });
-        else out.push({ file: t.f.path, unit: t.code, status: "failed", reason: `still being read: approve it as ${label} in AI Bulk Upload when it is ready` });
-      }
-    }
-  }
-
   async function saveDocuments(detail: CourseDetail): Promise<Outcome[]> {
     const ids = new Map(detail.units.filter(u => u.id && u.isActive).map(u => [norm(u.code), u.id as string]));
     const out: Outcome[] = [];
@@ -330,12 +272,9 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
       if (target) byUnit.set(target, [...(byUnit.get(target) ?? []), f]);
       else out.push({ file: f.path, unit: "", status: "unmatched", reason: "no unit code in its file or folder name or text" });
     }
-    const resources: { f: ReadFile; code: string; unitId: string }[] = [];
     for (const [code, list] of byUnit) {
       const unitId = ids.get(code);
       if (!unitId) { out.push(...list.map(f => ({ file: f.path, unit: code, status: "failed" as const, reason: `${code} is not a unit of this course` }))); continue; }
-      // With AI Bulk Upload available, every document goes to the unit's Resources under its category.
-      if (policy) { resources.push(...list.map(f => ({ f, code, unitId }))); continue; }
       const { data: have } = await supabase.from("unit_contents").select("file_name,sort").eq("unit_id", unitId);
       const names = new Set((have ?? []).map(r => r.file_name as string | null));
       let sort = Math.max(-1, ...(have ?? []).map(r => Number(r.sort) || 0));
@@ -352,14 +291,13 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
         const up = await supabase.storage.from("unit-content").upload(path, new Blob([f.bytes.slice()], { type: mime }), { contentType: mime, upsert: false });
         if (up.error) { out.push({ file: f.path, unit: code, status: "failed", reason: up.error.message }); continue; }
         const { error } = await supabase.from("unit_contents").insert({
-          unit_id: unitId, kind: "file", title: fileName.replace(/\.[a-z0-9]+$/i, "").slice(0, 200) || fileName, body: "", url: null, storage_path: path,
-          file_name: fileName, mime_type: mime, size_bytes: f.bytes.byteLength, sort: ++sort, visible_to_students: false,
+          unit_id: unitId, kind: "file", title: `${categoryLabel(categoryOf(f), policy)}: ${fileName.replace(/\.[a-z0-9]+$/i, "") || fileName}`.slice(0, 200), body: "", url: null, storage_path: path,
+          file_name: fileName, mime_type: mime, size_bytes: f.bytes.byteLength, sort: ++sort, visible_to_students: STUDENT_VISIBLE[categoryOf(f)],
         });
         if (error) { await supabase.storage.from("unit-content").remove([path]); out.push({ file: f.path, unit: code, status: "failed", reason: error.message }); continue; }
-        names.add(fileName); out.push({ file: f.path, unit: code, status: "saved", reason: "Learning content" });
+        names.add(fileName); out.push({ file: f.path, unit: code, status: "saved", reason: `Learning content · ${categoryLabel(categoryOf(f), policy)}` });
       }
     }
-    if (resources.length) await saveResources(resources, out);
     return out;
   }
 
@@ -497,7 +435,7 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
           </tr>)}</tbody>
         </table>
       </div> : null}
-      <p className="text-foreground-600">Saved documents are on each unit's Resources under their category (or Learning content when AI Bulk Upload is not available to you). They show in LMS › Units › Documents.</p>
+      <p className="text-foreground-600">Saved documents are on each unit's Learning content, titled with their category (students see only Learning Materials and Self-Assessment). They show in LMS › Units › Documents.</p>
     </div> : <div className="space-y-4 text-sm">
       <p className="text-foreground-600">Upload the course documents (training plan, unit list, learner guides, assessment tools; a ZIP folder works).
         The qualification and its units are found in them and checked against Training.gov.au, and each document is matched to its unit.
@@ -529,7 +467,7 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
             <tbody>{courseUnits.map(u => <tr key={u.code} className="border-t border-background-100 align-top">
               <td className="px-3 py-1.5 font-semibold">{u.code}</td><td className="px-3 py-1.5">{u.name}</td>
               <td className="px-3 py-1.5 text-xs text-foreground-500">{u.tag}</td>
-              <td className="px-3 py-1.5 text-xs">{(docsByUnit.get(u.code) ?? []).map(f => <div key={f.name}>{baseName(f.path)}{policy ? <span className="text-foreground-500"> · {categoryLabel(categoryOf(f), policy)}</span> : null}</div>)}</td>
+              <td className="px-3 py-1.5 text-xs">{(docsByUnit.get(u.code) ?? []).map(f => <div key={f.name}>{baseName(f.path)}<span className="text-foreground-500"> · {categoryLabel(categoryOf(f), policy)}</span></div>)}</td>
             </tr>)}</tbody>
           </table>
         </div>
@@ -551,10 +489,10 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
                 <option value={NONE}>Course document (not on a unit)</option>
                 {courseUnits.map(u => <option key={u.code} value={u.code}>{u.code}{u.name ? ` · ${u.name}` : ""}</option>)}
               </select>
-              {policy ? <select aria-label={`Category for ${f.name}`} className="rounded-md border border-background-300 px-2 py-1 text-xs" disabled={!!syncing || !unitOf(f)}
+              {<select aria-label={`Category for ${f.name}`} className="rounded-md border border-background-300 px-2 py-1 text-xs" disabled={!!syncing || !unitOf(f)}
                 value={categoryOf(f)} onChange={e => setCategory(c => ({ ...c, [f.name]: e.target.value as Category }))}>
                 {categories.map(c => <option key={c} value={c}>{categoryLabel(c, policy)}</option>)}
-              </select> : null}
+              </select>}
             </span>
             : <span className="text-foreground-500">{new Set(codesIn(`${f.path}\n${f.text}`, UNIT)).size} unit codes</span>}
         </li>)}</ul>

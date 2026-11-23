@@ -82,5 +82,29 @@
     "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
     "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
     "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.practice_enabled": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123173000_student_practice.sql",
+    "enforcement": "supabase/migrations/20261123173000_student_practice.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.practice_daily_batches": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123173000_student_practice.sql",
+    "enforcement": "supabase/migrations/20261123173000_student_practice.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.practice_level_evidence": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123173000_student_practice.sql",
+    "enforcement": "supabase/migrations/20261123173000_student_practice.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.practice_level_accuracy": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123173000_student_practice.sql",
+    "enforcement": "supabase/migrations/20261123173000_student_practice.sql",
+    "test": "scripts/test-business-rules.mjs"
   }
 }

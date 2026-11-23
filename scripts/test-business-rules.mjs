@@ -348,6 +348,71 @@ try {
   await request("publish", params(draft));
   assert((await bulk("policy")).confidence === 99, "Publishing changes the confidence threshold without a deployment");
 
+  await db.exec(`reset role;
+    create table public.enrollment_students(id uuid primary key);
+    insert into public.enrollment_students values ('${approver}'), ('${trainer}');
+    alter table public.asm_assignments add column tenant_id uuid, add column status text default 'open', add column due_at timestamptz;
+    alter table public.asm_assessments add column title text default 'Workplace safety';
+    create function public.asm_assignment_eligible(uuid) returns setof uuid language sql
+      as $$ select '${approver}'::uuid where exists(select 1 from public.asm_assignments where id=$1) $$;
+    alter table public.unit_contents add column body text default '', add column file_name text, add column visible_to_students boolean default true,
+      add column updated_at timestamptz default now();
+    update public.unit_contents set visible_to_students=false;
+    insert into public.unit_contents(id,unit_id,kind,title,body) values
+      (991,'unit-a','text','Safety guide','Reporting hazards helps you prevent incidents.'),
+      (992,'unit-a','text','Assessor Resources: Marking keys','This must never be used to generate practice.');
+  `);
+  await db.exec(await readFile(new URL("../supabase/migrations/20261123173000_student_practice.sql", import.meta.url), "utf8"));
+  await db.exec("set role authenticated");
+  const practice = async (action, input = {}) =>
+    (await db.query("select public.student_practice($1,$2::jsonb) result", [action,input])).rows[0].result;
+  const practiceScope = { unitId:"unit-a", difficulty:"easy" };
+  await setActor(approver);
+  await rejects(() => practice("next",practiceScope),"22023","has not been enabled","Practice disabled while its rules are drafts");
+  await rejects(() => db.exec("select * from public.lms_practice_questions"),"42501","permission denied","Student cannot read hidden practice answer keys");
+  await setActor(admin);
+  const practiceRules = ["lms.practice_enabled","lms.practice_daily_batches","lms.practice_level_evidence","lms.practice_level_accuracy"];
+  for (const id of practiceRules) {
+    const rule = (await request("list")).rules.find(row => row.identifier === id);
+    await request("publish",params(rule));
+  }
+  await setActor(approver);
+  assert((await practice("catalogue")).units.length===1,"Practice catalogue is scoped to enrolled units");
+  assert((await practice("next",practiceScope)).state==="generate","Published learner material can start a practice batch");
+  const lease = await practice("prepare",practiceScope);
+  assert(lease.state==="reserved" && lease.source.title!=="Assessor Resources: Marking keys","Practice only reserves learner-visible materials");
+  assert((await practice("prepare",practiceScope)).state==="generating","Concurrent generation leases are fenced");
+  await rejects(() => db.query("select public.lms_practice_finish($1,'[]')",[lease.requestId]),"42501","permission denied","Students cannot manufacture generated questions");
+  await db.exec("reset role");
+  const candidate = {prompt:"Why report hazards?",choices:["To prevent incidents","To delay work","To erase records","To skip training"],correct:0,
+    explanation:"Reporting helps prevent incidents.",evidence:"Reporting hazards helps you prevent incidents.",topic:"Hazard reporting"};
+  const finishPractice = (id,questions) => db.query("select public.lms_practice_finish($1,$2::jsonb) result",[id,JSON.stringify(questions)]);
+  assert((await finishPractice(lease.requestId,[candidate,candidate])).rows[0].result===1,"Worker saves one copy of a repeated practice question");
+  await db.exec("set role authenticated");
+  const served = (await practice("next",practiceScope)).question;
+  assert(served?.feedback===null && served?.correct===undefined,"Answer and feedback withheld before submission");
+  await setActor(trainer);
+  await rejects(() => practice("answer",{...practiceScope,questionId:served.id,selected:0}),"42501","enrolled unit","Unenrolled student cannot submit another student's answer");
+  await setActor(approver);
+  const feedback = await practice("answer",{...practiceScope,questionId:served.id,selected:0});
+  assert(feedback.feedback.correct===0 && feedback.feedback.selected===0,"Answer submission returns marked feedback");
+  assert((await practice("answer",{...practiceScope,questionId:served.id,selected:1})).feedback.selected===0,"A repeated submission cannot change the recorded answer");
+  assert((await practice("bookmark",{...practiceScope,questionId:served.id,saved:true})).saved,"Question bookmarks persist");
+  const studentProgress = await practice("progress",practiceScope);
+  assert(studentProgress.answered===1 && studentProgress.accuracy===100 && studentProgress.saved.length===1,"Progress reflects recorded answers and saved questions");
+  assert((await practice("next",practiceScope)).state==="generate","Practice continues with new questions after the bank is exhausted");
+  await rejects(() => practice("next",{...practiceScope,assignmentId:"00000000-0000-4000-8000-000000000000"}),"42501","not assigned","Assessment practice rejects an unassigned id");
+  await db.exec("reset role");
+  const assignment = (await db.query("select id from public.asm_assignments limit 1")).rows[0].id;
+  await db.exec("set role authenticated");
+  assert((await practice("prepare",{assignmentId:assignment,difficulty:"advanced"})).assessmentTitle==="Workplace safety",
+    "Assigned assessment practice resolves the authorised unit and title");
+  await setActor(admin);
+  await bulk("unpublish",{id:next.id});
+  await db.exec("reset role; update public.unit_contents set visible_to_students=false where id=991; set role authenticated");
+  await setActor(approver);
+  await rejects(() => practice("recall",{...practiceScope,questionId:served.id}),"42501","no longer available","Removing student access to the source hides its practice questions");
+
 } finally {
   await db.close();
 }

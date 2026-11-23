@@ -328,5 +328,56 @@
     "fingerprints": [
       "a26882494b7d65ef4a0726f8e787fb383f130be7f5137992a81e2825d74d5711"
     ]
+  },
+  {
+    "type": "business",
+    "id": "lms.practice_daily_batches",
+    "reason": "Registers or applies the published daily generation allowance.",
+    "fingerprints": [
+      "5fcfd1138826214848c0053c558412b2bf55e32c448c430472ec563f9d7be7c8",
+      "78238368c1594fcb1c14aaec2697a8d69dc95e5f5a9fa6651c3d4affb3f3e3c9",
+      "a669a3ecc7a5f14e1134b1d317289714cb1654607d0e6542f4c5889f6f47ea27"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "student-practice-interface",
+    "reason": "Defines question shape, user interface, provider response handling or stored practice results.",
+    "fingerprints": [
+      "1e60827156a0860feb57e7b3a89dcdb162de0bdfadce6af2ece932b3b9c8d87d",
+      "2c2f7a0a6c640769b7971119c6df6cf321d7f7fefe7d17fd5d91ccb4c690465b",
+      "3b2daddfce9961002994fed8f5cd39f7b696cf1fd052fa147b7f23489c2aeb10",
+      "42fbd304dfab8b55b089a5aec84409ff7b7595ebba8b502a0db4a51f702a3f76",
+      "4a2be8fda4b472086d3b32b758b96555d88fbcaac00ef8eaa7c5ed46bf359362",
+      "5897fb21f3662753df5a925f006473629726d19c2df5a2dd2e2fb886a93de960",
+      "5ef92ea1518bdced48eb0fdb0c80ba98579dd34894e1a6d9d957cf639dd5867a",
+      "65bf64b3b728e2747f83e248c62e2a771fe9a941f88fed83224aaf8ab6dab052",
+      "6729223702222b3957b7b9fcb51b613937805fbc9f73d550a6880974995643e4",
+      "8a8197d1688a6e9c71299f1fe8befad1c8397371a16dc9fd05c974bed829a54b",
+      "94397388bb97f4d8a379de0f1ac6cd4130237c907f1e0696d0fa2a1a797cd954",
+      "9574c55c79d96bd39c5b0380b884652429a3b676b474b14b809340c29967aa29",
+      "a26c16386a0fe4be9a1d6e53ad8a5531fbf945d8ddfb8d07a5d1c81f8b0356ad",
+      "ad2a002db95d146fb9d08aa67583115d035e4bd45ea06ba81532f4eb0b9c8d22",
+      "af141d4e3b38848f9f659edacc049555cba6614cb992ffe499b6254ed0f5dea8",
+      "b256a6c9f0a61e28adb794c93adbe29942825b23ecb1e8a92a5daf19a112d07a",
+      "c8d4173ff14da8feccbedb9286a01ac7659de0b953eb1d43910a9a64b3168c67",
+      "c95b6f0d982a084799018ce173a401cd972c71886ab9ad4b775ec897379dd73a",
+      "d6506207b3bf3cf31a4d5884a767e527d9b59641cb79ebcdc87edda07bbe929d",
+      "e1bfedb0f47d9a6554c8ebb8a3eb44eab63df3ce4805891bfd3522b9fcf33333",
+      "f4b84e960ea02949d6c10c9dd769d7911d7285ee06b688c92a0df60182a973a8"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "student-practice-access",
+    "reason": "Applies existing student access, response boundaries, or request lease fencing.",
+    "fingerprints": [
+      "31d858569e35c3749cc9d7186b83dc96d525aacd06960f40c59025abd49464ee",
+      "36f51db3966f91de00bac5797541d0db354a8dd5c246d40ae0c4e3af7c58d797",
+      "4724b5500f90e2f8df651f073b3109f76d99f3cb4746bc2d82995dcdf18c3df6",
+      "b4f7a42acd60aca87751f52182d862cffb07b0834db963e31c9dd78963baa2f1",
+      "cb359579ee600ef84d374428cf90baf92af14a6695be742c1fb36cbc599ec435",
+      "f94bba717e3e7d56607468106d5543a3b72dce1b212bcc6ac95d11e01348e0ae"
+    ]
   }
 ]

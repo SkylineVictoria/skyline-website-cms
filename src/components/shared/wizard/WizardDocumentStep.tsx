@@ -40,6 +40,10 @@ interface Props {
   camera?: boolean;
   /** The form's label for a value read from the document; given, the values read are listed under the file. */
   fieldLabel?: (key: string) => string | undefined;
+  /** When given, each value read from the document is an editable box (a misread can be corrected here, once). */
+  onEditValue?: (key: string, value: string) => void;
+  /** A value corrected earlier (shown instead of what was read). */
+  editedValue?: (key: string) => string | undefined;
 }
 
 
@@ -51,7 +55,7 @@ function expiryNote(step: WizardStep, doc: WizardDoc): { text: string; tone: str
   return text ? { text, tone: expiryTone(expiry.status) } : null;
 }
 
-export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView, signedUrl, dropzone, camera, fieldLabel }: Props) {
+export default function WizardDocumentStep({ step, docs, pending, dismissed, onPickFiles, onRetryUpload, onDropUpload, onRetryDoc, onDismissDoc, onRemoveDoc, logView, signedUrl, dropzone, camera, fieldLabel, onEditValue, editedValue }: Props) {
   const [dragging, setDragging] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<WizardDoc | null>(null);
   const [removing, setRemoving] = useState("");
@@ -141,7 +145,7 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
   );
 
   const readValues = (doc: WizardDoc) => fieldLabel && doc.extraction === "done"
-    ? Object.entries(doc.extracted ?? {}).filter(([key, value]) => String(value ?? "").trim() && fieldLabel(key)).map(([key, value]) => [fieldLabel(key) as string, String(value)] as const)
+    ? Object.entries(doc.extracted ?? {}).filter(([key, value]) => String(value ?? "").trim() && fieldLabel(key)).map(([key, value]) => [fieldLabel(key) as string, editedValue?.(key) ?? String(value), key] as const)
     : [];
 
   return (
@@ -209,7 +213,22 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
                 {expiry ? <p className={`mt-1.5 flex items-center gap-1.5 text-xs ${expiry.tone}`}><i className="ri-time-line" aria-hidden="true" />{expiry.text}</p> : null}
                 {failed ? <ReadFailure message={doc.error ?? "We couldn’t read this document."} onRetry={() => onRetryDoc(doc)} onManual={() => onDismissDoc(doc)} /> : null}
                 {doc.extraction === "empty" ? <p className="mt-1.5 text-xs text-foreground-600">Nothing readable on this one; add the details in the form.</p> : null}
-                {values.length ? (
+                {values.length && onEditValue ? (
+                  <div className="mt-2 space-y-1.5 px-1">
+                    <p className="text-xs text-foreground-500">Check what was read and correct anything that is wrong.</p>
+                    <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-2">
+                      {values.map(([label, value, key]) => (
+                        <label key={`${key}-${value}`} className="block text-xs">
+                          <span className="text-foreground-500">{label}</span>
+                          <input defaultValue={value} name={`read-${key}`} data-testid={`read-${key}`}
+                            onBlur={(e) => { const next = e.target.value.trim(); if (next && next !== value) onEditValue(key, next); }}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+                            className="mt-0.5 w-full rounded-md border border-background-300 bg-background-50 px-2 py-1.5 text-sm text-foreground-900 outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100" />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : values.length ? (
                   <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-0.5 px-1 sm:grid-cols-2">
                     {values.map(([label, value], index) => (
                       <div key={label} className="field-filled grid min-w-0 grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 text-xs leading-5" style={{ animationDelay: `${index * 40}ms` }}>

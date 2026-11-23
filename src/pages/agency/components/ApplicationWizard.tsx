@@ -641,6 +641,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (name === "course") setIntakeList(null);
     setAnswerErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
   };
+  /** A value read from a document, corrected on the document step: saved to the draft at once and used by the later screens. */
+  const [readSaveError, setReadSaveError] = useState("");
+  const correctReadValue = async (key: string, value: string) => {
+    setAnswer(key, value);
+    setReadSaveError("");
+    try {
+      await flushApplicationEdits(applicationId);
+      await getApplication(applicationId, true);
+      await saveApplicationDraft(applicationId, { data: { values: { [key]: value } }, studentName: "", studentEmail: "", intake: "", completion: 0 });
+    } catch (error) {
+      setReadSaveError(error instanceof Error ? error.message : "We could not save that correction. Try again.");
+    }
+  };
   // The course's intakes as listed (real intakes, or the fallback months): the choice must be one of them.
   const [intakeList, setIntakeList] = useState<OpenIntake[] | null>(null);
   const courseIdOf = (label: string): string | null => {
@@ -1009,6 +1022,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return (
       <>
         {uploadRejections[current.category] ? <WizardNotice tone="error">{uploadRejections[current.category]}</WizardNotice> : null}
+        {readSaveError ? <WizardNotice tone="error">{readSaveError}</WizardNotice> : null}
         {current.id === "english" && englishSaveError ? <WizardNotice tone="error">{englishSaveError}</WizardNotice> : null}
         {current.id === "visa" && visaNamesForReview.length > 0 ? <WizardNotice tone="error">Visa name review needed: {visaNamesForReview.map(item => `${item.filename}: ${item.name}`).join("; ")} differs from passport name {passportName}. Ask SLIT to verify before approval.</WizardNotice> : null}
         {current.id === "visa" && visaDocuments.some(doc => doc.extraction === "done" && visaExpiry(doc).expired) && ruleBool("admissions.visa_reject_expired", true) ? <WizardNotice tone="error">Expired visa evidence cannot satisfy the visa requirement. Upload valid evidence or request SLIT review.</WizardNotice> : null}
@@ -1027,6 +1041,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           onRemoveDoc={handleRemoveDoc}
           signedUrl={(doc) => getDocumentSignedUrl(doc.storagePath, 300)}
           fieldLabel={fieldLabel}
+          onEditValue={(key, value) => void correctReadValue(key, value)}
+          editedValue={(key) => (touchedRef.current.has(key) ? answers[key] : undefined)}
           logView={
             role === "slit_admin"
               ? (doc) => logAdminAccess(applicationId, "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category })

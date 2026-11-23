@@ -1,12 +1,12 @@
 import { PageHeading } from "@/pages/agency/components/PortalUI";
-import ClassTimetable from "@/components/timetable/ClassTimetable";
+import StudentTimetable from "@/components/timetable/StudentTimetable";
 
-/** Student portal > My timetable: this week's classes with unit, room and trainer. */
+/** Student portal > My timetable: the weekly calendar (units by week) and the daily timetable (the week of classes), as staff see them. */
 export default function StudentTimetablePage() {
   return (
     <div>
-      <PageHeading eyebrow="Timetable" title="My timetable" description="Your study plan and classes: time, unit, room and trainer. Cancelled classes are marked." />
-      <div className="mt-6"><ClassTimetable who="student" /></div>
+      <PageHeading eyebrow="Timetable" title="My timetable" description="Your weekly calendar (which unit each week) and your daily timetable (your classes, rooms and trainers)." />
+      <div className="mt-6"><StudentTimetable /></div>
     </div>
   );
 }

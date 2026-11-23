@@ -96,7 +96,7 @@ import AssessmentDetailPage from "@/pages/admin/assessments/AssessmentDetailPage
 import StudentAssessmentsPage from "@/pages/agency/assessments/page";
 import StudentAssessmentPage from "@/pages/agency/assessments/detail/page";
 import StudentLearningPage from "@/pages/agency/learning/page";
-import StudentPracticePage from "@/pages/agency/practice/page";
+import { PracticeRedirect } from "@/pages/agency/practice/page";
 import StudentTimetablePage from "@/pages/agency/timetable/page";
 import StudentMessagesPage from "@/pages/agency/messages/page";
 import StaffTimetablePage from "@/pages/staff/TimetablePage";
@@ -200,7 +200,8 @@ const routes: RouteObject[] = [
           { path: "assessments", element: <StudentAssessmentsPage /> },
           { path: "assessments/:id", element: <StudentAssessmentPage /> },
           { path: "learning", element: <StudentLearningPage /> },
-          { path: "practice", element: <StudentPracticePage /> },
+          // Practice is a tab of My learning now; old links keep working.
+          { path: "practice", element: <PracticeRedirect /> },
           { path: "timetable", element: <StudentTimetablePage /> },
           { path: "messages", element: <StudentMessagesPage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },

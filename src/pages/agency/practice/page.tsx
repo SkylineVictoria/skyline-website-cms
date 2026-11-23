@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useSearchParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { PortalEmpty, PortalError, PortalLoading } from "../components/PortalUI";
 
@@ -15,7 +15,7 @@ type Result = { question?: Question; state?: "generate" | "generating" | "no_mat
 const difficultyChoices: { id: Difficulty; label: string; icon: string }[] = [
   { id: "easy", label: "Easy", icon: "ri-seedling-line" },
   { id: "medium", label: "Medium", icon: "ri-bar-chart-line" },
-  { id: "advanced", label: "Advanced", icon: "ri-flashlight-line" },
+  { id: "advanced", label: "Hard", icon: "ri-flashlight-line" },
 ];
 const stateMessage: Partial<Record<NonNullable<Result["state"]>, string>> = {
   no_materials: "This unit needs published learning materials before you can practise.",
@@ -23,10 +23,10 @@ const stateMessage: Partial<Record<NonNullable<Result["state"]>, string>> = {
   daily_limit: "Today’s AI question allowance has been reached. You can still review saved questions.",
   generating: "New questions are already being prepared. Try again in a moment.",
 };
-const panel = "min-w-0 rounded-2xl border border-violet-100 bg-background-50 p-4 shadow-sm dark:border-background-200";
+const panel = "min-w-0 rounded-2xl border border-primary-100 bg-background-50 p-4 shadow-sm dark:border-background-200";
 const control = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm text-foreground-900 disabled:opacity-60";
-const primary = "rounded-lg bg-violet-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-800 disabled:opacity-50";
-const secondary = "rounded-lg border border-violet-200 px-3 py-2 text-sm font-semibold text-violet-800 hover:bg-violet-50 disabled:opacity-50 dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-950/40";
+const primary = "rounded-lg bg-primary-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary-800 disabled:opacity-50";
+const secondary = "rounded-lg border border-primary-200 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-50 disabled:opacity-50 dark:border-primary-800 dark:text-primary-300 dark:hover:bg-primary-950/40";
 const message = (error: unknown) => error instanceof Error ? error.message : "Practice is temporarily unavailable.";
 async function practice<T>(action: string, data: object = {}): Promise<T> {
   const result = await supabase.rpc("student_practice", { p_action: action, p_data: data });
@@ -41,7 +41,8 @@ async function requestQuestions(data: object): Promise<Result> {
   throw new Error(body?.message ?? "New questions could not be generated. Please try again.");
 }
 
-export default function StudentPracticePage() {
+/** `embedded`: shown as the Practice tab of My learning (owner, 2026-11-23: one page for learning and practice). */
+export default function StudentPracticePage({ embedded = false }: { embedded?: boolean } = {}) {
   const [params, setParams] = useSearchParams();
   const [catalogue, setCatalogue] = useState<Catalogue | null>(null);
   const [catalogueError, setCatalogueError] = useState("");
@@ -89,7 +90,8 @@ export default function StudentPracticePage() {
   const resetQuestion = () => { setQuestion(null); setChoice(null); setError(""); setNotice(""); };
   const go = (mode: "unlimited" | "assessment", nextAssignment = "") => {
     resetQuestion();
-    setParams(mode === "assessment" ? { assessment: nextAssignment } : unitId ? { unit: unitId } : {});
+    const keep = embedded ? { tab: "practice" } : {};
+    setParams(mode === "assessment" ? { ...keep, assessment: nextAssignment } : unitId ? { ...keep, unit: unitId } : keep);
   };
   const next = async () => {
     setBusy("next"); setChoice(null); setError(""); setNotice("");
@@ -137,10 +139,10 @@ export default function StudentPracticePage() {
   const hasMaterials = unit?.hasMaterials === true;
 
   return <div className="mx-auto w-full max-w-[1450px] space-y-5 pb-10">
-    <header className="flex flex-wrap items-center justify-between gap-3">
-      <h1 className="font-heading text-2xl font-bold text-violet-900 dark:text-violet-300">Practice</h1>
+    <header className={`flex flex-wrap items-center gap-3 ${embedded ? "justify-end" : "justify-between"}`}>
+      {embedded ? null : <h1 className="font-heading text-2xl font-bold text-primary-900 dark:text-primary-300">Practice</h1>}
       <nav aria-label="Learning navigation" className="flex flex-wrap items-center gap-2 text-sm font-semibold">
-        <Link className={secondary} to="/agency/learning">Learn</Link>
+        {embedded ? null : <Link className={secondary} to={unitId ? `/agency/learning?unit=${encodeURIComponent(unitId)}` : "/agency/learning"}>Learn</Link>}
         <button type="button" className={progressView ? secondary : primary} disabled={!!busy} aria-current={!progressView ? "page" : undefined}
           onClick={() => { const target = new URLSearchParams(params); target.delete("view"); setParams(target); }}>Practice</button>
         <Link className={secondary} to="/agency/assessments">Assessments</Link>
@@ -157,7 +159,7 @@ export default function StudentPracticePage() {
     {!!catalogue?.units.length && <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(11rem,1fr)_minmax(0,2.35fr)] xl:grid-cols-[minmax(11rem,1fr)_minmax(0,2.35fr)_minmax(11rem,0.95fr)]">
       <aside aria-label="Practice settings" className={panel + " space-y-5"}>
         <div className="flex items-start gap-2">
-          <i className="ri-book-open-line rounded-lg bg-violet-100 p-2 text-xl text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+          <i className="ri-book-open-line rounded-lg bg-primary-100 p-2 text-xl text-primary-700 dark:bg-primary-950 dark:text-primary-300" aria-hidden="true" />
           <div className="min-w-0">
             <p className="font-heading font-bold text-foreground-950">{unit?.code ?? "Choose an assessment"}</p>
             {unit && <p className="text-sm text-foreground-700">{unit.name}</p>}
@@ -165,10 +167,10 @@ export default function StudentPracticePage() {
         </div>
         <div className="space-y-2">
           <h2 className="font-heading text-sm font-bold">Practice mode</h2>
-          <button type="button" aria-pressed={!assessmentMode} className={secondary + " w-full text-left aria-pressed:border-violet-500 aria-pressed:bg-violet-50 dark:aria-pressed:bg-violet-950/40"} disabled={!!busy} onClick={() => go("unlimited")}>
+          <button type="button" aria-pressed={!assessmentMode} className={secondary + " w-full text-left aria-pressed:border-primary-500 aria-pressed:bg-primary-50 dark:aria-pressed:bg-primary-950/40"} disabled={!!busy} onClick={() => go("unlimited")}>
             <i className="ri-infinity-line mr-2" aria-hidden="true" />Unlimited practice
           </button>
-          <button type="button" aria-pressed={assessmentMode} className={secondary + " w-full text-left aria-pressed:border-violet-500 aria-pressed:bg-violet-50 dark:aria-pressed:bg-violet-950/40"} disabled={!!busy} onClick={() => go("assessment", catalogue.assessments[0]?.id)}>
+          <button type="button" aria-pressed={assessmentMode} className={secondary + " w-full text-left aria-pressed:border-primary-500 aria-pressed:bg-primary-50 dark:aria-pressed:bg-primary-950/40"} disabled={!!busy} onClick={() => go("assessment", catalogue.assessments[0]?.id)}>
             <i className="ri-focus-3-line mr-2" aria-hidden="true" />Assessment practice
           </button>
         </div>
@@ -188,7 +190,7 @@ export default function StudentPracticePage() {
           <legend className="font-heading text-sm font-bold">Difficulty</legend>
           <div className="grid grid-cols-3 gap-1">
             {difficultyChoices.map(item => <button key={item.id} type="button" aria-pressed={difficulty === item.id}
-              className="rounded-lg border border-background-200 px-1 py-2 text-xs font-semibold aria-pressed:bg-violet-700 aria-pressed:text-white"
+              className="rounded-lg border border-background-200 px-1 py-2 text-xs font-semibold aria-pressed:bg-primary-700 aria-pressed:text-white"
               onClick={() => { if (item.id !== difficulty) { resetQuestion(); setDifficulty(item.id); } }}>
               <i className={item.icon + " mb-1 block text-base"} aria-hidden="true" />{item.label}
             </button>)}
@@ -205,23 +207,23 @@ export default function StudentPracticePage() {
       <main aria-label={progressView ? "Practice progress" : "Practice question"} className={panel + " space-y-5"}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-heading text-lg font-bold text-foreground-950">
-            {!progressView && <i className={(assessmentMode ? "ri-focus-3-line" : "ri-infinity-line") + " mr-2 text-violet-700 dark:text-violet-300"} aria-hidden="true" />}
+            {!progressView && <i className={(assessmentMode ? "ri-focus-3-line" : "ri-infinity-line") + " mr-2 text-primary-700 dark:text-primary-300"} aria-hidden="true" />}
             {progressView ? "Your practice progress" : `${assessmentMode ? "Assessment practice" : "Unlimited practice"} · ${selectedDifficulty}`}
           </h2>
         </div>
         {error && <PortalError message={error} />}
         {notice && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-950" role="status">{notice}</p>}
         {progressView ? <div className="space-y-5">
-          <div className="grid grid-cols-2 gap-3 rounded-xl bg-violet-50 p-4 dark:bg-violet-950/40">
+          <div className="grid grid-cols-2 gap-3 rounded-xl bg-primary-50 p-4 dark:bg-primary-950/40">
             <div><p className="text-sm text-foreground-700">Accuracy</p><p className="font-heading text-xl font-bold">{progress?.accuracy == null ? "—" : `${progress.accuracy}%`}</p></div>
             <div><p className="text-sm text-foreground-700">Questions practised</p><p className="font-heading text-xl font-bold">{progress?.answered ?? 0}</p></div>
           </div>
-          <TopicProgress progress={progress} />
+          <TopicProgress progress={progress} unitId={unitId} />
           {!!progress?.saved.length && <div className="space-y-2"><h3 className="font-heading font-bold">Saved questions</h3>
             <ul className="space-y-2">{progress.saved.map(item => <li key={item.id}>
               <button type="button" className={secondary + " w-full text-left"} disabled={!!busy} onClick={() => void recall(item.id)}>{item.prompt}</button>
             </li>)}</ul></div>}
-        </div> : !question ? <div className="space-y-4 rounded-xl border border-dashed border-violet-200 p-5 dark:border-violet-800">
+        </div> : !question ? <div className="space-y-4 rounded-xl border border-dashed border-primary-200 p-5 dark:border-primary-800">
           {!validScope
             ? <p className="text-sm text-foreground-700">{catalogue.assessments.length ? "Select an assigned assessment to practise its unit topics." : "No assigned assessments are available for practice."}</p>
             : !enabled
@@ -238,9 +240,9 @@ export default function StudentPracticePage() {
               const active = (feedback?.selected ?? choice) === index;
               const tint = feedback?.correct === index ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/40"
                 : feedback?.selected === index ? "border-rose-300 bg-rose-50 dark:bg-rose-950/40"
-                : active ? "border-violet-500 bg-violet-50 dark:bg-violet-950/50" : "border-background-300";
+                : active ? "border-primary-500 bg-primary-50 dark:bg-primary-950/50" : "border-background-300";
               return <label key={option} className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${tint}`}>
-                <input type="radio" name={question.id} checked={active} onChange={() => setChoice(index)} className="mt-1 accent-violet-700" />
+                <input type="radio" name={question.id} checked={active} onChange={() => setChoice(index)} className="mt-1 accent-primary-700" />
                 <span><b>{String.fromCharCode(65 + index)}.</b> {option}</span>
               </label>;
             })}
@@ -249,6 +251,8 @@ export default function StudentPracticePage() {
             <p className="font-heading font-bold">{correct ? "Correct!" : `Correct answer: ${String.fromCharCode(65 + feedback.correct)}`}</p>
             <p className="text-sm">{feedback.explanation}</p>
             <blockquote className="border-l-2 border-current pl-2 text-xs text-foreground-700">{feedback.evidence}</blockquote>
+            {unitId ? <Link className="inline-flex items-center gap-1 pt-1 text-sm font-semibold text-primary-700 underline" to={learnLink(unitId, question.topic)}>
+              <i className="ri-book-open-line" aria-hidden="true" />Learn this topic{question.topic ? `: ${question.topic}` : ""}</Link> : null}
           </section>}
           <div className="flex flex-wrap justify-between gap-2">
             <button type="button" className={secondary} aria-pressed={question.saved} disabled={!!busy} onClick={() => void bookmark()}>
@@ -263,27 +267,44 @@ export default function StudentPracticePage() {
 
       <aside aria-label="Your capability" className={panel + " space-y-4 lg:col-start-2 xl:col-start-auto"}>
         <h2 className="font-heading font-bold">Your capability</h2>
-        <div className="mx-auto grid h-28 w-28 place-items-center rounded-full border-8 border-violet-200 text-center dark:border-violet-800"
-          style={{ borderTopColor: progress?.answered ? "#6d28d9" : undefined }}>
-          <div><i className="ri-graduation-cap-line block text-xl text-violet-700 dark:text-violet-300" aria-hidden="true" />
+        <div className="mx-auto grid h-28 w-28 place-items-center rounded-full border-8 border-primary-200 text-center dark:border-primary-800"
+          style={{ borderTopColor: progress?.answered ? "oklch(var(--primary-600))" : undefined }}>
+          <div><i className="ri-graduation-cap-line block text-xl text-primary-700 dark:text-primary-300" aria-hidden="true" />
             <p className="text-xs font-bold">{progress?.level ?? "Getting started"}</p></div>
         </div>
-        <dl className="grid grid-cols-2 gap-2 rounded-lg bg-violet-50 p-3 text-center dark:bg-violet-950/40">
+        <dl className="grid grid-cols-2 gap-2 rounded-lg bg-primary-50 p-3 text-center dark:bg-primary-950/40">
           <div><dt className="text-xs">Accuracy</dt><dd className="text-lg font-bold">{progress?.accuracy == null ? "—" : `${progress.accuracy}%`}</dd></div>
           <div><dt className="text-xs">Practised</dt><dd className="text-lg font-bold">{progress?.answered ?? 0}</dd></div>
         </dl>
-        {!progressView && <TopicProgress progress={progress} />}
+        {!progressView && <TopicProgress progress={progress} unitId={unitId} />}
       </aside>
     </div>}
   </div>;
 }
 
-function TopicProgress({ progress }: { progress: Progress | null }) {
+/** My learning, opened at this unit's materials with the topic named (owner, 2026-11-23: "learn by clicking Learn on that topic"). */
+function learnLink(unitId: string, topic?: string) {
+  const query = new URLSearchParams({ unit: unitId });
+  if (topic) query.set("topic", topic);
+  return `/agency/learning?${query.toString()}`;
+}
+
+function TopicProgress({ progress, unitId }: { progress: Progress | null; unitId?: string }) {
   return <section aria-label="Topic progress" className="space-y-2">
     <h3 className="font-heading text-sm font-bold">Topic progress</h3>
     {progress?.topics.length ? <ul className="space-y-3">{progress.topics.map(topic => <li key={topic.topic}>
-      <div className="flex justify-between gap-2 text-xs"><span>{topic.topic}</span><strong>{topic.accuracy}%</strong></div>
-      <progress className="h-2 w-full accent-violet-700" value={topic.accuracy} max={100} aria-label={topic.topic} />
+      <div className="flex items-center justify-between gap-2 text-xs"><span className="min-w-0 flex-1">{topic.topic}</span>
+        {unitId ? <Link className="font-semibold text-primary-700 underline" to={learnLink(unitId, topic.topic)}>Learn</Link> : null}
+        <strong>{topic.accuracy}%</strong></div>
+      <progress className="h-2 w-full accent-primary-700" value={topic.accuracy} max={100} aria-label={topic.topic} />
     </li>)}</ul> : <p className="text-xs text-foreground-600">Answer questions to see your progress by topic.</p>}
   </section>;
+}
+
+/** /agency/practice: Practice is a tab of My learning now; old links (with their unit or assessment) keep working. */
+export function PracticeRedirect() {
+  const { search } = useLocation();
+  const query = new URLSearchParams(search);
+  query.set("tab", "practice");
+  return <Navigate replace to={`/agency/learning?${query.toString()}`} />;
 }

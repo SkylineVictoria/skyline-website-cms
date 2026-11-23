@@ -84,8 +84,8 @@ export default function StudentAssessmentPage() {
   return (
     <div>
       <PageHeading eyebrow={`${data.assignment.unitCode ?? ""} ${data.assignment.unitName ?? ""}`.trim() || "Assessment"} title={data.assignment.title} description={data.assignment.description} />
-      {data.assignment.unitCode && <Link className="mb-4 inline-block rounded-md border border-violet-200 px-3 py-1.5 text-sm font-semibold text-violet-800 dark:text-violet-300"
-        to={`/agency/practice?assessment=${data.assignment.id}`}>Practise this assessment</Link>}
+      {data.assignment.unitCode && <Link className="mb-4 inline-block rounded-md border border-primary-200 px-3 py-1.5 text-sm font-semibold text-primary-800 dark:text-primary-300"
+        to={`/agency/learning?tab=practice&assessment=${data.assignment.id}`}>Practise this assessment</Link>}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-foreground-700">
         <Badge tone={attempt.state === "draft" ? "accent" : attempt.state === "final" ? (attempt.outcome === "S" ? "success" : "warn") : "primary"}>Attempt {attempt.attemptNo}: {STATE_LABEL[attempt.state] ?? attempt.state}{attempt.outcome && attempt.state !== "draft" ? ` · ${OUTCOME_LABEL[attempt.outcome]}` : ""}</Badge>
         <span>Due {fmtDateTime(attempt.dueAt ?? data.assignment.dueAt)}</span>

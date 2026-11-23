@@ -10,9 +10,13 @@ import { useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { autoPickElectives, checkElectives, groupSizes, parseElectiveRules, type ElectiveUnit } from "../../../../../supabase/functions/tga-course-import/packaging";
 import { loadUnitHours, rto, saveUnitHours, suggestHours, weeksForHours, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 
-interface Review { code: string; name: string; core: { code: string; name: string }[]; electives: { code: string; name: string }[] }
+interface Review {
+  code: string; name: string; core: { code: string; name: string }[]; electives: { code: string; name: string; groups: string[] }[];
+  packagingRules: string; requiredElectives: number | null; groups: Record<string, unknown>;
+}
 interface ReadFile { name: string; path: string; text: string; bytes?: Uint8Array; error?: string }
 /** Where Sync goes next: the documents settled everything (the weekly calendar), or units / hours are still to choose. */
 export type FromDocsNext = "master" | "units" | "hours";
@@ -197,11 +201,18 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
 
   /** Each mapped document into its unit's Learning content (staff only); a file already there by name is not added again. */
   async function saveDocuments(detail: CourseDetail): Promise<{ saved: number; failed: string[] }> {
-    const ids = new Map(detail.units.filter(u => u.id).map(u => [norm(u.code), u.id as string]));
+    const ids = new Map(detail.units.filter(u => u.id && u.isActive).map(u => [norm(u.code), u.id as string]));
     let saved = 0; const failed: string[] = [];
-    for (const [code, list] of docsByUnit) {
+    // A document matched to a unit that did not make it onto the course goes to the course unit it is about instead, if any.
+    const onCourse = new Set(ids.keys());
+    const byUnit = new Map<string, ReadFile[]>();
+    for (const [code, list] of docsByUnit) for (const f of list) {
+      const target = ids.has(code) ? code : guessUnit(f, onCourse) || code;
+      byUnit.set(target, [...(byUnit.get(target) ?? []), f]);
+    }
+    for (const [code, list] of byUnit) {
       const unitId = ids.get(code);
-      if (!unitId) { failed.push(...list.map(f => `${baseName(f.path)} (${code} is not on the course)`)); continue; }
+      if (!unitId) { failed.push(...list.map(f => `${baseName(f.path)} (${code} is not a unit of the course)`)); continue; }
       const { data: have } = await supabase.from("unit_contents").select("file_name,sort").eq("unit_id", unitId);
       const names = new Set((have ?? []).map(r => r.file_name as string | null));
       let sort = Math.max(-1, ...(have ?? []).map(r => Number(r.sort) || 0));
@@ -253,19 +264,36 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
     try {
       setSyncing(existing ? "Checking the course…" : "Creating the course…");
       if (!courseId) courseId = (await tga<{ courseId: string }>({ action: "create_core", code: review.code })).courseId;
-      const codes = sorted.electives.map(u => u.code);
-      const imported = includeOutside ? sorted.outside : [];
+      // Electives: the documents often list every elective option, more than the packaging rules allow. When the course's
+      // electives already meet the rules nothing is added; otherwise the rules pick from the electives found (those with their
+      // own documents first), as Pick for me does. The Add units step opens only when no such set exists.
+      const before = await rto<CourseDetail>("course_get", { courseId });
+      const official = new Map(review.electives.map(u => [norm(u.code), u]));
+      const isActive = (code: string) => before.units.some(u => u.isActive && norm(u.code) === norm(code));
+      const current: ElectiveUnit[] = before.units.filter(u => u.isActive && u.unitType !== "core")
+        .map(u => ({ code: norm(u.code), groups: official.get(norm(u.code))?.groups ?? null }));
+      const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups ?? {}), groupSizes(review.electives));
+      const imported = includeOutside ? sorted.outside.filter(code => !isActive(code)) : [];
       let next: FromDocsNext = "master";
+      let picks: string[] | null = [];
+      if (!checkElectives(rules, current).complete) {
+        const found = sorted.electives.map(u => u.code).filter(code => !isActive(code));
+        const ordered = [...found.filter(code => docsByUnit.has(code)), ...found.filter(code => !docsByUnit.has(code))];
+        picks = autoPickElectives(rules, ordered.map(code => ({ code, groups: official.get(code)?.groups ?? [], prerequisites: [] })), current, isActive);
+      }
+      const codes = picks ?? [];
       if (codes.length || imported.length) {
         setSyncing("Adding the units…");
-        try {
-          await tga({ action: "add_units", courseId, codes, imported });
-          lines.push(`${review.code}: every core unit and ${codes.length + imported.length} elective${codes.length + imported.length === 1 ? "" : "s"} from the documents.`);
-        } catch (e) {
-          next = "units";
-          lines.push(`${review.code}: core units saved. The electives from the documents were not added: ${e instanceof Error ? e.message : "error"} Choose them in the Add units step.`);
+        let done = false; let failure = "";
+        for (const extra of imported.length ? [imported, []] : [[]]) {
+          if (!codes.length && !extra.length) continue;
+          try { await tga({ action: "add_units", courseId, codes, imported: extra }); done = true; lines.push(`${review.code}: core units and ${codes.length + extra.length} elective${codes.length + extra.length === 1 ? "" : "s"} from the documents saved.`); break; }
+          catch (e) { failure = e instanceof Error ? e.message : "error"; }
         }
-      } else lines.push(`${review.code}: every core unit saved.`);
+        if (!done) { next = "units"; lines.push(`${review.code}: core units saved; the electives were not added (${failure}) Choose them in the Add units step.`); }
+      } else if (picks === null) {
+        next = "units"; lines.push(`${review.code}: core units saved. The electives in the documents do not make a set that meets the packaging rules: choose them in the Add units step.`);
+      } else lines.push(`${review.code}: units saved (the course's electives already meet the packaging rules).`);
       const detail = await rto<CourseDetail>("course_get", { courseId });
       if (mappedCount) {
         setSyncing("Saving the documents to their units…");

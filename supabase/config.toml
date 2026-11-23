@@ -108,3 +108,8 @@ verify_jwt = true
 
 [functions.lms-bulk-worker]
 verify_jwt = true
+
+[functions.usi-service]
+# USI-SERVICE: USI Verify / Locate / Create from the application form (usi_access decides who may run what with the caller's JWT),
+# and the service role's automatic re-checks (usi-reverify job). USI Web Services v5 with the EF_USI_* secrets (3PT until released).
+verify_jwt = true

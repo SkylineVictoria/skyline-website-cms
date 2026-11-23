@@ -59,7 +59,10 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   const menuRef = useRef<HTMLDivElement>(null);
   const actions = getAllowedActions(workflow, application.status);
   const primary = variant === "row" ? actions.find((a) => a.primary) : undefined;
-  const listed = primary ? actions.filter((a) => a !== primary) : actions;
+  // "Set to <status>" moves (20261123151517, Admins): any status by hand, listed apart under "Change status to".
+  const isManual = (a: StatusAction) => a.action.startsWith("set_");
+  const listed = (primary ? actions.filter((a) => a !== primary) : actions).filter((a) => !isManual(a));
+  const manual = actions.filter(isManual).filter((a) => a !== primary);
   // "Mark as enrolled" before CoE / VoE issued (owner 2026-11-21): shown disabled with the reason, for whoever may enrol (the database
   // refuses it too: application_enrolled_guard).
   const enrolAction = getAllowedActions(workflow, "coe_issued").find((a) => a.kind === "enrol");
@@ -89,7 +92,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   const toggle = () => {
     const rect = buttonRef.current?.getBoundingClientRect();
     if (rect) {
-      const needed = 8 + (listed.length + (enrolLater ? 1 : 0)) * 40;
+      const needed = 8 + (listed.length + (enrolLater ? 1 : 0)) * 40 + (manual.length ? 28 + manual.length * 32 : 0);
       const below = window.innerHeight - rect.bottom;
       const left = align === "right" ? rect.right : rect.left;
       setPlace(below < needed && rect.top > below ? { bottom: window.innerHeight - rect.top + 4, left } : { top: rect.bottom + 4, left });
@@ -152,7 +155,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
           <i className={`${primary.icon || "ri-arrow-right-line"} text-base leading-none`} aria-hidden="true" />
         </button>
       ) : null}
-      {listed.length ? (
+      {listed.length || manual.length ? (
         variant === "row" ? (
           <button ref={buttonRef} type="button" aria-haspopup="menu" aria-expanded={open} onClick={toggle} data-testid="take-action" title="More actions" aria-label="More actions"
             className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-foreground-600 transition-colors hover:bg-background-100 hover:text-foreground-900">
@@ -174,6 +177,15 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
             {enrolLater && action.tone === "danger" && (index === 0 || listed[index - 1].tone !== "danger") ? enrolLaterItem(enrolLater) : null}
             {item(action, index, listed)}</span>)}
           {enrolLater && !listed.some((a) => a.tone === "danger") ? enrolLaterItem(enrolLater) : null}
+          {manual.length ? <div className={listed.length ? "mt-1 border-t border-background-200 pt-1" : ""} data-testid="change-status">
+            <p className="px-3 pb-0.5 pt-1 text-2xs font-semibold uppercase tracking-wide text-foreground-500">Change status to</p>
+            <div className="max-h-64 overflow-y-auto">{manual.map((action) => (
+              <button key={action.action} type="button" role="menuitem" onClick={() => choose(action)} data-action={action.action}
+                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground-800 transition-colors hover:bg-background-100 focus:bg-background-100 focus:outline-none">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: action.to ? statusInfo(workflow, action.to).color ?? "#64748b" : "#64748b" }} aria-hidden="true" />
+                {action.to ? statusInfo(workflow, action.to).label : action.label.replace(/^Set to /, "")}
+              </button>))}</div>
+          </div> : null}
         </div>,
         document.body,
       ) : null}

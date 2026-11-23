@@ -5,7 +5,7 @@ import ClassTimetable from "@/components/timetable/ClassTimetable";
 export default function StudentTimetablePage() {
   return (
     <div>
-      <PageHeading eyebrow="Timetable" title="My timetable" description="Your classes for the week: time, unit, room and trainer. Cancelled classes are marked." />
+      <PageHeading eyebrow="Timetable" title="My timetable" description="Your study plan and classes: time, unit, room and trainer. Cancelled classes are marked." />
       <div className="mt-6"><ClassTimetable who="student" /></div>
     </div>
   );

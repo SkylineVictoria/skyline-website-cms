@@ -9,8 +9,13 @@ import UnitHoursEditor from "./UnitHoursEditor";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
+import { listResources, type Resource } from "@/pages/admin/lib/bulkResources";
+import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
+/** A unit's documents for the list (owner, 2026-11-23: "see all docs inside units on the main page"): its Learning content,
+ *  its Resources (AI bulk upload) and its Assessments. */
+type UnitDocs = { learning: { id: string; title: string; kind: string }[]; resources: Resource[]; assessments: AssessmentRow[] };
 /** Filled from Training.gov.au or calculated: shown greyed out, not typed in. */
 const readOnlyClass = "w-full cursor-not-allowed rounded-lg border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-600";
 /** Hours SLIT enters by hand: white, outlined, bold, so they stand out from the greyed fields. */
@@ -42,6 +47,8 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     void supabase.rpc("asm_is_admin").then(({ data }) => setCanManageResources(data === true));
   }, []);
   const [canEdit, setCanEdit] = useState(false);
+  const [docs, setDocs] = useState<Record<string, UnitDocs>>({});
+  const [showDocs, setShowDocs] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -100,6 +107,29 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const paged = filtered.slice((currentPage - 1) * PAGE, currentPage * PAGE);
   useEffect(() => { setPage(1); }, [query, courseId, type, status]);
   const selectedCourse = courses.find(c => c.id === courseId);
+  const docsUnitIds = useMemo(() => (details.find(d => d.course.id === courseId)?.units ?? []).map(u => u.id).filter((id): id is string => !!id), [details, courseId]);
+  const docsKey = docsUnitIds.join(",");
+  useEffect(() => {
+    if (!courseId || !docsUnitIds.length) { setDocs({}); return; }
+    let live = true;
+    const empty = (): UnitDocs => ({ learning: [], resources: [], assessments: [] });
+    void Promise.all([
+      supabase.from("unit_contents").select("id,unit_id,kind,title,sort").in("unit_id", docsUnitIds).order("sort").then(({ data }) => (data ?? []) as { id: string; unit_id: string; kind: string; title: string }[], () => []),
+      listResources(null).catch(() => [] as Resource[]),
+      asmAdmin<AssessmentRow[]>("assessment_list", { courseId, includeArchived: false }).catch(() => [] as AssessmentRow[]),
+    ]).then(([learning, resources, assessments]) => {
+      if (!live) return;
+      const out: Record<string, UnitDocs> = Object.fromEntries(docsUnitIds.map(id => [id, empty()]));
+      for (const row of learning) out[row.unit_id]?.learning.push({ id: row.id, title: row.title, kind: row.kind });
+      for (const row of resources) out[row.unit_id]?.resources.push(row);
+      for (const row of assessments) if (row.unitId) out[row.unitId]?.assessments.push(row);
+      setDocs(out);
+    });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloaded when the course or its units change
+  }, [courseId, docsKey, drawerTab, selected]);
+  /** Open a unit on one of its document tabs. */
+  const openOn = (entry: Entry, tab: "learning" | "resources" | "assessments") => { open(entry); setDrawerTab(tab); };
   const shownCourses = courses.filter(c => (c.code+" "+c.name).toLowerCase().includes(courseQuery.toLowerCase()));
   const uniqueCount = new Set(rows.map(r => r.unit.code.trim().toLowerCase())).size;
   const hoursOf = (u: RtoUnit) => shownHours(u.id ? hours[u.id] : undefined, u.nominalHours);
@@ -223,14 +253,30 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
           className={"rounded-full border px-2.5 py-1 font-semibold " + (type===value ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-600")}>{label}</button>)}
         <select aria-label="Unit status" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={status} onChange={e=>setStatus(e.target.value)}>
           <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
+        <label className="flex items-center gap-1.5 text-foreground-600"><input type="checkbox" checked={showDocs} onChange={e=>setShowDocs(e.target.checked)} />Show document names</label>
       </div>
       {hoursError ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{hoursError}</p> : null}
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[1000px] text-left text-sm">
-        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Type","Prerequisites","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[1150px] text-left text-sm">
+        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Documents","Type","Prerequisites","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
         <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
           className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
           <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
             </td>
+          <td className="px-3 py-2 text-xs">{(() => {
+            const d = r.unit.id ? docs[r.unit.id] : undefined;
+            if (!d) return <span className="text-foreground-400">—</span>;
+            const parts = [
+              ["learning", "Learning", d.learning.length, d.learning.map(x => x.title)],
+              ["resources", "Resources", d.resources.length, d.resources.map(x => x.title || x.name)],
+              ["assessments", "Assessments", d.assessments.length, d.assessments.map(x => x.title)],
+            ] as const;
+            if (!parts.some(([, , n]) => n)) return <span className="text-foreground-400">None</span>;
+            return <div className="flex max-w-xs flex-col gap-1">{parts.filter(([, , n]) => n).map(([tab, label, n, names]) => <div key={tab}>
+              <button type="button" onClick={e => { e.stopPropagation(); openOn(r, tab); }} title={names.join("\n")}
+                className="rounded-full border border-primary-200 bg-primary-50 px-2 py-0.5 font-semibold text-primary-800 hover:bg-primary-100">{label} {n}</button>
+              {showDocs ? <ul className="mt-1 space-y-0.5 pl-2 text-foreground-600">{names.map((name, i) => <li key={i} className="break-words">{name}</li>)}</ul> : null}
+            </div>)}</div>;
+          })()}</td>
           <td className="px-3 py-2"><span className="capitalize">{r.unit.unitType}</span>{r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title="Another unit needs this one first, so it is taught earlier">Prerequisite</span> : null}</td>
           <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="block max-w-xs space-y-0.5">{needs[r.unit.id].map(n => <span key={n.id} className="block"><b className="text-amber-800">{n.code}</b> <span className="text-foreground-600">{r.course && details.find(d => d.course.id === r.course.id)?.units.find(u => u.id === n.id)?.name}</span></span>)}</span> : <span className="text-foreground-400">—</span>}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
           {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");

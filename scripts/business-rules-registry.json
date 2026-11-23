@@ -106,5 +106,35 @@
     "migration": "supabase/migrations/20261123173000_student_practice.sql",
     "enforcement": "supabase/migrations/20261123173000_student_practice.sql",
     "test": "scripts/test-business-rules.mjs"
+  },
+  "admissions.application_invite_hours": {
+    "menu": "agency_students",
+    "migration": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "enforcement": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "admissions.application_invite_resend_limit": {
+    "menu": "agency_students",
+    "migration": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "enforcement": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "admissions.application_invite_sender": {
+    "menu": "agency_students",
+    "migration": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "enforcement": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "admissions.application_invite_template": {
+    "menu": "agency_students",
+    "migration": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "enforcement": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "admissions.application_mobile_required": {
+    "menu": "agency_students",
+    "migration": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "enforcement": "supabase/migrations/20261124001517_student_application_wizard.sql",
+    "test": "scripts/test-business-rules.mjs"
   }
 }

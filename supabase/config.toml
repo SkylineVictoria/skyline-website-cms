@@ -116,3 +116,6 @@ verify_jwt = true
 
 [functions.student-practice]
 verify_jwt = true
+
+[functions.student-application-invite]
+verify_jwt = true

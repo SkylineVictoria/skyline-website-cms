@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 
 const testModule = process.env.SLIT_RULES_TEST_PGLITE;
 const { PGlite } = await import(testModule ? pathToFileURL(testModule).href : "@electric-sql/pglite");
@@ -413,6 +414,192 @@ try {
   await setActor(approver);
   await rejects(() => practice("recall",{...practiceScope,questionId:served.id}),"42501","no longer available","Removing student access to the source hides its practice questions");
 
+  {
+  // Isolated admissions fixture. The production Supabase roles and JWT path are covered separately by browser tests.
+  await db.exec(`
+    reset role;
+    create schema skyline_private;
+    create table auth.users (id uuid primary key, email text, email_confirmed_at timestamptz);
+    create table public.agencies (id uuid primary key, status text default 'Active');
+    create table public.portal_profiles (id uuid primary key default gen_random_uuid(), auth_user_id uuid unique, email text, full_name text, status text);
+    create table public.agency_memberships (user_id uuid primary key, agency_id uuid, role text, student_id uuid, status text);
+    create table public.agents (id uuid primary key, business_id uuid, profile_id uuid);
+    alter table public.enrollment_students alter column id set default gen_random_uuid();
+    alter table public.enrollment_students add column agency_id uuid, add column tenant_id uuid, add column agent_id uuid,
+      add column email text unique, add column phone text, add column full_name text default '', add column details jsonb default '{}',
+      add column date_of_birth date, add column passport_number text, add column nationality text, add column status text default 'Active',
+      add column created_by uuid;
+    create table public.enrollment_applications (
+      id uuid primary key default gen_random_uuid(), student_id uuid references public.enrollment_students(id), agency_id uuid,
+      reference text, status text default 'draft', draft_version bigint default 0, student_name text default '', student_email text default '',
+      intake text default '', completion int default 0, data jsonb default '{}', tenant_id uuid, client_key text, is_test boolean default false,
+      assigned_agent_id uuid, created_by uuid, submitted_by uuid, created_at timestamptz default now(), updated_at timestamptz default now(),
+      submitted_at timestamptz, version int default 1
+    );
+    create table public.enrollment_application_documents (application_id uuid, category text, storage_path text, bucket_name text, is_current boolean);
+    create table public.enrollment_application_courses (application_id uuid, course_id text, course_code text, course_title text, variant text, intake_id uuid);
+    create table public.enrollment_application_consents (application_id uuid);
+    create table public.enrollment_application_messages (application_id uuid);
+    create table public.enrollment_application_status_history (application_id uuid);
+    create table public.admission_submission_receipts (id uuid primary key default gen_random_uuid(), application_id uuid,
+      tenant_id uuid, version int, request_key text, reference text, actor uuid);
+    create table public.course_intakes (id uuid primary key);
+    alter table public.cms_courses add column status text;
+    create or replace function public.portal_student_id() returns uuid language sql stable security definer as
+      $$ select m.student_id from public.agency_memberships m join public.portal_profiles p on p.id=m.user_id where p.auth_user_id=auth.uid() and m.role='student' $$;
+    create function public.portal_profile_id() returns uuid language sql stable as
+      $$ select id from public.portal_profiles where auth_user_id=auth.uid() $$;
+    create function public.portal_agency_id() returns uuid language sql stable as
+      $$ select agency_id from public.agency_memberships where user_id=public.portal_profile_id() $$;
+    create function public.portal_is_agency_admin() returns boolean language sql stable as $$ select false $$;
+    create function public.portal_is_slit_admin() returns boolean language sql stable as $$ select public.cms_is_admin() $$;
+    create function public.agency_effective_status(public.agencies) returns text language sql as $$ select $1.status $$;
+    create function public.tenant_request_domain() returns text language sql as $$ select null::text $$;
+    create function public.portal_next_application_reference() returns text language sql as $$ select 'TEST-' || gen_random_uuid() $$;
+    create function public.portal_scoped_applications() returns setof public.enrollment_applications language sql security definer as
+      $$ select * from public.enrollment_applications $$;
+    grant execute on function public.portal_scoped_applications() to authenticated;
+    create function public.portal_can_access_application(uuid) returns boolean language sql stable security definer as
+      $$ select exists(select 1 from public.enrollment_applications a where a.id=$1 and
+        (public.portal_is_slit_admin() or a.assigned_agent_id=public.portal_profile_id() or a.student_id=public.portal_student_id())) $$;
+    create function public.application_student_active(uuid) returns boolean language sql stable as $$ select true $$;
+    create function public.portal_create_application(p_client_key text, p_agent uuid, p_business uuid)
+      returns table(application_id uuid, application_reference text) language sql as $$
+      insert into public.enrollment_applications(student_id, agency_id, assigned_agent_id, created_by, reference, client_key)
+      values (current_setting('skyline.student_id')::uuid, p_business, p_agent, public.portal_profile_id(), public.portal_next_application_reference(), p_client_key)
+      returning id, reference $$;
+    create function public.portal_lock_draft(p_id uuid, p_version bigint) returns public.enrollment_applications language plpgsql as $$
+      declare a public.enrollment_applications;
+      begin
+        select * into a from public.enrollment_applications where id=p_id for update;
+        if not public.portal_can_access_application(p_id) or a.status<>'draft' then raise exception 'Unauthorized' using errcode='42501'; end if;
+        if a.draft_version<>p_version then raise exception 'Concurrent edit' using errcode='PT409'; end if;
+        return a;
+      end $$;
+    create function public.fixture_draft_revision() returns trigger language plpgsql as $$
+      begin if new.data is distinct from old.data then new.draft_version := old.draft_version + 1; end if; return new; end $$;
+    create trigger fixture_draft_revision before update on public.enrollment_applications for each row execute function public.fixture_draft_revision();
+    create function public.application_data(uuid) returns jsonb language sql stable as $$
+      select data || jsonb_build_object('values', s.details || coalesce(a.data->'values','{}')) from public.enrollment_applications a
+        join public.enrollment_students s on s.id=a.student_id where a.id=$1 $$;
+    create function public.application_values(uuid) returns jsonb language sql stable as $$ select public.application_data($1)->'values' $$;
+    create function public.portal_required_schema() returns jsonb language sql stable as $$
+      select '[{"fields":[{"name":"email","type":"email"},{"name":"mobile","type":"text"},{"name":"first_name","type":"text"}]}]'::jsonb $$;
+    create function public.portal_condition_met(jsonb,jsonb) returns boolean language sql stable as $$ select true $$;
+    create function public.admissions_field_optional(text) returns boolean language sql stable as $$ select false $$;
+    create function public.rule_bool(p_key text, p_default boolean) returns boolean language sql stable as
+      $$ select coalesce((public.business_rule_evaluate('', p_key, '{}') #>> '{}')::boolean, p_default) $$;
+    create function public.portal_course_options() returns jsonb language sql stable as $$ select '[]'::jsonb $$;
+    create function public.application_intake_problem(uuid) returns text language sql stable as $$ select null::text $$;
+    create function public.course_intake_display(public.course_intakes) returns text language sql stable as $$ select 'Fixture' $$;
+    alter table public.enrollment_applications enable row level security;
+    grant select on public.enrollment_applications to authenticated;
+    create policy fixture_permissive on public.enrollment_applications for select to authenticated using (true);
+    grant select on public.portal_profiles, public.agency_memberships to authenticated;
+  `);
+  const wizardMigration = await readFile(new URL("../supabase/migrations/20261124001517_student_application_wizard.sql", import.meta.url), "utf8");
+  await db.exec(wizardMigration);
+  await db.exec(await readFile(new URL("../supabase/migrations/20261124011517_restrict_student_application_data.sql", import.meta.url), "utf8"));
+  const firstAgent = "a5100000-0000-4000-8000-000000000001";
+  const business = "a5100000-0000-4000-8000-000000000002";
+  const otherAgent = "a5100000-0000-4000-8000-000000000003";
+  const studentUser = "a5100000-0000-4000-8000-000000000004";
+  const stranger = "a5100000-0000-4000-8000-000000000005";
+  const value = async (sql, args = []) => (await db.query(sql, args)).rows[0]?.result;
+  await setTenant("");
+  await setActor(admin);
+  await db.query("insert into public.agencies(id) values ($1)", [business]);
+  await db.query("insert into public.portal_profiles values ($1, $1, 'draft-agent@example.test', 'Draft agent', 'Active'), ($2, $2, 'other-agent@example.test', 'Other agent', 'Active')",
+    [firstAgent, otherAgent]);
+  await db.query("insert into public.agency_memberships(user_id, agency_id, role, status) values ($1, $3, 'agent', 'Active'), ($2, $3, 'agent', 'Active')",
+    [firstAgent, otherAgent, business]);
+  await db.query("insert into public.agents values ($1, $3, $1), ($2, $3, $2)", [firstAgent, otherAgent, business]);
+  await db.query("insert into auth.users values ($1, 'draft-student@example.test', now()), ($2, 'stranger@example.test', now())", [studentUser, stranger]);
+  const startWizard = (email, agent, key) => value("select public.portal_start_student_draft($1,$2,$3) result", [email, agent, key]);
+  const wizard = id => value("select public.portal_wizard_application($1) result", [id]);
+  const summary = id => value("select public.portal_wizard_invitation_status($1) result", [id]);
+  const invite = (id, token) => value("select public.portal_wizard_invite_begin($1,$2) result", [id, createHash("sha256").update(token).digest("hex")]);
+  const accept = token => value("select public.portal_wizard_invite_accept($1) result", [token]);
+  const saveWizard = (id, rev, patch, stamp = null) =>
+    value("select public.portal_wizard_save($1,$2,$3::jsonb,$4) result", [id, rev, JSON.stringify(patch), stamp]);
+  await db.exec("set role authenticated");
+  const draft = await startWizard(" Draft-Student@Example.Test ", firstAgent, "admin-draft-1");
+  assert((await wizard(draft)).student_email === "draft-student@example.test", "Admin creates a normalised email-only draft");
+  await setActor(firstAgent);
+  assert(await startWizard("draft-student@example.test", firstAgent, "agent-draft-retry") === draft, "Agent resumes the same draft by email");
+  const second = await startWizard("draft-student-two@example.test", firstAgent, "agent-draft-2");
+  assert(second !== draft, "Agent can also create a new email-only draft");
+  await rejects(() => db.query("select data from public.enrollment_applications where id=$1", [draft]), "42501", "permission denied",
+    "Draft answers are hidden from direct application table reads");
+  await rejects(() => db.exec("select * from public.portal_scoped_applications()"), "42501", "permission denied", "Raw application list RPC cannot bypass the restriction");
+  const initial = await wizard(draft);
+  const firstSave = await saveWizard(draft, initial.draft_version, { values: { first_name: "Fixture" }, wizard: { activeStep: "personal" } });
+  assert((await summary(draft)).lastStep === "personal", "Resume step is persisted");
+  await rejects(() => saveWizard(draft, initial.draft_version, { values: { first_name: "Stale" } }), "PT409", "Another session",
+    "Stale autosave does not overwrite another user's draft");
+  await setActor(otherAgent);
+  assert(await wizard(draft) === null, "Another agent in the same business cannot open an assigned draft");
+  await rejects(() => invite(draft, "a".repeat(43)), "42501", "cannot invite", "Another agent cannot send an invitation");
+  await setActor(firstAgent);
+  assert((await summary(draft)).invitationStatus === "Not Sent", "Draft creation and saving send no invitation");
+  await rejects(() => invite(draft, "a".repeat(43)), "22023", "Publish", "Unpublished invitation rules stay inactive");
+  await db.exec("reset role");
+  await db.exec(`
+    update public.business_rule_versions v set state='published', definition=jsonb_set(v.definition,'{value}', '"admissions@example.test"')
+      from public.business_rules r where r.id=v.rule_id and r.identifier='admissions.application_invite_sender';
+    update public.business_rule_versions v set state='published' from public.business_rules r
+      where r.id=v.rule_id and r.identifier in ('admissions.application_invite_hours','admissions.application_invite_resend_limit','admissions.application_invite_template');
+  `);
+  await db.exec("set role authenticated");
+  const failed = await invite(draft, "a".repeat(43));
+  assert((await summary(draft)).invitationStatus === "Sending", "Send is reserved before the provider call");
+  await rejects(() => invite(draft, "b".repeat(43)), "22023", "already sending", "Concurrent resend is fenced");
+  await db.exec("reset role; set role service_role");
+  await value("select public.portal_wizard_invite_delivered($1,false) result", [failed.id]);
+  await db.exec("reset role; set role authenticated");
+  assert((await summary(draft)).invitationStatus === "Failed", "Provider failure is tracked");
+  const expired = await invite(draft, "b".repeat(43));
+  await db.exec("reset role; set role service_role");
+  await value("select public.portal_wizard_invite_delivered($1,true) result", [expired.id]);
+  await db.exec("reset role");
+  await db.query("update skyline_private.student_application_invites set expires_at=now()-interval '1 minute' where id=$1", [expired.id]);
+  await db.exec("set role authenticated");
+  assert((await summary(draft)).invitationStatus === "Expired", "Expiry is reflected independently of application state");
+  await setActor(studentUser);
+  await rejects(() => accept("b".repeat(43)), "42501", "invalid, expired", "Expired token is rejected");
+  await setActor(firstAgent);
+  const delivered = await invite(draft, "c".repeat(43));
+  await db.exec("reset role; set role service_role");
+  await value("select public.portal_wizard_invite_delivered($1,true) result", [delivered.id]);
+  await db.exec("reset role; set role authenticated");
+  assert((await summary(draft)).invitationStatus === "Resent", "Provider acceptance marks a resend");
+  await setActor(stranger);
+  await rejects(() => accept("c".repeat(43)), "42501", "invalid, expired", "A confirmed but different recipient cannot redeem");
+  await setActor(studentUser);
+  await rejects(() => accept("d".repeat(43)), "42501", "invalid, expired", "Unknown token is rejected");
+  assert(await accept("c".repeat(43)) === draft, "Verified student opens the original draft");
+  await rejects(() => accept("c".repeat(43)), "42501", "invalid, expired", "The invitation cannot be replayed");
+  assert(await wizard(second) === null, "Student cannot open another student's draft");
+  assert((await wizard(draft)).data.values.first_name === "Fixture", "Student sees the agent's saved answers");
+  assert((await summary(draft)).invitationStatus === "Accepted" && (await summary(draft)).status === "In Progress",
+    "Invitation acceptance is independent of submission");
+  await rejects(() => saveWizard(draft, firstSave.draft_version, { values: { email: "changed@example.test" } }, firstSave.saved_at),
+    "42501", "sign-in email", "A student cannot change invitation identity through the draft command");
+  await db.exec("reset role");
+  await rejects(() => db.query("update public.enrollment_applications set status='active' where id=$1", [draft]),
+    "42501", "Wizard first", "Direct workflow status changes cannot bypass initial submission");
+  const validateApplication = id => db.query("select public.portal_validate_submission($1)", [id]);
+  await rejects(() => validateApplication(draft), "22023", "mobile", "Required phone is checked before submission");
+  await db.exec(`
+    update public.business_rule_versions v set state='published', definition=jsonb_set(v.definition, '{value}', 'false')
+      from public.business_rules r where r.id=v.rule_id and r.identifier='admissions.application_mobile_required';
+  `);
+  await db.exec("set role authenticated");
+  await saveWizard(draft, firstSave.draft_version, { values: { confirm_email: "draft-student@example.test" } }, firstSave.saved_at);
+  assert((await summary(draft)).status === "Ready for Submission", "Publishing the phone rule changes readiness without a deployment");
+  console.log("PASS student wizard fixture covers draft creation, autosave conflicts, scoped access, and invitation delivery and redemption");
+
+  }
 } finally {
   await db.close();
 }

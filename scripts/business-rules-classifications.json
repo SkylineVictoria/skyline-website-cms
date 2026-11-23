@@ -379,5 +379,165 @@
       "cb359579ee600ef84d374428cf90baf92af14a6695be742c1fb36cbc599ec435",
       "f94bba717e3e7d56607468106d5543a3b72dce1b212bcc6ac95d11e01348e0ae"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "application-workflow-display",
+    "reason": "The frontend displays server state or retains existing workflow controls using the same server authorization.",
+    "fingerprints": [
+      "559c38cf6b9a81a2ed03d5feb9db5e793f6d562addf44dcab64797b55585404b",
+      "59d007d0f108cfd80c41b5e8cf7fdbe5b34d52052c70c7b36ae5ee0efec84c1b",
+      "641a2f2f370387d318abdccbd6d43a5c6ea4bb4c477184eaae9f0e4f6c5dad1a",
+      "6ab224589ff8c974a3a2d692d22459695e99122de663a7d36538335fa2746f32",
+      "78f09234db25bc6e24c1702da55d8575b5ec51617d4c3f1124c49f1d13e03096",
+      "846013423074c03be845528130a439f4db94a430c28bcc36af368ff8ad33ce78",
+      "8584e29096fe9f82b44bf665dca20974931dfc04df8f86247563f3b2ce68514c",
+      "86dbe96c99937694f18687e1ccf89cc238cea6cf6573e8e0ce17f4ca92fe02c1",
+      "949d58a080f8c26e48b2ebf2682ac0aba9f6d18508438476c77baf2d67f95015",
+      "996c2ee8d377a4169258aff49e8fc3d66085e2d736a9104e93cddaad1a9ff738",
+      "9bad01dd28e3e31621275fd90bc6d99eb797e01646073bc1a6e63f192111c5a7",
+      "a0be0aef21a26ddf6c5e20340c0107dc68a6cbea7188a3b67a0b74a39fd76ba8",
+      "b337f0e55edd0dda2ca8e68d267e74410f78269cb9b27af44a203303a3476d83",
+      "b81096e5d91397ca78b31ac47cdf08b017ae70dbf7aa2b375a95e138945e5bfc",
+      "c4ab9a6b8cb75bdc2d503d283d0ba1b409f16d92ce421af1b74237d9a86e2c60",
+      "c5cfa82f5f9300f4ed114292ca08d690257cf072e8fa3965d9a6b77c4c293523",
+      "c79cf6a4117e2ced6215263bd88ad9ea38e3af5af6aeb576e11ede4e96a7490f",
+      "caa7f2146a6bc5c8e8a3ed4a462068719ee9ab34d8dc48f8563806bbcec2be90",
+      "d9cd6ce8b298fa639e82831a3455bfb95bd27af21703a7e860b0183bbcf598c5",
+      "de0652c4109253592906b8e33913dfee254c3b2f1c0e045caef9ae5122843f2e",
+      "e12618dc363acb1ec9e3a53a2bb78f4849908bc266564e9a2120796b4d5cacbc",
+      "ea8d9d133ddf7feedde805050ba48071823371334f1da07289d896af651e801e",
+      "f84d98790232ae3e5d9665e800c3d1761e077e4ff6d2e2cc9ba5e41c3f2d9662"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "contact-input-protocol",
+    "reason": "The input uses the existing format validator or the technical email length limit.",
+    "fingerprints": [
+      "02098f8f1e96663efe9f6bf101b7b121991d4a35b7ed751690cb9096b1e35d1c",
+      "4c5867cdf0eb7adf1549207b8cf97e749c48480b24e5521b5a7315c21ce1a32f",
+      "a5a585dba07eb17455fe1a6f03a3ff553ea5453c3b61bec595f917c0c824398c"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_mobile_required",
+    "reason": "The published admissions rule sets whether mobile is mandatory at initial submission.",
+    "fingerprints": [
+      "10ff0d3053acec5743d3fbab4d68d16165ba46aff22d0f7b5ce79b8e1f10f9d1",
+      "335bbcc325aad36aace178be55299f2ea87b2c23dbefc20ef3e0c052dece0785",
+      "3e730523e6d04df430a1c5a31128d131fe545d571f4d56494b193465ebdd6a3a",
+      "4029283d038167487c8d5b7c4e5d019ac621931c3d0878a1eb51ea0f2362da86",
+      "c46413b3f030b950184df0ac8f4c7584ec6a11eb6cb96f1d8bb9b351c26a0236",
+      "d50f6a82ab5083e3f1e3a0024dd10a06904348b9573970dffefae3759fdc4b5c"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "invitation-delivery-protocol",
+    "reason": "The HTTP method, response codes and provider acceptance code are fixed by the integration protocol.",
+    "fingerprints": [
+      "2a24c3c109ac1cb5bf3c5f4b366869209d481f7e420823e7ae76cd95840f5b56",
+      "5210b5b93da5b8ec997e1368cde0dd5ad031849900139354b45a820aa525f547",
+      "80c3b6bbb31d351f0907837d82215f51cc8a89348ef88374abe9610bac890f49",
+      "ec0f3631dce399766142b5e2fd75a96bab8b919067adc65ce07b3fd07e64861e"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "application-lifecycle-integrity",
+    "reason": "The statement fences concurrent requests or enforces application access and lifecycle integrity independently of settings.",
+    "fingerprints": [
+      "0e191ba05be0aa5115b8c03e31e899ec2ae9f29cfbdfcf8372bff3631409fe9f",
+      "23d1002ae0d45f63f6e1a7d58850a8e075a085be27287197f7e8ea20428f13ab",
+      "292e3631a43ba82611d817a1773899ab2ca9f924eca7924efaa9bf02cfdd9f2a",
+      "3f447cecac6b41fb0b9c6b66ed03912642080b1a88587478ffe3237cda60813f",
+      "9108fececa817c5cb0b77201dfbd896dec044f0518b80b92a73b4d20b104ef73",
+      "a2712bb57ff41dbc82a8f817b069eeaef83355c2bd012b16ce89f452841a608d"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "existing-admissions-schema",
+    "reason": "The statement preserves an existing admissions contract or implements fixed data and workflow presentation semantics.",
+    "fingerprints": [
+      "0c5a440f6bed2dcf075c67c1299122fdb4a2c4feb22775e48d5afb8c5e4688dd",
+      "1775e7de6a947bfe032c9554db27caea8fa0ccd3a5a42a639b0c0ecb391a8b2d",
+      "1e534a4d9b39d2d5ed859fa9928a93a3729cf844ceb4983355f7eacffe27bb97",
+      "29a1db239967129f2d3d75b5d6d603f0e49aa4818298093f6f0960aeb4ea7a45",
+      "327a0bf1ea0a454139399c1d923e2a1efbe26e90fbb6f70d7c320a82b24be472",
+      "347fe0b239b8694c9d8c3cf43c83d91cb23a962188186865638292ea6aa7b458",
+      "4168bb8f0f0d4c3cb762c2b4a518a3a7cc568dfe642cac00742448d1c8c97265",
+      "4749885f330cd8e49161dba732f2b786a1628c3c613ef36b4d13079433fbe649",
+      "4f446d2a9ec83dfeff4f865e10d3b37d7421cc0e019df78e10ca97e28117b21d",
+      "508262213d3d8ae8a771d75fd649a2e3ff6aa6447ff38b83bea47c37e9ebd471",
+      "56b4c5e8109a322cae05a405635aca46e1c2b4c0aa7ece8c336a05ba83c095fd",
+      "5a9f37ebe928a8ee07add76178015b70635ea18906169ba41c488930779feb16",
+      "5b547a9d363c45236d4f1987aaf8e13668d2574bfd874794e13e6af466e8b336",
+      "7186c179e094af649b0a4a1a745934f177f8f19ee12028d1394fbef307738a74",
+      "749276222efc5ce1fe0d787c14774b00927b74a49f0ccd1380aa02e232c03917",
+      "8068bf6bbbd4aaf259077d5018de068f469fba2829be18e1a79513928beffb00",
+      "84713e73443d59f8cea8e67faa39971f8dd0a00d59337710405a050941df094f",
+      "9133d3de4e19e6846c94eb576993fce8b81f1b8d950aa7fa2880870a9eb1c55a",
+      "99c22e4600e5c3b1d67d6c2f4c84f13b8dad190e6e1612508a168a9883a03c28",
+      "9a97b7e76281d3e0f3c3e949c8209fa392f7b671ca8884457f91b057f6c5135c",
+      "9bdef04cc8ac3b6c9689dac0d56233d92ca1ea04b60d68ea8497e99329134814",
+      "9c06f92fef2e6ffd4a8d29e5ed172181745a403be13593a9082609675fb3f6d0",
+      "9eaa308a262f260e411bfb64ff8a53fe918ec35228418566f73f0256f63ccfab",
+      "a7bb2ebed7fa1f12e9cd115ad0a5bd12b89aa7a5cbe766c5bc330f5a99767098",
+      "ba45b7a257017ac60d96e8b55be5226147fc4b86f75771b3f7a08a3dc1fc8f47",
+      "c383cfc41ee92e4185f689789ffbfa37c96a9304e31a02499fc602840694d625",
+      "cdb81a2f9102d3cf28ae7850871a5668e99ef912b3d38a8fa71936b7a1764793",
+      "d4ad246d0742d516534b1ac4785d678602142d21c7d712e42120425f4b56ffb5",
+      "d949da714214c8408b58e0688472a16be9d69e1e719f8990a7661872e3e0a63c",
+      "dbefdb5d14531728786e8685ffaf7cdb8741ae3d9ba172d2e249c384ace3ed99",
+      "e9c315f5e6ef63cbd54d35adb32ba19b21522d17dd938ab115726677fe7f34a0",
+      "f3f15bbafb9e77311b55dc8db1047ee9a8566826739da6782caeaf53bd5dec42",
+      "f4a5a7cc1bb890e5de225bd79ccf5913348728ff247cdf8a7cb264a2436c447f",
+      "f6cf69fde723d0798603c1a4f9e126ff0cd324ff348b4e9e632251bf7d2f654b",
+      "ff71baf24f3403dde1c84cce1c35362979657ba3f5cd7db15f8882c7b6b7da5c",
+      "fffa130f88fd609af464e3efb079ca74dbadf01ef463a7aeba6e0870870d951e"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_invite_hours",
+    "reason": "The published invitation rule determines how long a link remains valid.",
+    "fingerprints": [
+      "481d1688d45f73d2b725da92f3bdf9421baaec56ecd8229478a19ae89ed49176",
+      "824930447b4456fd86dd4401fe15995f6e3dbe5cdc9bf066e648e11d535bfefb",
+      "bb8fab015eab02478f4283dc6d87e8523de90670213de96325ae79b93c675548",
+      "bc46526dedab6f1005e641719d4b33cf2cd374f710cf3305a0277f4e075a6f79"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_invite_resend_limit",
+    "reason": "The published resend setting controls the number of invitations in the defined daily window.",
+    "fingerprints": [
+      "2b6593a5d67c5cc553887bca86d061fba2eb600631a463bd532867c2ee2bfcce",
+      "2c2713b29a9ca0b3d1c515ff0510de8e6333331164b5295243ec49cce2e94530",
+      "2dbe4b580877aba6d7d212dfab60ca76f4869669db2fdef4a92cf419e6ebb4d3",
+      "8b688d7fb7d9eeb03ad9b2dad5fdff9632af129a26e3a9e293bc9a244235e8b3",
+      "d206db37a0150f507f8159e77ad7324c3d22fcaff1e6de25bbb15295996f3db6",
+      "eeece90d2370a831881b10cff55393ca952d3fdfef63c07bf106977e554c41ea"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_invite_template",
+    "reason": "The migration registers the SLIT wording as an editable, unpublished invitation template.",
+    "fingerprints": [
+      "f046ed7cf51b9fa0b8bd477a7510a8428adfb97b5917516bf49a57ddc4d18911"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "existing-submission-validation",
+    "reason": "The statement carries forward the existing published course rule while retaining its current fallback.",
+    "fingerprints": [
+      "032520b03dad45d58d41dc417f761565bbd77dd62ab2f77353d5897006ecf815"
+    ]
   }
 ]

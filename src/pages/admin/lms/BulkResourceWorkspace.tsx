@@ -9,7 +9,7 @@ type Filter = "all" | "ready" | "low" | "unmatched" | "duplicates" | "restricted
 const control = "rounded-lg border border-background-300 bg-background-50 px-2.5 py-1.5 text-sm";
 const button = "rounded-lg border border-background-300 bg-background-50 px-3 py-1.5 text-sm font-semibold disabled:opacity-50";
 const mobileCell = "p-2 max-sm:flex max-sm:flex-wrap max-sm:items-center max-sm:gap-2 max-sm:before:text-xs max-sm:before:font-semibold max-sm:before:text-foreground-600 max-sm:before:content-[attr(data-column)]";
-const primary = "rounded-lg bg-primary-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50";
+const primary = "rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50";
 const stateLabel: Record<ImportFile["state"], string> = {
   uploading: "Awaiting upload", queued: "Queued", processing: "Analysing", extracted: "Extracted",
   review: "Review", failed: "Failed", excluded: "Excluded", imported: "Approved",
@@ -223,8 +223,8 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
 
   return <section aria-label="AI Bulk Upload" className="space-y-4">
     <header className="flex flex-wrap items-center justify-between gap-3">
-      <div><button type="button" className="text-sm font-semibold text-primary-800" onClick={onClose}>← Units</button>
-        <h1 className="mt-2 font-heading text-2xl font-bold text-foreground-950">AI Bulk Upload</h1></div>
+      <div><button type="button" className="text-sm font-semibold text-violet-800 dark:text-violet-300" onClick={onClose}>← Units</button>
+        <h1 className="mt-2 font-heading text-2xl font-bold text-slate-950 dark:text-slate-50">AI Bulk Upload</h1></div>
       <select className={control} aria-label="Open a recent import" value={job} onChange={e => showJob(e.target.value)} disabled={busy}>
         <option value="">New import</option>
         {jobs.map(j => <option value={j.id} key={j.id}>{new Date(j.created_at).toLocaleString()} · {j.id.slice(0, 8)}</option>)}
@@ -246,9 +246,9 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
       </label>
       <div className="min-w-0 space-y-4">
         <section className="space-y-3 rounded-xl border border-background-200 bg-background-50 p-4">
-          <div className="rounded-xl border-2 border-dashed border-primary-300 bg-primary-50/50 p-4"
+          <div className="rounded-xl border-2 border-dashed border-violet-300 bg-violet-50/50 dark:bg-violet-950/30 p-4"
             onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!busy) addFiles(e.dataTransfer.files); }}>
-            <h2 className="font-semibold text-foreground-950">Drop files here or choose a folder</h2>
+            <h2 className="font-semibold text-slate-950 dark:text-slate-50">Drop files here or choose a folder</h2>
             {policy && <p className="mt-1 break-words text-xs text-foreground-600">{policy.formats.map(f => f.toUpperCase()).join(", ")} · Up to {policy.max_mib} MiB per file</p>}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <label className={button + " cursor-pointer"}>Choose files
@@ -269,7 +269,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
             {hasPendingUpload && <button className={button} type="button" disabled={busy || !files.length} onClick={() => void upload(true)}>Resume this import</button>}
           </div>
           {progress && <div className="text-sm" role="status">Upload attempts {progress.completed} of {progress.total}
-            <progress className="ml-2 align-middle accent-primary-700" value={progress.completed} max={progress.total} />
+            <progress className="ml-2 align-middle accent-violet-700" value={progress.completed} max={progress.total} />
           </div>}
           {uploadErrors.length > 0 && <ul className="max-h-40 overflow-auto text-sm text-red-800" aria-label="Upload errors">
             {uploadErrors.map((message, index) => <li key={index}>{message}</li>)}
@@ -277,7 +277,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
         </section>
         {job && <section className="space-y-3 rounded-xl border border-background-200 bg-background-50 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-semibold text-foreground-950">Classification review</h2>
+            <div><h2 className="font-semibold text-slate-950 dark:text-slate-50">Classification review</h2>
               <p className="text-sm text-foreground-600">Archives extracted {archives.filter(f => f.state === "extracted").length}/{archives.length} · Documents processed {analysed}/{metadata.length}</p>
               <p className="text-xs text-foreground-600">Queued documents continue processing after you close this page.</p>
               {priced.length > 0 && <p className="text-xs text-foreground-600">Estimated AI cost USD {priced.reduce((a, b) => a + b, 0).toFixed(4)} for {priced.length} files</p>}</div>
@@ -312,10 +312,10 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
                   <td className="min-w-44 p-2 max-sm:block">
                     <p className="break-words font-semibold">{file.result?.title || file.name}</p>
                     <p className="break-all text-xs text-foreground-600">{file.source_path}</p>
-                    {file.result && <details className="mt-1 text-xs"><summary className="cursor-pointer text-primary-800">Evidence</summary>
+                    {file.result && <details className="mt-1 text-xs"><summary className="cursor-pointer text-violet-800 dark:text-violet-300">Evidence</summary>
                       <p>{file.result.documentType} · {file.result.intendedAudience}</p><p>{file.result.explanation}</p><p>{file.result.evidence}</p>
                       {file.result.assessmentPurpose && <p>{file.result.assessmentPurpose}</p>}</details>}
-                    {isReview && <button type="button" className="mt-1 text-xs font-semibold text-primary-800 underline" onClick={() => void open(file)}>Preview file</button>}
+                    {isReview && <button type="button" className="mt-1 text-xs font-semibold text-violet-800 dark:text-violet-300 underline" onClick={() => void open(file)}>Preview file</button>}
                   </td>
                   <td className={mobileCell} data-column="Course">{isReview ? <select className={control + " w-28"} aria-label={`Course for ${file.name}`} value={targetCourse}
                     onChange={e => {
@@ -334,7 +334,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
                     onChange={e => update(file, { category: e.target.value as Category, reviewed: false })}>
                     {categories.map(c => <option value={c} key={c}>{categoryLabel(c, policy)}</option>)}</select> : file.result ? categoryLabel(file.result.category, policy) : "—"}</td>
                   {/* // rule-policy: business lms.bulk_confidence Shows the confidence comparison from the published review setting. */}
-                  <td data-column="Confidence" className={mobileCell + (low(file, policy) ? "font-semibold text-amber-800" : "")}>{file.result ? `${Math.round(file.result.confidence)}%` : "—"}</td>
+                  <td data-column="Confidence" className={mobileCell + (low(file, policy) ? " font-semibold text-amber-800" : "")}>{file.result ? `${Math.round(file.result.confidence)}%` : "—"}</td>
                   <td className={mobileCell} data-column="Access">{isReview ? <select className={control} aria-label={`Access for ${file.name}`} value={restrictedAccess ? "assessor" : value.audience}
                     disabled={restrictedAccess} onChange={e => update(file, { audience: e.target.value as Audience, reviewed: false })}>
                     {Object.entries(accessLabels).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select> : "—"}</td>
@@ -376,7 +376,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
         : preview.format.startsWith("image/")
           ? <img className="mx-auto max-h-[70vh] object-contain" src={preview.url} alt={preview.name} />
           : <video className="mx-auto max-h-[70vh]" controls src={preview.url} />}
-      <a className="mt-3 inline-block text-sm text-primary-800 underline" href={preview.url} download={preview.name}>Download original</a>
+      <a className="mt-3 inline-block text-sm text-violet-800 dark:text-violet-300 underline" href={preview.url} download={preview.name}>Download original</a>
     </dialog>}
   </section>;
 }

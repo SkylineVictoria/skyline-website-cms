@@ -171,7 +171,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     {!embeddedCourseId && <header className="flex flex-wrap items-end justify-between gap-3">
       <div><h1 className="font-heading text-2xl font-bold text-foreground-950">Units</h1>
         <p className="text-sm text-foreground-500">Units of each course, with their Training.gov.au content.</p></div>
-      {canManageResources && <button type="button" className="rounded-lg bg-primary-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => setBulk({})}>AI Bulk Upload</button>}
+      {canManageResources && <button type="button" className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => setBulk({})}>AI Bulk Upload</button>}
     </header>}
     {error ? <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error} <button className="ml-2 underline" onClick={() => void load()}>Retry</button></p> : null}
     <div className={embeddedCourseId ? "" : "grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]"}>

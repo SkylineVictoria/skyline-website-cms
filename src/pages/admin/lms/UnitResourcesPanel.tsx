@@ -52,12 +52,12 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, onBulk
   const shown = resources?.filter(r => r.category === selected);
   return <section className="space-y-3" aria-label="Unit resources">
     <header className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="font-heading font-bold text-foreground-950">Unit resources</h3>
-      {canManage && <button type="button" className="rounded-lg bg-primary-700 px-3 py-2 text-sm font-semibold text-white" onClick={onBulk}>AI Bulk Upload</button>}
+      <h3 className="font-heading font-bold text-slate-950 dark:text-slate-50">Unit resources</h3>
+      {canManage && <button type="button" className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white" onClick={onBulk}>AI Bulk Upload</button>}
     </header>
     <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Resource categories">
       {categories.map(category => <button type="button" role="tab" aria-selected={category === selected} key={category} onClick={() => setSelected(category)}
-        className={button + (category === selected ? " border-primary-500 bg-primary-50 text-primary-800" : "")}>
+        className={button + (category === selected ? " border-violet-500 bg-violet-50 dark:bg-violet-950/40 text-violet-800 dark:text-violet-300" : "")}>
         {categoryLabel(category, policy)}{resources ? ` (${resources.filter(r => r.category === category).length})` : ""}
       </button>)}
     </div>
@@ -69,7 +69,7 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, onBulk
           const status = resource.published_at ? "Published" : resources?.some(r => r.previous_id === resource.id && r.published_at) ? "Superseded" : "Unpublished";
           return <li key={resource.id} className="space-y-2 p-3 text-sm">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <div><p className="font-semibold text-foreground-950">{resource.title}</p>
+              <div><p className="font-semibold text-slate-950 dark:text-slate-50">{resource.title}</p>
                 <p className="break-all text-xs text-foreground-600">{resource.name}</p>
                 <p className="text-xs text-foreground-600">{status} · {accessLabels[resource.audience]}{resource.previous_id ? " · Updated version" : ""}</p></div>
               <button className={button} type="button" onClick={() => void downloadResource(resource.path, resource.name).catch(handleError)}>Open file</button>
@@ -85,11 +85,11 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, onBulk
                   {assessments.map(a => <option value={a.id} key={a.id}>{a.title}</option>)}
                 </select>
                 {resource.assessment_id
-                  ? <Link className="text-primary-800 underline" to={`/admin/assessments/${resource.assessment_id}`}>Open assessment</Link>
+                  ? <Link className="text-violet-800 dark:text-violet-300 underline" to={`/admin/assessments/${resource.assessment_id}`}>Open assessment</Link>
                   : <button type="button" className={button} disabled={busy} onClick={() => void createAssessment(resource)}>Create assessment draft</button>}
               </>}
             </div>}
-            {publishing?.id === resource.id && <div className="space-y-3 rounded-lg bg-primary-50 p-3">
+            {publishing?.id === resource.id && <div className="space-y-3 rounded-lg bg-violet-50 dark:bg-violet-950/40 p-3">
               <p>Publish {resource.title} for {accessLabels[resource.audience].toLowerCase()}?</p>
               {resource.audience === "student_staff" && <label className="flex items-center gap-2"><input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} />
                 I checked this document for assessor-only answers and marking guidance.</label>}

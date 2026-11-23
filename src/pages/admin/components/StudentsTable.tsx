@@ -10,8 +10,11 @@ import { deleteStudentRecord, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PO
 import StudentLoginCell from "@/pages/admin/components/StudentLoginCell";
 import EditStudentDialog from "@/pages/admin/components/EditStudentDialog";
 import { deleteApplicationDocument, listApplicationDocuments } from "@/pages/agency/lib/portalApplications";
-import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
 import { StatusBadge } from "@/pages/agency/components/PortalUI";
+import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
+import ActivateInIntakeDialog from "@/components/shared/application-status/ActivateInIntakeDialog";
+import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
+import { changeApplicationStatus } from "@/pages/agency/lib/portalApplications";
 import { formatPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 
 // Up to 100 students load per page and are sorted on this device (like the Agents list).
@@ -45,7 +48,6 @@ function compareStudents(a: StudentRow, b: StudentRow, key: SortKey): number {
  */
 export default function StudentsTable({ businessId, agentId, emptyText, refreshKey = 0 }: { businessId?: string; agentId?: string; emptyText?: string; refreshKey?: number }) {
   const { push } = useToast();
-  const statusCatalog = useStatusCatalog();
   const [search, setSearch] = useState("");
   // 2026-11-21: the tabs are about portal access (never enrolment); "" is All. Enrolment is its own filter, derived from the applications.
   const [access, setAccess] = useState<PortalAccess | "">("");
@@ -62,6 +64,9 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
   const [editing, setEditing] = useState<StudentRow | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<StudentRow | null>(null);
   const [busyId, setBusyId] = useState("");
+  // ONE-STATUS (owner, 2026-11-23): Student status, Enrolment and the main application's status are one Status dropdown.
+  const workflow = useApplicationStatuses();
+  const [move, setMove] = useState<{ row: StudentRow; applicationId: string; action: StatusAction } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -121,6 +126,34 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
     }
   };
 
+  /** The application the Status follows: the most advanced one (row.enrolment), else the first. */
+  const mainApplication = (row: StudentRow) => {
+    const apps = (row.applicationRows ?? []).filter((a) => a.status !== "draft");
+    return apps.find((a) => a.id === row.enrolment?.applicationId) ?? apps[0] ?? null;
+  };
+  /** "Change status to" moves the signed-in user may make from this status (set_*, Admins; the database checks again). */
+  const movesFrom = (status: string) => getAllowedActions(workflow, status).filter((a) => a.action.startsWith("set_") && a.to);
+  const pickStatus = (row: StudentRow, value: string) => {
+    if (value === "__inactive") { setConfirmDisable(row); return; }
+    if (value === "__enable") { void changeStudentStatus(row, "Active"); return; }
+    const app = mainApplication(row);
+    const action = app ? movesFrom(app.status).find((a) => a.to === value) : undefined;
+    if (app && action) setMove({ row, applicationId: app.id, action });
+  };
+  const runMove = async () => {
+    if (!move) return;
+    setBusyId(move.row.id);
+    try {
+      const result = await changeApplicationStatus(move.applicationId, move.action.action, { note: "Changed on the Students list" });
+      push(`${move.row.name || move.row.email} is now ${result.label}.`);
+      setReload((n) => n + 1);
+    } catch (e) {
+      push(e instanceof Error ? e.message : "We could not change the status.", "error");
+    } finally {
+      setBusyId(""); setMove(null);
+    }
+  };
+
   // Deleting a student deletes all of their applications too. Files of applications still being worked on are removed
   // here first (the document-delete function keeps files of submitted ones); the database then deletes every
   // application with its records and queues any remaining files for removal, then the student.
@@ -164,7 +197,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
   };
 
   const filtered = Boolean(search || access || enrolment);
-  const columns = businessId ? 6 : 7;
+  const columns = businessId ? 4 : 5;
   return (
     <div>
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
@@ -198,10 +231,8 @@ This permanently deletes the student and ALL ${total} of their application${tota
                   {sortHeader("student", "Student", businessId ? "w-[26%]" : "w-[21%]")}
                   {businessId ? null : sortHeader("business", "Business", "w-[13%]")}
                   {sortHeader("agent", "Agent", "w-[11%]")}
-                  {sortHeader("studentStatus", "Student status", "w-[10%]")}
-                  <th className="w-[11%]">Portal access</th>
-                  <th className="w-[13%]">Enrolment</th>
-                  {sortHeader("applications", "Application status", "w-[21%]")}
+                  {sortHeader("studentStatus", "Status", "w-[22%]")}
+                  {sortHeader("applications", "Applications", "w-[23%]")}
                 </tr>
               </thead>
               <tbody>
@@ -231,26 +262,35 @@ This permanently deletes the student and ALL ${total} of their application${tota
                       </td>
                       {businessId ? null : <td><Link to={`/admin/businesses/${row.businessId}`} className="text-foreground-800 hover:text-primary-700">{row.businessName}</Link>{inactiveBusiness(row) ? <p className="text-xs font-medium text-foreground-600">Business inactive</p> : null}</td>}
                       <td>{row.agentId ? <Link to={`/admin/agents/${row.agentId}`} className="text-foreground-800 hover:text-primary-700">{row.agentName}</Link> : <span className="text-xs text-foreground-500">Not assigned</span>}</td>
-                      <td>
-                        <label className="sr-only" htmlFor={`student-status-${row.id}`}>Status for {row.name || row.email}</label>
-                        <select id={`student-status-${row.id}`} value={studentStatusOf(row)} disabled={busyId === row.id || row.status === undefined}
-                          onChange={(e) => { if (e.target.value === "Inactive") setConfirmDisable(row); else void changeStudentStatus(row, "Active"); }}
-                          className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${disabled ? "border-background-300 bg-background-100 text-foreground-600" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>
-                          {statusCatalog.student.map((item) => (
-                            <option key={item.value} value={item.value}>{busyId === row.id && item.value === studentStatusOf(row) ? "Saving…" : item.label}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <StudentLoginCell login={row.login} access={row.portalAccess} email={row.email} busy={busyId === row.id} disabled={disabled} onInvite={() => void invite(row)} />
-                      </td>
-                      <td data-testid={`student-enrolment-${row.id}`}>
-                        {/* Derived from the applications (the most advanced one); never set by hand. */}
-                        {row.enrolment ? <div className="flex flex-col items-start gap-0.5 text-xs">
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 font-medium ${ENROLMENT_TONE[row.enrolment.stage] ?? ENROLMENT_TONE.none}`}>{row.enrolment.label}</span>
-                          {row.enrolment.applicationId ? <Link to={`/admin/applications/${row.enrolment.applicationId}`} className="text-foreground-700 hover:text-primary-700">
-                            {[row.enrolment.course, row.enrolment.reference].filter(Boolean).join(" · ") || "Application"}</Link> : null}
-                        </div> : <span className="text-xs text-foreground-500">—</span>}
+                      <td data-testid={`student-status-cell-${row.id}`}>
+                        {(() => {
+                          const app = disabled ? null : mainApplication(row);
+                          const moves = app ? movesFrom(app.status) : [];
+                          const current = disabled ? "__inactive" : app?.status ?? "";
+                          const tone = disabled ? ENROLMENT_TONE.none : ENROLMENT_TONE[row.enrolment?.stage ?? "none"] ?? ENROLMENT_TONE.none;
+                          return <div className="flex flex-col items-start gap-1 text-xs">
+                            <label className="sr-only" htmlFor={`student-status-${row.id}`}>Status for {row.name || row.email}</label>
+                            <select id={`student-status-${row.id}`} value={current} disabled={busyId === row.id || row.status === undefined}
+                              onChange={(e) => pickStatus(row, e.target.value)}
+                              className={`max-w-full cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${tone}`}>
+                              {disabled ? <>
+                                <option value="__inactive">Inactive (switched off)</option>
+                                <option value="__enable">Switch back on</option>
+                              </> : <>
+                                {app ? <option value={app.status}>{busyId === row.id ? "Saving…" : statusInfo(workflow, app.status).label}</option> : <option value="">No submitted application</option>}
+                                {moves.map((a) => <option key={a.action} value={a.to ?? ""}>{a.to === "active" ? "Active (choose intake)" : statusInfo(workflow, a.to ?? "").label}</option>)}
+                                <option value="__inactive">Inactive (switch off student)</option>
+                              </>}
+                            </select>
+                            {!disabled && row.enrolment?.stage === "deposit_paid" ? <span className="font-medium text-teal-800">Deposit paid</span> : null}
+                            {app ? <Link to={`/admin/applications/${app.id}`} className="text-foreground-700 hover:text-primary-700">
+                              {[app.course, app.reference].filter(Boolean).join(" · ") || "Application"}</Link> : null}
+                            <span className="inline-flex items-center gap-1 text-foreground-600" title="Portal access">
+                              <i className="ri-key-2-line" aria-hidden="true" />
+                              <StudentLoginCell login={row.login} access={row.portalAccess} email={row.email} busy={busyId === row.id} disabled={disabled} onInvite={() => void invite(row)} />
+                            </span>
+                          </div>;
+                        })()}
                       </td>
                       <td>
                         {row.applicationRows ? (
@@ -263,8 +303,14 @@ This permanently deletes the student and ALL ${total} of their application${tota
                                     <span className="block text-foreground-600">{[application.course || "No course yet", application.intake ? `Intake ${application.intake}` : "", `${application.completion}%`].filter(Boolean).join(" · ")}</span>
                                   </span>
                                   <span className="inline-flex flex-col items-end gap-0.5">
-                                    {/* Shown only; the status is changed on the Applications list or the application itself. */}
+                                    {/* STUDENT-STATUS-MENU (owner, 2026-11-23): the application status (and so Enrolment) can be changed here by hand
+                                        when automation did not move it: the same Take action menu as the Applications list ("Change status to", Admins). */}
                                     <StatusBadge status={application.status} />
+                                    {!disabled && application.status !== "draft" ? <TakeActionMenu
+                                      application={{ id: application.id, status: application.status, reference: application.reference, studentName: row.name ?? "", studentId: row.id,
+                                        course: application.course ? { title: application.course, code: application.course } : null, intake: application.intake }}
+                                      onDone={() => setReload((n) => n + 1)}
+                                      onResult={(message, ok) => push(message, ok ? undefined : "error")} /> : null}
                                     {disabled ? <span className="text-2xs font-medium text-foreground-500"><i className="ri-lock-line" aria-hidden="true" /> Locked</span> : null}
                                   </span>
                                 </li>
@@ -290,6 +336,19 @@ This permanently deletes the student and ALL ${total} of their application${tota
 
       <EditStudentDialog student={editing} onClose={() => setEditing(null)} onSaved={() => setReload((n) => n + 1)} />
 
+      {move && move.action.to === "active" ? (
+        <ActivateInIntakeDialog application={{ id: move.applicationId, studentName: move.row.name ?? "" }} action={move.action}
+          onClose={() => setMove(null)}
+          onDone={(result) => { push(`${move.row.name || move.row.email} is now ${result.label}.`); setMove(null); setReload((n) => n + 1); }} />
+      ) : null}
+      <ConfirmDialog
+        open={Boolean(move) && move?.action.to !== "active"}
+        title={`Change ${move?.row.name || move?.row.email || "this student"} to ${move?.action.to ? statusInfo(workflow, move.action.to).label : ""}?`}
+        message="This moves the status by hand. To issue an offer letter or CoE / VoE, use Take action under Applications instead."
+        confirmLabel={busyId ? "Saving…" : "Change status"}
+        onConfirm={() => { if (!busyId) void runMove(); }}
+        onCancel={() => { if (!busyId) setMove(null); }}
+      />
       <ConfirmDialog
         open={Boolean(confirmDisable)}
         title={`Disable ${confirmDisable?.name || confirmDisable?.email || "this student"}?`}

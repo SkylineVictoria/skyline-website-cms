@@ -5,6 +5,7 @@ import OfferLetterDrawer, { type OfferApplication } from "./OfferLetterDrawer";
 import { FinalBadge, StatusConfigError } from "./StatusBadge";
 import { CoeVoeDrawer, EnrolDialog, ReasonDialog, type StatusResult } from "./StatusDialogs";
 import EnrolMailboxDialog from "./EnrolMailboxDialog";
+import ActivateInIntakeDialog from "./ActivateInIntakeDialog";
 import { FORM_LABEL } from "@/components/shared/application-form/Field";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
@@ -147,6 +148,8 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
 
   const sizeClass = size === "md" ? "h-9 px-3 text-sm" : "h-8 px-2.5 text-xs";
   const isEnrol = (a: StatusAction | null) => a?.kind === "enrol";
+  // ACTIVE-NEEDS-INTAKE (20261123221517): any move to Active asks for the intake and the unit start first.
+  const isActivate = (a: StatusAction | null) => a?.to === "active" && a.kind === "status" && !a.requiresReason;
   return (
     <span className="inline-flex items-center gap-1">
       {primary ? (
@@ -199,7 +202,8 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
       {isEnrol(active) && active ? <EnrolDialog application={dialogApp} action={active} onClose={close} onDone={(result) => { changed(result); setMailbox(true); }} /> : null}
       {mailbox ? <EnrolMailboxDialog applicationId={application.id} studentId={application.studentId} studentName={application.studentName} reference={application.reference}
         onClose={() => setMailbox(false)} /> : null}
-      {active && !["offer_letter", "coe"].includes(active.kind) && !(active.kind === "status" && active.requiresReason) && !isEnrol(active) ? (
+      {isActivate(active) && active ? <ActivateInIntakeDialog application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
+      {active && !["offer_letter", "coe"].includes(active.kind) && !(active.kind === "status" && active.requiresReason) && !isEnrol(active) && !isActivate(active) ? (
         <ConfirmDialog title={`${active.label}?`} confirmLabel={active.label} tone={active.tone === "danger" ? "danger" : "primary"} busy={busy} onClose={close} onConfirm={() => void runSimple()}
           body={active.kind === "resend_offer" ? "The same offer letter is emailed again, with a new link for the student to review and sign it. Earlier links stop working." : active.kind === "reminder" ? "The student or agent is emailed what this application still needs."
             : active.to ? `${application.studentName || "The application"} moves to ${statusInfo(workflow, active.to).label}.` : undefined}>

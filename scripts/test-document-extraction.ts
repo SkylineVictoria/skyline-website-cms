@@ -101,15 +101,16 @@ test("document expiry: expired, valid, expiring soon, English +2 years, missing,
 });
 
 test("USI: format rules, forbidden characters, case, blank, check character", async () => {
-  const { validateUsi, normalizeUsi, hasForbiddenUsiCharacter, usiCheckCharacter, USI_FORMAT_MESSAGE, USI_CHECK_MESSAGE } = await import("../supabase/functions/_shared/validation/identifiers.ts");
+  const { validateUsi, normalizeUsi, hasForbiddenUsiCharacter, usiCheckCharacter, USI_FORMAT_MESSAGE } = await import("../supabase/functions/_shared/validation/identifiers.ts");
   // Every USI in the USI Developers Kit V5 (test outlines, Generic USI Test Data, spec samples) passes the Registry's check character.
   for (const kit of ["BNGH7C75FN", "BP6LKB3C7X", "RVJ5DM8LXJ", "PDGGW5XLXW", "DG6K5YHPP3", "U6Q8JN6UD9", "QFJEGFSBC4", "9FZSH4B7KN", "R5HQLSWS9Y", "JXH6XLHLNU",
     "4BPKTANV6J", "HB4PJBFP6Z", "K49YCFFTQG", "3TTJN9GVLQ", "4N4XCTEP9Z", "HTSU3ZNMEB", "GHACP8URE8", "UDMAWRUMPG", "UDNM3W6KUS", "HEY5DBYZHX"]) assert.equal(validateUsi(kit), "", kit);
   assert.equal(validateUsi("bngh7c75fn"), "");
   assert.equal(usiCheckCharacter("BNGH7C75F"), "N");
-  assert.equal(validateUsi("BNGH7C75FM"), USI_CHECK_MESSAGE);   // last character changed
-  assert.equal(validateUsi("BNHG7C75FN"), USI_CHECK_MESSAGE);   // two characters swapped
-  assert.equal(validateUsi("ABCDEFGHJK"), USI_CHECK_MESSAGE);
+  assert.equal(validateUsi("BNGH7C75FM"), "");   // check character not enforced (owner, 2026-11-23)
+  assert.equal(validateUsi("BNHG7C75FN"), "");   // check character not enforced
+  assert.equal(validateUsi("ABCDEFGHJK"), "");
+  assert.equal(validateUsi("M23U923423"), "");
   assert.equal(normalizeUsi("abcd-efgh jk99"), "ABCDEFGHJK");
   assert.equal(validateUsi(""), "");
   assert.equal(validateUsi("   "), "");

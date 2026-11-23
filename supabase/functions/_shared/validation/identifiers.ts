@@ -52,12 +52,14 @@ export function usiCheckCharacter(first9: string): string {
   return USI_CHECK_CHARS[(n - (sum % n)) % n];
 }
 
-/** Format and check character (the Registry's algorithm). Blank is valid (optional for offshore students). */
+/** Format only: 10 characters from the USI alphabet. Blank is valid (optional for offshore students). The check character is
+ *  not enforced (owner, 2026-11-23: "remove validation rule"); the USI Registry still confirms a USI when it is verified.
+ *  usiCheckCharacter stays for anyone who wants to warn about it. */
 export function validateUsi(raw: string): string {
   const text = String(raw ?? "").toUpperCase().replace(/[\s-]/g, "");
   if (!text) return "";
   if (text.length !== USI_LENGTH || ![...text].every((char) => USI_ALPHABET.includes(char))) return USI_FORMAT_MESSAGE;
-  return usiCheckCharacter(text.slice(0, 9)) === text[9] ? "" : USI_CHECK_MESSAGE;
+  return "";
 }
 
 /* ------------------------------------------------------------------- Phones */

@@ -1,13 +1,55 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
-import { accessLabels, bulkAdmin, categories, categoryLabel, downloadResource, listResources, type BulkPolicy, type Category, type Resource } from "@/pages/admin/lib/bulkResources";
+import { accessLabels, bulkAdmin, categories, categoryLabel, categoryTitle, downloadResource, listResources, splitCategoryTitle, type BulkPolicy, type Category, type Resource } from "@/pages/admin/lib/bulkResources";
+import { supabase } from "@/pages/admin/lib/supabase";
+
+/** A document saved straight to the unit (Add from documents, no AI reader): a unit_contents file whose title carries its category. */
+type UnitDoc = { id: string; title: string; file_name: string | null; storage_path: string | null; visible_to_students: boolean };
 
 const button = "rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold disabled:opacity-50";
 
-export default function UnitResourcesPanel({ courseId, unitId, canManage, onBulk }: {
-  courseId: string; unitId: string; canManage: boolean; onBulk: () => void;
+export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdit = false, onBulk }: {
+  courseId: string; unitId: string; canManage: boolean;
+  /** RTO Managers edit and delete the documents saved straight to the unit. */
+  canEdit?: boolean; onBulk: () => void;
 }) {
+  const [docs, setDocs] = useState<UnitDoc[] | null>(null);
+  const [editing, setEditing] = useState<{ id: string; title: string; category: Category; visible: boolean } | null>(null);
+  const loadDocs = useCallback(async () => {
+    const { data, error } = await supabase.from("unit_contents").select("id,title,file_name,storage_path,visible_to_students")
+      .eq("unit_id", unitId).eq("kind", "file").order("sort");
+    if (error) throw new Error(error.message);
+    setDocs((data ?? []) as UnitDoc[]);
+  }, [unitId]);
+  useEffect(() => { void loadDocs().catch(e => setError(e instanceof Error ? e.message : "The documents could not be loaded.")); }, [loadDocs]);
+  const openDoc = async (doc: UnitDoc) => {
+    if (!doc.storage_path) return;
+    const { data, error } = await supabase.storage.from("unit-content").createSignedUrl(doc.storage_path, 300);
+    if (error || !data?.signedUrl) { setError("The file could not be opened."); return; }
+    window.open(data.signedUrl, "_blank", "noopener");
+  };
+  const saveDoc = async () => {
+    if (!editing || !editing.title.trim()) return;
+    setBusy(true); setError("");
+    try {
+      const { error } = await supabase.from("unit_contents").update({ title: categoryTitle(editing.category, editing.title, policy), visible_to_students: editing.visible }).eq("id", editing.id);
+      if (error) throw new Error(error.message);
+      setEditing(null); await loadDocs();
+    } catch (e) { setError(e instanceof Error ? e.message : "The document could not be saved."); }
+    finally { setBusy(false); }
+  };
+  const deleteDoc = async (doc: UnitDoc) => {
+    if (!window.confirm(`Delete "${splitCategoryTitle(doc.title, policy).title}"? The file is removed from this unit.`)) return;
+    setBusy(true); setError("");
+    try {
+      const { error } = await supabase.from("unit_contents").delete().eq("id", doc.id);
+      if (error) throw new Error(error.message);
+      if (doc.storage_path) await supabase.storage.from("unit-content").remove([doc.storage_path]);
+      await loadDocs();
+    } catch (e) { setError(e instanceof Error ? e.message : "The document could not be deleted."); }
+    finally { setBusy(false); }
+  };
   const [selected, setSelected] = useState<Category>("learning");
   const [resources, setResources] = useState<Resource[] | null>(null);
   const [assessments, setAssessments] = useState<AssessmentRow[]>([]);
@@ -50,6 +92,8 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, onBulk
   };
 
   const shown = resources?.filter(r => r.category === selected);
+  const docsIn = (category: Category) => (docs ?? []).filter(d => splitCategoryTitle(d.title, policy).category === category);
+  const shownDocs = docsIn(selected);
   return <section className="space-y-3" aria-label="Unit resources">
     <header className="flex flex-wrap items-center justify-between gap-2">
       <h3 className="font-heading font-bold text-slate-950 dark:text-slate-50">Unit resources</h3>
@@ -58,11 +102,45 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, onBulk
     <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Resource categories">
       {categories.map(category => <button type="button" role="tab" aria-selected={category === selected} key={category} onClick={() => setSelected(category)}
         className={button + (category === selected ? " border-violet-500 bg-violet-50 dark:bg-violet-950/40 text-violet-800 dark:text-violet-300" : "")}>
-        {categoryLabel(category, policy)}{resources ? ` (${resources.filter(r => r.category === category).length})` : ""}
+        {categoryLabel(category, policy)}{resources ? ` (${resources.filter(r => r.category === category).length + docsIn(category).length})` : ""}
       </button>)}
     </div>
     {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
-    {!shown ? <p role="status" className="text-sm">Loading resources…</p> : shown.length === 0 ?
+    {shownDocs.length ? <ul className="divide-y divide-background-200 rounded-lg border border-background-200" aria-label="Documents on this unit">
+      {shownDocs.map(doc => {
+        const parts = splitCategoryTitle(doc.title, policy);
+        const edit = editing?.id === doc.id ? editing : null;
+        return <li key={doc.id} className="space-y-2 p-3 text-sm">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div><p className="font-semibold text-slate-950 dark:text-slate-50">{parts.title}</p>
+              <p className="break-all text-xs text-foreground-600">{doc.file_name}</p>
+              <p className="text-xs text-foreground-600">{doc.visible_to_students ? "Students and staff" : "Staff only"} · on the unit</p></div>
+            <div className="flex flex-wrap gap-2">
+              <button className={button} type="button" onClick={() => void openDoc(doc)}>Open file</button>
+              {canEdit && !edit ? <button className={button} type="button" disabled={busy} onClick={() => setEditing({ id: doc.id, title: parts.title, category: parts.category, visible: doc.visible_to_students })}>Edit</button> : null}
+              {canEdit ? <button className={button + " text-red-700"} type="button" disabled={busy} onClick={() => void deleteDoc(doc)}>Delete</button> : null}
+            </div>
+          </div>
+          {edit ? <div className="grid gap-2 rounded-lg bg-background-100 p-3 sm:grid-cols-[1fr_auto]">
+            <label className="flex flex-col gap-1 text-xs font-semibold text-foreground-600">Title
+              <input className="rounded-lg border border-background-300 px-2.5 py-1.5 text-sm font-normal text-foreground-900" value={edit.title} maxLength={180}
+                onChange={e => setEditing({ ...edit, title: e.target.value })} /></label>
+            <label className="flex flex-col gap-1 text-xs font-semibold text-foreground-600">Category
+              <select className="rounded-lg border border-background-300 px-2.5 py-1.5 text-sm font-normal text-foreground-900" value={edit.category}
+                onChange={e => { const category = e.target.value as Category; setEditing({ ...edit, category, visible: category === "learning" || category === "self_assessment" ? edit.visible : false }); }}>
+                {categories.map(c => <option key={c} value={c}>{categoryLabel(c, policy)}</option>)}
+              </select></label>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={edit.visible} disabled={edit.category === "assessment" || edit.category === "assessor"}
+              onChange={e => setEditing({ ...edit, visible: e.target.checked })} />Students can see it{edit.category === "assessment" || edit.category === "assessor" ? " (never for assessments and assessor resources)" : ""}</label>
+            <div className="flex gap-2 sm:col-span-2">
+              <button className={button + " bg-white"} type="button" disabled={busy || !edit.title.trim()} onClick={() => void saveDoc()}>Save</button>
+              <button className={button} type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+            </div>
+          </div> : null}
+        </li>;
+      })}
+    </ul> : null}
+    {!shown ? <p role="status" className="text-sm">Loading resources…</p> : shown.length === 0 ? shownDocs.length ? null :
       <p className="rounded-lg border border-dashed border-background-300 p-4 text-sm text-foreground-600">No resources in this category.</p> :
       <ul className="divide-y divide-background-200 rounded-lg border border-background-200">
         {shown.map(resource => {

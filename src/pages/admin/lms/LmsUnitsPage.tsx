@@ -9,7 +9,7 @@ import UnitHoursEditor from "./UnitHoursEditor";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
-import { bulkAdmin, listResources, type ImportFile, type ImportJob, type Resource } from "@/pages/admin/lib/bulkResources";
+import { bulkAdmin, categories, categoryLabel, listResources, splitCategoryTitle, type ImportFile, type ImportJob, type Resource } from "@/pages/admin/lib/bulkResources";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
@@ -283,11 +283,18 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
           <td className="px-3 py-2 text-xs">{(() => {
             const d = r.unit.id ? docs[r.unit.id] : undefined;
             if (!d) return <span className="text-foreground-400">—</span>;
-            const parts = [
-              ["learning", "Learning", d.learning.length, d.learning.map(x => x.title)],
-              ["resources", "Resources", d.resources.length, d.resources.map(x => x.title || x.name)],
-              ["assessments", "Assessments", d.assessments.length, d.assessments.map(x => x.title)],
-            ] as const;
+            // Files on the unit are counted under their category (with the AI Bulk Upload resources of that category); notes and
+            // links stay "Learning content".
+            const files = d.learning.filter(x => x.kind === "file").map(x => splitCategoryTitle(x.title));
+            const other = d.learning.filter(x => x.kind !== "file");
+            const parts: (readonly ["learning" | "resources" | "assessments", string, number, string[]])[] = [
+              ...categories.map(c => {
+                const names = [...files.filter(x => x.category === c).map(x => x.title), ...d.resources.filter(x => x.category === c).map(x => x.title || x.name)];
+                return ["resources", categoryLabel(c), names.length, names] as const;
+              }),
+              ["learning", "Learning content", other.length, other.map(x => x.title)] as const,
+              ["assessments", "Assessments set", d.assessments.length, d.assessments.map(x => x.title)] as const,
+            ];
             const waiting = d.pending.length ? <div>
               <button type="button" onClick={e => { e.stopPropagation(); setBulk({ hint: r.unit.id }); }}
                 title={d.pending.map(x => `${x.name} (${x.state === "review" ? "waiting for your review" : x.state === "failed" ? "failed: open AI Bulk Upload to retry" : "being read"})`).join("\n")}
@@ -295,7 +302,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
               {showDocs ? <ul className="mt-1 space-y-0.5 pl-2 text-foreground-600">{d.pending.map((x, i) => <li key={i} className="break-words">{x.name} · {x.state === "review" ? "review" : x.state}</li>)}</ul> : null}
             </div> : null;
             if (!parts.some(([, , n]) => n)) return waiting ?? <span className="text-foreground-400">None</span>;
-            return <div className="flex max-w-xs flex-col gap-1">{waiting}{parts.filter(([, , n]) => n).map(([tab, label, n, names]) => <div key={tab}>
+            return <div className="flex max-w-xs flex-col gap-1">{waiting}{parts.filter(([, , n]) => n).map(([tab, label, n, names]) => <div key={label}>
               <button type="button" onClick={e => { e.stopPropagation(); openOn(r, tab); }} title={names.join("\n")}
                 className="rounded-full border border-primary-200 bg-primary-50 px-2 py-0.5 font-semibold text-primary-800 hover:bg-primary-100">{label} {n}</button>
               {showDocs ? <ul className="mt-1 space-y-0.5 pl-2 text-foreground-600">{names.map((name, i) => <li key={i} className="break-words">{name}</li>)}</ul> : null}
@@ -338,7 +345,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
           {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
           {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEdit} /> : null}
-          {drawerTab==="resources" && draft.id && selectedCourse ? <UnitResourcesPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id}
+          {drawerTab==="resources" && draft.id && selectedCourse ? <UnitResourcesPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEdit}
             canManage={canManageResources} onBulk={() => setBulk({ hint: draft.id })} /> : null}
           {drawerTab==="assessments" && draft.id && selectedCourse ? <UnitAssessmentsPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEdit} /> : null}
           {drawerTab==="details" ? <div className="space-y-5">

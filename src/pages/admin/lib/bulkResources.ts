@@ -55,3 +55,18 @@ export async function downloadResource(path: string, name: string) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
+
+/** A unit document saved by Add from documents carries its category in its title ("Assessor Resources: Benchmarks", owner
+ *  2026-11-23: documents go straight to the unit without the AI reader). The category and the plain title; a title without a
+ *  known category name is Learning Materials. */
+export function splitCategoryTitle(title: string, policy?: BulkPolicy | null): { category: Category; title: string } {
+  for (const category of categories) {
+    for (const label of new Set([categoryLabel(category, policy), categoryLabels[category]])) {
+      if (title.toLowerCase().startsWith(label.toLowerCase() + ":")) return { category, title: title.slice(label.length + 1).trim() };
+    }
+  }
+  return { category: "learning", title };
+}
+export function categoryTitle(category: Category, title: string, policy?: BulkPolicy | null) {
+  return `${categoryLabel(category, policy)}: ${title.trim()}`.slice(0, 200);
+}

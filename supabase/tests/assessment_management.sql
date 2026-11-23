@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(379);
+select plan(384);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -188,6 +188,15 @@ select is(jsonb_array_length(public.asm_student('my_assessments')), 1, 'the enro
 select pg_temp.put('open', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment'))))::text);
 select pg_temp.put('attempt', pg_temp.s('open')::jsonb->'attempt'->>'id');
 select is(pg_temp.s('open')::jsonb->'attempt'->>'state', 'draft', 'opening creates attempt 1 as a draft');
+-- ASM-OPEN-RACE (20261123235517): a start returns the open attempt; one open attempt per student per assignment (the two-session
+-- race itself runs in the lab e2e "ASM-OPEN-RACE", pgTAP has one session)
+select is((public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment'))))->'attempt'->>'id', pg_temp.s('attempt'), 'open race: opening again returns the same open attempt');
+select pg_temp.as_postgres();
+select is(public.asm_start_attempt(pg_temp.v('assignment'), (select student_id from public.asm_attempts where id = pg_temp.v('attempt')), null)::text, pg_temp.s('attempt'), 'open race: a start while an attempt is open returns that attempt');
+select throws_ok(format($$select public.asm_next_attempt('%s', '%s', now(), null, false)$$, pg_temp.v('assignment'), (select student_id from public.asm_attempts where id = pg_temp.v('attempt'))), '23505', 'The student already has an open attempt', 'open race: a staff reassessment still refuses a second open attempt');
+select throws_ok(format($$insert into public.asm_attempts(assignment_id, version_id, student_id, attempt_no, due_at) select assignment_id, version_id, student_id, attempt_no + 1, due_at from public.asm_attempts where id = '%s'$$, pg_temp.v('attempt')), '23505', null, 'open race: the database refuses a second open attempt (asm_attempts_one_open)');
+select ok(not has_function_privilege('authenticated', 'public.asm_start_attempt(uuid,uuid,uuid)', 'execute') and not has_function_privilege('anon', 'public.asm_start_attempt(uuid,uuid,uuid)', 'execute'), 'open race: asm_start_attempt is called by asm_student only, not by users');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
 select is(public.asm_jsonb_forbidden_key(pg_temp.s('open')::jsonb), null, 'the student payload carries no key, model answer or assessor guidance');
 select ok(not (pg_temp.s('open')::jsonb ? 'keys'), 'the student payload has no keys collection');
 select is((select count(*)::int from public.asm_question_keys), 0, 'the student reads no key rows directly');

@@ -1,8 +1,9 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { createAdmin, createAuthUser, createStudentLogin, person, shot, signInAsAdmin, signInThroughTheForm, signOutEverywhere, sql } from "./support";
+import { anonClient, createAdmin, createAuthUser, createStudentLogin, person, shot, signInAsAdmin, signInThroughTheForm, PASSWORD, signOutEverywhere, sql } from "./support";
 
 /**
  * Assessment Management (ASM-01) in the browser, against the LOCAL lab only: an Admin builds and publishes an assessment with two
@@ -471,6 +472,7 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await expect(page.getByTestId("assessment-details")).toContainText("Select Pavement surfacing");
     await expect(page.getByTestId("assessment-details")).toContainText("RII50520");
     await expect(page.getByTestId("assessment-details")).not.toContainText("Filled in for each student");
+    await expect(page.getByText(/already has an open attempt/)).toHaveCount(0); // ASM-OPEN-RACE: a double load opens the same attempt
     await expect(page.getByTestId("assessment-details")).toContainText("Wendy Workbook");
     await shot(page, "wb-06-student-before-you-start");
     await page.getByRole("button", { name: /I have read this – start the assessment/ }).click();
@@ -564,4 +566,67 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     expect(own.text).toContain("Student Full Name");
     expect(own.text).toContain("Assessment Task - 1 - Results Sheet");
   });
+
+  /**
+   * ASM-OPEN-RACE (owner, 2026-11-23): two simultaneous starts of the same assessment by the same student. A fresh assignment each
+   * time (one per intake), the student enrolled in its intake.
+   */
+  function freshAssignment(tag: string): string {
+    const course = sql(`select id from public.cms_courses where code = 'RII50520' limit 1`);
+    const unit = sql(`select id from public.cms_course_units where course_id = '${course}' and code = 'RIICWD525E' limit 1`);
+    const intake = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${course}', date '2026-01-05', date '2026-12-18', 'Race ${tag} ${RUN}') returning id`).split("\n")[0];
+    sql(`insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('${intake}', '${unit}', date '2026-01-05', date '2026-12-18')`);
+    enrol(intake, wbStudent.student);
+    return sql(`insert into public.asm_assignments(assessment_id, version_id, intake_id, due_at)
+      select a.id, v.id, '${intake}', now() + interval '30 days' from public.asm_assessments a join public.asm_versions v on v.assessment_id = a.id and v.status = 'published'
+      where a.id = '${wbAssessment}' returning id`).split("\n")[0];
+  }
+  /** One database session as the student (psql in the lab's database container), run in the background. */
+  function studentSession(uid: string, body: string): Promise<{ code: number; out: string }> {
+    return new Promise((resolve) => {
+      const child = spawn("docker", ["exec", "-i", process.env.E2E_DB_CONTAINER ?? "supabase_db_skyline-staff-lab", "psql", "-U", "postgres", "-At", "-v", "ON_ERROR_STOP=1"]);
+      let out = "";
+      child.stdout.on("data", (d) => { out += String(d); });
+      child.stderr.on("data", (d) => { out += String(d); });
+      child.on("close", (code) => resolve({ code: code ?? 1, out }));
+      child.stdin.end(`begin;
+        select set_config('request.jwt.claims', '{"sub":"${uid}","role":"authenticated"}', true);
+        set local role authenticated;
+        ${body}
+        commit;`);
+    });
+  }
+  const attemptOf = (out: string) => out.match(/"attempt":\s*\{[^{}]*?"id":\s*"([0-9a-f-]{36})"/)?.[1] ?? out.match(/"id":\s*"([0-9a-f-]{36})"[^{}]*"attemptNo"/)?.[1] ?? "";
+
+  test("ASM-OPEN-RACE: two simultaneous starts give the student one open attempt, and neither start fails", async () => {
+    test.setTimeout(120_000);
+    const uid = sql(`select id from auth.users where lower(email) = lower('${wbStudent.email}')`);
+    // 1. deterministic: session A creates attempt 1 and keeps its transaction open for 2 s; session B starts meanwhile, waits for
+    //    A's lock, and must get A's attempt instead of "The student already has an open attempt"
+    const one = freshAssignment("A");
+    const open = `select (public.asm_student('assessment_open', jsonb_build_object('assignmentId', '${one}')))::text;`;
+    const a = studentSession(uid, `${open} select pg_sleep(2);`);
+    await new Promise((r) => setTimeout(r, 600));
+    const b = studentSession(uid, open);
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(ra.out).not.toMatch(/ERROR/);
+    expect(rb.out).not.toMatch(/already has an open attempt|ERROR/);
+    expect(attemptOf(rb.out)).toBe(attemptOf(ra.out));
+    expect(sql(`select count(*) || ':' || count(*) filter (where state = 'draft') from public.asm_attempts where assignment_id = '${one}'`)).toBe("1:1");
+    // 2. the app's own call twice at the same moment (REST, as the page does on a double load), on another fresh assignment
+    const two = freshAssignment("B");
+    const client = anonClient();
+    const { error: signInError } = await client.auth.signInWithPassword({ email: wbStudent.email, password: PASSWORD });
+    expect(signInError).toBeNull();
+    const call = () => client.rpc("asm_student", { p_action: "assessment_open", p_data: { assignmentId: two } });
+    const results = await Promise.all([call(), call(), call()]);
+    expect(results.map((r) => r.error?.message ?? "ok")).toEqual(["ok", "ok", "ok"]);
+    const ids = new Set(results.map((r) => (r.data as { attempt: { id: string } }).attempt.id));
+    expect(ids.size).toBe(1);
+    expect(sql(`select count(*) from public.asm_attempts where assignment_id = '${two}' and state = 'draft'`)).toBe("1");
+    // 3. the database still refuses a second open attempt written directly (asm_attempts_one_open)
+    expect(() => sql(`insert into public.asm_attempts(assignment_id, version_id, student_id, attempt_no, due_at)
+      select assignment_id, version_id, student_id, attempt_no + 1, due_at from public.asm_attempts where assignment_id = '${two}'`)).toThrow(/asm_attempts_one_open/);
+  });
 });
+

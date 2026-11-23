@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ActionDrawer from "./ActionDrawer";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { CreateEmailForm } from "@/pages/admin/components/CreateEmailSection";
 import { logApplicationMailbox } from "@/pages/admin/lib/microsoft365";
 
@@ -20,11 +21,23 @@ export default function EnrolMailboxDialog({ applicationId, studentId, studentNa
   const [created, setCreated] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [closing, setClosing] = useState(false);
+  // The CRM student profile: every application has one (enrollment_applications.student_id is NOT NULL, set by the insert trigger), but
+  // not every caller has it (the Applications list row does not load it), so the dialog reads it from the application itself.
+  const [resolved, setResolved] = useState<{ id: string | null; done: boolean }>({ id: studentId, done: Boolean(studentId) });
+  useEffect(() => {
+    if (studentId) { setResolved({ id: studentId, done: true }); return undefined; }
+    let live = true;
+    void Promise.resolve(supabase.from("enrollment_applications").select("student_id").eq("id", applicationId).maybeSingle())
+      .then(({ data }) => { if (live) setResolved({ id: (data as { student_id?: string | null } | null)?.student_id ?? null, done: true }); },
+        () => { if (live) setResolved({ id: null, done: true }); });
+    return () => { live = false; };
+  }, [applicationId, studentId]);
+  const student = resolved.id;
 
   const close = async () => {
     if (closing) return;
     // Nothing created and no failure already logged: the mailbox was skipped (best effort; enrolment is saved either way).
-    if (!created && !failed && studentId) {
+    if (!created && !failed && resolved.done) {
       setClosing(true);
       await logApplicationMailbox(applicationId, "skipped", { reason: "Skipped after Mark as enrolled" }).catch(() => undefined);
     }
@@ -42,12 +55,17 @@ export default function EnrolMailboxDialog({ applicationId, studentId, studentNa
           {created ? "Done" : closing ? "Closing…" : "Skip for now"}
         </button>
       </>}>
-      {studentId ? <>
-        <p className="mb-4 text-sm text-foreground-700">Create their Microsoft 365 mailbox now, or skip and do it later. If anything below is not ready, skip: the enrolment is not affected.</p>
-        <CreateEmailForm initialKind="student" personId={studentId} personQuery={studentName.slice(0, 80)} locked applicationId={applicationId}
-          onCreated={(email) => setCreated(email)} onFailed={() => setFailed(true)} />
-      </> : <p role="status" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="enrol-mailbox-no-student">
-        This application has no student profile linked, so no mailbox can be made from here. Link the student, then use Email Management &gt; Create Email.</p>}
+      {!resolved.done ? <p className="text-sm text-foreground-600" role="status">Loading the student's profile…</p>
+        : student ? <>
+          <p className="mb-4 text-sm text-foreground-700">Create their Microsoft 365 mailbox now, or skip and do it later. If anything below is not ready, skip: the enrolment is not affected.</p>
+          <CreateEmailForm initialKind="student" personId={student} personQuery={studentName.slice(0, 80)} locked applicationId={applicationId}
+            onCreated={(email) => setCreated(email)} onFailed={() => setFailed(true)} />
+        </> : <>
+          <p role="status" className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="enrol-mailbox-no-student">
+            We could not find this application's student profile. Choose the student below to create their mailbox.</p>
+          <CreateEmailForm initialKind="student" personQuery={studentName.slice(0, 80)} applicationId={applicationId}
+            onCreated={(email) => setCreated(email)} onFailed={() => setFailed(true)} />
+        </>}
     </ActionDrawer>
   );
 }

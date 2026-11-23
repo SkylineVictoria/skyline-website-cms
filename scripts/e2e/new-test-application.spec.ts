@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SPECIMEN, SPECIMEN_FILE, specimenPassportPng } from "./fixtures/specimen-passport";
@@ -62,17 +62,22 @@ async function readerProblem(page: Page): Promise<string> {
   return texts.join(" | ");
 }
 
+/** Signs in as the TEST admin (E2E_ADMIN_EMAIL / E2E_ADMIN_PASSWORD; never stored). */
+async function signIn(page: Page) {
+  await page.goto("/login");
+  await page.locator('input[name="email"]').fill(process.env.E2E_ADMIN_EMAIL ?? "");
+  await page.locator('input[name="password"]').fill(process.env.E2E_ADMIN_PASSWORD ?? "");
+  await page.getByRole("button", { name: /^Sign in$/ }).click();
+  await expect(page).not.toHaveURL(/\/login/, { timeout: 30_000 });
+}
+const credentialsMissing = () => !process.env.E2E_ADMIN_EMAIL || !process.env.E2E_ADMIN_PASSWORD;
+
 test("new TEST application with the specimen passport (USI testing)", async ({ page, baseURL }) => {
-  const email = process.env.E2E_ADMIN_EMAIL ?? "", password = process.env.E2E_ADMIN_PASSWORD ?? "";
-  test.skip(!email || !password, "Set E2E_ADMIN_EMAIL and E2E_ADMIN_PASSWORD (a TEST admin account).");
+  test.skip(credentialsMissing(), "Set E2E_ADMIN_EMAIL and E2E_ADMIN_PASSWORD (a TEST admin account).");
   if (!existsSync(SPECIMEN_FILE)) writeFileSync(SPECIMEN_FILE, specimenPassportPng());
 
   // 2. Sign in.
-  await page.goto("/login");
-  await page.locator('input[name="email"]').fill(email);
-  await page.locator('input[name="password"]').fill(password);
-  await page.getByRole("button", { name: /^Sign in$/ }).click();
-  await expect(page).not.toHaveURL(/\/login/, { timeout: 30_000 });
+  await signIn(page);
 
   // Resume the draft of an earlier run (E2E_APPLICATION_ID, else the id this spec saved) unless E2E_NEW=1: never a second application.
   const resumeId = process.env.E2E_NEW === "1" ? "" : (process.env.E2E_APPLICATION_ID ?? savedApplicationId());
@@ -156,4 +161,73 @@ test("new TEST application with the specimen passport (USI testing)", async ({ p
   }
   await page.goto(`/admin/applications/${applicationId}`);
   console.log(`Link: ${new URL(`/admin/applications/${applicationId}`, baseURL).toString()}`);
+});
+
+// The document wizard on an existing TEST draft (2026-11-23): it is really modal, a second upload asks first, and a document added from
+// another tab shows once the wizard's window is focused again. Needs E2E_APPLICATION_ID = a TEST draft whose passport is already
+// stored and read (SLIT-2026-0092). The Replace step uploads the specimen once more under another file name (one more reading).
+test("document wizard: modal, replace question, refresh from another tab (TEST draft)", async ({ context }) => {
+  test.skip(credentialsMissing(), "Set E2E_ADMIN_EMAIL and E2E_ADMIN_PASSWORD (a TEST admin account).");
+  const id = process.env.E2E_APPLICATION_ID ?? "";
+  test.skip(!UUID.test(id), "Set E2E_APPLICATION_ID to the TEST draft (SLIT-2026-0092) that already has the specimen passport.");
+  if (!existsSync(SPECIMEN_FILE)) writeFileSync(SPECIMEN_FILE, specimenPassportPng());
+  const copy = join(tmpdir(), "specimen-passport-usi-replaced.png");
+  copyFileSync(SPECIMEN_FILE, copy);
+
+  const openWizard = async (page: Page) => {
+    await page.goto(`/admin/applications/${id}?wizard=1`);
+    const wizard = page.locator('[aria-labelledby="wizard-title"]').first();
+    await expect(wizard, "the document wizard opens on the draft").toBeVisible({ timeout: 60_000 });
+    await expect(wizard.getByText(/Loading the document wizard/)).toHaveCount(0, { timeout: 60_000 });
+    await expect(wizard.getByText(/Step 1 of \d+/), "the wizard is on its first step (Passport)").toBeVisible();
+    await expect(wizard.getByText("Ready for review").first(), "the draft's passport is stored and read").toBeVisible({ timeout: 30_000 });
+    return wizard;
+  };
+
+  const a = await context.newPage();
+  await signIn(a);
+  const wizardA = await openWizard(a);
+
+  // 1. Modal: nothing outside the dialog can be focused or clicked (toasts and live regions added later are left alone), and Tab never
+  //    reaches the page behind (focus may pass through the document itself at the end of the dialog).
+  const outside = await a.evaluate(() => {
+    const dialog = document.querySelector('[aria-labelledby="wizard-title"]');
+    return Array.from(document.querySelectorAll("input, button, select, textarea, a[href], [tabindex]"))
+      .filter((el) => !dialog?.contains(el) && !el.closest("[inert]") && !el.closest('[role="status"], [aria-live]'))
+      .map((el) => `${el.tagName.toLowerCase()} ${(el.getAttribute("name") ?? el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 40)}`);
+  });
+  expect(outside, "controls outside the wizard are inert").toEqual([]);
+  for (let i = 1; i <= 40; i++) {
+    await a.keyboard.press("Tab");
+    const where = await a.evaluate(() => {
+      const el = document.activeElement;
+      return !el || el === document.body || !!document.querySelector('[aria-labelledby="wizard-title"]')?.contains(el) ? "ok" : `${el.tagName} ${(el.getAttribute("name") ?? el.textContent ?? "").trim().slice(0, 40)}`;
+    });
+    expect(where, `Tab ${i} stays in the wizard`).toBe("ok");
+  }
+
+  // 2. Replace question: Cancel uploads nothing; Replace uploads and the new file is read.
+  const b = await context.newPage();
+  const wizardB = await openWizard(b);
+  const ask = b.getByRole("alertdialog", { name: /A passport is already uploaded\. Replace it\?/ });
+  await wizardB.locator('input[type="file"]:not([capture])').first().setInputFiles(copy);
+  await expect(ask, "a second upload asks first").toBeVisible();
+  await ask.getByRole("button", { name: "Cancel" }).click();
+  await expect(ask).toHaveCount(0);
+  await b.waitForTimeout(1500);
+  await expect(wizardB.getByText("specimen-passport-usi-replaced.png"), "Cancel uploads nothing").toHaveCount(0);
+
+  await wizardB.locator('input[type="file"]:not([capture])').first().setInputFiles(copy);
+  await expect(ask).toBeVisible();
+  await ask.getByRole("button", { name: "Replace passport" }).click();
+  await expect(wizardB.getByText("specimen-passport-usi-replaced.png").first(), "the replacement is uploaded").toBeVisible({ timeout: 60_000 });
+  await expect(wizardB.getByText(/Ready for review|No details found|Couldn.t read/).first()).toBeVisible({ timeout: 300_000 });
+  await expect(wizardB.getByText("Ready for review").first(), "the replacement is read").toBeVisible();
+  await expect(wizardB.getByText("specimen-passport-usi.png", { exact: true }), "the earlier passport file is replaced").toHaveCount(0);
+
+  // 3. Tab A's wizard was open the whole time: once its window is focused again it lists the replacement.
+  await a.bringToFront();
+  await a.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(wizardA.getByText("specimen-passport-usi-replaced.png").first(), "the open wizard picks up a document added in another tab").toBeVisible({ timeout: 20_000 });
+  console.log(`Wizard checks passed on application ${id}.`);
 });

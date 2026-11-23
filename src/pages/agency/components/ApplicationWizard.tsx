@@ -36,6 +36,7 @@ import { formatExtractionCandidates } from "@/pages/agency/lib/documentExtractio
 import { formatExpiryDate, getDocumentExpiryStatus } from "@/pages/agency/lib/documentExpiry";
 import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
 import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardLock, WizardNotice } from "@/components/shared/wizard/WizardShell";
+import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import WizardStages, { type WizardStage } from "@/components/shared/wizard/WizardStages";
 import { englishAlternatives, usiRequired } from "@/pages/agency/lib/admissionsRules";
 import EnglishAlternative, { ENGLISH_PATHWAY, EnglishNotMetDialog, type AusStudyAnswer, type CambridgeAnswer } from "@/pages/agency/components/EnglishAlternative";
@@ -288,6 +289,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     };
   }, [applicationId, hasLiveExtraction]);
 
+  /** Re-reads the draft's documents (sequence-guarded like the extraction poll: a newer local change always wins). */
+  const [checkingAgain, setCheckingAgain] = useState(false);
+  const refreshDocuments = useCallback(async (byHand = false) => {
+    const sequence = ++refreshSequenceRef.current;
+    if (byHand) setCheckingAgain(true);
+    try {
+      const stored = await listApplicationDocuments(applicationId);
+      if (sequence === refreshSequenceRef.current) setDocuments(wizardDocs(stored));
+    } catch { /* keep what is shown; the next focus / tick tries again */ }
+    finally { if (byHand) setCheckingAgain(false); }
+  }, [applicationId]);
+
   /* ------------------------------------------------------------ uploads */
 
   const startUpload = useCallback(
@@ -337,14 +350,24 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     [applicationId, profile?.id],
   );
 
-  // The loader starts here, synchronously, before any hashing or network call.
+  // A single-document step that already has a file: a new upload replaces it and is read again, so it is asked first (2026-11-23).
+  const [replaceAsk, setReplaceAsk] = useState<{ target: WizardStep; files: File[]; current: string } | null>(null);
   const handlePickFiles = (target: WizardStep, list: FileList | null) => {
     if (!list || list.length === 0) return;
+    const existing = target.multiple ? undefined
+      : documentsRef.current.find((doc) => doc.category === target.category && !dismissed.has(doc.id) && !isExpiredPassport(doc) && !isWrongDocument(doc));
+    if (existing) { setReplaceAsk({ target, files: Array.from(list), current: existing.filename }); return; }
+    uploadPicked(target, Array.from(list));
+  };
+
+  // The loader starts here, synchronously, before any hashing or network call.
+  const uploadPicked = (target: WizardStep, list: File[]) => {
+    if (list.length === 0) return;
     setUploadRejections((prev) => ({ ...prev, [target.category]: "" }));
     if (target.id === "passport") setExpiredPassport(null);
     if (target.id === "licence") setRejectedLicence(null);
     setRejectedDocs((prev) => { if (!prev[target.category]) return prev; const next = { ...prev }; delete next[target.category]; return next; });
-    const items = Array.from(list).map((file) => ({ key: crypto.randomUUID(), category: target.category, file }));
+    const items = list.map((file) => ({ key: crypto.randomUUID(), category: target.category, file }));
     setPending((prev) => [...prev, ...items]);
     items.forEach((item) => void startUpload(item));
   };
@@ -689,6 +712,30 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // The document notices below belong to document screens only.
   const onDocStep = !question;
 
+  // A document added somewhere else while the wizard is open (the full form, another tab or device, another person) must show here,
+  // or the step keeps saying it is required and invites a second upload. Re-read the list when the window comes back into focus,
+  // when the step changes, and every 12 seconds while a required document is holding Next (2026-11-23).
+  const waitingForDocument = ready && onDocStep && (blockedByPassport || blockedByRequiredDocument) && !locked && stepPending.length === 0;
+  useEffect(() => {
+    if (!ready) return undefined;
+    const refresh = () => { if (document.visibilityState === "visible") void refreshDocuments(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [ready, refreshDocuments]);
+  useEffect(() => { if (ready) void refreshDocuments(); }, [ready, step, refreshDocuments]);
+  useEffect(() => {
+    if (!waitingForDocument) return undefined;
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refreshDocuments(); }, 12_000);
+    return () => window.clearInterval(timer);
+  }, [waitingForDocument, refreshDocuments]);
+  const checkAgain = waitingForDocument ? (
+    <button type="button" onClick={() => void refreshDocuments(true)} disabled={checkingAgain} data-testid="wizard-check-again"
+      className="ml-1 cursor-pointer font-semibold text-primary-700 underline-offset-2 hover:underline disabled:cursor-wait disabled:opacity-60">
+      {checkingAgain ? "Checking…" : "Uploaded it somewhere else? Check again"}
+    </button>
+  ) : null;
+
   const primaryClass = WIZARD_PRIMARY_CLASS;
 
   /* --------------------------------------------------------------- render */
@@ -872,11 +919,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       notices={
         <>
           {onDocStep && blockedByPassport && !passportExpired && !locked ? (
-            <WizardNotice tone="info">A current passport is required. Upload it to continue.</WizardNotice>
+            <WizardNotice tone="info">A current passport is required. Upload it to continue.{checkAgain}</WizardNotice>
           ) : null}
 
           {onDocStep && current.required && step !== PASSPORT_STEP && !hasFile && !locked && !(current.id === "english" && englishAlt) ? (
-            <WizardNotice tone="info">{current.title} is required. Upload it to continue.</WizardNotice>
+            <WizardNotice tone="info">{current.title} is required. Upload it to continue.{checkAgain}</WizardNotice>
           ) : null}
 
           {onDocStep && rejectedHere && stepCheck ? (
@@ -935,6 +982,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     >
       {body()}
       <EnglishNotMetDialog open={englishNotMet} onBack={backToEnglishOptions} />
+      {replaceAsk ? (
+        <ConfirmDialog title={`A ${replaceAsk.target.noun} is already uploaded. Replace it?`} confirmLabel={`Replace ${replaceAsk.target.noun}`}
+          body={`${replaceAsk.current} is already on this application. The new file is read again and replaces it.`}
+          onClose={() => setReplaceAsk(null)}
+          onConfirm={() => { const ask = replaceAsk; setReplaceAsk(null); uploadPicked(ask.target, ask.files); }} />
+      ) : null}
     </WizardShell>
   );
 }

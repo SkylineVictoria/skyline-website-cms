@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 /**
  * The frame every wizard uses: header (icon, title, one line of text, close), the step pills, the body, the footer and the
@@ -31,6 +31,8 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
   /** On a phone the footer (Back / Next) stays at the bottom of the screen as one row (the F04 wizard on the page). */
   stickyFooter?: boolean;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalIsolation(variant === "modal" ? dialogRef : null);
   const card = (
     <div className={variant === "modal" ? "relative my-auto w-full max-w-3xl rounded-xl border border-background-200 bg-background-50" : "relative mx-auto w-full max-w-3xl rounded-xl border border-background-200 bg-background-50"}>
       {/* Header */}
@@ -81,6 +83,7 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
   return (
     <div
       className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-foreground-950/55 p-3 backdrop-blur-sm sm:items-center sm:p-4"
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="wizard-title"
@@ -88,6 +91,33 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
       {card}
     </div>
   );
+}
+
+/**
+ * A modal that really is modal (2026-11-23): while it is open everything else on the page is inert (not focusable, not clickable,
+ * hidden from screen readers), so keyboard users cannot Tab into the page behind (on a draft, the full application form with its own
+ * upload fields). Elements added later (toasts, dialogs the wizard opens) are not touched. Focus moves into the dialog when it opens
+ * and back to where it was when it closes.
+ */
+function useModalIsolation(ref: { current: HTMLElement | null } | null) {
+  useEffect(() => {
+    const dialog = ref?.current;
+    if (!dialog) return undefined;
+    const made: Element[] = [];
+    for (let node: Element | null = dialog; node && node.parentElement && node !== document.body; node = node.parentElement) {
+      for (const sibling of Array.from(node.parentElement.children)) {
+        if (sibling === node || sibling.hasAttribute("inert") || ["SCRIPT", "STYLE", "LINK"].includes(sibling.tagName)) continue;
+        sibling.setAttribute("inert", "");
+        made.push(sibling);
+      }
+    }
+    const before = document.activeElement as HTMLElement | null;
+    if (!dialog.contains(document.activeElement)) dialog.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus();
+    return () => {
+      made.forEach((element) => element.removeAttribute("inert"));
+      if (before && document.contains(before)) before.focus();
+    };
+  }, [ref]);
 }
 
 export function WizardBackButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {

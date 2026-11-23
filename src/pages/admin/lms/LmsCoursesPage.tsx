@@ -9,6 +9,7 @@ import { DangerDialog } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import TrainingGovBulkSync from "@/pages/admin/components/rto/TrainingGovBulkSync";
+import CourseFromDocuments from "@/pages/admin/components/rto/CourseFromDocuments";
 import LmsUnitsPage from "./LmsUnitsPage";
 import UnitHoursEditor from "./UnitHoursEditor";
 import StartDateBreaksEditor from "./StartDateBreaksEditor";
@@ -96,6 +97,7 @@ export default function LmsCoursesPage() {
   const [savedAt, setSavedAt] = useState("");
   const [editing, setEditing] = useState(false);
   const [bulkSync, setBulkSync] = useState(false);
+  const [fromDocs, setFromDocs] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string[]>([]);
@@ -380,10 +382,24 @@ export default function LmsCoursesPage() {
       {canEdit ? <div className="flex items-center gap-2">
         <button type="button" onClick={() => setBulkSync(true)} title="Import one qualification from SLIT's Training.gov.au scope of registration and run the new course wizard on it"
           className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync from Training.gov.au</button>
+        <button type="button" onClick={() => setFromDocs(true)} title="Upload course documents: the qualification and units in them are found and synced from Training.gov.au"
+          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Add from documents</button>
         <button type="button" onClick={() => setAddingCourse("tga")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
       </div> : null}
     </header>
 
+    <CourseFromDocuments open={fromDocs && canEdit} courses={courses} onClose={() => setFromDocs(false)}
+      // Units and hours settled by the documents: straight to the CoE weekly calendar; otherwise the step still to do.
+      onCreated={(courseId, next, message) => {
+        setFromDocs(false);
+        if (next === "units") { reloadAfterAdd(courseId, "units"); setSyncNote([message]); return; }
+        reloadAfterAdd(courseId, "none"); setSyncNote([message]);
+        void acquireLock(courseId).then(ok => {
+          if (!ok) return;
+          if (next === "master") setTab("master");
+          setWizard({ courseId, step: next });
+        }).catch(() => undefined);
+      }} />
     <TrainingGovBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }}
       onAddUnits={courseId => { setBulkSync(false); reloadAfterAdd(courseId, "units"); }} />

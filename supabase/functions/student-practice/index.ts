@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { generatePractice, sourceInput, type PracticeRequest } from "./generate.ts";
+import { tutorAnswer, tutorInput } from "./tutor.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const anon = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "";
@@ -20,6 +21,26 @@ Deno.serve(async request => {
   const caller = createClient(url, anon, { global: { headers: { Authorization: token, ...(tenant ? { "x-tenant-domain": tenant } : {}) } },
     auth: { persistSession: false } });
   const input = await request.json().catch(() => null);
+  // Learning with AI (mode "tutor", 20261123181517): a question about a unit, answered from its learner material.
+  if (input && input.mode === "tutor") {
+    const ask = tutorInput(input);
+    if (!ask) return json({ message: "Write a question about one of your units (up to 1000 characters)." }, 400);
+    const started = await caller.rpc("student_tutor_start", { p_unit: ask.unitId });
+    if (started.error) return started.error.code === "42501" || started.error.code === "22023"
+      ? json({ message: started.error.message }, started.error.code === "42501" ? 403 : 400)
+      : json({ message: "Learning with AI is temporarily unavailable." }, 503);
+    if (!key || !model) return json({ message: "Learning with AI has not been configured." }, 503);
+    try {
+      const result = await tutorAnswer(started.data.unitTitle, started.data.sources, ask.question, ask.history, async (bucket, path) => {
+        const fetched = await caller.storage.from(bucket).download(path);
+        if (fetched.error || !fetched.data) throw new Error("This learning material is no longer available.");
+        return fetched.data;
+      }, key, model);
+      return json(result);
+    } catch (e) {
+      return json({ message: e instanceof Error ? e.message : "The AI could not answer. Please try again." }, 503);
+    }
+  }
   if (!input || !["easy", "medium", "advanced"].includes(input.difficulty)
     || !["unitId", "assignmentId", "focus"].every(field => input[field] == null || typeof input[field] === "string" && input[field].length <= 120)) {
     return json({ message: "Choose a unit and practice difficulty." }, 400);

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { Button } from "@/pages/admin/components/ui";
 
 export default function ApplicationInvitePage() {
   const { authUser, authLoading, reloadIdentity, signOut } = usePortalAuth();
+  const { key: locationKey } = useLocation();
   const navigate = useNavigate();
   const storeKey = `slit-application-invitation:${window.location.host}`;
   const [token, setToken] = useState("");
@@ -17,25 +18,39 @@ export default function ApplicationInvitePage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.slice(1));
     const linkToken = params.get("t");
-    try {
-      const saved = linkToken ?? sessionStorage.getItem(storeKey) ?? "";
-      if (/^[A-Za-z0-9_-]{43}$/.test(saved)) setToken(saved);
-    } catch {
-      if (linkToken && /^[A-Za-z0-9_-]{43}$/.test(linkToken)) setToken(linkToken);
+    const validLinkToken = linkToken !== null && /^[A-Za-z0-9_-]{43}$/.test(linkToken);
+    if (linkToken !== null) {
+      // Keep the link just opened across reloads and the sign-in redirect in this tab.
+      try {
+        if (validLinkToken) sessionStorage.setItem(storeKey, linkToken);
+        else sessionStorage.removeItem(storeKey);
+      } catch {
+        // An already signed-in student can still use the link in this page.
+      }
+      setToken(validLinkToken ? linkToken : "");
+      setError("");
+      setNotice("");
+      window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+      return;
     }
-    if (linkToken) window.history.replaceState(window.history.state, "", window.location.pathname);
-  }, [storeKey]);
+
+    try {
+      const saved = sessionStorage.getItem(storeKey) ?? "";
+      setToken(/^[A-Za-z0-9_-]{43}$/.test(saved) ? saved : "");
+    } catch {
+      // Opening the original email link again works when tab storage is unavailable.
+    }
+  }, [locationKey, storeKey]);
 
   const sendSignIn = async () => {
     setBusy(true); setError(""); setNotice("");
     try {
-      sessionStorage.setItem(storeKey, token);
       const { error: failure } = await supabase.auth.signInWithOtp({
         email: email.trim().toLowerCase(),
         options: { emailRedirectTo: `${window.location.origin}/agency/application-invite` },
       });
       if (failure) throw failure;
-      setNotice("Open the sign-in email in this browser, then select Open application.");
+      setNotice("Open the sign-in email. Then return to your latest SLIT application invitation in the same browser.");
     } catch {
       setError("The sign-in email could not be requested. Try again.");
     } finally {
@@ -47,7 +62,10 @@ export default function ApplicationInvitePage() {
     setBusy(true); setError("");
     try {
       const { data, error: failure } = await supabase.rpc("portal_wizard_invite_accept", { p_token: token });
-      if (failure || typeof data !== "string") throw new Error("This invitation is invalid, expired, or belongs to a different email address.");
+      if (failure?.code === "42501") {
+        throw new Error("Open the newest SLIT application invitation and sign in with the email address that received it. If it still won't open, contact SLIT Admissions.");
+      }
+      if (failure || typeof data !== "string") throw new Error("The application could not be opened. Try again.");
       try { sessionStorage.removeItem(storeKey); } catch { /* The database already consumed the invitation. */ }
       await reloadIdentity();
       navigate(`/agency/applications/${data}?wizard=1`, { replace: true });
@@ -63,7 +81,7 @@ export default function ApplicationInvitePage() {
       <section className="w-full max-w-md space-y-4 rounded-card border border-background-200 bg-background-50 p-6">
         <h1 className="font-heading text-xl font-semibold">Complete your SLIT application</h1>
         {authLoading ? <p role="status">Checking your sign-in…</p> : !token ? (
-          <p>Open the invitation from your email. Contact SLIT Admissions if you need a new link.</p>
+          <p>Open the newest SLIT application invitation from your email in this browser. Contact SLIT Admissions if you need a new link.</p>
         ) : authUser ? (
           <>
             <p>Signed in as {authUser.email}.</p>

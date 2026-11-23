@@ -89,10 +89,13 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
 
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview.url); }, [preview]);
 
-  const addFiles = (incoming: FileList | File[]) => setFiles(old => {
-    const existing = new Set(old.map(file => relativePath(file) + ":" + file.size + ":" + file.lastModified));
-    return [...old, ...Array.from(incoming).filter(file => !existing.has(relativePath(file) + ":" + file.size + ":" + file.lastModified))];
-  });
+  const addFiles = (incoming: FileList | File[]) => {
+    const picked = Array.from(incoming);
+    setFiles(old => {
+      const existing = new Set(old.map(file => relativePath(file) + ":" + file.size + ":" + file.lastModified));
+      return [...old, ...picked.filter(file => !existing.has(relativePath(file) + ":" + file.size + ":" + file.lastModified))];
+    });
+  };
   const showJob = (id: string) => {
     setRows([]); setJob(id); setSelection([]); setOverride({}); setDisplayCourse({}); setRowErrors({}); setFilter("all");
   };

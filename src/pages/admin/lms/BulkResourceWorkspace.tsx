@@ -35,8 +35,8 @@ function suggested(file: ImportFile, courses: CourseOption[], policy: BulkPolicy
     skipExisting: policy?.duplicates === "skip_identical" && file.related?.some(r => r.identical && r.unit_id === unit) };
 }
 
-export default function BulkResourceWorkspace({ courses: initialCourses, units: initialUnits, unitHint, onClose }: {
-  courses: CourseOption[]; units: UnitOption[]; unitHint?: string; onClose: () => void;
+export default function BulkResourceWorkspace({ courses: initialCourses, units: initialUnits, unitHint, initialFiles, onClose }: {
+  courses: CourseOption[]; units: UnitOption[]; unitHint?: string; initialFiles?: File[]; onClose: () => void;
 }) {
   const [catalogue, setCatalogue] = useState<{ courses: CourseOption[]; units: UnitOption[] } | null>(null);
   const courses = catalogue?.courses ?? initialCourses;
@@ -46,7 +46,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
   const [job, setJob] = useState("");
   const [course, setCourse] = useState(() => units.find(u => u.id === unitHint)?.course_id ?? "");
   const [hint, setHint] = useState(unitHint ?? "");
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<File[]>(() => initialFiles ?? []);
   const [rows, setRows] = useState<ImportFile[]>([]);
   const [override, setOverride] = useState<Record<string, Decision>>({});
   const [selection, setSelection] = useState<string[]>([]);
@@ -224,6 +224,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
     } catch (e) { setError(errorMessage(e)); }
   };
 
+  const stage = !job || hasPendingUpload ? 0 : !rows.length || rows.some(file => file.state === "queued" || file.state === "processing") ? 1 : 2;
   return <section aria-label="AI Bulk Upload" className="space-y-4">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><button type="button" className="text-sm font-semibold text-violet-800 dark:text-violet-300" onClick={onClose}>← Units</button>
@@ -233,8 +234,15 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
         {jobs.map(j => <option value={j.id} key={j.id}>{new Date(j.created_at).toLocaleString()} · {j.id.slice(0, 8)}</option>)}
       </select>
     </header>
+    <ol aria-label="Import progress" className="grid grid-cols-3 gap-2 rounded-xl border border-background-200 bg-background-50 p-3">
+      {["Upload files", "Classify files", "Review and save"].map((label, index) => <li key={label} aria-current={stage === index ? "step" : undefined}
+        className={"flex items-center gap-2 text-xs font-semibold sm:text-sm " + (stage >= index ? "text-violet-800 dark:text-violet-300" : "text-foreground-600")}>
+        <span aria-hidden="true" className={"grid h-6 w-6 shrink-0 place-items-center rounded-full border " + (stage === index ? "border-violet-700 bg-violet-700 text-white" : "border-background-300")}>
+          {index < stage ? <i className="ri-check-line" /> : index + 1}</span>{label}
+      </li>)}
+    </ol>
     {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
-    <div className="grid min-w-0 items-start gap-3 lg:grid-cols-[10rem_11rem_minmax(0,1fr)]">
+    <div className="grid min-w-0 items-start gap-3 sm:grid-cols-2">
       <label className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-3 text-sm font-semibold">Course
         <select className={control + " mt-2 w-full"} value={course} disabled={busy} onChange={e => { setCourse(e.target.value); setHint(""); }}>
           <option value="">All courses</option>
@@ -247,7 +255,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
           {units.filter(u => !course || u.course_id === course).map(u => <option value={u.id} key={u.id}>{u.code} · {u.name}</option>)}
         </select>
       </label>
-      <div className="min-w-0 space-y-4">
+      <div className="min-w-0 space-y-4 sm:col-span-2">
         <section className="space-y-3 rounded-xl border border-background-200 bg-background-50 p-4">
           <div className="rounded-xl border-2 border-dashed border-violet-300 bg-violet-50/50 dark:bg-violet-950/30 p-4"
             onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!busy) addFiles(e.dataTransfer.files); }}>

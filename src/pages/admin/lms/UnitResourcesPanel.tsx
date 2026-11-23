@@ -1,23 +1,33 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 import { accessLabels, bulkAdmin, categories, categoryLabel, categoryTitle, downloadResource, listResources, splitCategoryTitle, type BulkPolicy, type Category, type Resource } from "@/pages/admin/lib/bulkResources";
+
 import { supabase } from "@/pages/admin/lib/supabase";
 
 /** A document saved straight to the unit (Add from documents, no AI reader): a unit_contents file whose title carries its category. */
-type UnitDoc = { id: string; title: string; file_name: string | null; storage_path: string | null; visible_to_students: boolean };
+type UnitDoc = { id: string; title: string; file_name: string | null; size_bytes: number | null; storage_path: string | null; visible_to_students: boolean };
+
+const categoryStyles: Record<Category, { icon: string; tone: string }> = {
+  learning: { icon: "ri-book-open-line", tone: "border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-300" },
+  assessment: { icon: "ri-clipboard-line", tone: "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300" },
+  self_assessment: { icon: "ri-list-check-3", tone: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300" },
+  assessor: { icon: "ri-shield-check-line", tone: "border-orange-200 bg-orange-50 text-orange-900 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300" },
+};
+
+function formatBytes(bytes: number) {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MiB` : `${Math.max(1, Math.round(bytes / 1024))} KiB`;
+}
 
 const button = "rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold disabled:opacity-50";
 
-export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdit = false, onBulk }: {
-  courseId: string; unitId: string; canManage: boolean;
-  /** RTO Managers edit and delete the documents saved straight to the unit. */
-  canEdit?: boolean; onBulk: () => void;
+export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdit = false, onBulk, onAddContent }: {
+  courseId: string; unitId: string; canManage: boolean; canEdit?: boolean; onBulk: (files?: File[]) => void; onAddContent?: () => void;
 }) {
   const [docs, setDocs] = useState<UnitDoc[] | null>(null);
   const [editing, setEditing] = useState<{ id: string; title: string; category: Category; visible: boolean } | null>(null);
   const loadDocs = useCallback(async () => {
-    const { data, error } = await supabase.from("unit_contents").select("id,title,file_name,storage_path,visible_to_students")
+    const { data, error } = await supabase.from("unit_contents").select("id,title,file_name,size_bytes,storage_path,visible_to_students")
       .eq("unit_id", unitId).eq("kind", "file").order("sort");
     if (error) throw new Error(error.message);
     setDocs((data ?? []) as UnitDoc[]);
@@ -92,36 +102,70 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
   };
 
   const shown = resources?.filter(r => r.category === selected);
-  const docsIn = (category: Category) => (docs ?? []).filter(d => splitCategoryTitle(d.title, policy).category === category);
+  const docsIn = (category: Category) => (docs ?? []).filter(doc => splitCategoryTitle(doc.title, policy).category === category);
   const shownDocs = docsIn(selected);
+  const countIn = (category: Category) => (resources?.filter(resource => resource.category === category).length ?? 0) + docsIn(category).length;
   return <section className="space-y-3" aria-label="Unit resources">
-    <header className="flex flex-wrap items-center justify-between gap-2">
-      <h3 className="font-heading font-bold text-slate-950 dark:text-slate-50">Unit resources</h3>
-      {canManage && <button type="button" className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white" onClick={onBulk}>AI Bulk Upload</button>}
-    </header>
-    <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Resource categories">
-      {categories.map(category => <button type="button" role="tab" aria-selected={category === selected} key={category} onClick={() => setSelected(category)}
-        className={button + (category === selected ? " border-violet-500 bg-violet-50 dark:bg-violet-950/40 text-violet-800 dark:text-violet-300" : "")}>
-        {categoryLabel(category, policy)}{resources ? ` (${resources.filter(r => r.category === category).length + docsIn(category).length})` : ""}
-      </button>)}
+    {canManage && <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-violet-400 bg-violet-50/70 p-4 dark:bg-violet-950/30"
+      onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const files = Array.from(event.dataTransfer.files); if (files.length) onBulk(files); }}>
+      <div className="flex items-center gap-3">
+        <i className="ri-upload-cloud-2-line text-3xl text-violet-700 dark:text-violet-300" aria-hidden="true" />
+        <div><h3 className="font-heading font-bold">Upload unit resources</h3>
+          <p className="text-sm text-foreground-600">Drop a ZIP package or individual files here.</p>
+          {policy && <p className="mt-1 text-xs text-foreground-600">{policy.formats.map(format => format.toUpperCase()).join(", ")} · Up to {policy.max_mib} MiB per file</p>}
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => onBulk()}>Upload ZIP package</button>
+        <label className={button + " cursor-pointer border-violet-400 bg-background-50 text-violet-800 focus-within:ring-2 focus-within:ring-violet-500 dark:text-violet-300"}>
+          + Add files<input className="sr-only" type="file" multiple onChange={event => { const files = Array.from(event.currentTarget.files ?? []); if (files.length) onBulk(files); }} />
+        </label>
+      </div>
+    </section>}
+    <div className="grid grid-cols-2 gap-2 xl:grid-cols-4" aria-label="Resource categories">
+      {categories.map(category => {
+        const { icon, tone } = categoryStyles[category];
+        const count = resources || docs ? countIn(category) : undefined;
+        return <button type="button" aria-pressed={category === selected} key={category} onClick={() => setSelected(category)}
+          className={`flex min-h-24 flex-col items-start gap-1 rounded-xl border p-3 text-left ${tone} ${category === selected ? "ring-2 ring-inset ring-current" : "hover:shadow-sm"}`}>
+          <span className="flex w-full items-center justify-between"><i className={icon + " text-xl"} aria-hidden="true" />
+            {category === "assessor" && <i className="ri-lock-line" aria-label="Restricted access" />}</span>
+          <span className="text-sm font-bold">{categoryLabel(category, policy)}</span>
+          <span className="text-xs">{count !== undefined ? `${count} ${count === 1 ? "file" : "files"}` : "Loading…"}</span>
+        </button>;
+      })}
     </div>
+    <header className="flex flex-wrap items-center justify-between gap-2 border-t border-background-200 pt-3">
+      <h3 className="font-heading font-bold text-slate-950 dark:text-slate-50"><i className={categoryStyles[selected].icon + " mr-2 text-violet-700 dark:text-violet-300"} aria-hidden="true" />
+        {categoryLabel(selected, policy)}{(shown || docs) && ` (${countIn(selected)})`}</h3>
+      {onAddContent && selected === "learning" && <button type="button" className={button} onClick={onAddContent}>+ Add learning content</button>}
+    </header>
     {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
-    {shownDocs.length ? <ul className="divide-y divide-background-200 rounded-lg border border-background-200" aria-label="Documents on this unit">
-      {shownDocs.map(doc => {
-        const parts = splitCategoryTitle(doc.title, policy);
-        const edit = editing?.id === doc.id ? editing : null;
-        return <li key={doc.id} className="space-y-2 p-3 text-sm">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div><p className="font-semibold text-slate-950 dark:text-slate-50">{parts.title}</p>
-              <p className="break-all text-xs text-foreground-600">{doc.file_name}</p>
-              <p className="text-xs text-foreground-600">{doc.visible_to_students ? "Students and staff" : "Staff only"} · on the unit</p></div>
-            <div className="flex flex-wrap gap-2">
-              <button className={button} type="button" onClick={() => void openDoc(doc)}>Open file</button>
-              {canEdit && !edit ? <button className={button} type="button" disabled={busy} onClick={() => setEditing({ id: doc.id, title: parts.title, category: parts.category, visible: doc.visible_to_students })}>Edit</button> : null}
-              {canEdit ? <button className={button + " text-red-700"} type="button" disabled={busy} onClick={() => void deleteDoc(doc)}>Delete</button> : null}
-            </div>
-          </div>
-          {edit ? <div className="grid gap-2 rounded-lg bg-background-100 p-3 sm:grid-cols-[1fr_auto]">
+    {!shown && !docs ? <p role="status" className="text-sm">Loading resources…</p> : !shown?.length && !shownDocs.length ?
+      <p className="rounded-lg border border-dashed border-background-300 p-4 text-sm text-foreground-600">No resources in this category.</p> :
+      <div className="overflow-x-auto rounded-lg border border-background-200">
+      <table className="w-full min-w-[34rem] text-left text-sm">
+      <thead className="bg-background-100 text-xs text-foreground-700"><tr>
+        {["File name", "Type", "Size", "Access", "Status", "Actions"].map(label => <th scope="col" className="px-2.5 py-2" key={label}>{label}</th>)}
+      </tr></thead><tbody className="divide-y divide-background-200">
+        {shownDocs.map(doc => {
+          const parts = splitCategoryTitle(doc.title, policy);
+          const edit = editing?.id === doc.id ? editing : null;
+          return <Fragment key={doc.id}>
+            <tr className="align-top">
+              <td className="min-w-32 break-words px-2.5 py-2.5"><p className="font-semibold">{parts.title}</p><p className="text-xs text-foreground-600">{doc.file_name}</p></td>
+              <td className="px-2.5 py-2.5 text-xs font-semibold">{doc.file_name?.includes(".") ? doc.file_name.split(".").at(-1)?.toUpperCase() : "File"}</td>
+              <td className="whitespace-nowrap px-2.5 py-2.5 text-xs">{doc.size_bytes ? formatBytes(doc.size_bytes) : "—"}</td>
+              <td className="px-2.5 py-2.5 text-xs">{doc.visible_to_students ? "Student & Staff" : "Staff only"}</td>
+              <td className="px-2.5 py-2.5 text-xs font-semibold">On unit</td>
+              <td className="px-2.5 py-2.5"><div className="flex flex-wrap gap-1">
+                <button className={button} type="button" onClick={() => void openDoc(doc)}>Open</button>
+                {canEdit && !edit && <button className={button} type="button" disabled={busy} onClick={() => setEditing({ id: doc.id, title: parts.title, category: parts.category, visible: doc.visible_to_students })}>Edit</button>}
+                {canEdit && <button className={button + " text-red-700"} type="button" disabled={busy} onClick={() => void deleteDoc(doc)}>Delete</button>}
+              </div></td>
+            </tr>
+            {edit && <tr><td colSpan={6} className="p-2">
+          <div className="grid gap-2 rounded-lg bg-background-100 p-3 sm:grid-cols-[1fr_auto]">
             <label className="flex flex-col gap-1 text-xs font-semibold text-foreground-600">Title
               <input className="rounded-lg border border-background-300 px-2.5 py-1.5 text-sm font-normal text-foreground-900" value={edit.title} maxLength={180}
                 onChange={e => setEditing({ ...edit, title: e.target.value })} /></label>
@@ -136,22 +180,21 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
               <button className={button + " bg-white"} type="button" disabled={busy || !edit.title.trim()} onClick={() => void saveDoc()}>Save</button>
               <button className={button} type="button" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
             </div>
-          </div> : null}
-        </li>;
-      })}
-    </ul> : null}
-    {!shown ? <p role="status" className="text-sm">Loading resources…</p> : shown.length === 0 ? shownDocs.length ? null :
-      <p className="rounded-lg border border-dashed border-background-300 p-4 text-sm text-foreground-600">No resources in this category.</p> :
-      <ul className="divide-y divide-background-200 rounded-lg border border-background-200">
-        {shown.map(resource => {
+          </div>
+            </td></tr>}
+          </Fragment>;
+        })}
+        {shown?.map(resource => {
           const status = resource.published_at ? "Published" : resources?.some(r => r.previous_id === resource.id && r.published_at) ? "Superseded" : "Unpublished";
-          return <li key={resource.id} className="space-y-2 p-3 text-sm">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div><p className="font-semibold text-slate-950 dark:text-slate-50">{resource.title}</p>
-                <p className="break-all text-xs text-foreground-600">{resource.name}</p>
-                <p className="text-xs text-foreground-600">{status} · {accessLabels[resource.audience]}{resource.previous_id ? " · Updated version" : ""}</p></div>
-              <button className={button} type="button" onClick={() => void downloadResource(resource.path, resource.name).catch(handleError)}>Open file</button>
-            </div>
+          return <tr key={resource.id} className="align-top">
+            <td className="min-w-32 break-words px-2.5 py-2.5"><p className="font-semibold">{resource.title}</p>
+              <p className="text-xs text-foreground-600">{resource.name}{resource.previous_id ? " · Updated version" : ""}</p></td>
+            <td className="px-2.5 py-2.5 text-xs font-semibold text-violet-800 dark:text-violet-300">{resource.name.includes(".") ? resource.name.split(".").at(-1)?.toUpperCase() : "File"}</td>
+            <td className="whitespace-nowrap px-2.5 py-2.5 text-xs">{formatBytes(resource.bytes)}</td>
+            <td className="px-2.5 py-2.5 text-xs">{accessLabels[resource.audience]}</td>
+            <td className="px-2.5 py-2.5 text-xs font-semibold">{status}</td>
+            <td className="space-y-2 px-2.5 py-2.5">
+              <button className={button} type="button" onClick={() => void downloadResource(resource.path, resource.name).catch(handleError)}>Download</button>
             {canManage && <div className="flex flex-wrap items-center gap-2">
               {resource.published_at
                 ? <button type="button" className={button} disabled={busy} onClick={() => void act("unpublish", { id: resource.id })}>Unpublish</button>
@@ -177,8 +220,9 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
                 <button className={button} type="button" disabled={busy} onClick={() => setPublishing(null)}>Cancel</button>
               </div>
             </div>}
-          </li>;
+            </td>
+          </tr>;
         })}
-      </ul>}
+      </tbody></table></div>}
   </section>;
 }

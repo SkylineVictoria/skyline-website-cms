@@ -14,14 +14,15 @@ const safeName = (name: string) => name.normalize("NFKD").replace(/[^A-Za-z0-9._
 const size = (n: number | null) => n == null ? "" : n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 /** LMS > Courses > Units > a unit > Learning content: notes, files, links and videos for the unit, in order. RTO Managers edit. */
-export default function UnitContentPanel({ unitId, canEdit }: { unitId: string; canEdit: boolean }) {
+// rule-policy: technical unit-content-entry Opens the existing editor when reached from the add resource action.
+export default function UnitContentPanel({ unitId, canEdit, initiallyAdding = false }: { unitId: string; canEdit: boolean; initiallyAdding?: boolean }) {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(canEdit && initiallyAdding);
   const [editing, setEditing] = useState<string | null>(null);
-  const [kind, setKind] = useState<Kind>("text");
+  const [kind, setKind] = useState<Kind>(initiallyAdding ? "file" : "text");
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [url, setUrl] = useState("");

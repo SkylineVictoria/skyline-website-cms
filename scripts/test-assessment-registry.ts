@@ -16,7 +16,7 @@ import { buildWorkbookPdf, questionOutcome } from "../src/lib/assessment/workboo
 import { forbiddenKey, schemaCheck, validateDefinition, validateResponses } from "../src/lib/assessment/validate";
 import { buildFromLines, definitionText, imageRegionsFromPdf, linesFromDocxHtml, linesFromPdf, type PdfDocLike, type PdfOps } from "../src/lib/assessment/workbookImport";
 import { autoTitle, decideFiling, filingCourseId, needsUnitStep } from "../src/lib/assessment/workbookFiling";
-import { htmlToBlocks, workbookNumbering } from "../src/lib/assessment/workbookLayout";
+import { adjustmentLayout, detailRows, htmlToBlocks, INFO_HEADING, workbookDetails, workbookNumbering } from "../src/lib/assessment/workbookLayout";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 let passed = 0; let failed = 0;
@@ -292,6 +292,15 @@ else {
   const cover = ((await (await (await pdf.getDocument({ data: numbered.slice(), verbosity: 0 }).promise).getPage(1)).getTextContent()).items as { str: string }[]).map((i) => i.str).join(" ");
   check("export: the student number, when Skyline has one, is the cover's Student ID", /Student ID SLIT-000123/.test(cover.replace(/\s+/g, " ")), cover.slice(0, 300));
   check("export: no picture data, instruction pages or assessor keys are printed", !allText.includes("data:image") && !allText.includes("Team Member Role Responsibilities") && !/model answer/i.test(allText));
+  // items 1 / 3 / 7 on the shared layout: what the screens draw is what the PDF prints
+  check("item 1: the marked export prints the information (compliance) pages after the cover, the task briefs still not", allText.includes(INFO_HEADING) && /Plagiarism/.test(pageTexts[1] ?? "") && /appeal/i.test(allText) && !allText.includes("Team Member Role Responsibilities"), pageTexts[1]?.slice(0, 200));
+  const det = workbookDetails({ history: hist, definition: wb.definition });
+  check("item 3: the details rows (student, ID, email, trainers) are the cover's, in the workbook's order", detailRows(det).every(([label, value]) => !value || pageTexts[0].includes(`${label} ${value}`)) && detailRows(det).map(([l]) => l).join("|") === "Student Full Name|Student ID|Student Email|Trainer Full Name", detailRows(det));
+  check("item 3: qualification / unit come from the history first, else the workbook, else the assignment's unit", workbookDetails({ history: null, definition: wb.definition }).unit?.code === "RIICWD525E" && workbookDetails({ history: null, definition: { tasks: [] }, unit: { code: "CPCCPD2012", name: "Painting tools" } }).unit?.code === "CPCCPD2012" && workbookDetails({ history: { ...hist, assessment: { title: "x", unit: { code: "HIST01", name: "From history" } } }, definition: wb.definition }).unit?.code === "HIST01");
+  const ra = flatQ.find((q) => q.type === "adjustment_record")!;
+  const lay = adjustmentLayout(ra, { applied: true, strategies: ["Verbal assessment"], assessorName: "Alex Assessor", declared: true, date: "2026-11-09" }, (d) => d.split("-").reverse().join("/"));
+  check("item 7: the adjustment layout: applied ticks, one row per strategy with its tick, the sign-off rows as printed", lay.facts.map(([l]) => l).every((l) => allText.includes(l)) && lay.strategies.length >= 30 && lay.strategies.filter(([, on]) => on).map(([t]) => t).join() === "Verbal assessment" && lay.sign.map(([l]) => l).every((l) => allText.includes(l)) && lay.sign[2][1] === "09/11/2026" && Boolean(lay.declaration), lay.facts);
+  check("item 7: an unrecorded adjustment record lays out empty (no ticks, no values)", adjustmentLayout(ra, undefined).facts.every(([, c]) => (typeof c === "string" ? c === "" : c.ticks.every(([, on]) => !on))) && adjustmentLayout(ra, undefined).strategies.every(([, on]) => !on));
   // ASM-REVIEW: the wizard's page view numbers the bars from the same layout as the PDF
   const bars = [...workbookNumbering(wb.definition).values()];
   check("review: the page view's question bars (Q1 … and 2.1.3) are the PDF's: same count of Satisfactory Yes / No bars", bars.filter((b) => b.markable).length === (allText.match(/Satisfactory Yes No/g) ?? []).length && bars.some((b) => /^2\.\d+\.\d+$/.test(b.number)), [bars.filter((b) => b.markable).length, (allText.match(/Satisfactory Yes No/g) ?? []).length]);

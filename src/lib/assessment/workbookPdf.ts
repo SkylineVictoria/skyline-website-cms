@@ -16,7 +16,7 @@
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { buildResultsSheet, type AttemptHistory, type SheetCell } from "./resultsSheet";
 import type { Definition, EvidenceFile, Outcome, Question, Responses, ResultRow } from "./types";
-import { CONTENT_TYPES, DETAIL_LABELS, footerParts, helpRepeatsLabel, htmlToBlocks, qualificationRows, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering } from "./workbookLayout";
+import { adjustmentLayout, CONTENT_TYPES, detailRows, footerParts, INFO_HEADING, workbookDetails, helpRepeatsLabel, htmlToBlocks, qualificationRows, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering } from "./workbookLayout";
 
 export interface WorkbookInstitution {
   name: string;
@@ -291,8 +291,10 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
   const { definition, attempt, history } = input;
   const tz = input.timeZone ?? "Australia/Melbourne";
   const date = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleDateString("en-AU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: tz }) : "");
-  const unit = definition.source?.unit ?? history.assessment?.unit ?? null;
-  const qual = definition.source?.qualification ?? history.assessment?.qualification ?? null;
+  // item 3: the same details as the student's page (workbookDetails)
+  const details = workbookDetails({ history, definition });
+  const unit = details.unit;
+  const qual = details.qualification;
   const version = definition.source?.version ?? (history.assessment?.versionNo ? String(history.assessment.versionNo) : "1.0");
 
   const pdf = await PDFDocument.create();
@@ -308,13 +310,13 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
   L.text("Student Assessment Pack", { size: 11, color: GREY, lead: 16 });
   L.gap(14);
   L.heading("1. Student and trainer details", 11);
-  const details = [history.student?.name ?? "", history.student?.ref ?? "", history.student?.email ?? "", history.trainers.join(", ")];
-  L.table(null, DETAIL_LABELS.map((label, i) => [label, details[i]]), [0.3, 0.7], { labelColumn: true });
+  L.table(null, detailRows(details), [0.3, 0.7], { labelColumn: true });
   L.heading("2. Qualification and unit of competency", 11);
   L.table(null, qualificationRows(qual, unit), [0.3, 0.7], { labelColumn: true });
   L.heading("3. Assessment Tasks", 11);
   L.table([...TASK_TABLE_HEAD], taskRows(definition), [0.3, 0.7]);
-  if (input.blank && definition.instructions) { L.newPage(); L.heading("Assessment information", 14); await L.content(definition.instructions); }
+  // item 1: the information (compliance) pages, in every export as in the workbook
+  if (definition.instructions) { L.newPage(); L.heading(INFO_HEADING, 14); await L.content(definition.instructions); }
   if (!input.blank) L.text(`Attempt ${attempt.attemptNo}${attempt.receiptNo ? ` · receipt ${attempt.receiptNo}` : ""}${attempt.submittedAt ? ` · submitted ${date(attempt.submittedAt)}` : ""}`, { size: 8.5, color: GREY });
 
   /* ---- tasks */
@@ -346,25 +348,15 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
       const val = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
       L.table(null, fields.map((f) => [f.label, str(val[f.id])]), [0.3, 0.7], { labelColumn: true });
     } else if (q.type === "adjustment_record") {
-      // Appendix A – Reasonable Adjustments, as the trainer / assessor recorded it
-      const val = (v && typeof v === "object" ? v : {}) as { applied?: boolean; tasks?: string; categories?: string[]; strategies?: string[]; explanation?: string; assessorName?: string; date?: string; declared?: boolean };
-      const intro = cfg(q, "intro", "");
-      if (intro) L.text(intro, { size: 8, color: GREY });
+      // item 7: Appendix A – Reasonable Adjustments, as the trainer / assessor recorded it (adjustmentLayout, as on screen)
+      const lay = adjustmentLayout(q, v, (d) => date(`${d}T00:00:00`));
+      if (lay.intro) L.text(lay.intro, { size: 8, color: GREY });
       L.gap(2);
-      const used = new Set(val.strategies ?? []);
-      L.table(null, [
-        ["Reasonable adjustments applied", { ticks: [["Yes", val.applied === true], ["No", val.applied === false]] }],
-        ["Task name and number", val.tasks ?? ""],
-        ["Category", (val.categories ?? []).join(", ")],
-        ["Explanation", val.explanation ?? ""],
-      ], [0.3, 0.7], { labelColumn: true });
-      const strategies = cfg<string[]>(q, "strategies", []);
-      if (strategies.length) L.table(["Reasonable adjustment strategy", "Applied"], strategies.map((s): Cell[] => [s, { ticks: [["", used.has(s)]] }]), [0.86, 0.14]);
-      L.table(null, [
-        ["Trainer/Assessor Name", val.assessorName ?? ""],
-        ["Trainer/Assessor Declaration", { ticks: [[val.declared ? "Declared" : "Not declared", Boolean(val.declared)]] }],
-        ["Date", val.date ? date(`${val.date}T00:00:00`) : ""],
-      ], [0.3, 0.7], { labelColumn: true });
+      L.table(null, lay.facts, [0.3, 0.7], { labelColumn: true });
+      if (lay.strategies.length) L.table(["Reasonable adjustment strategy", "Applied"], lay.strategies.map(([text, on]): Cell[] => [text, { ticks: [["", on]] }]), [0.86, 0.14]);
+      if (lay.declaration) L.text(lay.declaration, { size: 8, color: GREY });
+      L.gap(2);
+      L.table(null, lay.sign, [0.3, 0.7], { labelColumn: true });
     } else if (q.type === "declaration") {
       const val = (v && typeof v === "object" ? v : {}) as { agreed?: boolean; signature?: string };
       const text = cfg(q, "text", "");

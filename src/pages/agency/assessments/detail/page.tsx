@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { Badge, Button, Modal, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import AssessmentRenderer, { AssessmentInfo } from "@/components/assessment/AssessmentRenderer";
+import BeforeYouStart from "@/components/assessment/BeforeYouStart";
 import AssessmentDetails from "@/components/assessment/AssessmentDetails";
 import ResultsSheet from "@/components/assessment/ResultsSheet";
 import { historyFromAttempts } from "@/lib/assessment/resultsSheet";
@@ -119,12 +120,7 @@ export default function StudentAssessmentPage() {
       <AssessmentDetails history={sheetHistory} definition={definition} unit={{ code: data.assignment.unitCode, name: data.assignment.unitName }} />
 
       {editable && definition.instructions && !started && !Object.keys(responses).length ? (
-        <div className="mt-5 space-y-4" data-testid="before-you-start">
-          <h2 className="font-heading text-lg font-bold text-foreground-950">Before you start</h2>
-          <p className="text-sm text-foreground-700">Read how this assessment works: submission, plagiarism and collusion, outcomes, reassessment, appeals and the declaration you will sign.</p>
-          <AssessmentInfo text={definition.instructions} />
-          <Button icon="ri-play-line" onClick={() => setStarted(true)}>I have read this – start the assessment</Button>
-        </div>
+        <BeforeYouStart instructions={definition.instructions} action={<Button icon="ri-play-line" onClick={() => setStarted(true)}>I have read this – start the assessment</Button>} />
       ) : editable ? (
         <>
         {definition.instructions ? (

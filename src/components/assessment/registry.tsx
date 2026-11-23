@@ -11,6 +11,8 @@ import { Button, Select, TextArea, TextInput, Toggle } from "@/pages/admin/compo
 import type { ChecklistItem, GridColumn, GridRow, Option } from "@/lib/assessment/registry";
 import { attachmentCapable, attachmentSettings, newId } from "@/lib/assessment/registry";
 import type { EvidenceFile, Question, Responses } from "@/lib/assessment/types";
+import { asAdjustment, type AdjustmentRecord } from "@/lib/assessment/workbookLayout";
+import { AdjustmentSheet } from "./WorkbookTables";
 
 export interface InputProps {
   q: Question; value: unknown; onChange: (v: unknown) => void; disabled?: boolean;
@@ -298,8 +300,9 @@ const observation_checklist: TypeUi = {
   Config: ({ q, onChange }) => <div className="space-y-3"><ListEditor<ChecklistItem> label="Items to observe" items={cfg(q, "items", [])} onChange={(items) => onChange({ config: { ...q.config, items } })} render={(it, update) => <TextInput value={it.text} onChange={(e) => update({ text: e.target.value })} />} add={() => ({ id: newId("o"), text: "" })} addLabel="Add item" /><Toggle label="Notes field" checked={cfg(q, "allowNotes", true)} onChange={(v) => onChange({ config: { ...q.config, allowNotes: v } })} /></div>,
 };
 /* ASM-WORKBOOK item 7: Appendix A – Reasonable Adjustments, completed by the trainer / assessor */
-export interface AdjustmentValue { applied?: boolean; tasks?: string; categories?: string[]; strategies?: string[]; explanation?: string; assessorName?: string; date?: string; declared?: boolean }
-const adjValue = (v: unknown): AdjustmentValue => (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as AdjustmentValue;
+/** The adjustment record's value: the shared layout's AdjustmentRecord (item 7). */
+export type AdjustmentValue = AdjustmentRecord;
+const adjValue = asAdjustment;
 function Ticks({ items, value, onChange, disabled }: { items: string[]; value: string[]; onChange: (v: string[]) => void; disabled?: boolean }) {
   return <div className="grid gap-1 sm:grid-cols-2">{items.map((it) => <label key={it} className="flex items-start gap-2 text-sm text-foreground-900"><input type="checkbox" className="mt-0.5" disabled={disabled} checked={value.includes(it)} onChange={(e) => onChange(e.target.checked ? [...value, it] : value.filter((x) => x !== it))} />{it}</label>)}</div>;
 }
@@ -333,13 +336,8 @@ const adjustment_record: TypeUi = {
       </div>
     );
   },
-  View: ({ value }) => {
-    const v = adjValue(value);
-    if (v.applied === undefined) return <span className="text-sm text-foreground-500">Not yet recorded</span>;
-    if (!v.applied) return <p className="text-sm text-foreground-900">No reasonable adjustments were applied{v.assessorName ? ` (${v.assessorName}${v.date ? `, ${v.date}` : ""})` : ""}.</p>;
-    const row = (k: string, val: string) => (val ? <div><dt className="text-xs text-foreground-500">{k}</dt><dd className="whitespace-pre-wrap text-foreground-900">{val}</dd></div> : null);
-    return <dl className="space-y-1 text-sm">{row("Applied in", v.tasks ?? "")}{row("Category", (v.categories ?? []).join(", "))}{row("Strategies", (v.strategies ?? []).join(", "))}{row("Explanation", v.explanation ?? "")}{row("Trainer / assessor", [v.assessorName, v.date].filter(Boolean).join(" · "))}{v.declared ? <p className="text-xs text-foreground-600">Declaration signed.</p> : null}</dl>;
-  },
+  // read-only, as Appendix A prints it (the same rows as the PDF and the wizard's Review step)
+  View: ({ q, value }) => <AdjustmentSheet q={q} value={value} note={adjValue(value).applied === undefined ? <p className="text-sm text-foreground-500">Not yet recorded.</p> : null} />,
   Config: ({ q, onChange }) => {
     const lines = (k: string) => cfg<string[]>(q, k, []).join("\n");
     const setLines = (k: string, text: string) => onChange({ config: { ...q.config, [k]: text.split("\n").map((x) => x.trim()).filter(Boolean) } });

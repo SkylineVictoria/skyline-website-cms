@@ -64,6 +64,93 @@ export function helpRepeatsLabel(q: Question): boolean {
   return q.helpText.replace(/\s+/g, " ").trim().startsWith(q.label.replace(/\s+/g, " ").trim().slice(0, 60));
 }
 
+/* ------------------------------------------------------------------ item 1: the information (compliance) pages */
+
+/** The heading of the information pages (submission, plagiarism, appeals …) in the page view, the student page and the PDF. */
+export const INFO_HEADING = "Assessment information";
+
+/* ------------------------------------------------------------------ item 3: the details filled in by the system */
+
+export interface WorkbookPerson { name: string; ref: string; email?: string | null }
+export interface WorkbookDetails {
+  student: WorkbookPerson | null;
+  trainers: string[];
+  qualification: WorkbookUnitInfo | null;
+  unit: WorkbookUnitInfo | null;
+}
+
+/**
+ * Who and what the workbook is for: the student and trainers from the attempt history, the qualification and unit from the history,
+ * else the workbook the definition came from, else the assignment's unit. One rule for the student page, the PDF and the review.
+ */
+export function workbookDetails(input: {
+  history?: { student: WorkbookPerson | null; trainers: string[]; assessment: { unit?: WorkbookUnitInfo | null; qualification?: WorkbookUnitInfo | null } | null } | null;
+  definition?: Definition | null;
+  unit?: { code: string | null; name: string | null } | null;
+}): WorkbookDetails {
+  const h = input.history ?? null;
+  const fallbackUnit = input.unit?.code ? { code: input.unit.code, name: input.unit.name ?? "" } : null;
+  return {
+    student: h?.student ?? null,
+    trainers: h?.trainers ?? [],
+    qualification: h?.assessment?.qualification ?? input.definition?.source?.qualification ?? null,
+    unit: h?.assessment?.unit ?? input.definition?.source?.unit ?? fallbackUnit,
+  };
+}
+
+/** Cover section 1 with its values ("" where the system has none). */
+export function detailRows(d: WorkbookDetails): [string, string][] {
+  const values = [d.student?.name ?? "", d.student?.ref ?? "", d.student?.email ?? "", d.trainers.join(", ")];
+  return DETAIL_LABELS.map((label, i) => [label, values[i]]);
+}
+
+/* ------------------------------------------------------------------ item 7: Appendix A – Reasonable Adjustments */
+
+export const APPENDIX_TITLE = "Appendix A – Reasonable Adjustments";
+
+/** What the trainer / assessor records (asm assessor responses of an adjustment_record question). */
+export interface AdjustmentRecord { applied?: boolean; tasks?: string; categories?: string[]; strategies?: string[]; explanation?: string; assessorName?: string; date?: string; declared?: boolean }
+
+/** A table cell: text, or tick boxes with labels. */
+export type LayoutCell = string | { ticks: [string, boolean][] };
+
+export interface AdjustmentLayout {
+  intro: string;
+  /** Applied Yes / No, task name and number, category, explanation. */
+  facts: [string, LayoutCell][];
+  /** The strategy matrix: every strategy of the record with its "applied" tick. */
+  strategies: [string, boolean][];
+  /** Name, declaration, date. */
+  sign: [string, LayoutCell][];
+  declaration: string;
+}
+
+export const asAdjustment = (v: unknown): AdjustmentRecord => (v && typeof v === "object" && !Array.isArray(v) ? v : {}) as AdjustmentRecord;
+
+/** The adjustment record as the workbook's Appendix A prints it (the same rows in the page view, on screen and in the PDF). */
+export function adjustmentLayout(q: Question, value: unknown, date: (isoDay: string) => string = (d) => d): AdjustmentLayout {
+  const v = asAdjustment(value);
+  const used = new Set(v.strategies ?? []);
+  const config = q.config ?? {};
+  const list = (k: string) => (Array.isArray(config[k]) ? (config[k] as string[]) : []);
+  return {
+    intro: typeof config.intro === "string" ? config.intro : "",
+    facts: [
+      ["Reasonable adjustments applied", { ticks: [["Yes", v.applied === true], ["No", v.applied === false]] }],
+      ["Task name and number", v.tasks ?? ""],
+      ["Category", (v.categories ?? []).join(", ")],
+      ["Explanation", v.explanation ?? ""],
+    ],
+    strategies: list("strategies").map((s) => [s, used.has(s)]),
+    sign: [
+      ["Trainer/Assessor Name", v.assessorName ?? ""],
+      ["Trainer/Assessor Declaration", { ticks: [[v.declared ? "Declared" : "Not declared", Boolean(v.declared)]] }],
+      ["Date", v.date ? date(v.date) : ""],
+    ],
+    declaration: typeof config.declaration === "string" ? config.declaration : "",
+  };
+}
+
 /* ------------------------------------------------------------------ HTML content as printable blocks */
 
 export type HtmlBlock =

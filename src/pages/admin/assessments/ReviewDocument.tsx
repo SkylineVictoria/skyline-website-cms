@@ -15,7 +15,8 @@ import QuestionEditor from "./builder/QuestionEditor";
 import { earlierQuestionIds } from "@/lib/assessment/definition";
 import { GROUP_LABEL, newId, QUESTION_TYPES, questionType, type TypeGroup } from "@/lib/assessment/registry";
 import type { Definition, Question, QuestionKey, Section, Task } from "@/lib/assessment/types";
-import { CONTENT_TYPES, DETAIL_LABELS, footerParts, helpRepeatsLabel, qualificationRows, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering, type QuestionNumber, type WorkbookUnitInfo } from "@/lib/assessment/workbookLayout";
+import { AdjustmentSheet, DetailsTables } from "@/components/assessment/WorkbookTables";
+import { CONTENT_TYPES, footerParts, helpRepeatsLabel, INFO_HEADING, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering, type QuestionNumber, type WorkbookUnitInfo } from "@/lib/assessment/workbookLayout";
 import type { WorkbookLetterhead } from "@/lib/assessment/workbookExport";
 
 export interface ReviewActions {
@@ -72,15 +73,6 @@ function Sheet({ head, footer, children, testId }: { head: WorkbookLetterhead | 
   );
 }
 
-/** The workbook's two-column table (label column shaded). */
-function LabelTable({ rows, testId }: { rows: [string, ReactNode][]; testId?: string }) {
-  return (
-    <table className="w-full border-collapse text-[12px]" data-testid={testId}>
-      <tbody>{rows.map(([label, value]) => <tr key={label}><th scope="row" className="w-[30%] border border-neutral-400 bg-neutral-100 px-2 py-1.5 text-left font-semibold">{label}</th><td className="border border-neutral-400 px-2 py-1.5">{value}</td></tr>)}</tbody>
-    </table>
-  );
-}
-
 /** The question bar: "Q3   2.1.3          Satisfactory ☐ Yes ☐ No". */
 function QuestionBar({ n }: { n: QuestionNumber }) {
   return (
@@ -106,6 +98,8 @@ function AnswerArea({ q }: { q: Question }) {
     );
   }
   if (q.type === "single_choice" || q.type === "multi_choice") return <ul className="space-y-1">{cfg<{ id: string; label: string }[]>(q, "options", []).map((o) => <li key={o.id} className="flex items-center gap-2"><Tick />{o.label}</li>)}</ul>;
+  // item 7: Appendix A as the trainer fills it in when marking (the student never sees it)
+  if (q.type === "adjustment_record") return <AdjustmentSheet q={q} value={undefined} note={<p className="text-[12px] italic text-neutral-500">Completed by the trainer / assessor when marking; students do not see it.</p>} />;
   if (q.type === "true_false") return <p className="flex items-center gap-4"><span className="flex items-center gap-1.5"><Tick />{cfg(q, "trueLabel", "True")}</span><span className="flex items-center gap-1.5"><Tick />{cfg(q, "falseLabel", "False")}</span></p>;
   const ui = typeUi(q.type);
   return <div className="pointer-events-none select-none opacity-90" aria-hidden="true">{ui.Input({ q, value: undefined, onChange: () => undefined, disabled: true, evidence: [], renderChildren: () => null })}</div>;
@@ -263,10 +257,8 @@ export default function ReviewDocument({ definition, title, onTitle, unit, quali
           {unit ? <p className="mt-1 text-base text-neutral-500">{unit.code} {unit.name}</p> : null}
           <p className="text-sm text-neutral-500">Student Assessment Pack</p>
         </div>
-        <h3 className="pt-2 text-sm font-bold">1. Student and trainer details</h3>
-        <LabelTable rows={DETAIL_LABELS.map((l) => [l, <span key={l} className="block h-4" />])} testId="review-details" />
-        <h3 className="pt-2 text-sm font-bold">2. Qualification and unit of competency</h3>
-        <LabelTable rows={qualificationRows(qualification, unit)} testId="review-qualification" />
+        {/* item 3: the same tables as the student's page and the PDF; the student and trainer are filled in for each student */}
+        <div className="pt-2"><DetailsTables details={{ student: null, trainers: [], qualification, unit }} placeholder="Filled in for each student" testId="review-details" /></div>
         <h3 className="pt-2 text-sm font-bold">3. Assessment Tasks</h3>
         <table className="w-full border-collapse text-[12px]">
           <thead><tr>{TASK_TABLE_HEAD.map((h) => <th key={h} className="border border-neutral-400 bg-neutral-100 px-2 py-1.5 text-left font-semibold">{h}</th>)}</tr></thead>
@@ -277,7 +269,7 @@ export default function ReviewDocument({ definition, title, onTitle, unit, quali
       {/* the information pages (submission, plagiarism, appeals …) */}
       {hasInfo ? (
         <Sheet head={letterhead} footer={footer(2)} testId="review-info">
-          <h3 className="text-lg font-bold">Assessment information</h3>
+          <h3 className="text-lg font-bold">{INFO_HEADING}</h3>
           <div data-block="info" className={`rounded-md p-1.5 ${selected === "info" ? "bg-primary-50/60 ring-2 ring-primary-300" : "cursor-pointer hover:bg-neutral-50 hover:ring-1 hover:ring-neutral-300"}`}
             onClick={selected === "info" ? undefined : () => onSelect("info")} role={selected === "info" ? undefined : "button"} tabIndex={selected === "info" ? undefined : 0}
             onKeyDown={selected === "info" ? undefined : (e) => { if (e.key === "Enter" && e.target === e.currentTarget) onSelect("info"); }} aria-label={selected === "info" ? undefined : "Edit the assessment information"}>

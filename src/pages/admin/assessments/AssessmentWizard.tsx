@@ -15,7 +15,9 @@ import WizardStages, { type WizardStage } from "@/components/shared/wizard/Wizar
 import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import { DocumentRow, Dropzone } from "@/components/shared/application-form/DocumentUpload";
 import DocumentReadingState from "@/components/shared/application-form/DocumentReadingState";
-import AssessmentRenderer, { AssessmentInfo } from "@/components/assessment/AssessmentRenderer";
+import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
+import AssessmentDetails from "@/components/assessment/AssessmentDetails";
+import BeforeYouStart from "@/components/assessment/BeforeYouStart";
 import PdfPages from "@/components/signing/PdfPages";
 import ReviewDocument, { type ReviewActions } from "./ReviewDocument";
 import { flattenQuestions, moveItem, newSection, newTask, removeQuestion, updateQuestion } from "@/lib/assessment/definition";
@@ -424,7 +426,8 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
           {view === "student" ? (
             <div className="space-y-4" data-testid="review-student-view">
               <p className="text-xs text-foreground-600">{trainerView ? "As the trainer sees it: the assessor checklists are shown." : "Exactly what the student sees. Answers typed here are not kept."}</p>
-              {definition.instructions ? <AssessmentInfo text={definition.instructions} /> : settings?.instructions ? <div className="rounded-card border border-background-200 bg-background-100 p-4 text-sm text-foreground-800 whitespace-pre-wrap">{settings.instructions}</div> : null}
+              <AssessmentDetails preview history={null} definition={docDefinition} />
+              {definition.instructions ? <BeforeYouStart instructions={definition.instructions} action={<span className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-md bg-primary-500/60 px-4 py-2 text-sm font-semibold text-background-50" aria-disabled="true"><i className="ri-play-line" aria-hidden="true" />I have read this – start the assessment</span>} /> : settings?.instructions ? <div className="rounded-card border border-background-200 bg-background-100 p-4 text-sm text-foreground-800 whitespace-pre-wrap">{settings.instructions}</div> : null}
               {definition.tasks.length > 1 ? <div className="flex flex-wrap gap-2">{definition.tasks.map((x, i) => <button key={x.id} type="button" onClick={() => setPreviewTask(i)} className={`rounded-full border px-3.5 py-1.5 text-label font-medium ${x.id === task?.id ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-200 text-foreground-700 hover:bg-background-100"}`}>Task {i + 1}: {x.title}</button>)}</div> : null}
               {task ? <AssessmentRenderer definition={definition} responses={{}} onChange={() => undefined} mode="student" taskId={task.id} evidence={[]} onUpload={async () => undefined} disabled declarationText={settings?.declaration_text ?? ""} showAssessor={trainerView} /> : <p className="text-sm text-foreground-600">There is nothing to preview yet.</p>}
             </div>

@@ -379,7 +379,9 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     const doc = wizard.getByTestId("review-document");
     await expect(doc.getByTestId("review-cover")).toContainText("Student Assessment Pack");
     await expect(doc.getByTestId("review-details")).toContainText("Student ID");
-    await expect(doc.getByTestId("review-qualification")).toContainText("RII50520");
+    await expect(doc.getByTestId("review-details-qualification")).toContainText("RII50520");
+    // item 3 in the review: the details rows say they are filled in for each student
+    await expect(doc.getByTestId("review-details-people")).toContainText("Filled in for each student");
     await expect(doc.getByTestId("review-info")).toContainText("Plagiarism");
     await expect(doc.getByText(/Version Number: 1\.0/).first()).toBeVisible();
     await expect(doc.getByText(/^Q1$/).first()).toBeVisible();
@@ -410,15 +412,26 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await expect(more.getByText("Model / benchmark answer")).toBeVisible();
     await reviewShot(page, "rv-3-review-edit-table-more-options", table);
     await table.getByRole("button", { name: "Done" }).click();
+    // item 7 in the review: Appendix A laid out as the workbook / PDF prints it, for the trainer to fill in when marking
+    const appendix = doc.getByTestId("adjustment-sheet");
+    await expect(appendix).toContainText("Reasonable adjustments applied");
+    await expect(appendix).toContainText("Reasonable adjustment strategy");
+    await expect(appendix).toContainText("Trainer/Assessor Declaration");
+    await expect(appendix).toContainText("Completed by the trainer / assessor when marking");
+    await reviewShot(page, "rv-3b-review-edit-appendix-a", appendix);
     await wizard.getByRole("button", { name: "Mark all as reviewed" }).click();
     await expect(wizard.getByTestId("review-all-reviewed")).toBeVisible();
     await expect(doc.getByTestId("check-this")).toHaveCount(0);
     // Student view
     await wizard.getByRole("tab", { name: "Student view" }).click();
     await expect(wizard.getByTestId("review-student-view")).toContainText(/Exactly what the student sees/);
-    await expect(wizard.getByTestId("assessment-info")).toContainText("Plagiarism");
+    // items 1 and 3 as the student's page shows them: the details card, then Before you start with the compliance pages
+    await expect(wizard.getByTestId("assessment-details")).toContainText("Filled in for each student");
+    await expect(wizard.getByTestId("assessment-details")).toContainText("RIICWD525E");
+    await expect(wizard.getByTestId("before-you-start")).toContainText("Plagiarism");
+    await reviewShot(page, "rv-4a-review-student-view-before-you-start", wizard.getByTestId("assessment-details"));
     await wizard.getByRole("button", { name: /Task 2:/ }).click();
-    await expect(wizard.locator("[data-testid=review-student-view] table").first()).toBeVisible();
+    await expect(wizard.locator("[data-testid=review-student-view] [data-question] table").first()).toBeVisible();
     await expect(wizard.locator("[data-testid=review-student-view] figure img").first()).toBeVisible();
     await expect(wizard.getByTestId("review-student-view")).toContainText("Checked in the lab review.");
     await reviewShot(page, "rv-4-review-student-view");
@@ -454,7 +467,10 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
     await expect(page.getByTestId("before-you-start")).toContainText("Plagiarism");
     await expect(page.getByTestId("before-you-start")).toContainText("Assessment appeals process");
-    await expect(page.getByTestId("assessment-details")).toContainText("RIICWD525E Select Pavement surfacing");
+    await expect(page.getByTestId("assessment-details")).toContainText("RIICWD525E");
+    await expect(page.getByTestId("assessment-details")).toContainText("Select Pavement surfacing");
+    await expect(page.getByTestId("assessment-details")).toContainText("RII50520");
+    await expect(page.getByTestId("assessment-details")).not.toContainText("Filled in for each student");
     await expect(page.getByTestId("assessment-details")).toContainText("Wendy Workbook");
     await shot(page, "wb-06-student-before-you-start");
     await page.getByRole("button", { name: /I have read this – start the assessment/ }).click();
@@ -499,6 +515,11 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     expect(pdf.text).toContain("Unit Code: RIICWD525E");
     expect(pdf.text).toContain("Appendix A – Reasonable Adjustments");
     expect(pdf.text).toContain("The student answered two questions orally.");
+    // items 1 / 3 / 7 in the export: compliance pages, the filled-in details, Appendix A ticked as recorded
+    expect(pdf.text).toContain("Assessment information");
+    expect(pdf.text).toMatch(/Plagiarism/);
+    expect(pdf.text).toMatch(/Trainer Full Name Wendy Workbook/);
+    expect(pdf.text).toMatch(/Trainer\/Assessor Name Wendy Workbook/);
     expect(pdf.text).toContain("Assessment Task - 2 - Results Sheet");
     expect(pdf.text).toContain(`Page ${pdf.pages} of ${pdf.pages}`);
     expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${wbStudent.student}'`)).toBe("1:returned:NYS,2:draft:-");

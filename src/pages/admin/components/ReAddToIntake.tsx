@@ -5,19 +5,21 @@ import { friendlyDbError, shortDate } from "@/pages/admin/lib/rto";
 
 type Options = {
   applications: { id: string; reference: string; status: string; courseCode: string | null }[];
-  intakes: { id: string; name: string; courseCode: string; courseName: string; startDate: string; endDate: string | null; load: string }[];
+  intakes: { id: string; name: string; courseCode: string; courseName: string; startDate: string; endDate: string | null; load: string; joinDates?: { date: string; firstDay: boolean; unitCode: string | null; unitName: string | null }[] }[];
 };
 
 /**
  * Re-add to intake (owner, 2026-11-23): after a course was deleted and created again, an Admin or RTO Manager links one of the
  * student's applications to an open intake of the new course and places the student there in one step, with a reason
- * (rto_readd_to_intake, 20261123191517). Shown on the CMS student page.
+ * (rto_readd_to_intake, 20261123191517). Shown on the CMS student page. The join date is day one or any unit start date
+ * of the intake (joinDates, 20261123211517).
  */
 export default function ReAddToIntake({ studentId, onDone }: { studentId: string; onDone?: () => void }) {
   const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<Options | null>(null);
   const [application, setApplication] = useState("");
   const [intake, setIntake] = useState("");
+  const [joinOn, setJoinOn] = useState("");
   const [reason, setReason] = useState("Course was deleted and created again; back in the new intake.");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -41,10 +43,13 @@ export default function ReAddToIntake({ studentId, onDone }: { studentId: string
   }, [open, studentId]);
 
   const chosen = useMemo(() => options?.intakes.find((i) => i.id === intake), [options, intake]);
+  const joinDates = useMemo(() => chosen?.joinDates ?? [], [chosen]);
+  // A new intake starts on its first join date (day one, else the next unit start); none listed = today / day one.
+  useEffect(() => { setJoinOn(joinDates[0]?.date ?? ""); }, [joinDates]);
   const submit = async () => {
     if (!application || !intake || !reason.trim()) return;
     setBusy(true); setError("");
-    const { data, error: e } = await supabase.rpc("rto_readd_to_intake", { p_student: studentId, p_application: application, p_intake: intake, p_reason: reason.trim() });
+    const { data, error: e } = await supabase.rpc("rto_readd_to_intake", { p_student: studentId, p_application: application, p_intake: intake, p_reason: reason.trim(), p_on: joinOn || null });
     setBusy(false);
     if (e) { setError(friendlyDbError(e.message)); return; }
     const r = data as { batch?: string; joinedOn?: string } | null;
@@ -61,7 +66,7 @@ export default function ReAddToIntake({ studentId, onDone }: { studentId: string
         {done ? null : <Button disabled={busy || !application || !intake || !reason.trim()} onClick={() => void submit()}>{busy ? "Adding…" : "Re-add to intake"}</Button>}
       </div>}>
       <div className="space-y-3 text-sm">
-        <p className="text-foreground-600">Use this when the student's course was deleted and created again (or they need to join another intake). Their application is linked to the intake's course and they are placed in it, joining today or on the intake's first day.</p>
+        <p className="text-foreground-600">Use this when the student's course was deleted and created again (or they need to join another intake). Their application is linked to the intake's course and they are placed in it from the join date you pick: the intake's first day or the start of any unit.</p>
         {options === null && !error ? <p className="text-foreground-500">Loading…</p> : null}
         {options ? <>
           <label className="block"><span className="mb-1 block text-xs font-semibold text-foreground-600">Application</span>
@@ -73,6 +78,11 @@ export default function ReAddToIntake({ studentId, onDone }: { studentId: string
             <select className={field} value={intake} disabled={busy || !!done} onChange={(e) => setIntake(e.target.value)}>
               {options.intakes.length ? null : <option value="">No open intake</option>}
               {options.intakes.map((i) => <option key={i.id} value={i.id}>{i.courseCode} · {i.name} · {i.load.toUpperCase()} · {shortDate(i.startDate)}{i.endDate ? ` – ${shortDate(i.endDate)}` : ""}</option>)}
+            </select></label>
+          <label className="block"><span className="mb-1 block text-xs font-semibold text-foreground-600">Joins on</span>
+            <select className={field} value={joinOn} disabled={busy || !!done || !chosen} onChange={(e) => setJoinOn(e.target.value)}>
+              {joinDates.length ? null : <option value="">Today (no upcoming unit start)</option>}
+              {joinDates.map((d) => <option key={d.date} value={d.date}>{shortDate(d.date)} · {d.firstDay ? "day one of the intake" : d.unitCode ? `${d.unitCode}${d.unitName ? ` ${d.unitName}` : ""}` : "unit start"}</option>)}
             </select></label>
           <label className="block"><span className="mb-1 block text-xs font-semibold text-foreground-600">Reason (kept on the record)</span>
             <textarea className={field} rows={2} maxLength={500} value={reason} disabled={busy || !!done} onChange={(e) => setReason(e.target.value)} /></label>

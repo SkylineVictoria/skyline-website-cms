@@ -497,9 +497,9 @@ try {
     create policy fixture_permissive on public.enrollment_applications for select to authenticated using (true);
     grant select on public.portal_profiles, public.agency_memberships to authenticated;
   `);
-  const wizardMigration = await readFile(new URL("../supabase/migrations/20261124001517_student_application_wizard.sql", import.meta.url), "utf8");
+  const wizardMigration = await readFile(new URL("../supabase/migrations/20261123165538_student_application_wizard.sql", import.meta.url), "utf8");
   await db.exec(wizardMigration);
-  await db.exec(await readFile(new URL("../supabase/migrations/20261124011517_restrict_student_application_data.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../supabase/migrations/20261123165817_restrict_student_application_data.sql", import.meta.url), "utf8"));
   const firstAgent = "a5100000-0000-4000-8000-000000000001";
   const business = "a5100000-0000-4000-8000-000000000002";
   const otherAgent = "a5100000-0000-4000-8000-000000000003";

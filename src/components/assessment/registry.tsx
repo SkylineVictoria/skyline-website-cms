@@ -105,6 +105,15 @@ const instruction: TypeUi = {
     </div>
   ),
 };
+/** The attached links of an instruction block alone (the Review step edits its text in place, never as HTML). */
+export function ContentLinksEditor({ q, onChange }: ConfigProps) {
+  return (
+    <ListEditor<{ id: string; label: string; url: string }> label="Attached documents / media (links)" items={cfg(q, "attachments", [])}
+      onChange={(attachments) => onChange({ config: { ...q.config, attachments } })}
+      render={(a, update) => <div className="grid grid-cols-2 gap-1.5"><TextInput value={a.label} placeholder="Label" onChange={(e) => update({ label: e.target.value })} /><TextInput value={a.url} placeholder="https://…" onChange={(e) => update({ url: e.target.value })} /></div>}
+      add={() => ({ id: newId("a"), label: "", url: "" })} addLabel="Add link" />
+  );
+}
 function ContentBlock({ q }: { q: Question }) {
   const html = cfg<string>(q, "html", "");
   const attachments = cfg<{ id: string; label: string; url: string }[]>(q, "attachments", []);

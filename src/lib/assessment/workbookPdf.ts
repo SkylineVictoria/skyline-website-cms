@@ -16,6 +16,7 @@
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { buildResultsSheet, type AttemptHistory, type SheetCell } from "./resultsSheet";
 import type { Definition, EvidenceFile, Outcome, Question, Responses, ResultRow } from "./types";
+import { CONTENT_TYPES, DETAIL_LABELS, footerParts, helpRepeatsLabel, htmlToBlocks, qualificationRows, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering } from "./workbookLayout";
 
 export interface WorkbookInstitution {
   name: string;
@@ -42,6 +43,11 @@ export interface WorkbookPdfInput {
   maxAttempts?: number;
   /** Dates are printed in this zone (default Australia/Melbourne). */
   timeZone?: string;
+  /**
+   * The blank workbook (ASM-REVIEW: the wizard's "Workbook (PDF) view"): as a student receives it, so the information pages and the
+   * instruction blocks (briefs, drawings, tables) are printed too, and no attempt line. A marked export leaves them out.
+   */
+  blank?: boolean;
 }
 
 const W = 595.28; const H = 841.89; const M = 42;
@@ -121,6 +127,41 @@ class Layout {
     });
     page.drawLine({ start: { x: M, y: HEADER_BOTTOM + 8 }, end: { x: W - M, y: HEADER_BOTTOM + 8 }, thickness: 0.8, color: LINE });
     this.y = HEADER_BOTTOM - 4;
+  }
+  /** A picture (JPEG / PNG data: URL) at most the content width and 300 pt high; anything else is skipped. */
+  async image(src: string) {
+    const m = src.match(/^data:image\/(png|jpe?g);base64,(.+)$/i);
+    if (!m) return;
+    try {
+      const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+      const img = m[1].toLowerCase() === "png" ? await this.pdf.embedPng(bytes) : await this.pdf.embedJpg(bytes);
+      const scale = Math.min((W - 2 * M) / img.width, 300 / img.height, 1);
+      const w = img.width * scale; const h = img.height * scale;
+      this.ensure(h + 6);
+      this.page.drawImage(img, { x: M, y: this.y - h, width: w, height: h });
+      this.y -= h + 6;
+    } catch { /* not a picture pdf-lib can read: left out */ }
+  }
+  /** An instruction block's HTML (or plain text) as headings, paragraphs, list items, tables and pictures. */
+  async content(html: string) {
+    for (const b of htmlToBlocks(html)) {
+      if (b.kind === "heading") this.heading(b.text, 10.5);
+      else if (b.kind === "para") { this.text(b.text, { size: 8.5 }); this.gap(2); }
+      else if (b.kind === "item") {
+        const lines = this.wrap(b.text, W - 2 * M - 16, 8.5);
+        lines.forEach((line, k) => {
+          this.ensure(11.2);
+          if (k === 0) this.page.drawText(this.clean(b.marker), { x: M + 4, y: this.y - 8.5, size: 8.5, font: this.font, color: INK });
+          this.page.drawText(line, { x: M + 16, y: this.y - 8.5, size: 8.5, font: this.font, color: INK });
+          this.y -= 11.2;
+        });
+        this.gap(1);
+      } else if (b.kind === "table") {
+        const n = Math.max(1, ...b.rows.map((r) => r.length));
+        const rows = b.rows.map((r) => [...r, ...Array<string>(n - r.length).fill("")]);
+        this.table(b.head ? rows[0] : null, b.head ? rows.slice(1) : rows, rows[0].map(() => 1 / n));
+      } else await this.image(b.src);
+    }
   }
   ensure(h: number) { if (this.y - h < FOOTER_TOP + 8) this.newPage(); }
   gap(h = 6) { this.y -= h; }
@@ -267,25 +308,19 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
   L.text("Student Assessment Pack", { size: 11, color: GREY, lead: 16 });
   L.gap(14);
   L.heading("1. Student and trainer details", 11);
-  L.table(null, [
-    ["Student Full Name", history.student?.name ?? ""],
-    ["Student ID", history.student?.ref ?? ""],
-    ["Student Email", history.student?.email ?? ""],
-    ["Trainer Full Name", history.trainers.join(", ")],
-  ], [0.3, 0.7], { labelColumn: true });
+  const details = [history.student?.name ?? "", history.student?.ref ?? "", history.student?.email ?? "", history.trainers.join(", ")];
+  L.table(null, DETAIL_LABELS.map((label, i) => [label, details[i]]), [0.3, 0.7], { labelColumn: true });
   L.heading("2. Qualification and unit of competency", 11);
-  L.table(null, [
-    ["Qualification Code", qual?.code ?? ""], ["Qualification Name", qual?.name ?? ""],
-    ["Unit Code", unit?.code ?? ""], ["Unit Name", unit?.name ?? ""],
-  ], [0.3, 0.7], { labelColumn: true });
+  L.table(null, qualificationRows(qual, unit), [0.3, 0.7], { labelColumn: true });
   L.heading("3. Assessment Tasks", 11);
-  L.table(["Evidence number", "Assessment method / Type of evidence"], definition.tasks.map((t, i) => [`Assessment Task - ${i + 1}`, t.title]), [0.3, 0.7]);
-  L.text(`Attempt ${attempt.attemptNo}${attempt.receiptNo ? ` · receipt ${attempt.receiptNo}` : ""}${attempt.submittedAt ? ` · submitted ${date(attempt.submittedAt)}` : ""}`, { size: 8.5, color: GREY });
+  L.table([...TASK_TABLE_HEAD], taskRows(definition), [0.3, 0.7]);
+  if (input.blank && definition.instructions) { L.newPage(); L.heading("Assessment information", 14); await L.content(definition.instructions); }
+  if (!input.blank) L.text(`Attempt ${attempt.attemptNo}${attempt.receiptNo ? ` · receipt ${attempt.receiptNo}` : ""}${attempt.submittedAt ? ` · submitted ${date(attempt.submittedAt)}` : ""}`, { size: 8.5, color: GREY });
 
   /* ---- tasks */
   const sheet = buildResultsSheet(definition, history, input.maxAttempts ?? 3);
   const evidenceOf = (qid: string) => attempt.evidence.filter((f) => f.questionId === qid && !f.byAssessor);
-  let seq = 0;
+  const numbers = workbookNumbering(definition);
 
   const drawAnswer = (q: Question, scope: Responses) => {
     const assessor = q.assessorOnly === true || q.type === "observation_checklist" || q.type === "third_party_report";
@@ -362,37 +397,34 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
     }
   };
 
-  definition.tasks.forEach((task, ti) => {
+  for (const [ti, task] of definition.tasks.entries()) {
     L.newPage();
-    L.heading(`Assessment Task - ${ti + 1} - ${task.title}`, 14);
+    L.heading(taskHeading(task, ti), 14);
     if (task.instructions) L.text(task.instructions, { size: 8.5, color: GREY });
-    task.sections.forEach((s) => {
-      const qs = s.questions.filter((q) => !ANSWERABLE_SKIP.has(q.type));
-      if (!qs.length) return;
-      if (s.title && !/^instructions$/i.test(s.title)) L.heading(s.title, 11);
-      let n = 0;
-      // a sub-task section ("2.1 Project Plan …") numbers its questions as the workbook does: 2.1.1, 2.1.2, …
-      const prefix = s.title.match(/^(\d+\.\d+)\b/)?.[1] ?? String(ti + 1);
-      qs.forEach((q) => {
-        const markable = (q.markingMode ?? "criteria") !== "none";
-        const number = q.type === "declaration" ? "Student declaration" : q.type === "adjustment_record" ? "Trainer / assessor record" : `${prefix}.${++n}`;
-        L.questionBar(markable ? ++seq : null, number, questionOutcome(attempt.results, q), markable);
+    for (const s of task.sections) {
+      // the blank workbook keeps the briefs; a marked export prints only what was answered
+      const qs = s.questions.filter((q) => input.blank || !CONTENT_TYPES.has(q.type));
+      if (!qs.length) continue;
+      if (sectionShowsTitle(s.title)) L.heading(s.title, 11);
+      for (const q of qs) {
+        if (CONTENT_TYPES.has(q.type)) { await L.content(cfg(q, "html", "")); L.gap(4); continue; }
+        // the question bar: "Q3 | 2.1.3 | Satisfactory Yes / No" (sub-task sections number as the workbook does: 2.1.1, 2.1.2, …)
+        const { seq, number, markable } = numbers.get(q.id) ?? { seq: null, number: "", markable: false };
+        L.questionBar(seq, number, questionOutcome(attempt.results, q), markable);
         if (q.type !== "declaration") L.text(q.label, { bold: true, size: 9.5 });
-        // help text that only repeats the question (an imported long question keeps it whole) is not printed twice
-        const repeats = q.helpText ? q.helpText.replace(/\s+/g, " ").trim().startsWith(q.label.replace(/\s+/g, " ").trim().slice(0, 60)) : false;
-        if (q.helpText && q.type !== "declaration" && !repeats) L.text(q.helpText, { size: 8, color: GREY });
+        if (q.helpText && q.type !== "declaration" && !helpRepeatsLabel(q)) L.text(q.helpText, { size: 8, color: GREY });
         L.gap(2);
         drawAnswer(q, attempt.responses);
         const fb = attempt.results.find((r) => r.questionId === q.id && !r.criterionId)?.feedback;
         if (fb) L.text(`Assessor feedback: ${fb}`, { size: 8.5, color: GREY });
         L.gap(4);
-      });
-    });
+      }
+    }
     // the task's results sheet
     const row = sheet.rows[ti];
     L.heading(`Assessment Task - ${ti + 1} - Results Sheet`, 12);
     L.table(["", ...row.cells.map((c) => ordinal(c.attemptNo))], resultRows(row.cells, date), [0.2, ...row.cells.map(() => 0.8 / row.cells.length)], { labelColumn: true });
-  });
+  }
 
   /* ---- overall outcome and declarations */
   L.newPage();
@@ -412,7 +444,7 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
   const total = L.pages.length;
   L.pages.forEach((page, i) => {
     page.drawLine({ start: { x: M, y: FOOTER_TOP }, end: { x: W - M, y: FOOTER_TOP }, thickness: 0.6, color: LINE });
-    const left = L.clean(`Version Number: ${version}`); const mid = L.clean(unit ? `Unit Code: ${unit.code}` : ""); const right = `Page ${i + 1} of ${total}`;
+    const [a, b, right] = footerParts(version, unit, i + 1, total); const left = L.clean(a); const mid = L.clean(b);
     page.drawText(left, { x: M, y: FOOTER_TOP - 14, size: 8, font: L.font, color: GREY });
     if (mid) page.drawText(mid, { x: (W - L.width(mid, 8)) / 2, y: FOOTER_TOP - 14, size: 8, font: L.font, color: GREY });
     page.drawText(right, { x: W - M - L.width(right, 8), y: FOOTER_TOP - 14, size: 8, font: L.font, color: GREY });

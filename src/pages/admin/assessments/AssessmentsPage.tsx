@@ -115,6 +115,14 @@ export function CreateDialog({ courses, templates, onClose, onCreated }: { cours
               if (r && !title) setTitle(r.title);
               if (r?.unitCode && !unitId) { const u = units.find((x) => x.code.toUpperCase() === r.unitCode); if (u) setUnitId(u.id); }
             }} />
+            {(() => {
+              // ASM-REVIEW bug 5: the same check as the wizard's Upload step, against the unit chosen here
+              const wbCode = workbook?.unit?.code ?? workbook?.unitCode ?? null;
+              const chosen = units.find((u) => u.id === unitId);
+              return wbCode && chosen && chosen.code.toUpperCase() !== wbCode.toUpperCase()
+                ? <p role="alert" data-testid="filing-mismatch" className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"><i className="ri-error-warning-line mt-0.5" aria-hidden="true" /><span><strong>This workbook is for {wbCode}{workbook?.unit?.name ? ` ${workbook.unit.name}` : ""}, not {chosen.code} {chosen.name}.</strong> Choose its unit above, or upload the workbook for {chosen.code}.</span></p>
+                : null;
+            })()}
             {workbook ? <WorkbookSummary result={workbook} /> : null}
           </div>
         ) : null}

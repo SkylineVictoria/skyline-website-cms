@@ -705,6 +705,8 @@
 .asm-content h4 { margin: 0.9rem 0 0.35rem; font-weight: 600; color: oklch(var(--foreground-950)); }
 .asm-content p { margin: 0.4rem 0; }
 .asm-content ul { margin: 0.4rem 0; padding-left: 1.25rem; list-style: disc; }
+.asm-content ol { margin: 0.4rem 0; padding-left: 1.25rem; list-style: decimal; }
+.asm-content a { color: oklch(var(--primary-700)); text-decoration: underline; }
 .asm-content table { width: 100%; margin: 0.6rem 0; border-collapse: collapse; font-size: 0.8125rem; }
 .asm-content th, .asm-content td { border: 1px solid oklch(var(--background-300)); padding: 0.4rem 0.5rem; text-align: left; vertical-align: top; }
 .asm-content th { background: oklch(var(--background-100)); font-weight: 600; }

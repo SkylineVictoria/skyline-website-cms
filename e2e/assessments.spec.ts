@@ -310,6 +310,51 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     return { text: texts.join("\n"), pages: doc.numPages, file };
   }
 
+  /** One screenshot of the wizard at 1440 x 1400 (the dialog scrolls inside the page, so a full-page shot would miss it). */
+  async function reviewShot(page: Page, name: string, target?: ReturnType<Page["locator"]>): Promise<void> {
+    const dir = process.env.E2E_SHOTS_DIR;
+    if (!dir) return;
+    const original = page.viewportSize();
+    await page.setViewportSize({ width: 1440, height: 1400 });
+    await page.waitForTimeout(300);
+    if (target) await target.evaluate((el) => el.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(dir, `${name}.png`) });
+    if (original) await page.setViewportSize(original);
+  }
+
+  test("ASM-REVIEW bug 5: the RIICWD525E workbook uploaded on the CPCCPD2012 page is flagged on the Upload step", async ({ page }) => {
+    test.setTimeout(180_000);
+    const cpc = sql(`select id from public.cms_courses where code = 'CPC30620'`) || `course-e2e-cpc30620-${RUN}`;
+    sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${cpc}', 'e2e-cpc30620-${RUN}', 'CPC30620', 'Certificate III in Painting and Decorating', 'Published') on conflict (id) do nothing`);
+    const pd = sql(`select id from public.cms_course_units where course_id = '${cpc}' and code = 'CPCCPD2012'`) || `unit-e2e-cpccpd2012-${RUN}`;
+    sql(`insert into public.cms_course_units(id, course_id, code, name) values ('${pd}', '${cpc}', 'CPCCPD2012', 'Use painting and decorating tools and equipment') on conflict (id) do nothing`);
+    await signInAsAdmin(page, admin.email);
+    await page.goto("/admin/lms/assessments");
+    await page.getByRole("button", { name: /CPC30620/ }).first().click();
+    await page.getByRole("button", { name: /CPCCPD2012/ }).first().click();
+    await page.getByRole("button", { name: "+ Add assessment" }).click();
+    const wizard = page.getByRole("dialog");
+    await expect(wizard.getByTestId("wizard-filing")).toContainText("CPC30620 › CPCCPD2012");
+    await wizard.getByRole("button", { name: /Upload workbook \(Word or PDF\)/ }).click();
+    await wizard.locator("input[type=file]").first().setInputFiles(workbook);
+    await expect(wizard.getByText(/2 tasks · \d+ questions/)).toBeVisible({ timeout: 90_000 });
+    // the warning is on the Upload step itself, before Review, and names both units
+    const warning = wizard.getByTestId("filing-mismatch");
+    await expect(warning).toContainText("This workbook is for RIICWD525E Select Pavement surfacing, not CPCCPD2012");
+    await expect(warning).toContainText("RII50520 › RIICWD525E");
+    await expect(wizard.getByTestId("filing-check")).toContainText("Selected on the page");
+    await reviewShot(page, "rv-0-upload-mismatch");
+    // and the next step is Qualification & unit, pre-set to the workbook's unit
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await expect(wizard.getByText("Found in the workbook")).toBeVisible();
+    await expect(wizard.getByRole("alert").filter({ hasText: "CPCCPD2012" })).toBeVisible();
+    await reviewShot(page, "rv-0b-unit-step-after-mismatch");
+    await wizard.getByRole("button", { name: "Close the wizard" }).click();
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
+    await expect(wizard).toHaveCount(0);
+  });
+
   test("the admin creates it from the workbook in the wizard, publishes and assigns it", async ({ page }) => {
     test.setTimeout(240_000);
     await signInAsAdmin(page, admin.email);
@@ -324,29 +369,76 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await wizard.locator("input[type=file]").first().setInputFiles(workbook);
     await expect(wizard.getByText(/2 tasks · \d+ questions/)).toBeVisible({ timeout: 90_000 });
     await shot(page, "wb-02-uploaded");
-    // the workbook's unit is the page's unit: no Qualification & unit step
+    // the workbook's unit is the page's unit: said on the Upload step, and no Qualification & unit step
+    await expect(wizard.getByTestId("filing-match")).toContainText("Matches the unit selected on the page");
+    await expect(wizard.getByTestId("filing-mismatch")).toHaveCount(0);
     await expect(wizard.getByText("Qualification & unit")).toHaveCount(0);
     await wizard.getByRole("button", { name: "Next" }).click();
-    await expect(wizard.getByText("Review & edit").first()).toBeVisible();
-    await expect(wizard.getByText(/\d+ to check/)).toBeVisible();
-    await shot(page, "wb-03-review");
-    await wizard.getByRole("button", { name: "Next" }).click();
-    await page.getByRole("button", { name: "Continue anyway" }).click();
-    await expect(wizard.getByText(/Exactly what the student sees/)).toBeVisible();
+    // ASM-REVIEW: one Review step with Edit | Student view | Workbook (PDF) view; Edit looks like the workbook
+    await expect(wizard.getByRole("tab", { name: "Edit" })).toHaveAttribute("aria-selected", "true");
+    const doc = wizard.getByTestId("review-document");
+    await expect(doc.getByTestId("review-cover")).toContainText("Student Assessment Pack");
+    await expect(doc.getByTestId("review-details")).toContainText("Student ID");
+    await expect(doc.getByTestId("review-qualification")).toContainText("RII50520");
+    await expect(doc.getByTestId("review-info")).toContainText("Plagiarism");
+    await expect(doc.getByText(/Version Number: 1\.0/).first()).toBeVisible();
+    await expect(doc.getByText(/^Q1$/).first()).toBeVisible();
+    await expect(wizard.getByText(/\d+ marked “Check this”/)).toBeVisible();
+    await expect(wizard.getByRole("button", { name: "Raw HTML" })).toHaveCount(0);
+    await reviewShot(page, "rv-1-review-edit");
+    await reviewShot(page, "rv-1b-review-edit-task-page", doc.getByTestId("review-task").first());
+    // a text block: rich text in place, never HTML tags
+    const brief = doc.getByTestId("review-task").nth(1).locator("[data-block]").filter({ has: page.locator(".asm-content") }).first();
+    await brief.click();
+    const editor = wizard.getByTestId("rich-block-editor");
+    await expect(editor.getByRole("button", { name: "Bold" })).toBeVisible();
+    for (const tool of ["Italic", "Bulleted list", "Numbered list", "Link", "Table"]) await expect(editor.getByRole("button", { name: tool })).toBeVisible();
+    await expect(editor.getByText("Picture")).toHaveCount(1);
+    await editor.getByRole("textbox").press("Control+End");
+    await editor.getByRole("textbox").pressSequentially(" Checked in the lab review.");
+    await expect(wizard.getByText(/<\/?(p|strong|h4|table)>/)).toHaveCount(0);
+    await reviewShot(page, "rv-2-review-edit-text-block", brief);
+    await brief.getByRole("button", { name: "Done" }).click();
+    // a table question: its columns and rows typed in place; the advanced settings under a closed More options
+    const table = doc.locator("[data-type=table_grid]").filter({ hasText: "Site Condition Evaluation" }).first();
+    await table.click();
+    await expect(table.getByTestId("table-in-place")).toBeVisible();
+    const more = table.getByTestId("more-options");
+    await expect(more).not.toHaveAttribute("open", "");
+    await more.locator("summary").click();
+    await expect(more.getByText("Show this when").first()).toBeVisible();
+    await expect(more.getByText("Model / benchmark answer")).toBeVisible();
+    await reviewShot(page, "rv-3-review-edit-table-more-options", table);
+    await table.getByRole("button", { name: "Done" }).click();
+    await wizard.getByRole("button", { name: "Mark all as reviewed" }).click();
+    await expect(wizard.getByTestId("review-all-reviewed")).toBeVisible();
+    await expect(doc.getByTestId("check-this")).toHaveCount(0);
+    // Student view
+    await wizard.getByRole("tab", { name: "Student view" }).click();
+    await expect(wizard.getByTestId("review-student-view")).toContainText(/Exactly what the student sees/);
+    await expect(wizard.getByTestId("assessment-info")).toContainText("Plagiarism");
     await wizard.getByRole("button", { name: /Task 2:/ }).click();
-    await expect(wizard.locator("table").first()).toBeVisible();
-    await expect(wizard.locator("figure img").first()).toBeVisible();
-    await wizard.getByLabel("Trainer view").check();
-    await shot(page, "wb-04-preview-trainer-view");
+    await expect(wizard.locator("[data-testid=review-student-view] table").first()).toBeVisible();
+    await expect(wizard.locator("[data-testid=review-student-view] figure img").first()).toBeVisible();
+    await expect(wizard.getByTestId("review-student-view")).toContainText("Checked in the lab review.");
+    await reviewShot(page, "rv-4-review-student-view");
+    // Workbook (PDF) view: the blank workbook from the export layout
+    await wizard.getByRole("tab", { name: "Workbook (PDF) view" }).click();
+    await expect(wizard.locator("[data-pdf-page]").nth(5)).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(1500);
+    await reviewShot(page, "rv-5-review-pdf-view", wizard.locator("[data-pdf-page]").first());
     await wizard.getByRole("button", { name: "Next" }).click();
     await expect(wizard.getByLabel("Title")).toHaveValue(/Select Pavement surfacing/);
     await shot(page, "wb-05-save");
+    await expect(wizard.getByText(/still marked “Check this”/)).toHaveCount(0);
     await wizard.getByRole("button", { name: "Publish" }).click();
     await page.getByRole("button", { name: "Publish", exact: true }).last().click();
     await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/, { timeout: 30_000 });
     wbAssessment = page.url().match(/assessments\/([0-9a-f-]{36})/)?.[1] ?? "";
     expect(sql(`select string_agg(v.status, ',') from public.asm_versions v where v.assessment_id = '${wbAssessment}'`)).toBe("published");
     expect(sql(`select (definition->>'instructions') ~ 'Plagiarism' and (definition::text ~ 'adjustment_record') from public.asm_versions where assessment_id = '${wbAssessment}'`)).toBe("t");
+    // the in-place edit is stored as HTML, and Mark all as reviewed left no 'check this'
+    expect(sql(`select definition::text ~ 'Checked in the lab review' and definition::text !~ '"confidence": "low"' from public.asm_versions where assessment_id = '${wbAssessment}'`)).toBe("t");
     await page.getByRole("button", { name: "Assignments" }).click();
     await page.getByRole("button", { name: "Assign to intakes" }).click();
     await page.getByLabel(new RegExp(`WB ${RUN}`)).check();

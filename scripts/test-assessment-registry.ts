@@ -16,6 +16,7 @@ import { buildWorkbookPdf, questionOutcome } from "../src/lib/assessment/workboo
 import { forbiddenKey, schemaCheck, validateDefinition, validateResponses } from "../src/lib/assessment/validate";
 import { buildFromLines, definitionText, imageRegionsFromPdf, linesFromDocxHtml, linesFromPdf, type PdfDocLike, type PdfOps } from "../src/lib/assessment/workbookImport";
 import { autoTitle, decideFiling, filingCourseId, needsUnitStep } from "../src/lib/assessment/workbookFiling";
+import { htmlToBlocks, workbookNumbering } from "../src/lib/assessment/workbookLayout";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 let passed = 0; let failed = 0;
@@ -129,6 +130,13 @@ const attachDef: Definition = { tasks: [{ id: "t", title: "T", sections: [{ id: 
 check("an answer with an attachment validates (the files are evidence rows, the answer is the text)", validateResponses(attachDef, { q_att: "See the attached photo" }, "student").length === 0);
 check("an attachment does not replace a required answer", validateResponses(attachDef, {}, "student").some((e) => e.questionId === "q_att" && e.code === "required"));
 
+// ASM-REVIEW: an edited text block (rich text, never shown as HTML) prints as headings, paragraphs, lists, tables and pictures
+{
+  const blocks = htmlToBlocks(`<h4>Submission</h4><p>Upload <strong>all</strong> files &amp; photos.</p><ul><li>One</li><li>Two</li></ul><ol><li>First</li></ol><table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table><figure><img src="data:image/jpeg;base64,AAA" alt=""></figure><p>End</p>`);
+  check("review: htmlToBlocks keeps the order and kinds of an edited block", JSON.stringify(blocks.map((b) => b.kind)) === JSON.stringify(["heading", "para", "item", "item", "item", "table", "image", "para"]) && blocks[1].kind === "para" && blocks[1].text === "Upload all files & photos." && blocks[4].kind === "item" && blocks[4].marker === "1." && blocks[5].kind === "table" && blocks[5].head && blocks[5].rows[1].join() === "1,2", blocks);
+  check("review: plain text (no tags) prints one paragraph per line", htmlToBlocks("Line one\nLine two").length === 2);
+}
+
 // ASM-WIZARD-SKIP: the Qualification & unit step is skipped when the page already chose the unit the assessment goes to
 {
   const page = { courseId: "c-cpc", unitId: "u-cm2008", unitCode: "CPCCCM2008" };
@@ -141,6 +149,12 @@ check("an attachment does not replace a required answer", validateResponses(atta
   check("unit step: a workbook unit Skyline does not have -> shown", needsUnitStep({ page, decision: missing, changeRequested: false }));
   const sameUnitOtherCourse = decideFiling({ workbook: { qualificationCode: "RII50520", unitCode: "CPCCCM2008" }, page, courses, unitsOfCourse: [{ id: "u-cm2008-rii", code: "CPCCCM2008" }] });
   check("unit step: the same unit code but filed under another course -> shown", needsUnitStep({ page, decision: sameUnitOtherCourse, changeRequested: false }), sameUnitOtherCourse);
+  // ASM-REVIEW bug 5: the RIICWD525E workbook uploaded while CPCCPD2012 is selected: a mismatch whether or not Skyline has RII50520
+  const pd = { courseId: "c-cpc", unitId: "u-pd2012", unitCode: "CPCCPD2012" };
+  const withRii = decideFiling({ workbook: { qualificationCode: "RII50520", unitCode: "RIICWD525E" }, page: pd, courses, unitsOfCourse: [{ id: "u-525", code: "RIICWD525E" }] });
+  const noRii = decideFiling({ workbook: { qualificationCode: "RII50520", unitCode: "RIICWD525E" }, page: pd, courses: [courses[0]], unitsOfCourse: [{ id: "u-pd2012", code: "CPCCPD2012" }] });
+  const riiNoUnit = decideFiling({ workbook: { qualificationCode: "RII50520", unitCode: "RIICWD525E" }, page: pd, courses, unitsOfCourse: [{ id: "u-526", code: "RIICWD526E" }] });
+  check("mismatch: RIICWD525E workbook on the CPCCPD2012 page -> warned in every case (course + unit in Skyline, course missing, unit missing)", [withRii, noRii, riiNoUnit].every((d) => d.mismatch && needsUnitStep({ page: pd, decision: d, changeRequested: false })), [withRii, noRii, riiNoUnit]);
   check("unit step: manual create with the page's unit -> skipped", !needsUnitStep({ page, decision: null, changeRequested: false }));
   check("unit step: Change pressed -> shown", needsUnitStep({ page, decision: same, changeRequested: true }));
   check("unit step: the page has no unit selected -> shown", needsUnitStep({ page: { courseId: "c-cpc", unitId: "" }, decision: null, changeRequested: false }));
@@ -278,6 +292,17 @@ else {
   const cover = ((await (await (await pdf.getDocument({ data: numbered.slice(), verbosity: 0 }).promise).getPage(1)).getTextContent()).items as { str: string }[]).map((i) => i.str).join(" ");
   check("export: the student number, when Skyline has one, is the cover's Student ID", /Student ID SLIT-000123/.test(cover.replace(/\s+/g, " ")), cover.slice(0, 300));
   check("export: no picture data, instruction pages or assessor keys are printed", !allText.includes("data:image") && !allText.includes("Team Member Role Responsibilities") && !/model answer/i.test(allText));
+  // ASM-REVIEW: the wizard's page view numbers the bars from the same layout as the PDF
+  const bars = [...workbookNumbering(wb.definition).values()];
+  check("review: the page view's question bars (Q1 … and 2.1.3) are the PDF's: same count of Satisfactory Yes / No bars", bars.filter((b) => b.markable).length === (allText.match(/Satisfactory Yes No/g) ?? []).length && bars.some((b) => /^2\.\d+\.\d+$/.test(b.number)), [bars.filter((b) => b.markable).length, (allText.match(/Satisfactory Yes No/g) ?? []).length]);
+  // ASM-REVIEW: the Workbook (PDF) view: the blank workbook prints the information pages and the briefs, and no attempt line
+  const blank = await buildWorkbookPdf({ definition: wb.definition, blank: true, history: { student: null, trainers: [], assessment: null, attempts: [], complete: true }, title: "Select Pavement surfacing", institution: { name: "Skyline Institute of Technology", lines: [], logo: null }, attempt: { attemptNo: 1, responses: {}, assessorResponses: {}, results: [], evidence: [], submittedAt: null } });
+  const blankDoc = await pdf.getDocument({ data: blank.slice(), verbosity: 0 }).promise;
+  const blankTexts: string[] = [];
+  for (let p = 1; p <= blankDoc.numPages; p++) blankTexts.push(((await (await blankDoc.getPage(p)).getTextContent()).items as { str: string }[]).map((i) => i.str).join(" ").replace(/\s+/g, " "));
+  const blankText = blankTexts.join("\n");
+  check("review: the blank workbook has the information pages (plagiarism, appeals) and the task briefs, with the footer on every page", blankText.includes("Assessment information") && /Plagiarism/.test(blankText) && /appeal/i.test(blankText) && blankText.includes("Team Member Role Responsibilities") && blankTexts.every((t, i) => t.includes(`Page ${i + 1} of ${blankDoc.numPages}`) && t.includes("Unit Code: RIICWD525E")), blankDoc.numPages);
+  check("review: the blank workbook prints no attempt, answers or assessor keys", !/Attempt 1/.test(blankText) && !blankText.includes("UNIQUE-") && !/model answer/i.test(blankText) && !blankText.includes("data:image"));
   const tables = all.filter((q) => q.type === "table_grid");
   check("workbook: Q2.2.3's table is titled from the line above it (Site Condition Evaluation), no table is \"Complete the table\"", tables.some((q) => q.label === "Site Condition Evaluation") && !tables.some((q) => /complete the table/i.test(q.label)), tables.map((q) => q.label));
   const selected = all.filter((q) => q.label === "Selected Option");

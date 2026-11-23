@@ -7,7 +7,6 @@ import { ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { deleteStudentRecord, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PORTAL_ACCESS_LABEL, sendStudentInvitation, setStudentStatus, type EnrolmentStage, type PortalAccess, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
-import StudentLoginCell from "@/pages/admin/components/StudentLoginCell";
 import EditStudentDialog from "@/pages/admin/components/EditStudentDialog";
 import { deleteApplicationDocument, listApplicationDocuments } from "@/pages/agency/lib/portalApplications";
 import { StatusBadge } from "@/pages/agency/components/PortalUI";
@@ -285,10 +284,16 @@ This permanently deletes the student and ALL ${total} of their application${tota
                             {!disabled && row.enrolment?.stage === "deposit_paid" ? <span className="font-medium text-teal-800">Deposit paid</span> : null}
                             {app ? <Link to={`/admin/applications/${app.id}`} className="text-foreground-700 hover:text-primary-700">
                               {[app.course, app.reference].filter(Boolean).join(" · ") || "Application"}</Link> : null}
-                            <span className="inline-flex items-center gap-1 text-foreground-600" title="Portal access">
-                              <i className="ri-key-2-line" aria-hidden="true" />
-                              <StudentLoginCell login={row.login} access={row.portalAccess} email={row.email} busy={busyId === row.id} disabled={disabled} onInvite={() => void invite(row)} />
-                            </span>
+                            {/* Portal access as plain text (not a second status pill), with Invite when it is needed. */}
+                            {(() => {
+                              const access = disabled ? "disabled" : row.portalAccess ?? "not_invited";
+                              const canInvite = !disabled && Boolean(row.email) && access !== "active" && access !== "disabled";
+                              return <span className="inline-flex flex-wrap items-center gap-1 text-foreground-600" title="Portal access (login)">
+                                <i className="ri-key-2-line" aria-hidden="true" /> Login: {PORTAL_ACCESS_LABEL[access]}
+                                {canInvite ? <button type="button" disabled={busyId === row.id} onClick={() => void invite(row)}
+                                  className="ml-1 font-semibold text-primary-700 hover:underline disabled:opacity-60">{access === "invited" ? "Resend" : "Invite"}</button> : null}
+                              </span>;
+                            })()}
                           </div>;
                         })()}
                       </td>
@@ -307,7 +312,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                                         when automation did not move it: the same Take action menu as the Applications list ("Change status to", Admins). */}
                                     {/* ONE-STATUS: the main application's status is the Status dropdown; only the others show a badge here. */}
                                     {application.id !== mainApplication(row)?.id ? <StatusBadge status={application.status} /> : null}
-                                    {!disabled && application.status !== "draft" ? <TakeActionMenu
+                                    {!disabled && application.status !== "draft" && application.id !== mainApplication(row)?.id ? <TakeActionMenu
                                       application={{ id: application.id, status: application.status, reference: application.reference, studentName: row.name ?? "", studentId: row.id,
                                         course: application.course ? { title: application.course, code: application.course } : null, intake: application.intake }}
                                       onDone={() => setReload((n) => n + 1)}

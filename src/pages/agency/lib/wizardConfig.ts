@@ -91,7 +91,8 @@ export const WIZARD_STEPS: WizardStep[] = [
 // English, academic results and visa today). The step's "Required." / "Optional." subtitle follows the same rule.
 for (const step of WIZARD_STEPS) {
   const detail = step.subtitle.replace(/^(Required|Optional)\. /, "");
-  Object.defineProperty(step, "required", { get: () => requiredDocumentSteps().has(step.id), enumerable: true, configurable: true });
+  // TEMPORARY (owner, 2026-11-23, for testing): Academic results never blocks Next, whatever the rule says. Remove this exception to restore it.
+  Object.defineProperty(step, "required", { get: () => step.id !== "academic" && requiredDocumentSteps().has(step.id), enumerable: true, configurable: true });
   Object.defineProperty(step, "subtitle", { get: () => `${step.required ? "Required" : "Optional"}. ${detail}`, enumerable: true, configurable: true });
 }
 

@@ -281,7 +281,11 @@ test("Mark as enrolled (2026-11-21): only from CoE / VoE issued in the menu and 
   assert.ok(menu.includes('const BEFORE_COE = ["draft", "submitted", "under_review", "action_required", "offer_issued", "offer_accepted"]') && menu.includes('aria-disabled="true" title="Issue the CoE/VoE first"'));
   assert.ok(menu.includes("onDone={(result) => { changed(result); setMailbox(true); }}") && menu.includes("<EnrolMailboxDialog applicationId={application.id} studentId={application.studentId}"));
   // The same Create Email form, Student and the linked profile locked, the outcome logged on the application; Skip logs and closes.
-  assert.ok(dialog.includes('<CreateEmailForm initialKind="student" personId={studentId}') && dialog.includes("locked applicationId={applicationId}") && dialog.includes('logApplicationMailbox(applicationId, "skipped"'));
+  assert.ok(dialog.includes('<CreateEmailForm initialKind="student" personId={student}') && dialog.includes("locked applicationId={applicationId}") && dialog.includes('logApplicationMailbox(applicationId, "skipped"'));
+  // 2026-11-23: a caller without the student (the Applications list row) still gets the form: the dialog reads the application's own
+  // student profile (student_id is NOT NULL), and only if none is found lets staff choose the student there (never Email Management).
+  assert.ok(dialog.includes('supabase.from("enrollment_applications").select("student_id").eq("id", applicationId)') && dialog.includes('<CreateEmailForm initialKind="student" personQuery=')
+    && !dialog.includes("then use Email Management"));
   assert.ok(form.includes("export default function CreateEmailSection() {") && form.includes("return <CreateEmailForm />;") && form.includes("disabled={locked || !status?.connected"));
   assert.ok(fn.includes("caller.rpc('application_mailbox_log'") && fn.includes("body.dryRun!==true") && list.includes("<EnrolMailboxDialog"));
   // The database: Enrolled only from CoE / VoE issued (or Undo back to it), never inserted as Enrolled, no "-> Enrolled" transition from elsewhere.

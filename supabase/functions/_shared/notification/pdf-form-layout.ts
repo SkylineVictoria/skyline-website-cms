@@ -78,6 +78,11 @@ export const PDF_FORM_SECTIONS: PdfSection[] = [
     "type": "select"
    },
    {
+    "name": "place_of_birth",
+    "label": "Town / City of Birth",
+    "type": "text"
+   },
+   {
     "name": "passport_number",
     "label": "Passport Number",
     "type": "text"

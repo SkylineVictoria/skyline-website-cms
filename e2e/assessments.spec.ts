@@ -254,6 +254,7 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
 
   test.beforeAll(async () => {
     test.skip(!workbook, "the RIICWD525E workbook PDF is not on this machine (set ASM_WORKBOOK)");
+    sql(`update public.asm_settings set workbook_header_url = null`);
     const course = sql(`select id from public.cms_courses where code = 'RII50520'`) || `course-e2e-rii-${RUN}`;
     sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${course}', 'e2e-rii-${RUN}', 'RII50520', 'Diploma of Civil Construction Design', 'Published') on conflict (id) do nothing`);
     // an earlier run leaves the course and unit in the lab: reuse them
@@ -345,7 +346,15 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await expect(warning).toContainText("This workbook is for RIICWD525E Select Pavement surfacing, not CPCCPD2012");
     await expect(warning).toContainText("RII50520 › RIICWD525E");
     await expect(wizard.getByTestId("filing-check")).toContainText("Selected on the page");
-    await reviewShot(page, "rv-0-upload-mismatch");
+    // ASM-HEADER: no header set yet: the Upload step asks for it (upload or the current Skyline logo); Next waits for it
+    const ask = wizard.getByTestId("workbook-header-picker");
+    await expect(ask).toContainText("Choose the workbook header (asked once)");
+    await expect(ask.getByTestId("workbook-header-hint")).toContainText("PNG, at least 1200 × 300 px");
+    await expect(wizard.getByRole("button", { name: "Next" })).toBeDisabled();
+    await reviewShot(page, "rv-0-upload-mismatch-and-header-not-set");
+    await ask.getByRole("button", { name: "Use current Skyline logo" }).click();
+    await expect(ask).toHaveCount(0);
+    expect(sql(`select string_agg(coalesce(workbook_header_url, '-'), ',') from public.asm_settings`)).toContain("/templates/image.png");
     // and the next step is Qualification & unit, pre-set to the workbook's unit
     await wizard.getByRole("button", { name: "Next" }).click();
     await expect(wizard.getByText("Found in the workbook")).toBeVisible();
@@ -354,6 +363,43 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await wizard.getByRole("button", { name: "Close the wizard" }).click();
     await page.getByRole("button", { name: "Discard", exact: true }).click();
     await expect(wizard).toHaveCount(0);
+  });
+
+  test("ASM-HEADER: Assessments › Settings uploads the workbook header picture, with the recommended size and a live preview", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signInAsAdmin(page, admin.email);
+    await page.goto("/admin/assessments?tab=settings");
+    const picker = page.getByTestId("workbook-header-picker");
+    await expect(picker.getByTestId("workbook-header-hint")).toContainText("Recommended: PNG, at least 1200 × 300 px, transparent or white background");
+    await expect(picker.getByText("Using the Skyline logo that ships with the site.")).toBeVisible();
+    await picker.getByTestId("workbook-header-file").setInputFiles("public/templates/image.png");
+    await expect(picker.getByText("Using the uploaded header.")).toBeVisible({ timeout: 30_000 });
+    await expect(picker.getByTestId("workbook-header").locator("img")).toHaveAttribute("src", /\/storage\/v1\/object\/public\/template-assets\/.+\.png$/);
+    expect(sql(`select string_agg(coalesce(workbook_header_url, '-'), ',') from public.asm_settings`)).toMatch(/template-assets\/.+\.png/);
+    await reviewShot(page, "rv-hdr-settings-upload", picker);
+  });
+
+  test("ASM-ONE-FLOW: Master Data › Assessments › New assessment opens the same wizard, with the Qualification & unit step", async ({ page }) => {
+    test.setTimeout(120_000);
+    await signInAsAdmin(page, admin.email);
+    await page.goto("/admin/assessments");
+    await page.getByRole("button", { name: "New assessment" }).first().click();
+    const wizard = page.getByRole("dialog");
+    await expect(wizard.getByRole("heading", { name: "Add assessment" })).toBeVisible({ timeout: 20_000 });
+    await expect(wizard.getByText("Start from", { exact: true })).toHaveCount(0); // the old dialog is gone
+    await wizard.getByRole("button", { name: /Create manually/ }).click();
+    await expect(wizard.getByText("Step 2 of 4 · Qualification & unit")).toBeVisible();
+    await wizard.getByLabel("Qualification").selectOption({ label: "RII50520 — Diploma of Civil Construction Design" });
+    await wizard.getByLabel("Unit").selectOption({ label: "RIICWD525E — Select Pavement surfacing" });
+    await reviewShot(page, "rv-md-unit-step");
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await expect(wizard.getByTestId("review-document")).toBeVisible();
+    await expect(wizard.getByTestId("workbook-header").first().locator("img")).toHaveAttribute("src", /template-assets/);
+    await wizard.getByRole("button", { name: "Next" }).click();
+    await wizard.getByLabel("Title").fill(`E2E Master Data ${RUN}`);
+    await wizard.getByRole("button", { name: "Save as draft" }).click();
+    await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/, { timeout: 30_000 });
+    expect(sql(`select count(*) from public.asm_assessments a join public.cms_course_units u on u.id = a.unit_id where a.title = 'E2E Master Data ${RUN}' and u.code = 'RIICWD525E'`)).toBe("1");
   });
 
   test("the admin creates it from the workbook in the wizard, publishes and assigns it", async ({ page }) => {
@@ -372,6 +418,7 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await shot(page, "wb-02-uploaded");
     // the workbook's unit is the page's unit: said on the Upload step, and no Qualification & unit step
     await expect(wizard.getByTestId("filing-match")).toContainText("Matches the unit selected on the page");
+    await expect(wizard.getByTestId("workbook-header-picker")).toHaveCount(0); // set once: never asked again
     await expect(wizard.getByTestId("filing-mismatch")).toHaveCount(0);
     await expect(wizard.getByText("Qualification & unit")).toHaveCount(0);
     await wizard.getByRole("button", { name: "Next" }).click();
@@ -388,7 +435,12 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await expect(doc.getByText(/^Q1$/).first()).toBeVisible();
     await expect(wizard.getByText(/\d+ marked “Check this”/)).toBeVisible();
     await expect(wizard.getByRole("button", { name: "Raw HTML" })).toHaveCount(0);
-    await reviewShot(page, "rv-1-review-edit");
+    // ASM-COVER + ASM-HEADER in the page view: the STUDENT WORKBOOK cover first, then the header picture + address block
+    await expect(doc.getByTestId("review-cover-page").getByTestId("workbook-cover")).toHaveAttribute("aria-label", /Student workbook, RIICWD525E Select Pavement surfacing/);
+    await expect(doc.getByTestId("workbook-header").first().locator("img")).toHaveAttribute("src", /template-assets/);
+    await expect(doc.getByTestId("review-cover")).not.toContainText("INDOPACIFIC");
+    await reviewShot(page, "rv-cover-review-edit", doc.getByTestId("review-cover-page"));
+    await reviewShot(page, "rv-1-review-edit", doc.getByTestId("review-cover"));
     await reviewShot(page, "rv-1b-review-edit-task-page", doc.getByTestId("review-task").first());
     // a text block: rich text in place, never HTML tags
     const brief = doc.getByTestId("review-task").nth(1).locator("[data-block]").filter({ has: page.locator(".asm-content") }).first();
@@ -515,6 +567,10 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await shot(page, "wb-09-trainer-results-sheet");
     const pdf = await exportPdf(page, page.getByRole("button", { name: "Export as workbook PDF" }), "wb-attempt1-trainer.pdf");
     expect(pdf.text).toContain("Unit Code: RIICWD525E");
+    // ASM-COVER: the export starts with the STUDENT WORKBOOK cover, filled in for this student; numbering starts after it
+    expect(pdf.text.split("\n")[0]).toMatch(/S\s?T\s?U\s?D\s?E\s?N\s?T\s*W\s?O\s?R\s?K\s?B\s?O\s?O\s?K/);
+    expect(pdf.text.split("\n")[0]).toContain("Student Name:");
+    expect(pdf.text).toContain(`Page 1 of ${pdf.pages - 1}`);
     expect(pdf.text).toContain("Appendix A – Reasonable Adjustments");
     expect(pdf.text).toContain("The student answered two questions orally.");
     // items 1 / 3 / 7 in the export: compliance pages, the filled-in details, Appendix A ticked as recorded
@@ -523,7 +579,7 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     expect(pdf.text).toMatch(/Trainer Full Name Wendy Workbook/);
     expect(pdf.text).toMatch(/Trainer\/Assessor Name Wendy Workbook/);
     expect(pdf.text).toContain("Assessment Task - 2 - Results Sheet");
-    expect(pdf.text).toContain(`Page ${pdf.pages} of ${pdf.pages}`);
+    expect(pdf.text).toContain(`Page ${pdf.pages - 1} of ${pdf.pages - 1}`); // the cover is not numbered
     expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${wbStudent.student}'`)).toBe("1:returned:NYS,2:draft:-");
   });
 

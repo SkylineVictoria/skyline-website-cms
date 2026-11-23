@@ -305,7 +305,8 @@ This permanently deletes the student and ALL ${total} of their application${tota
                                   <span className="inline-flex flex-col items-end gap-0.5">
                                     {/* STUDENT-STATUS-MENU (owner, 2026-11-23): the application status (and so Enrolment) can be changed here by hand
                                         when automation did not move it: the same Take action menu as the Applications list ("Change status to", Admins). */}
-                                    <StatusBadge status={application.status} />
+                                    {/* ONE-STATUS: the main application's status is the Status dropdown; only the others show a badge here. */}
+                                    {application.id !== mainApplication(row)?.id ? <StatusBadge status={application.status} /> : null}
                                     {!disabled && application.status !== "draft" ? <TakeActionMenu
                                       application={{ id: application.id, status: application.status, reference: application.reference, studentName: row.name ?? "", studentId: row.id,
                                         course: application.course ? { title: application.course, code: application.course } : null, intake: application.intake }}

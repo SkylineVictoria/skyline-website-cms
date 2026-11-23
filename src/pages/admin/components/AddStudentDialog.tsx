@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import SearchPick, { type PickOption } from "@/pages/admin/components/SearchPick";
@@ -6,17 +7,24 @@ import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import AddStudentRecordDialog, { type AddStudentRecordValue } from "@/pages/admin/components/AddStudentRecordDialog";
 import StudentDetailsStep, { type StudentDraft } from "@/pages/agency/components/StudentDetailsStep";
 import { activateAgent, listBusinesses, sendStudentInvitation, setBusinessStatus, type BusinessStatus } from "@/pages/admin/lib/businessData";
-import { listAgentsOfBusiness, saveStudent, type BusinessAgentOption, type StudentMatch } from "@/pages/agency/lib/portalApplications";
+import { createApplicationForStudent, listAgentsOfBusiness, saveStudent, type BusinessAgentOption, type StudentMatch } from "@/pages/agency/lib/portalApplications";
 import { isEmailTakenError } from "@/lib/identity/email";
+
+function newClientKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 type Business = { id: string; name: string; status: BusinessStatus };
 
 /**
  * SLIT admin: add a student down the chain. Choose the business, then the agent who looks after them, then the student's
- * email and mobile. Only the student is created; applications are started separately.
+ * email and mobile. The student is created, then their application is started and opened in the wizard
+ * (/admin/applications/:id?wizard=1), as before.
  */
 export default function AddStudentDialog({ open, onClose, onAdded }: { open: boolean; onClose: () => void; onAdded?: () => void }) {
   const { push } = useToast();
+  const navigate = useNavigate();
   const [business, setBusiness] = useState<Business | null>(null);
   const [agent, setAgent] = useState<BusinessAgentOption | null>(null);
   const [recordDialogMode, setRecordDialogMode] = useState<"business" | "agent" | null>(null);
@@ -60,7 +68,7 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
     }
   };
 
-  // Adding a student only creates the student record. Applications are started separately (Applications > New application).
+  // Adding a student creates the record, then starts their application and opens the wizard (owner, 2026-11-23).
   const finish = async (draft: StudentDraft, existing: StudentMatch | null) => {
     if (!business || !agent) return;
     if (existing) { setError("This student is already on record. Each email and mobile can belong to one student only."); return; }
@@ -83,9 +91,14 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
         try { notes.push(await sendStudentInvitation({ id: saved.id, email: saved.email || draft.email, name: saved.name || draft.fullName, agencyId: saved.businessId })); }
         catch (e) { notes.push(`The sign-in invitation was not sent${e instanceof Error && e.message ? `: ${e.message}` : "."} Send it from the student's row.`); }
       }
+      // The student stays added if the application cannot be started; Start application on the Students list tries again.
+      let applicationId = "";
+      try { applicationId = (await createApplicationForStudent(newClientKey(), saved.id)).id; }
+      catch (e) { notes.push(`The application was not started${e instanceof Error && e.message ? `: ${e.message}` : "."} Use Start application on the student's row.`); }
       push([saved.reused ? `${saved.name || draft.email} is already on record, so that record is kept.` : `${draft.fullName || draft.email} added to ${agent.name}.`, ...notes].join(" "));
       onAdded?.();
       onClose();
+      if (applicationId) navigate(`/admin/applications/${applicationId}?wizard=1`);
     } catch (e) {
       if (isEmailTakenError(e)) { setEmailError(e); return; }
       setError(e instanceof Error ? e.message : "We could not add this student.");
@@ -143,7 +156,7 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
         {/* Student */}
         {ready ? (
           <div className="border-t border-background-200 pt-5">
-            <StudentDetailsStep askName offerInvite busy={busy} error={error} submitLabel="Add student" context="admin" emailError={emailError}
+            <StudentDetailsStep askName offerInvite busy={busy} error={error} submitLabel="Add student and start application" context="admin" emailError={emailError}
               description="Name, email and mobile. Email and mobile must be new: a student already on record with either cannot be added again. When an application is started, the name read from the passport replaces the one typed here."
               onContinue={(draft, existing) => void finish(draft, existing)}
               cancel={<Button type="button" variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>} />

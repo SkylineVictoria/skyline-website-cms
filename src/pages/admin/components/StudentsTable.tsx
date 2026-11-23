@@ -1,7 +1,7 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button, Card, ConfirmDialog } from "@/pages/admin/components/ui";
 import { ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
@@ -13,7 +13,7 @@ import { StatusBadge } from "@/pages/agency/components/PortalUI";
 import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
 import ActivateInIntakeDialog from "@/components/shared/application-status/ActivateInIntakeDialog";
 import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
-import { changeApplicationStatus } from "@/pages/agency/lib/portalApplications";
+import { changeApplicationStatus, createApplicationForStudent } from "@/pages/agency/lib/portalApplications";
 import { formatPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 
 // Up to 100 students load per page and are sorted on this device (like the Agents list).
@@ -47,6 +47,7 @@ function compareStudents(a: StudentRow, b: StudentRow, key: SortKey): number {
  */
 export default function StudentsTable({ businessId, agentId, emptyText, refreshKey = 0 }: { businessId?: string; agentId?: string; emptyText?: string; refreshKey?: number }) {
   const { push } = useToast();
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   // 2026-11-21: the tabs are about portal access (never enrolment); "" is All. Enrolment is its own filter, derived from the applications.
   const [access, setAccess] = useState<PortalAccess | "">("");
@@ -132,6 +133,19 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
   };
   /** "Change status to" moves the signed-in user may make from this status (set_*, Admins; the database checks again). */
   const movesFrom = (status: string) => getAllowedActions(workflow, status).filter((a) => a.action.startsWith("set_") && a.to);
+  /** Start an application for the student and open it in the wizard (the same page Add student goes to). */
+  const startApplication = async (row: StudentRow) => {
+    setBusyId(row.id);
+    try {
+      const key = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const { id } = await createApplicationForStudent(key, row.id);
+      navigate(`/admin/applications/${id}?wizard=1`);
+    } catch (e) {
+      push(e instanceof Error ? e.message : "We could not start the application.", "error");
+    } finally {
+      setBusyId("");
+    }
+  };
   const pickStatus = (row: StudentRow, value: string) => {
     if (value === "__inactive") { setConfirmDisable(row); return; }
     if (value === "__enable") { void changeStudentStatus(row, "Active"); return; }
@@ -299,13 +313,17 @@ This permanently deletes the student and ALL ${total} of their application${tota
                       </td>
                       <td>
                         {row.applicationRows ? (
-                          row.applicationRows.length === 0 ? <span className="text-xs text-foreground-500">No applications</span> : (
+                          row.applicationRows.length === 0 ? (disabled ? <span className="text-xs text-foreground-500">No applications</span> : <span className="flex flex-col items-start gap-1 text-xs">
+                            <span className="text-foreground-500">No applications</span>
+                            <Button size="sm" icon="ri-magic-line" disabled={busyId === row.id} onClick={() => void startApplication(row)}>Start application</Button>
+                          </span>) : (
                             <ul className="space-y-2">
                               {row.applicationRows.map((application) => (
                                 <li key={application.id} className="flex flex-wrap items-center justify-between gap-2">
                                   <span className="min-w-0 text-xs">
                                     <Link to={`/admin/applications/${application.id}`} className="font-semibold text-foreground-900 hover:text-primary-700">{application.reference || "Draft"}</Link>
                                     <span className="block text-foreground-600">{[application.course || "No course yet", application.intake ? `Intake ${application.intake}` : "", `${application.completion}%`].filter(Boolean).join(" · ")}</span>
+                                    {!disabled && application.status === "draft" ? <Link to={`/admin/applications/${application.id}?wizard=1`} className="font-semibold text-primary-700 hover:underline"><i className="ri-magic-line" aria-hidden="true" /> Continue in wizard</Link> : null}
                                   </span>
                                   <span className="inline-flex flex-col items-end gap-0.5">
                                     {/* STUDENT-STATUS-MENU (owner, 2026-11-23): the application status (and so Enrolment) can be changed here by hand

@@ -52,6 +52,8 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
   const [choice, setChoice] = useState<number | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [busy, setBusy] = useState("");
+  /** While practising, the settings fold into a summary (owner, 2026-11-23: "hide unwanted filters once practice starts"). */
+  const [showSettings, setShowSettings] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -94,7 +96,7 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
     setParams(mode === "assessment" ? { ...keep, assessment: nextAssignment } : unitId ? { ...keep, unit: unitId } : keep);
   };
   const next = async () => {
-    setBusy("next"); setChoice(null); setError(""); setNotice("");
+    setBusy("next"); setChoice(null); setError(""); setNotice(""); setShowSettings(false);
     try {
       const inputs = { ...scope, difficulty, focus };
       let result = await practice<Result>("next", inputs);
@@ -137,9 +139,19 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
   const correct = feedback?.selected === feedback?.correct;
   const selectedDifficulty = difficultyChoices.find(item => item.id === difficulty)?.label;
   const hasMaterials = unit?.hasMaterials === true;
+  /** Practising: the settings live in a one-line summary in the top bar (owner, 2026-11-23: "hide it on top, don't break the view"). */
+  const folded = !!question && !progressView && !showSettings;
 
   return <div className="mx-auto w-full max-w-[1450px] space-y-5 pb-10">
-    <header className={`flex flex-wrap items-center gap-3 ${embedded ? "justify-end" : "justify-between"}`}>
+    <header className={`flex flex-wrap items-center gap-3 ${embedded && !folded ? "justify-end" : "justify-between"}`}>
+      {folded ? <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm" aria-label="Practising">
+        <i className="ri-focus-3-line text-primary-600" aria-hidden="true" />
+        <span className="min-w-0 truncate font-semibold text-foreground-950">{unit?.code} {unit?.name}</span>
+        <span className="rounded-full bg-primary-50 px-2 py-0.5 text-xs font-semibold text-primary-800">{assessmentMode ? "Assessment practice" : "Unlimited"}</span>
+        <span className="rounded-full bg-primary-50 px-2 py-0.5 text-xs font-semibold text-primary-800">{selectedDifficulty}</span>
+        {focus ? <span className="rounded-full bg-primary-50 px-2 py-0.5 text-xs font-semibold text-primary-800">{focus}</span> : null}
+        <button type="button" className="text-xs font-semibold text-primary-700 underline" disabled={!!busy} onClick={() => setShowSettings(true)}>Change</button>
+      </div> : null}
       {embedded ? null : <h1 className="font-heading text-2xl font-bold text-primary-900 dark:text-primary-300">Practice</h1>}
       <nav aria-label="Learning navigation" className="flex flex-wrap items-center gap-2 text-sm font-semibold">
         {embedded ? null : <Link className={secondary} to={unitId ? `/agency/learning?unit=${encodeURIComponent(unitId)}` : "/agency/learning"}>Learn</Link>}
@@ -156,8 +168,9 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
     {catalogue && catalogue.units.length === 0 && <PortalEmpty icon="ri-focus-2-line" title="No units to practise yet"
       message="Your practice units appear here after enrolment." />}
     {/* // rule-policy: technical practice-dashboard-layout Arranges practice settings, question and progress at different viewport sizes. */}
-    {!!catalogue?.units.length && <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(11rem,1fr)_minmax(0,2.35fr)] xl:grid-cols-[minmax(11rem,1fr)_minmax(0,2.35fr)_minmax(11rem,0.95fr)]">
-      <aside aria-label="Practice settings" className={panel + " space-y-5"}>
+    {!!catalogue?.units.length && <div className={"grid min-w-0 items-start gap-4 " + (folded ? "lg:grid-cols-[minmax(0,2.35fr)_minmax(11rem,0.95fr)]" : "lg:grid-cols-[minmax(11rem,1fr)_minmax(0,2.35fr)] xl:grid-cols-[minmax(11rem,1fr)_minmax(0,2.35fr)_minmax(11rem,0.95fr)]")}>
+      {folded ? null : <aside aria-label="Practice settings" className={panel + " space-y-5"}>
+        {question && !progressView ? <button type="button" className="text-sm font-semibold text-primary-700 underline" onClick={() => setShowSettings(false)}>Hide settings</button> : null}
         <div className="flex items-start gap-2">
           <i className="ri-book-open-line rounded-lg bg-primary-100 p-2 text-xl text-primary-700 dark:bg-primary-950 dark:text-primary-300" aria-hidden="true" />
           <div className="min-w-0">
@@ -202,7 +215,7 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
             {progress.topics.map(item => <option key={item.topic} value={item.topic}>{item.topic}</option>)}
           </select>
         </label>}
-      </aside>
+      </aside>}
 
       <main aria-label={progressView ? "Practice progress" : "Practice question"} className={panel + " space-y-5"}>
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -265,7 +278,7 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
         </>}
       </main>
 
-      <aside aria-label="Your capability" className={panel + " space-y-4 lg:col-start-2 xl:col-start-auto"}>
+      <aside aria-label="Your capability" className={panel + " space-y-4" + (folded ? "" : " lg:col-start-2 xl:col-start-auto")}>
         <h2 className="font-heading font-bold">Your capability</h2>
         <div className="mx-auto grid h-28 w-28 place-items-center rounded-full border-8 border-primary-200 text-center dark:border-primary-800"
           style={{ borderTopColor: progress?.answered ? "oklch(var(--primary-600))" : undefined }}>

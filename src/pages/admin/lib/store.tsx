@@ -86,13 +86,19 @@ export function AdminStoreProvider({ children }: { children: ReactNode }) {
   }, [data]);
 
   const load = useCallback(async () => {
-    await saveQueue.current.catch(() => {});
+    // A save that never answers (a phone waking from sleep, a dropped connection) must not hold the CMS on Loading for ever.
+    await Promise.race([saveQueue.current.catch(() => {}), new Promise((resolve) => window.setTimeout(resolve, 10000))]);
     saveFailed.current = false;
     // A refresh after the CMS is already showing must not unmount the open editor: only the first load shows the loading state.
     if (!loadedRef.current) setStatus("loading");
     setError(null);
     try {
-      const result = await loadAdminData();
+      // Show an error with Retry after 30 seconds instead of the loading placeholders for ever.
+      let timer = 0;
+      const result = await Promise.race([
+        loadAdminData(),
+        new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error("Loading the CMS took too long. Check your connection, then press Retry or reload the page.")), 30000); }),
+      ]).finally(() => window.clearTimeout(timer));
       if (result.isEmpty) {
         // First run: push the existing website content into the database.
         syncedRef.current = emptyAdminData();

@@ -499,6 +499,7 @@ try {
   `);
   const wizardMigration = await readFile(new URL("../supabase/migrations/20261123165538_student_application_wizard.sql", import.meta.url), "utf8");
   await db.exec(wizardMigration);
+  await db.exec(await readFile(new URL("../supabase/migrations/20261123172526_retry_failed_student_application_invite.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../supabase/migrations/20261123165817_restrict_student_application_data.sql", import.meta.url), "utf8"));
   const firstAgent = "a5100000-0000-4000-8000-000000000001";
   const business = "a5100000-0000-4000-8000-000000000002";
@@ -558,7 +559,15 @@ try {
   await value("select public.portal_wizard_invite_delivered($1,false) result", [failed.id]);
   await db.exec("reset role; set role authenticated");
   assert((await summary(draft)).invitationStatus === "Failed", "Provider failure is tracked");
-  const expired = await invite(draft, "b".repeat(43));
+  const retryHash = createHash("sha256").update("b".repeat(43)).digest("hex");
+  await rejects(() => value("select public.portal_wizard_retry_failed_invite($1,$2) result", [failed.id, retryHash]),
+    "42501", "permission denied", "CRM users cannot invoke the service recovery command");
+  await db.exec("reset role; set role service_role");
+  const expired = await value("select public.portal_wizard_retry_failed_invite($1,$2) result", [failed.id, retryHash]);
+  assert(expired.recipient === failed.recipient, "Service recovery keeps the original student recipient");
+  await rejects(() => value("select public.portal_wizard_retry_failed_invite($1,$2) result", [failed.id, retryHash]),
+    "22023", "latest failed", "Service recovery cannot replay the same failed attempt");
+  await db.exec("reset role; set role authenticated");
   await db.exec("reset role; set role service_role");
   await value("select public.portal_wizard_invite_delivered($1,true) result", [expired.id]);
   await db.exec("reset role");

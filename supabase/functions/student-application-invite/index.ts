@@ -106,22 +106,32 @@ Deno.serve(async (request) => {
       return json({ error: "Office 365 mailbox lookup failed." }, 502);
     }
   }
+  const retry = body?.action === "retry";
+  // rule-policy: security invitation-service-retry Restrict recovery to the service caller and a stored failed invitation ID.
+  if (retry && !isServiceCaller(authorization, service, url)) return json({ error: "Service access required." }, 403);
+  if (retry && (typeof body.failedInvitationId !== "string" || !uuid.test(body.failedInvitationId))) {
+    return json({ error: "Choose a failed invitation." }, 400);
+  }
   const caller = createClient(url, anon, { ...config, global: { headers: { Authorization: authorization,
     ...(request.headers.get("x-tenant-domain") ? { "x-tenant-domain": request.headers.get("x-tenant-domain")! } : {}),
   } } });
-  const { data: user, error: authError } = await caller.auth.getUser(authorization.slice(7));
-  if (authError || !user.user) return json({ error: "Sign in before sending invitations." }, 401);
-
-  if (!body || typeof body.applicationId !== "string" || !uuid.test(body.applicationId) ||
-    (body.correctedEmail !== undefined && (typeof body.correctedEmail !== "string" || body.correctedEmail.length > 254))) {
-    return json({ error: "Choose a valid student application." }, 400);
+  if (!retry) {
+    const { data: user, error: authError } = await caller.auth.getUser(authorization.slice(7));
+    if (authError || !user.user) return json({ error: "Sign in before sending invitations." }, 401);
+    if (!body || typeof body.applicationId !== "string" || !uuid.test(body.applicationId) ||
+      (body.correctedEmail !== undefined && (typeof body.correctedEmail !== "string" || body.correctedEmail.length > 254))) {
+      return json({ error: "Choose a valid student application." }, 400);
+    }
   }
+
   const token = base64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  const { data: invitation, error: beginError } = await caller.rpc("portal_wizard_invite_begin", {
-    p_application: body.applicationId, p_hash: hash, p_corrected_email: body.correctedEmail ?? null,
-  });
+  const { data: invitation, error: beginError } = retry
+    ? await admin.rpc("portal_wizard_retry_failed_invite", { p_failed_invitation: body.failedInvitationId, p_hash: hash })
+    : await caller.rpc("portal_wizard_invite_begin", {
+      p_application: body.applicationId, p_hash: hash, p_corrected_email: body.correctedEmail ?? null,
+    });
   if (beginError || !invitation) {
     const known = beginError && ["22023", "42501", "23505"].includes(beginError.code);
     return json({ error: known ? beginError.message : "The invitation could not be prepared." }, beginError?.code === "42501" ? 403 : 400);

@@ -1,9 +1,17 @@
+import { useEffect, useState } from "react";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import AddressFields from "@/components/shared/wizard/AddressFields";
 import AddressSearch, { type AddressPick } from "@/components/shared/wizard/AddressSearch";
 import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
 import { DECLARATION_TERMS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+
+const PERSONAL_LABELS: Record<string, string> = {
+  title: "Title", gender: "Gender", first_name: "Given name", middle_name: "Middle name", last_name: "Surname", dob: "Date of birth",
+  mobile: "Mobile", email: "Email", nationality: "Nationality", citizenship: "Citizenship", birth_country: "Country of birth",
+  place_of_birth: "Town / city of birth", passport_number: "Passport number", passport_expiry: "Passport expiry",
+};
+const PERSONAL_FIELDS = Object.keys(PERSONAL_LABELS);
 
 /**
  * WIZARD-FULL (owner, 2026-11-23): the answer screens that finish the whole application inside the wizard: Personal details, Address,
@@ -26,6 +34,15 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   version?: number;
 }) {
   const v = (name: string) => answers[name] ?? "";
+  // One page, one time (owner, 2026-11-23): what the passport (or the student record) already filled was shown on the document
+  // step, so Personal details asks only for what is still missing and does not show the rest again.
+  const [prefilled, setPrefilled] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setPrefilled(new Set(PERSONAL_FIELDS.filter((name) => String(answers[name] ?? "").trim())));
+    // Captured when the screen opens or the answers are refilled from the draft, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, question.id]);
+  const ask = (name: string) => !prefilled.has(name) || Boolean(errors[name]) || !String(answers[name] ?? "").trim();
   const text = (name: string, label: string, props: { required?: boolean; placeholder?: string; maxLength?: number; upper?: boolean; type?: string } = {}) => (
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={v(name)} error={errors[name]} required={props.required ?? true} maxLength={props.maxLength ?? 200}
       placeholder={props.placeholder} upper={props.upper} type={props.type} onChange={(value) => onChange(name, value)} />
@@ -69,25 +86,33 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
       </div>
 
       {question.id === "personal" ? (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          {select("title", "Title")}
-          {radios("gender", "Gender")}
-          {text("first_name", "Given name")}
-          {text("middle_name", "Middle name", { required: false })}
-          {text("last_name", "Surname")}
-          {text("dob", "Date of birth", { type: "date" })}
-          <div>
-            <Label htmlFor="wizard-mobile">Mobile</Label>
-            <PhoneInput key={`mobile-${version}`} id="wizard-mobile" name="mobile" value={v("mobile")} required placeholder="041 234 5678" onValueChange={(e164) => onChange("mobile", e164)} />
-            <FieldError text={errors.mobile} />
+        <div className="space-y-4">
+          {/* Only what is missing is asked; what the passport and the student record filled is not shown again. */}
+          {PERSONAL_FIELDS.every((name) => !ask(name) || name === "middle_name" || name === "place_of_birth") ? (
+            <p className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm text-emerald-900" data-testid="wizard-personal-done">
+              <i className="ri-checkbox-circle-line" aria-hidden="true" /> Nothing else is needed here. Press Next.
+            </p>
+          ) : null}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {ask("title") ? select("title", "Title") : null}
+            {ask("gender") ? radios("gender", "Gender") : null}
+            {ask("first_name") ? text("first_name", "Given name") : null}
+            {ask("middle_name") && !prefilled.size ? text("middle_name", "Middle name", { required: false }) : null}
+            {ask("last_name") ? text("last_name", "Surname") : null}
+            {ask("dob") ? text("dob", "Date of birth", { type: "date" }) : null}
+            {ask("mobile") ? <div>
+              <Label htmlFor="wizard-mobile">Mobile</Label>
+              <PhoneInput key={`mobile-${version}`} id="wizard-mobile" name="mobile" value={v("mobile")} required placeholder="041 234 5678" onValueChange={(e164) => onChange("mobile", e164)} />
+              <FieldError text={errors.mobile} />
+            </div> : null}
+            {ask("email") ? text("email", "Email", { type: "email" }) : null}
+            {ask("nationality") ? select("nationality", "Nationality") : null}
+            {ask("citizenship") ? select("citizenship", "Country of citizenship") : null}
+            {ask("birth_country") ? select("birth_country", "Country of birth") : null}
+            {ask("place_of_birth") && !prefilled.size ? text("place_of_birth", "Town / city of birth", { required: false, placeholder: "As on the passport" }) : null}
+            {ask("passport_number") ? text("passport_number", "Passport number", { upper: true, maxLength: 20 }) : null}
+            {ask("passport_expiry") ? text("passport_expiry", "Passport expiry date", { type: "date" }) : null}
           </div>
-          {text("email", "Email", { type: "email" })}
-          {select("nationality", "Nationality")}
-          {select("citizenship", "Country of citizenship")}
-          {select("birth_country", "Country of birth")}
-          {text("place_of_birth", "Town / city of birth", { required: false, placeholder: "As on the passport" })}
-          {text("passport_number", "Passport number", { upper: true, maxLength: 20 })}
-          {text("passport_expiry", "Passport expiry date", { type: "date" })}
         </div>
       ) : null}
 

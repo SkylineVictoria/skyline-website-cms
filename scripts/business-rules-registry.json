@@ -4,5 +4,83 @@
     "migration": "supabase/migrations/20261120221000_business_rule_lms_upload.sql",
     "enforcement": "supabase/migrations/20261120221000_business_rule_lms_upload.sql",
     "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_max_mib": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_max_files": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_formats": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_confidence": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_instructions": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_default_audience": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_duplicates": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_allow_publication": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_confirm_each": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_learning_label": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_assessment_label": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_self_assessment_label": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
+  },
+  "lms.bulk_assessor_label": {
+    "menu": "lms/courses",
+    "migration": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "enforcement": "supabase/migrations/20261123081000_lms_bulk_resources.sql",
+    "test": "scripts/test-business-rules.mjs"
   }
 }

@@ -110,5 +110,173 @@
     "fingerprints": [
       "42980fef4e582253211aeaf5150b7bf13737c3eb885d2750feca88411624fa5f"
     ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_max_mib",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "1749e4701b1167dd924a3da82163a113b4fce66672392ef573f4e48bedbdad45",
+      "a7e88aba5a17f28ebcd80902450daea777ca5eb58dacfbac6f0f3c33a8a86473",
+      "a8246218e0abd9caccb3f87e21eeb53d623047fb5261d47389d9c0fff4b015d2",
+      "b40b7ef289ab7cef8f283a3e93bc395860b326692a0ab36fb8ded25180c09538",
+      "ccb1f786076ed53b8eaac5691c9a47dd456653686c947d7cfc3b7e45723da162"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_max_files",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "2e9058a5ab0a2ced1b5ca84073989c4ebe0d6a7ffcc9351ce2e91418395832d4",
+      "5957e927e2729fa3754395de51ecf5712a73f9d603c2ceb83ac3976cf5204fac",
+      "89a9eee451d4df0e7ac934bf753c6e53d323fa01697295d11106e9f2ac239917"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_formats",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "08a29c0b2a5aab61f6efd153ae2379a2cf73f78dbea2d9fc89e4a9165b564b0f",
+      "acc6e86578fce08c8d3f5809131f3b18a2a894df400a5255e51c570cf48016b1"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_default_audience",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "049374e6200cc3c29b170801a17b7428637036f7562daea0f565393052e17bc6",
+      "862f144b683c4634dd7b197e254f5f193f5ca46c2f1a7da38d773a75d382ee1c",
+      "f78e5f908d741109e9c7916f338e0a9989c3ff4f2073c2f08c9a677bc0ddebc8"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_allow_publication",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "02cbfe039381616f5194b129122258b19508b7a7b77fa8558e2a2261d4663cf9",
+      "359e4ddb2bc46a286ece34cccb21ea734cce3522034ea3e4156462342c098783",
+      "a1e2f57a7172488f8b56f7610972e413ec714dff3563cc2f7443ff1bd664c05d"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "lms-bulk-implementation",
+    "reason": "Implements data schemas, queue execution, provider protocol or presentation of the workflow and its published settings.",
+    "fingerprints": [
+      "00cd5ac1b16a46462b8d1a9e96721b3b12c22ba1af32b7625d25a10cdf2d4fa3",
+      "01408df43562ca133b8fcd924a24037c566de035a8b15d79c220917dd034c895",
+      "025bbf065505ffa373648f3e0b8b8669b669e893357129175e76fa108dda5828",
+      "0a8f2719247b95b72cf05867581d1f58fd5e7d62b2bf54c8b59462c4888e0400",
+      "1180719a57ac22abed379e436e076b72e94191e43732e8add2675f386792e983",
+      "1980c2f2c9b9e814a36d9e84b06aeda9f3aa162feb593274faf315fbaf9b2b9e",
+      "199985ac511c9c1f8ca9b4272e5f5b426db57d5176f47fac8be9da36dd86adf4",
+      "1bee9ff12fe119a87bd126eacc960740922d34f0867c2564cc5953a8441e4471",
+      "1bfa8088666cf69db2aed6fe56318eccd75f8b74e72ee37588880b85dedcd7cd",
+      "1c548bbba1fa28af4fecca9f2ea7ac64ba02cd19eb19fbec886cacd9f367acd0",
+      "1e9819eaad9cc01d69579260a897fdebbc66a8b2ae48a932ffb36a51c86ce62a",
+      "1f874844cfe55d2c2d01c708d4eae1c197e818d10992cddabf1fefbfdfd64b74",
+      "2688b605e32a2a9a9ad3ac8d6ccc19eff62c71971cdadc33831f1695f6eb875f",
+      "27caf6aaf4641c3fb5ae7f4bb9be7eb1f72f8ca98a34ab4c4ebb25314897baa4",
+      "280a498575d80d47228a046d749361e88f654dba67d33b16accdd350511f9102",
+      "2c45b2fdb62af9210f46cf8b1dfb803c407976491ce6b4d8f213caaef4aafd60",
+      "2e4c262da9a9d023817ec386c8fc0f5f01a145cf312d6720ef67892e1d66cdd9",
+      "2f93bc896c8a220029b5d3974e4c6e783ef6e8a481071d52376f41832b593b35",
+      "3562670cfa83c9a0799dc09ea490ae9ddc07db26666c21b774210fcba091086a",
+      "35f4e13bbcad555748015142f351005a0a281520b22fc578e552e4aaf3d7dd44",
+      "3c1ee3297e5295ecf668959d695ae7477b809a338ad58cb6fe77f2a3d0b4df8a",
+      "3e0fced8a30747266cb8e6d86d4cdc453f48fe4bc7b6c4bf7e239a9456e8dcd9",
+      "3e7f89339bf4829bbe3d4ab9913a47d9482a13766206ac4a13c1c5040853a140",
+      "4008db11aecb6f0abac725a574285152ba43de1e85ed70551e81083078322b48",
+      "478ac34271bed4a484ae1839bbd5eab1cc2e3843798e1ff01090f92ef745b2ba",
+      "484e3095b95007d0095763b6254f2ca206306bb6b311182f2f9c4cf263364554",
+      "49d3f1ae01ae9eae7c231c42cc19acbb16842d174b979ffb99893f4939775f9e",
+      "4f6681d74f8371887cc3c44f6d6e73c064a5591ff351847d0b8bdaa8f44c7a29",
+      "4fc4f98d8b4e8b6775d3aed853cd5cc67155b12f324a525adc655fc976b8d55b",
+      "5a270efd0088c2041a2b4894bdc1ac692aa8b10d1c9e993be704d1fc88ce0f67",
+      "64ddc106d79fc41bee82af941e1aee14dfa71244bde216cc9cf654a2f351b46f",
+      "65c174da2c4952e647fee55ef0ad31cc1b692fcecfd8636b117571dae821c882",
+      "6a081c89e1f3d89f6f5252fff67ec3c01adc0d53521028e36b0929e9abc71b50",
+      "6c3abb738ce87edff04de49903f5bebfd273713b885544d5d654a4c132a6299f",
+      "7a737d74384e4b14e1b779fd58e6245bcf57e3b3d04e3004e4e661699b9d15f1",
+      "7f0165f555fb759cb1138dd21b67ac3dae2d9a2278ff5a82c5c57f02099a0ee6",
+      "83c08eb2f8c59c3ee22c4bb6fd652632d5bbab169806b40719f5dd11bc979610",
+      "8abfa78a8b940263d216e81fd74d730950497ce00a00012b5e07ac6aee3fc4a7",
+      "9061fb3ea25dd4e51cc154028b0565a716da17122d9767aa89fa82bc6af6d13e",
+      "9119af271d05b4023650738c3b6e55bce4b6fc032ad45db15334c5081b890c26",
+      "92d3be6c86591c5e4ab7ba9445f9d141dce2efa00f73b11bfeb6b117e163456b",
+      "948b47692e19e7fc858381d86897fce870a5b1d25891e6fc2ce733d905637c85",
+      "972b671ee3f375eed64dee92c1c7e34b152d0dedfc3bcc4ab3cf8400ffb2cf28",
+      "997175b684b8a50d25b0a50f50b1bd329b3a5be85798e517484194042a6fc46f",
+      "9f21699630ccc8970e1f4a04e8b313df9ff25b76862c42b0b2ab29a286aaa9c0",
+      "a106c1f1ae19f160aa6b961c99ae06625f76acedee09e8b519ae3c49dbfffce2",
+      "a4c972103d522e384a4fd9fc221cd97d70f652a5b5eadbda9ca9af8be87a0e7e",
+      "a5f0bf7152f124f2af8b06a5399b6342846fa445bae5c1b4873571df4a0bd8ec",
+      "b11ae3003bf87caa34bef0a804a29a48b326f4dad025631c1c00e526e9c3b732",
+      "b5ca4637a76d07da50ff8f85dd3c184c114b7dbd39f1ea52619b216c7db2ec49",
+      "b6e7811d3bb9d986adef8e2f58fb00d2f6987127879c38acd81f9467ddb5fe44",
+      "b85d64e36b9fd44824ce2262c235ba04699a3632408bb3a631f3875f8b9a7704",
+      "b9f639b475a26de4d18e73995a14f4a06928b07b399f2abb01c6ebcbd42e5ef2",
+      "bdc955b40d54e76d00e48741373c4c418f4ac05632e4f5674ec0c3f3e073c17f",
+      "c748c12b99ec41874913313b2ada29bf3d313c86aa98d7433cc4fa6ad1255318",
+      "ce86b0b20d39a3ee2970f4bef000811f8e6c536a66a3dd5364c43c63e99b85c8",
+      "cfb4a259d998e94cf0acf50641c9af31b478c79c41cf4485aa7825574af7085e",
+      "d08f1a70c5b62b8c1b20df64722c43524fe7038baffb5ad6712e5212983e3e20",
+      "db226fa66029e753b8a53a012fdd785fc710d321f9b66d238e2642752494c6f6",
+      "dc5cdf57e185d0b20192cb41fd4208d9ac4a6891b0ea0a38aa4b98692e1aa8da",
+      "e36aaf38f907e5804ec41a82e39d45f8023d67ca117d67c47f9c34c4d99a3bf0",
+      "eb1aec0cbaa701a101022d58e8ba421c085b876cc07416d469905d88b18719d7",
+      "f534dfcc6257f5e1c95369b64d0ab0373165bd38c1ac23bcb38a1ad133988c78",
+      "fda933f710913eca5135eb7ff320d8ede5631af51c2121d1a346b0e784e88b14"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_duplicates",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "298ce6ed0002385ba686f732a52c4c6d8610b026ac4cfab8ec2b8f31f26b24e6",
+      "463ff6b463f6e9631ee115d314bf0ad9ad8195535f3afeba708d4415df0bcbb2"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_confirm_each",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "50599ac5c4625bf7fa5454cdfcbc443c7fbb33f47c155149ba277e3386f436d1",
+      "d810c5e19804b537fe07f61ffcf19d39ae5bc72900ef09417d74b5eeabd4082b"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "lms-bulk-boundaries",
+    "reason": "Enforces file integrity, archive bounds or mandatory authorization independently of configurable policy.",
+    "fingerprints": [
+      "008363d3a65ec54f3e298ce6b64cb0812613b812fffd84ef76b9bb23d0a0bd32",
+      "01ac2c6540dbed4dcaf199658fda1e1a49ce24d2e5fedcf4a102c2ea2c4ffc8c",
+      "0b8ce374b2588e42db1b1ec03e9bb022c652613fa4dd6a4f5cc9c85e1660ca68",
+      "16d33d40ccea3bc743f3f85cacc1dcada04827f848f0b0e11e7599896caf0de1",
+      "5e4d318f478ff50f541081469b20441dacee14c18339e3a10caa717dd817a273",
+      "65c1781383c35d330dac852c5ee4ff61f79d8448230c603e0f3b3f0a8ed36ebe",
+      "8b8fa3f947297fee0b099c863cc080a2d375c34c9114996087c6c0c4f6604327",
+      "90ccd21b74018cbcfd6b0c3d8a0bc26a34c1203c30677e793002e15216eff9e6",
+      "95cd455d6f2e48b9a46655532ae91aed6df6bf6826824a6f8403107ad60cb16b",
+      "bafd2733df1961a229d1279a3bfd11356a3b5fb1d89fe0fd8d033b0fcd09965f",
+      "d8af754726ed8d4ac26667e9e8c653b967672871ce4c0eaab8216f3f7bd8093d",
+      "e0aee9d539bd9e259f1db070436d21feb14c642dce22fda5a97f2439c8dfcde1",
+      "ec6493ec19af687cfe061e20a7fef0a69bcaf33c1173955ffd2dacf1232d0e1a"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_confidence",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "c90a0e8dd231d5c739484a4347feff93241ede5723c3a177cc43207dbd7efea8"
+    ]
   }
 ]

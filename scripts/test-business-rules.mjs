@@ -213,6 +213,141 @@ try {
   await db.exec("set role authenticated");
   await setActor(trainer);
   await rejects(() => limit("pdf"), "22023", "unavailable", "Missing continuity configuration fails safely");
+
+  await db.exec(`
+    reset role;
+    create schema cron;
+    create function cron.schedule(text,text,text) returns bigint language sql as 'select 1::bigint';
+    alter table storage.buckets add column name text, add column public boolean;
+    create table public.tenants(id uuid primary key);
+    create table public.cms_courses(id text primary key, tenant_id uuid, code text, name text);
+    alter table public.cms_course_units add column code text, add column name text;
+    insert into public.cms_courses values ('course-a',null,'CPC30620','Painting and Decorating');
+    update public.cms_course_units set code='CPCCWHS2001', name='WHS' where id='unit-a';
+    create table public.asm_assessments(id uuid primary key, tenant_id uuid, unit_id text);
+    create table public.asm_assignments(id uuid primary key, assessment_id uuid);
+    create function public.asm_is_admin() returns boolean language sql as 'select public.cms_is_admin()';
+    create function public.asm_trainer_profile() returns uuid language sql as $$ select auth.uid() $$;
+    create function public.asm_can_assess(uuid,uuid) returns boolean language sql as $$ select $2 = '${trainer}'::uuid $$;
+    create function public.portal_student_id() returns uuid language sql as $$ select auth.uid() $$;
+    create function public.student_enrolled_unit_ids(uuid) returns setof text language sql
+      as $$ select 'unit-a'::text where $1 = '${approver}'::uuid $$;
+    create or replace function public.cms_is_admin() returns boolean language sql stable
+      as $$ select auth.uid() = '${admin}'::uuid $$;
+    alter table storage.objects enable row level security;
+    grant select,insert on storage.objects to authenticated;
+    grant usage on schema storage to authenticated;
+  `);
+  const batch = await readFile(new URL("../supabase/migrations/20261120233517_business_rules_live_batch1.sql", import.meta.url), "utf8");
+  await db.exec(batch.slice(batch.indexOf("create or replace function public.business_rule_patch_function"), batch.indexOf("-- Turns a reference")));
+  const bulkMigration = "20261123081000_lms_bulk_resources.sql";
+  await db.exec(await readFile(new URL(`../supabase/migrations/${bulkMigration}`, import.meta.url), "utf8"));
+  const bulk = async (action, data = {}) =>
+    (await db.query("select public.lms_bulk_admin($1,$2::jsonb) result", [action, data])).rows[0].result;
+  const resources = async () => (await db.query("select public.lms_bulk_resources('unit-a') as result")).rows[0].result;
+  const canGet = async path => (await db.query("select public.lms_bulk_storage_allowed($1,false) as result", [path])).rows[0].result;
+  await db.exec("set role authenticated");
+  await rejects(() => bulk("list"), "42501", "administration", "Trainer cannot manage bulk imports");
+  await setActor(admin);
+  await rejects(() => bulk("policy"), "22023", "missing max_mib", "Bulk settings stay inactive before publication");
+  const ids = ["lms.bulk_max_mib", "lms.bulk_max_files", "lms.bulk_formats", "lms.bulk_confidence",
+    "lms.bulk_instructions", "lms.bulk_default_audience", "lms.bulk_duplicates", "lms.bulk_allow_publication",
+    "lms.bulk_confirm_each", "lms.bulk_learning_label", "lms.bulk_assessment_label", "lms.bulk_self_assessment_label", "lms.bulk_assessor_label"];
+  for (const id of ids) {
+    const found = (await request("list")).rules.find(r => r.identifier === id);
+    assert(found?.versions[0].state === "draft", `${id} is registered and ready for SLIT review`);
+    await request("publish", params(found));
+  }
+  const policy = await bulk("policy");
+  assert(policy.max_files >= 100 && policy.formats.includes("zip"), "Published bulk policy enables multi-file ZIP imports");
+  await rejects(() => bulk("begin", {files: [{name:"file.exe",bytes:100}]}), "P0001", "Unsupported", "Server rejects an unsupported type");
+  await rejects(() => bulk("begin", {files: [{name:"file.pdf",bytes:27_000_000}]}), "P0001", "configured size", "Server rejects an oversized file");
+  const batchJob = await bulk("begin", {files: Array.from({length:105}, (_, i) => ({name:`document-${i}.pdf`,bytes:10}))});
+  assert(batchJob.files.length === 105, "105 files reserved in one operation");
+  const job = await bulk("begin", {unit:"unit-a",files:[{name:"student.pdf",bytes:100},{name:"assessor.pdf",bytes:100},{name:"updated.pdf",bytes:100},{name:"duplicate.pdf",bytes:100}]});
+  await rejects(() => bulk("uploaded", {job:job.id,id:job.files[0].id}), "P0001", "Upload incomplete", "Interrupted upload cannot be queued");
+  const complete = async (entry, confidentiality, sha256, signals = {}, jobId = job.id) => {
+    await db.query("insert into storage.objects values ('lms-bulk-resources',$1,$2::jsonb)", [entry.object_path,{size:100}]);
+    await bulk("uploaded", {job:jobId,id:entry.id});
+    await db.exec("reset role");
+    const lease = (await db.query("select public.lms_bulk_claim() result")).rows[0].result;
+    assert(lease.id === entry.id, "Worker claimed the queued file");
+    const outcome = {classification:{title:"Workbook",unitCode:"CPCCWHS2001",courseCode:"CPC30620",category:"learning",confidence:98,confidentiality,...signals},sha256};
+    const settle = (token) => db.query("select public.lms_bulk_finish($1,$2,$3::jsonb) result",[entry.id,token,outcome]);
+    assert((await settle("00000000-0000-4000-8000-000000000000")).rows[0].result === false, "Stale worker cannot save a result");
+    assert((await settle(lease.lease)).rows[0].result, "Worker saved the classification");
+    await db.exec("set role authenticated");
+  };
+  const [learner, confidential, updated, duplicate] = job.files;
+  await complete(learner,"student_safe","learner-hash");
+  await complete(confidential,"mixed","confidential-hash");
+  await complete(updated,"student_safe","updated-hash");
+  await complete(duplicate,"student_safe","learner-hash");
+  const review = await bulk("detail",{job:job.id});
+  assert(review.every(f => f.matches[0].id === "unit-a"), "Classifications match the existing unit");
+  const approval = (entry, extra = {}) => ({id:entry.id,unit:"unit-a",category:"learning",audience:"student_staff",...extra});
+  const approve = (...items) => bulk("approve",{job:job.id,items});
+  assert((await approve({ id: learner.id }, approval(learner), approval(confidential)))[1].ok, "Bulk approval isolates invalid rows");
+  assert(!(await approve(approval(confidential)))[0].ok, "Mixed content requires explicit review");
+  assert((await approve(approval(confidential,{reviewed:true})))[0].ok, "Reviewed mixed content can be imported in quarantine");
+  let list = await resources();
+  const first = list.find(r => r.path === learner.object_path);
+  const held = list.find(r => r.path === confidential.object_path);
+  assert(held.audience === "assessor" && held.security_hold, "Backend forces assessor access for mixed material");
+  assert(!first.published_at, "Approval does not publish");
+  await setActor(approver);
+  assert(!(await canGet(learner.object_path)), "Enrolled student cannot open unpublished resource");
+  assert((await db.query("select name from storage.objects where name=$1",[learner.object_path])).rows.length === 0, "Storage RLS denies direct unpublished file reads");
+  await setActor(admin);
+  await rejects(() => bulk("publish",{id:first.id}), "P0001", "Verify the file", "Student publication requires confidentiality confirmation");
+  await bulk("publish",{id:first.id,contentChecked:true});
+  await bulk("publish",{id:held.id});
+  await setActor(approver);
+  assert(await canGet(learner.object_path), "Enrolled student can open explicitly published resource");
+  assert(!(await canGet(confidential.object_path)), "Enrolled student cannot open published confidential resource");
+  assert((await resources()).length === 1, "Student resource list excludes confidential material");
+  await setActor(trainer);
+  assert(!(await canGet(confidential.object_path)), "Unassigned trainer cannot read assessor material");
+  await db.exec("reset role; insert into public.asm_assessments values (gen_random_uuid(),null,'unit-a'); insert into public.asm_assignments select gen_random_uuid(),id from public.asm_assessments; set role authenticated;");
+  assert(await canGet(confidential.object_path), "Assigned assessor can read published assessor material");
+  await setActor(admin);
+  assert(!(await approve(approval(duplicate)))[0].ok, "Identical document requires a duplicate decision");
+  assert((await approve(approval(duplicate,{skipExisting:true})))[0].ok, "Identical upload can be skipped");
+  assert((await approve(approval(updated,{previousId:first.id})))[0].ok, "Changed document can be stored as a version");
+  list = await resources();
+  const next = list.find(r => r.path === updated.object_path);
+  assert(next.previous_id === first.id && !next.published_at, "New version preserves the original and stays unpublished");
+  await bulk("publish",{id:next.id,contentChecked:true});
+  await setActor(approver);
+  assert(!(await canGet(learner.object_path)) && await canGet(updated.object_path), "Publishing the new version removes student access to the superseded file");
+  await db.exec(`reset role;
+    insert into public.cms_courses values ('course-alt',null,'CPP12345','Other qualification');
+    insert into public.cms_course_units values ('unit-shared',null,'course-alt','CPCCWHS2001','WHS'),
+      ('unit-other',null,'course-alt','CPCCWHS1001','Construction safety');
+    set role authenticated;
+  `);
+  await setActor(admin);
+  assert((await bulk("catalogue")).units.length === 3, "Bulk course picker is limited to the active tenant");
+  const multi = await bulk("begin", {files: ["ambiguous.pdf","missing.pdf","second-unit.pdf"].map(name => ({name,bytes:100}))});
+  await complete(multi.files[0],"student_safe","ambiguous-hash",{courseCode:null},multi.id);
+  await complete(multi.files[1],"student_safe","missing-hash",{courseCode:null,unitCode:null},multi.id);
+  await complete(multi.files[2],"student_safe","other-unit-hash",{courseCode:"CPP12345",unitCode:"CPCCWHS1001"},multi.id);
+  const reviewed = await bulk("detail",{job:multi.id});
+  const matches = id => reviewed.find(row => row.id === id).matches;
+  assert(matches(multi.files[0].id).length === 2 && matches(multi.files[1].id).length === 0, "Ambiguous and missing codes require selection");
+  const multiApproval = await bulk("approve",{job:multi.id,items:[
+    approval(multi.files[0]), approval(multi.files[1]), approval(multi.files[2],{unit:"unit-other"}),
+  ]});
+  assert(!multiApproval[0].ok && !multiApproval[1].ok && multiApproval[2].ok, "Backend requires review of exceptions and routes an exact second-unit match");
+  assert((await bulk("approve",{job:multi.id,items:[approval(multi.files[0],{unit:"unit-shared",reviewed:true})]}))[0].ok,
+    "An administrator can resolve an ambiguous match without changing master data");
+  const threshold = (await request("list")).rules.find(r => r.identifier === "lms.bulk_confidence");
+  await request("save", params(threshold, {...threshold.versions[0].definition,value:99,priority:1}));
+  const draft = (await request("list")).rules.find(r => r.id === threshold.id);
+  assert((await bulk("policy")).confidence === 85, "Unpublished threshold changes do not affect review");
+  await request("publish", params(draft));
+  assert((await bulk("policy")).confidence === 99, "Publishing changes the confidence threshold without a deployment");
+
 } finally {
   await db.close();
 }

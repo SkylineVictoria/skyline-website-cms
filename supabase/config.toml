@@ -105,3 +105,6 @@ verify_jwt = true
 # INTAKE-GROUPS: an Admin / RTO Manager (intake_group_can_manage) syncs one intake's Microsoft 365 group, or the scheduled job
 # (service role) syncs every group with work. App-only Microsoft Graph with the EF_MICROSOFT365_* secrets.
 verify_jwt = true
+
+[functions.lms-bulk-worker]
+verify_jwt = true

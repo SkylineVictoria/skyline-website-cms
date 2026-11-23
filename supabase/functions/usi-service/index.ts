@@ -225,25 +225,12 @@ async function primitives(cfg: UsiConfig) {
   const block = text.split('<credential ').slice(1).find((b) => b.includes(`id="${cfg.credentialId}"`)) ?? '';
   const enc = Buffer.from((block.match(/<protectedPrivateKey>([\s\S]*?)<\/protectedPrivateKey>/)?.[1] ?? '').replace(/\s/g, ''), 'base64');
   await step('sha1 / sha256 / hmac-sha1', () => { nodeCrypto.createHash('sha1').update('x').digest(); nodeCrypto.createHash('sha256').update('x').digest(); nodeCrypto.createHmac('sha1', Buffer.alloc(32, 1)).update('x').digest(); return 'ok'; });
-  await step('des-ede3-cbc decipher', () => { const d = nodeCrypto.createDecipheriv('des-ede3-cbc', Buffer.alloc(24, 1), Buffer.alloc(8, 2)); d.setAutoPadding(false); Buffer.concat([d.update(Buffer.alloc(8)), d.final()]); return 'ok'; });
+  await step('TDEA (TypeScript) known answer, NIST SP 800-67', async () => { const { tdeaEncryptBlock } = await import('../_shared/usi/tdes.ts'); const k = Buffer.from('0123456789ABCDEF23456789ABCDEF01456789ABCDEF0123', 'hex'); const c = Buffer.from(tdeaEncryptBlock(k, Buffer.from('5468652071756663', 'hex'))).toString('hex').toUpperCase(); if (c !== 'A826FD8CE53B855F') throw Error('wrong ciphertext'); return 'ok'; });
   const pkcs8 = await step('PKCS#12 3DES key decryption', () => decryptPkcs12ShroudedKey(enc, cfg.password)) as Uint8Array | null;
   const key = pkcs8 ? await step('createPrivateKey (plain PKCS#8 DER)', () => nodeCrypto.createPrivateKey({ key: Buffer.from(pkcs8), format: 'der', type: 'pkcs8' })) as import('node:crypto').KeyObject | null : null;
   if (key) {
     await step('createPublicKey + export spki', () => { nodeCrypto.createPublicKey(key).export({ type: 'spki', format: 'der' }); return 'ok'; });
     await step('sign rsa-sha256', () => `${nodeCrypto.sign('sha256', Buffer.from('<SignedInfo/>'), key).length} bytes`);
-  } else {
-    // The keystore key could not be opened: the remaining steps with a throwaway key made here (diagnostic only).
-    const der = await step('throwaway RSA key: generate + export PKCS#8 DER', () => nodeCrypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'der' })) as Uint8Array | null;
-    const k = der ? await step('throwaway RSA key: createPrivateKey (plain PKCS#8 DER)', () => nodeCrypto.createPrivateKey({ key: Buffer.from(der), format: 'der', type: 'pkcs8' })) as import('node:crypto').KeyObject | null : null;
-    if (k) {
-      await step('throwaway RSA key: createPublicKey + export spki', () => { nodeCrypto.createPublicKey(k).export({ type: 'spki', format: 'der' }); return 'ok'; });
-      await step('throwaway RSA key: sign rsa-sha256', () => `${nodeCrypto.sign('sha256', Buffer.from('<SignedInfo/>'), k).length} bytes`);
-    }
-    if (der) await step('Web Crypto: importKey pkcs8 + RSASSA-PKCS1-v1_5 SHA-256 sign', async () => {
-      const ck = await crypto.subtle.importKey('pkcs8', Buffer.from(der), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']);
-      return `${(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', ck, new TextEncoder().encode('<SignedInfo/>'))).byteLength} bytes`;
-    });
-    await step('ciphers available (des / 3des family)', () => nodeCrypto.getCiphers().filter((c) => /des/i.test(c)).join(', ') || 'none');
   }
   const p7 = Buffer.from((block.match(/<publicCertificate>([\s\S]*?)<\/publicCertificate>/)?.[1] ?? '').replace(/\s/g, ''), 'base64');
   await step('X509Certificate from the PKCS#7 bundle', () => {

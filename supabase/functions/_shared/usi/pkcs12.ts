@@ -2,10 +2,12 @@
 // The keystore's protectedPrivateKey is a PKCS#8 EncryptedPrivateKeyInfo with the legacy PKCS#12 scheme
 // pbeWithSHAAnd3-KeyTripleDES-CBC (OID 1.2.840.113549.1.12.1.3). Node opens it with createPrivateKey({ passphrase }); Deno's node:crypto
 // does not ("invalid PKCS#8 private key"), so the key and IV are derived here (RFC 7292 Appendix B.2, SHA-1) and the data is decrypted
-// with des-ede3-cbc, which Deno supports. The result is the plain PKCS#8 DER, opened with createPrivateKey. Nothing is logged.
+// with TDEA-CBC (_shared/usi/tdes.ts, plain TypeScript: the hosted edge runtime has no DES cipher at all). The result is the plain
+// PKCS#8 DER, opened with createPrivateKey and kept in memory only. Nothing is logged.
 // Runs in Deno and Node (scripts/test-document-extraction.ts compares the result with Node's own decryption of the kit keystore).
-import { createDecipheriv, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
+import { tdeaCbcDecrypt } from "./tdes.ts";
 
 const PBE_SHA1_3DES = "1.2.840.113549.1.12.1.3";
 
@@ -100,8 +102,7 @@ export function decryptPkcs12ShroudedKey(encrypted: Uint8Array, password: string
   const key = pkcs12Kdf(password, salt, iterations, 1, 24);
   const iv = pkcs12Kdf(password, salt, iterations, 2, 8);
   try {
-    const decipher = createDecipheriv("des-ede3-cbc", key, iv);
-    return Buffer.concat([decipher.update(encrypted.subarray(data.start, data.end)), decipher.final()]);
+    return Buffer.from(tdeaCbcDecrypt(key, iv, encrypted.subarray(data.start, data.end)));
   } catch {
     throw new Error("The keystore password is not correct");
   }

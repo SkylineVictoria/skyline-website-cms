@@ -120,6 +120,34 @@ test("USI: format rules, forbidden characters, case, blank, check character", as
   assert.equal(hasForbiddenUsiCharacter("abcdefghjk"), false);
 });
 
+test("USI service: TypeScript DES / TDEA against the published vectors and Node's des-ede3-cbc", async () => {
+  const tdes = await import("../supabase/functions/_shared/usi/tdes.ts");
+  const { createCipheriv, randomBytes } = await import("node:crypto");
+  const hex = (h: string) => Uint8Array.from(Buffer.from(h.replace(/\s/g, ""), "hex"));
+  const toHex = (b: Uint8Array) => Buffer.from(b).toString("hex").toUpperCase();
+  // DES known answers: the FIPS 46 worked example, FIPS 81 ("Now is t"), NIST SP 800-17 variable-plaintext KAT (round 1).
+  for (const [key, pt, ct] of [["133457799BBCDFF1", "0123456789ABCDEF", "85E813540F0AB405"], ["0123456789ABCDEF", "4E6F772069732074", "3FA40E8A984D4815"],
+    ["0101010101010101", "8000000000000000", "95F8A5E5DD31D900"]]) {
+    assert.equal(toHex(tdes.desEncryptBlock(hex(key), hex(pt))), ct, `DES E ${key}`);
+    assert.equal(toHex(tdes.desDecryptBlock(hex(key), hex(ct))), pt, `DES D ${key}`);
+  }
+  // TDEA known answer: NIST SP 800-67 Rev. 1 Appendix B ("The qufck brown fox jump", three independent keys).
+  const k = hex("0123456789ABCDEF 23456789ABCDEF01 456789ABCDEF0123");
+  const blocks = [["5468652071756663", "A826FD8CE53B855F"], ["6B2062726F776E20", "CCE21C8112256FE6"], ["666F78206A756D70", "68D5C05DD9B6B900"]];
+  for (const [pt, ct] of blocks) {
+    assert.equal(toHex(tdes.tdeaEncryptBlock(k, hex(pt))), ct, `TDEA E ${pt}`);
+    assert.equal(toHex(tdes.tdeaDecryptBlock(k, hex(ct))), pt, `TDEA D ${ct}`);
+  }
+  // CBC + PKCS#7 against Node's des-ede3-cbc: random keys, IVs and lengths (0 to 40 bytes, so 1 to 6 blocks).
+  for (let i = 0; i < 60; i++) {
+    const key = randomBytes(24), iv = randomBytes(8), data = randomBytes(i % 41);
+    const c = createCipheriv("des-ede3-cbc", key, iv);
+    const enc = Buffer.concat([c.update(data), c.final()]);
+    assert.equal(Buffer.from(tdes.tdeaCbcDecrypt(key, iv, enc)).equals(data), true, `CBC round ${i}`);
+  }
+  assert.throws(() => tdes.tdeaCbcDecrypt(randomBytes(24), randomBytes(8), randomBytes(12)), /whole 8-byte blocks/);
+});
+
 test("USI service: keystore key decryption (PKCS#12 3DES) matches Node", async (t) => {
   const { existsSync, readFileSync } = await import("node:fs");
   const { createPrivateKey } = await import("node:crypto");

@@ -166,7 +166,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const pendingWizard = useRef<Record<string, unknown>>({});
   const completedSteps = useRef(new Set<string>());
   const persistence = useRef<Promise<boolean> | null>(null);
-  const markDirty = () => setInputVersion((version) => version + 1);
+  const markDirty = () => {
+    setAutoSave("saving");
+    setInputVersion((version) => version + 1);
+  };
   const persist = useCallback(async (): Promise<boolean> => {
     if (persistence.current && !(await persistence.current)) return false;
     const values = pendingValues.current;
@@ -179,7 +182,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     const task = (async () => {
       try {
         await saveWizardDraft(applicationId, { values, wizard });
-        setAutoSave("saved");
+        const queued = Object.keys(pendingValues.current).length || Object.keys(pendingWizard.current).length;
+        setAutoSave(queued ? "saving" : "saved");
         return true;
       } catch (error) {
         pendingValues.current = { ...values, ...pendingValues.current };

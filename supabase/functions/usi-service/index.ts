@@ -57,6 +57,7 @@ const LOCATE: Record<string, string> = { Exact: 'exact', MultipleExact: 'multipl
 const errorCode = (e: unknown) => e instanceof UsiError ? (e.fault?.detailCode || e.fault?.subcode || e.stage) : 'internal';
 const errorText = (e: unknown) => e instanceof UsiError ? (faultText(e.fault) || e.message) : 'The USI service could not be reached.';
 const friendly = (e: unknown) => e instanceof UsiError && e.stage === 'config' ? 'The USI service is not set up yet. Ask SLIT to finish the USI connection.'
+  : e instanceof UsiError && e.fault?.detailCode === '2006' ? 'The identity document check (DVS) is unavailable right now. Nothing was created; try again later.'
   : e instanceof UsiError && e.stage === 'fault' && e.fault?.detailMessage ? `The USI Registry refused the request: ${e.fault.detailMessage}`
   : 'The USI Registry could not be reached. Try again in a few minutes.';
 
@@ -292,8 +293,8 @@ async function selftest() {
   const ok = person('A', '1994-03-17');
   const created = await run('create with DVS mock document (non-Australian passport 111111)', 'Success, IdentityDocumentVerified True',
     () => client.create({ ...ok, documentXml: usiDocumentXml('visa', { PassportNumber: '111111' }) }), (r) => r?.result === 'Success' && !!r?.usi && r?.identityDocumentVerified === 'True') as { usi?: string } | null;
-  await run('create with DVS mock "unavailable" document (non-Australian passport 000000)', 'Failure (DVS unavailable)',
-    () => { const p = person('B', '1991-08-09'); return client.create({ ...p, documentXml: usiDocumentXml('visa', { PassportNumber: '000000' }) }); }, (r) => r?.result === 'Failure');
+  await run('create with DVS mock "unavailable" document (non-Australian passport 000000)', 'USI 2006 DVS Service Unavailable (fault) or a Failure result',
+    () => { const p = person('B', '1991-08-09'); return client.create({ ...p, documentXml: usiDocumentXml('visa', { PassportNumber: '000000' }) }); }, (r) => r?.result === 'Failure' || r?.error?.fault?.detailCode === '2006');
   await run('create without a document: refused by Skyline before any call', 'refused locally',
     async () => usiDocumentProblems('', {}), (r) => !!r?._type);
   await run('create without a document sent to the Registry (DVSCheckRequired true)', 'fault 1002 "DVS document must be supplied"',

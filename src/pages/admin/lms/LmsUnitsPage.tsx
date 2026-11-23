@@ -9,13 +9,21 @@ import UnitHoursEditor from "./UnitHoursEditor";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
-import { listResources, type Resource } from "@/pages/admin/lib/bulkResources";
+import { bulkAdmin, listResources, type ImportFile, type ImportJob, type Resource } from "@/pages/admin/lib/bulkResources";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
 /** A unit's documents for the list (owner, 2026-11-23: "see all docs inside units on the main page"): its Learning content,
  *  its Resources (AI bulk upload) and its Assessments. */
-type UnitDocs = { learning: { id: string; title: string; kind: string }[]; resources: Resource[]; assessments: AssessmentRow[] };
+type UnitDocs = { learning: { id: string; title: string; kind: string }[]; resources: Resource[]; assessments: AssessmentRow[];
+  /** AI Bulk Upload files for this unit not approved yet: they become Resources only after review (or failed / still reading). */
+  pending: { name: string; state: ImportFile["state"] }[] };
+/** The AI Bulk Upload files still in the queue (the latest 20 uploads), for the Documents column. */
+async function pendingBulkFiles(): Promise<ImportFile[]> {
+  const jobs = await bulkAdmin<ImportJob[]>("list");
+  const lists = await Promise.all(jobs.slice(0, 20).map(job => bulkAdmin<ImportFile[]>("detail", { job: job.id }).catch(() => [] as ImportFile[])));
+  return lists.flat().filter(file => !["imported", "excluded"].includes(file.state));
+}
 /** Filled from Training.gov.au or calculated: shown greyed out, not typed in. */
 const readOnlyClass = "w-full cursor-not-allowed rounded-lg border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-600";
 /** Hours SLIT enters by hand: white, outlined, bold, so they stand out from the greyed fields. */
@@ -112,22 +120,29 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   useEffect(() => {
     if (!courseId || !docsUnitIds.length) { setDocs({}); return; }
     let live = true;
-    const empty = (): UnitDocs => ({ learning: [], resources: [], assessments: [] });
+    const empty = (): UnitDocs => ({ learning: [], resources: [], assessments: [], pending: [] });
     void Promise.all([
       supabase.from("unit_contents").select("id,unit_id,kind,title,sort").in("unit_id", docsUnitIds).order("sort").then(({ data }) => (data ?? []) as { id: string; unit_id: string; kind: string; title: string }[], () => []),
       listResources(null).catch(() => [] as Resource[]),
       asmAdmin<AssessmentRow[]>("assessment_list", { courseId, includeArchived: false }).catch(() => [] as AssessmentRow[]),
-    ]).then(([learning, resources, assessments]) => {
+      canManageResources ? pendingBulkFiles().catch(() => [] as ImportFile[]) : Promise.resolve([] as ImportFile[]),
+    ]).then(([learning, resources, assessments, pending]) => {
       if (!live) return;
       const out: Record<string, UnitDocs> = Object.fromEntries(docsUnitIds.map(id => [id, empty()]));
       for (const row of learning) out[row.unit_id]?.learning.push({ id: row.id, title: row.title, kind: row.kind });
       for (const row of resources) out[row.unit_id]?.resources.push(row);
       for (const row of assessments) if (row.unitId) out[row.unitId]?.assessments.push(row);
+      // A queued file belongs to the unit the AI named (its code on this course), else to its only matching unit.
+      const byCode = new Map((details.find(d => d.course.id === courseId)?.units ?? []).filter(u => u.id).map(u => [u.code.trim().toUpperCase(), u.id as string]));
+      for (const file of pending) {
+        const unitId = (file.result?.unitCode && byCode.get(file.result.unitCode.trim().toUpperCase())) || (file.matches?.length === 1 ? file.matches[0].id : "");
+        if (unitId) out[unitId]?.pending.push({ name: file.result?.title || file.name, state: file.state });
+      }
       setDocs(out);
     });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloaded when the course or its units change
-  }, [courseId, docsKey, drawerTab, selected]);
+  }, [courseId, docsKey, drawerTab, selected, canManageResources, bulk]);
   /** Open a unit on one of its document tabs. */
   const openOn = (entry: Entry, tab: "learning" | "resources" | "assessments") => { open(entry); setDrawerTab(tab); };
   const shownCourses = courses.filter(c => (c.code+" "+c.name).toLowerCase().includes(courseQuery.toLowerCase()));
@@ -270,8 +285,14 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
               ["resources", "Resources", d.resources.length, d.resources.map(x => x.title || x.name)],
               ["assessments", "Assessments", d.assessments.length, d.assessments.map(x => x.title)],
             ] as const;
-            if (!parts.some(([, , n]) => n)) return <span className="text-foreground-400">None</span>;
-            return <div className="flex max-w-xs flex-col gap-1">{parts.filter(([, , n]) => n).map(([tab, label, n, names]) => <div key={tab}>
+            const waiting = d.pending.length ? <div>
+              <button type="button" onClick={e => { e.stopPropagation(); setBulk({ hint: r.unit.id }); }}
+                title={d.pending.map(x => `${x.name} (${x.state === "review" ? "waiting for your review" : x.state === "failed" ? "failed: open AI Bulk Upload to retry" : "being read"})`).join("\n")}
+                className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 font-semibold text-amber-900 hover:bg-amber-100">Not approved yet {d.pending.length}</button>
+              {showDocs ? <ul className="mt-1 space-y-0.5 pl-2 text-foreground-600">{d.pending.map((x, i) => <li key={i} className="break-words">{x.name} · {x.state === "review" ? "review" : x.state}</li>)}</ul> : null}
+            </div> : null;
+            if (!parts.some(([, , n]) => n)) return waiting ?? <span className="text-foreground-400">None</span>;
+            return <div className="flex max-w-xs flex-col gap-1">{waiting}{parts.filter(([, , n]) => n).map(([tab, label, n, names]) => <div key={tab}>
               <button type="button" onClick={e => { e.stopPropagation(); openOn(r, tab); }} title={names.join("\n")}
                 className="rounded-full border border-primary-200 bg-primary-50 px-2 py-0.5 font-semibold text-primary-800 hover:bg-primary-100">{label} {n}</button>
               {showDocs ? <ul className="mt-1 space-y-0.5 pl-2 text-foreground-600">{names.map((name, i) => <li key={i} className="break-words">{name}</li>)}</ul> : null}

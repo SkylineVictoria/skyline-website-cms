@@ -18,6 +18,8 @@ interface Review {
   packagingRules: string; requiredElectives: number | null; groups: Record<string, unknown>;
 }
 interface ReadFile { name: string; path: string; text: string; bytes?: Uint8Array; error?: string }
+/** What happened to one document at Sync, shown before the dialog closes (owner, 2026-11-23: the files were not mapped). */
+type Outcome = { file: string; unit: string; status: "saved" | "already" | "failed" | "unmatched"; reason?: string };
 /** Where Sync goes next: the documents settled everything (the weekly calendar), or units / hours are still to choose. */
 export type FromDocsNext = "master" | "units" | "hours";
 
@@ -26,12 +28,23 @@ const UNIT = /(?<![A-Z0-9])[A-Z]{5,8}\d{3,4}[A-Z]?(?![A-Z0-9])/g;
 const norm = (value: string | null | undefined) => (value ?? "").trim().toUpperCase();
 const codesIn = (value: string, re: RegExp) => value.toUpperCase().match(re) ?? [];
 const MAX_MB = 20;
+/** Text is read from these (to find unit codes); every ACCEPTED file is kept and mapped by its file / folder name too. */
 const READABLE = /\.(pdf|docx|txt|csv)$/i;
+const ACCEPTED = /\.(pdf|docx?|pptx?|xlsx?|txt|csv|png|jpe?g|webp)$/i;
 const ZIP_MAX_FILES = 200;
 const ZIP_MAX_MB = 200;
+// The types the unit-content bucket accepts (20261117064117); a CSV is stored as plain text (text/csv is not allowed there).
 const MIME: Record<string, string> = {
-  pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", txt: "text/plain", csv: "text/csv",
+  pdf: "application/pdf", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ppt: "application/vnd.ms-powerpoint", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  txt: "text/plain", csv: "text/plain", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp",
 };
+/** A kept file: its text when it can be read (an unreadable one keeps "" and is mapped by its name). */
+async function keep(name: string, path: string, bytes: Uint8Array): Promise<ReadFile> {
+  const text = READABLE.test(path) ? await readText(path, bytes).catch(() => "") : "";
+  return { name, path, text, bytes };
+}
 const NONE = "";
 const safeName = (name: string) => name.normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(-120) || "file";
 const baseName = (path: string) => path.split("/").pop() ?? path;
@@ -73,29 +86,28 @@ async function readText(fileName: string, bytes: Uint8Array): Promise<string> {
   throw new Error("Use a PDF, Word (.docx), text, CSV or ZIP file.");
 }
 
-/** One chosen file, or every readable document inside a ZIP folder (folders inside it included; nested ZIPs skipped). */
+/** One chosen file, or every document inside a ZIP folder (folders inside it included; nested ZIPs skipped). */
 async function readFile(file: File): Promise<ReadFile[]> {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  if (!/\.zip$/i.test(file.name)) return [{ name: file.name, path: file.name, text: await readText(file.name, bytes), bytes }];
+  if (!/\.zip$/i.test(file.name)) {
+    if (!ACCEPTED.test(file.name)) throw new Error("Use PDF, Word, PowerPoint, Excel, text, CSV, image or ZIP files.");
+    return [await keep(file.name, file.name, bytes)];
+  }
   const { unzipSync } = await import("fflate");
-  let total = 0; let count = 0; let skipped = 0;
+  let total = 0; let count = 0; const skipped: string[] = [];
   const entries = unzipSync(bytes, {
     filter: entry => {
       if (entry.name.endsWith("/") || entry.name.startsWith("__MACOSX/") || /(^|\/)\./.test(entry.name)) return false;
-      if (!READABLE.test(entry.name)) { skipped++; return false; }
+      if (!ACCEPTED.test(entry.name)) { skipped.push(baseName(entry.name)); return false; }
       total += entry.originalSize; count++;
       if (count > ZIP_MAX_FILES || total > ZIP_MAX_MB * 1024 * 1024) throw new Error(`The ZIP holds more than ${ZIP_MAX_FILES} documents or ${ZIP_MAX_MB} MB.`);
       return true;
     },
   });
   const out: ReadFile[] = [];
-  for (const [path, data] of Object.entries(entries)) {
-    const name = `${file.name} › ${path}`;
-    try { out.push({ name, path, text: await readText(path, data), bytes: data }); }
-    catch (e) { out.push({ name, path, text: "", error: e instanceof Error ? e.message : "Could not be read." }); }
-  }
-  if (!out.length) throw new Error("No PDF, Word, text or CSV documents in this ZIP.");
-  if (skipped) out.push({ name: `${file.name}: ${skipped} other file${skipped === 1 ? "" : "s"} skipped`, path: "", text: "", error: "Not a PDF, Word, text or CSV file." });
+  for (const [path, data] of Object.entries(entries)) out.push(await keep(`${file.name} › ${path}`, path, data));
+  if (!out.length) throw new Error("No documents in this ZIP.");
+  if (skipped.length) out.push({ name: `${file.name}: ${skipped.length} file${skipped.length === 1 ? "" : "s"} of another type skipped (${skipped.slice(0, 5).join(", ")}${skipped.length > 5 ? "…" : ""})`, path: "", text: "", error: "Type not stored on units." });
   return out;
 }
 
@@ -129,6 +141,7 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
   const [mapping, setMapping] = useState<Record<string, string>>({});
   /** Staff confirm the packaging rules the system cannot check by itself (as in Add units). */
   const [attested, setAttested] = useState(false);
+  const [done, setDone] = useState<{ courseId: string; next: FromDocsNext; message: string; outcomes: Outcome[] } | null>(null);
   const [syncing, setSyncing] = useState("");
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
@@ -171,7 +184,7 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
   const mappedCount = [...docsByUnit.values()].reduce((n, l) => n + l.length, 0);
 
   function reset() {
-    setFiles([]); setQualification(""); setReview(null); setError(""); setNote(""); setIncludeOutside(false); setMapping({}); setAttested(false);
+    setFiles([]); setQualification(""); setReview(null); setError(""); setNote(""); setIncludeOutside(false); setMapping({}); setAttested(false); setDone(null);
   }
 
   async function addFiles(list: FileList | null) {
@@ -218,42 +231,50 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
   }
 
   /** Each mapped document into its unit's Learning content (staff only); a file already there by name is not added again. */
-  async function saveDocuments(detail: CourseDetail): Promise<{ saved: number; failed: string[] }> {
+  async function saveDocuments(detail: CourseDetail): Promise<Outcome[]> {
     const ids = new Map(detail.units.filter(u => u.id && u.isActive).map(u => [norm(u.code), u.id as string]));
-    let saved = 0; const failed: string[] = [];
+    const out: Outcome[] = [];
     // A document matched to a unit that did not make it onto the course goes to the course unit it is about instead, if any.
     const onCourse = new Set(ids.keys());
     const byUnit = new Map<string, ReadFile[]>();
+    const mapped = new Set<string>();
     for (const [code, list] of docsByUnit) for (const f of list) {
       const target = ids.has(code) ? code : guessUnit(f, onCourse) || code;
-      byUnit.set(target, [...(byUnit.get(target) ?? []), f]);
+      byUnit.set(target, [...(byUnit.get(target) ?? []), f]); mapped.add(f.name);
+    }
+    // Documents never matched to a unit: matched now against the units actually on the course, else listed.
+    for (const f of docs.filter(d => !mapped.has(d.name) && mapping[d.name] === undefined)) {
+      const target = guessUnit(f, onCourse);
+      if (target) byUnit.set(target, [...(byUnit.get(target) ?? []), f]);
+      else out.push({ file: f.path, unit: "", status: "unmatched", reason: "no unit code in its file or folder name or text" });
     }
     for (const [code, list] of byUnit) {
       const unitId = ids.get(code);
-      if (!unitId) { failed.push(...list.map(f => `${baseName(f.path)} (${code} is not a unit of the course)`)); continue; }
+      if (!unitId) { out.push(...list.map(f => ({ file: f.path, unit: code, status: "failed" as const, reason: `${code} is not a unit of this course` }))); continue; }
       const { data: have } = await supabase.from("unit_contents").select("file_name,sort").eq("unit_id", unitId);
       const names = new Set((have ?? []).map(r => r.file_name as string | null));
       let sort = Math.max(-1, ...(have ?? []).map(r => Number(r.sort) || 0));
       for (const f of list) {
-        const fileName = baseName(f.path);
-        if (names.has(fileName) || !f.bytes) continue;
+        const fileName = baseName(f.path).slice(0, 200);
+        if (names.has(fileName)) { out.push({ file: f.path, unit: code, status: "already" }); continue; }
+        if (!f.bytes) { out.push({ file: f.path, unit: code, status: "failed", reason: "the file could not be read" }); continue; }
         const extension = fileName.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? null;
         const limit = await supabase.rpc("unit_learning_file_limit", { p_unit_id: unitId, p_extension: extension });
-        if (limit.error || typeof limit.data !== "number") { failed.push(`${fileName} (file limit could not be checked)`); continue; }
-        if (f.bytes.byteLength > limit.data) { failed.push(`${fileName} (too large for unit content)`); continue; }
+        if (limit.error || typeof limit.data !== "number") { out.push({ file: f.path, unit: code, status: "failed", reason: limit.error?.message ?? "the file limit could not be checked" }); continue; }
+        if (f.bytes.byteLength > limit.data) { out.push({ file: f.path, unit: code, status: "failed", reason: `larger than the unit content limit (${Math.round(limit.data / 1048576)} MB)` }); continue; }
         const mime = MIME[extension ?? ""] ?? "application/octet-stream";
         const path = `${unitId}/${crypto.randomUUID().slice(0, 8)}-${safeName(fileName)}`;
         const up = await supabase.storage.from("unit-content").upload(path, new Blob([f.bytes.slice()], { type: mime }), { contentType: mime, upsert: false });
-        if (up.error) { failed.push(`${fileName} (${up.error.message})`); continue; }
+        if (up.error) { out.push({ file: f.path, unit: code, status: "failed", reason: up.error.message }); continue; }
         const { error } = await supabase.from("unit_contents").insert({
-          unit_id: unitId, kind: "file", title: fileName.replace(/\.[a-z0-9]+$/i, "").slice(0, 200), body: "", url: null, storage_path: path,
-          file_name: fileName.slice(0, 200), mime_type: mime, size_bytes: f.bytes.byteLength, sort: ++sort, visible_to_students: false,
+          unit_id: unitId, kind: "file", title: fileName.replace(/\.[a-z0-9]+$/i, "").slice(0, 200) || fileName, body: "", url: null, storage_path: path,
+          file_name: fileName, mime_type: mime, size_bytes: f.bytes.byteLength, sort: ++sort, visible_to_students: false,
         });
-        if (error) { await supabase.storage.from("unit-content").remove([path]); failed.push(`${fileName} (${error.message})`); continue; }
-        names.add(fileName); saved++;
+        if (error) { await supabase.storage.from("unit-content").remove([path]); out.push({ file: f.path, unit: code, status: "failed", reason: error.message }); continue; }
+        names.add(fileName); out.push({ file: f.path, unit: code, status: "saved" });
       }
     }
-    return { saved, failed };
+    return out;
   }
 
   /** Every active unit's SLIT hours confirmed from its nominal hours (as the hours step's suggestion), durations to match.
@@ -330,11 +351,12 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
       } else if (!stuck) lines.push(`${review.code}: units saved (the course's electives already meet the packaging rules).`);
       if (stuck) { next = "units"; lines.push(`${review.code}: core units saved; electives not added: ${stuck}. Choose them in the Add units step.`); }
       const detail = await rto<CourseDetail>("course_get", { courseId });
-      if (mappedCount) {
+      let outcomes: Outcome[] = [];
+      if (docs.length) {
         setSyncing("Saving the documents to their units…");
-        const { saved, failed } = await saveDocuments(detail);
-        lines.push(`${saved} document${saved === 1 ? "" : "s"} saved to ${docsByUnit.size} unit${docsByUnit.size === 1 ? "" : "s"} (Learning content, staff only).`);
-        if (failed.length) lines.push(`Not saved: ${failed.join("; ")}.`);
+        outcomes = await saveDocuments(detail);
+        const count = (st: Outcome["status"]) => outcomes.filter(o => o.status === st).length;
+        lines.push(`Documents: ${count("saved")} saved to their units${count("already") ? `, ${count("already")} already there` : ""}${count("failed") ? `, ${count("failed")} not saved` : ""}${count("unmatched") ? `, ${count("unmatched")} not matched to a unit` : ""}.`);
       }
       if (next === "master") {
         setSyncing("Confirming the unit hours…");
@@ -342,8 +364,9 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
         else { next = "hours"; lines.push("Some units have no nominal hours: enter them in the hours step."); }
       }
       setSyncing("");
-      reset();
-      onCreated(courseId, next, lines.join(" "));
+      // The result per document stays on screen until Continue (problems first).
+      const order = { failed: 0, unmatched: 1, saved: 2, already: 3 } as const;
+      setDone({ courseId, next, message: lines.join(" "), outcomes: outcomes.sort((x, y) => order[x.status] - order[y.status]) });
     } catch (e) {
       setSyncing("");
       if (courseId && lines.length) { reset(); onCreated(courseId, "units", `${lines.join(" ")} Then stopped: ${e instanceof Error ? e.message : "error"}`); return; }
@@ -351,25 +374,42 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
     }
   }
 
-  const close = () => { if (!syncing) { reset(); onClose(); } };
+  const finish = () => { if (!done) return; const d = done; reset(); onCreated(d.courseId, d.next, d.message); };
+  const close = () => { if (syncing) return; if (done) { finish(); return; } reset(); onClose(); };
+  const NEXT_LABEL: Record<FromDocsNext, string> = { master: "Continue: CoE weekly calendar", units: "Continue: choose the electives", hours: "Continue: unit hours" };
+  const STATUS_LABEL: Record<Outcome["status"], string> = { saved: "Saved", already: "Already on the unit", failed: "Not saved", unmatched: "No unit found" };
   const busy = !!syncing || checking || reading;
 
   return <Modal open={open} title="Add a course from documents" width="max-w-5xl" onClose={close}
     footer={<div className="flex flex-wrap items-center justify-end gap-2">
       {syncing ? <span className="mr-auto text-sm text-foreground-600">{syncing}</span> : null}
+      {done ? <Button onClick={finish}>{NEXT_LABEL[done.next]}</Button> : <>
       <Button variant="outline" disabled={!!syncing} onClick={close}>Cancel</Button>
       <Button disabled={!review || busy} onClick={() => void sync()}
         title="Saves the course with its units, the documents on their units and the unit hours; then only the weekly and daily calendars remain">
-        {syncing ? "Syncing…" : existing ? `Sync into ${existing.code}` : review ? `Sync: save ${review.code}` : "Sync"}</Button>
+        {syncing ? "Syncing…" : existing ? `Sync into ${existing.code}` : review ? `Sync: save ${review.code}` : "Sync"}</Button></>}
     </div>}>
-    <div className="space-y-4 text-sm">
+    {done ? <div className="space-y-3 text-sm">
+      <p role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">{done.message}</p>
+      {done.outcomes.length ? <div className="max-h-[55vh] overflow-y-auto rounded-lg border border-background-200">
+        <table className="w-full text-left">
+          <thead className="sticky top-0 bg-background-50"><tr className="text-xs text-foreground-500"><th className="px-3 py-2">Document</th><th className="px-3 py-2">Unit</th><th className="px-3 py-2">Result</th></tr></thead>
+          <tbody>{done.outcomes.map((o, i) => <tr key={i} className="border-t border-background-100 align-top">
+            <td className="break-all px-3 py-1.5">{o.file}</td>
+            <td className="px-3 py-1.5 font-semibold">{o.unit || "—"}</td>
+            <td className={"px-3 py-1.5 " + (o.status === "saved" || o.status === "already" ? "text-green-800" : "text-red-700")}>{STATUS_LABEL[o.status]}{o.reason ? `: ${o.reason}` : ""}</td>
+          </tr>)}</tbody>
+        </table>
+      </div> : null}
+      <p className="text-foreground-600">Saved documents are on each unit's Learning content (staff only). They show in LMS › Units › Documents.</p>
+    </div> : <div className="space-y-4 text-sm">
       <p className="text-foreground-600">Upload the course documents (training plan, unit list, learner guides, assessment tools; a ZIP folder works).
         The qualification and its units are found in them and checked against Training.gov.au, and each document is matched to its unit.
         <strong> Sync</strong> saves the course with its units and hours and puts each document on its unit; then only the weekly and daily calendars are left.</p>
       <label className="flex cursor-pointer flex-col items-center gap-1 rounded-lg border-2 border-dashed border-background-300 p-5 text-center hover:bg-background-50">
         <span className="font-semibold text-foreground-800">{reading ? "Reading…" : files.length ? "Add more files" : "Choose files"}</span>
-        <span className="text-xs text-foreground-500">PDF, Word (.docx), text, CSV or a ZIP folder of them · up to {MAX_MB} MB each, ZIP up to {ZIP_MAX_MB} MB</span>
-        <input type="file" multiple className="sr-only" accept=".pdf,.docx,.txt,.csv,.zip,application/pdf,text/plain,text/csv,application/zip,application/x-zip-compressed"
+        <span className="text-xs text-foreground-500">PDF, Word, PowerPoint, Excel, text, CSV, images or a ZIP folder of them · up to {MAX_MB} MB each, ZIP up to {ZIP_MAX_MB} MB</span>
+        <input type="file" multiple className="sr-only" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.png,.jpg,.jpeg,.webp,.zip"
           disabled={busy} onChange={e => { void addFiles(e.target.files); e.target.value = ""; }} />
       </label>
 
@@ -417,6 +457,6 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
             : <span className="text-foreground-500">{new Set(codesIn(`${f.path}\n${f.text}`, UNIT)).size} unit codes</span>}
         </li>)}</ul>
       </div> : null}
-    </div>
+    </div>}
   </Modal>;
 }

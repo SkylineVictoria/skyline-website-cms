@@ -307,49 +307,57 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
       // packaging rules pick a set (electives with their own documents first, then the others found in the documents, then
       // the rest of the qualification), and prerequisites from outside the qualification are added with them. A course whose
       // electives already meet the rules gets nothing added. Add units opens only when no set can be found or saved.
-      const before = await rto<CourseDetail>("course_get", { courseId });
-      const official = new Map(review.electives.map(u => [norm(u.code), u]));
-      const coreCodes = new Set(review.core.map(u => norm(u.code)));
-      const isActive = (code: string) => before.units.some(u => u.isActive && norm(u.code) === norm(code));
-      const current: ElectiveUnit[] = before.units.filter(u => u.isActive && u.unitType !== "core")
-        .map(u => ({ code: norm(u.code), groups: official.get(norm(u.code))?.groups ?? null }));
-      const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups ?? {}), groupSizes(review.electives));
       let next: FromDocsNext = "master";
-      let codes: string[] = []; let outside: string[] = []; let stuck = "";
-      if (!checkElectives(rules, current).complete) {
-        setSyncing("Reading the units' prerequisites…");
-        const prereqs = await readPrerequisites(review.electives.map(u => norm(u.code)));
-        const found = sorted.electives.map(u => u.code);
-        const ordered = [...new Set([...found.filter(c => docsByUnit.has(c)), ...found, ...review.electives.map(u => norm(u.code))])].filter(c => !isActive(c));
-        const picks = autoPickElectives(rules, ordered.map(code => ({ code, groups: official.get(code)?.groups ?? [], prerequisites: prereqs.get(code) ?? [] })), current, isActive);
-        if (!picks) stuck = `the packaging rules could not be met from ${review.code}'s electives`;
-        else {
-          codes = picks;
-          // Prerequisites of the picked units that are neither in the qualification nor on the course: added as outside units.
-          const have = (code: string) => isActive(code) || coreCodes.has(code) || codes.includes(code) || outside.includes(code);
-          let queue = picks.flatMap(c => prereqs.get(c) ?? []).map(norm);
-          for (let round = 0; queue.length && round < 4; round++) {
-            const extra = [...new Set(queue.filter(c => !have(c) && !official.has(c)))];
-            outside = [...outside, ...extra];
-            queue = [...(await readPrerequisites(extra)).values()].flat().map(norm);
+      let stuck = "";
+      // Electives in their own step (owner, 2026-11-23: the documents were not saved when this step failed): an error here is
+      // reported and the Add units step offered; the documents are saved and listed whatever happens.
+      try {
+        let codes: string[] = []; let outside: string[] = [];
+        const before = await rto<CourseDetail>("course_get", { courseId });
+        const official = new Map(review.electives.map(u => [norm(u.code), u]));
+        const coreCodes = new Set(review.core.map(u => norm(u.code)));
+        const isActive = (code: string) => before.units.some(u => u.isActive && norm(u.code) === norm(code));
+        const current: ElectiveUnit[] = before.units.filter(u => u.isActive && u.unitType !== "core")
+          .map(u => ({ code: norm(u.code), groups: official.get(norm(u.code))?.groups ?? null }));
+        const rules = parseElectiveRules(review.packagingRules, review.requiredElectives, Object.keys(review.groups ?? {}), groupSizes(review.electives));
+        if (!checkElectives(rules, current).complete) {
+          setSyncing("Reading the units' prerequisites…");
+          const prereqs = await readPrerequisites(review.electives.map(u => norm(u.code)));
+          const found = sorted.electives.map(u => u.code);
+          const ordered = [...new Set([...found.filter(c => docsByUnit.has(c)), ...found, ...review.electives.map(u => norm(u.code))])].filter(c => !isActive(c));
+          const picks = autoPickElectives(rules, ordered.map(code => ({ code, groups: official.get(code)?.groups ?? [], prerequisites: prereqs.get(code) ?? [] })), current, isActive);
+          if (!picks) stuck = `the packaging rules could not be met from ${review.code}'s electives`;
+          else {
+            codes = picks;
+            // Prerequisites of the picked units that are neither in the qualification nor on the course: added as outside units.
+            const have = (code: string) => isActive(code) || coreCodes.has(code) || codes.includes(code) || outside.includes(code);
+            let queue = picks.flatMap(c => prereqs.get(c) ?? []).map(norm);
+            for (let round = 0; queue.length && round < 4; round++) {
+              const extra = [...new Set(queue.filter(c => !have(c) && !official.has(c)))];
+              outside = [...outside, ...extra];
+              queue = [...(await readPrerequisites(extra)).values()].flat().map(norm);
+            }
           }
         }
+        const chosenOutside = includeOutside ? sorted.outside.filter(c => !isActive(c) && !outside.includes(c)) : [];
+        if (!stuck && (codes.length || outside.length || chosenOutside.length)) {
+          setSyncing("Adding the units…");
+          let failure = "";
+          for (const extra of chosenOutside.length ? [chosenOutside, []] : [[]]) {
+            try {
+              await tga({ action: "add_units", courseId, codes, imported: [...outside, ...extra], attested: rules.unchecked.length > 0 && attested });
+              const n = codes.length + outside.length + extra.length;
+              lines.push(`${review.code}: core units and ${n} elective${n === 1 ? "" : "s"} saved (${[...codes, ...outside, ...extra].join(", ")}).`);
+              failure = ""; break;
+            } catch (e) { failure = e instanceof Error ? e.message : "error"; }
+          }
+          if (failure) stuck = failure;
+        } else if (!stuck) lines.push(`${review.code}: units saved (the course's electives already meet the packaging rules).`);
+        if (stuck) { next = "units"; lines.push(`${review.code}: core units saved; electives not added: ${stuck}. Choose them in the Add units step.`); }
+      } catch (e) {
+        next = "units";
+        lines.push(`${review.code}: electives not added: ${e instanceof Error ? e.message : "error"}. Choose them in the Add units step.`);
       }
-      const chosenOutside = includeOutside ? sorted.outside.filter(c => !isActive(c) && !outside.includes(c)) : [];
-      if (!stuck && (codes.length || outside.length || chosenOutside.length)) {
-        setSyncing("Adding the units…");
-        let failure = "";
-        for (const extra of chosenOutside.length ? [chosenOutside, []] : [[]]) {
-          try {
-            await tga({ action: "add_units", courseId, codes, imported: [...outside, ...extra], attested: rules.unchecked.length > 0 && attested });
-            const n = codes.length + outside.length + extra.length;
-            lines.push(`${review.code}: core units and ${n} elective${n === 1 ? "" : "s"} saved (${[...codes, ...outside, ...extra].join(", ")}).`);
-            failure = ""; break;
-          } catch (e) { failure = e instanceof Error ? e.message : "error"; }
-        }
-        if (failure) stuck = failure;
-      } else if (!stuck) lines.push(`${review.code}: units saved (the course's electives already meet the packaging rules).`);
-      if (stuck) { next = "units"; lines.push(`${review.code}: core units saved; electives not added: ${stuck}. Choose them in the Add units step.`); }
       const detail = await rto<CourseDetail>("course_get", { courseId });
       let outcomes: Outcome[] = [];
       if (docs.length) {
@@ -360,8 +368,10 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
       }
       if (next === "master") {
         setSyncing("Confirming the unit hours…");
-        if (await confirmHours(courseId, detail)) lines.push("Unit hours confirmed from the nominal hours. Next: the CoE and VoE weekly calendars, then the daily timetables.");
-        else { next = "hours"; lines.push("Some units have no nominal hours: enter them in the hours step."); }
+        try {
+          if (await confirmHours(courseId, detail)) lines.push("Unit hours confirmed from the nominal hours. Next: the CoE and VoE weekly calendars, then the daily timetables.");
+          else { next = "hours"; lines.push("Some units have no nominal hours: enter them in the hours step."); }
+        } catch (e) { next = "hours"; lines.push(`Unit hours not confirmed: ${e instanceof Error ? e.message : "error"}.`); }
       }
       setSyncing("");
       // The result per document stays on screen until Continue (problems first).
@@ -369,7 +379,7 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
       setDone({ courseId, next, message: lines.join(" "), outcomes: outcomes.sort((x, y) => order[x.status] - order[y.status]) });
     } catch (e) {
       setSyncing("");
-      if (courseId && lines.length) { reset(); onCreated(courseId, "units", `${lines.join(" ")} Then stopped: ${e instanceof Error ? e.message : "error"}`); return; }
+      if (courseId) { setDone({ courseId, next: "units", message: `${lines.join(" ")} Stopped: ${e instanceof Error ? e.message : "error"}`.trim(), outcomes: [] }); return; }
       setError(e instanceof Error ? e.message : "The course could not be synced.");
     }
   }

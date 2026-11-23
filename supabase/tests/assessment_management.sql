@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(366);
+select plan(379);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -49,11 +49,20 @@ insert into public.cms_courses(id, slug, code, name, status) values ('course-asm
 insert into public.cms_course_units(id, course_id, code, name) values ('unit-asm-1', 'course-asm-test', 'ASMU1', 'Work safely'), ('unit-asm-2', 'course-asm-test', 'ASMU2', 'Use tools');
 insert into public.course_intakes(id, course_id, start_date, end_date, label) values ('f5000000-0000-0000-0000-000000000001', 'course-asm-test', date '2026-01-05', date '2026-12-18', 'Jan 2026');
 insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('f5000000-0000-0000-0000-000000000001', 'unit-asm-1', date '2026-01-05', date '2026-12-18');
-insert into public.batches(id, intake_id, name) values ('f5000000-0000-0000-0000-000000000011', 'f5000000-0000-0000-0000-000000000001', 'G1'), ('f5000000-0000-0000-0000-000000000012', 'f5000000-0000-0000-0000-000000000001', 'G2');
-insert into public.batch_trainers(batch_id, staff_id) values ('f5000000-0000-0000-0000-000000000011', 'b5000000-0000-0000-0000-000000000003'), ('f5000000-0000-0000-0000-000000000012', 'b5000000-0000-0000-0000-000000000004');
-insert into public.batch_enrolments(batch_id, student_id) values
+-- INTAKE-REPLACES-BATCH (2026-11-19): an intake is the class group; G1 and G2 are two intakes of the course (the ids the batches had)
+insert into public.course_intakes(id, course_id, start_date, end_date, label) values
+ ('f5000000-0000-0000-0000-000000000011', 'course-asm-test', date '2026-01-05', date '2026-12-18', 'G1'),
+ ('f5000000-0000-0000-0000-000000000012', 'course-asm-test', date '2026-01-05', date '2026-12-18', 'G2');
+insert into public.intake_units(intake_id, unit_id, start_date, end_date) values
+ ('f5000000-0000-0000-0000-000000000011', 'unit-asm-1', date '2026-01-05', date '2026-12-18'), ('f5000000-0000-0000-0000-000000000012', 'unit-asm-1', date '2026-01-05', date '2026-12-18');
+insert into public.intake_trainers(intake_id, staff_id) values ('f5000000-0000-0000-0000-000000000011', 'b5000000-0000-0000-0000-000000000003'), ('f5000000-0000-0000-0000-000000000012', 'b5000000-0000-0000-0000-000000000004');
+-- placements are made by the system only (guard intake_enrolments_auto_only, 20261118180000): the fixture places its students as the
+-- system's planner does, for this insert only
+select set_config('rto.carry_over_planning', 'on', true);
+insert into public.intake_enrolments(intake_id, student_id) values
  ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000011'), ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000013'),
  ('f5000000-0000-0000-0000-000000000012', 'e5000000-0000-0000-0000-000000000012');
+select set_config('rto.carry_over_planning', '', true);
 -- a second institution with its own course (tenant isolation)
 insert into public.tenants(id, slug, name) values ('15000000-0000-0000-0000-000000000002', 'asm-other', 'Other Institute');
 insert into public.cms_courses(id, slug, code, name, status, tenant_id) values ('course-asm-other', 'asm-other-course', 'ASM202', 'Other Course', 'Published', '15000000-0000-0000-0000-000000000002');
@@ -160,7 +169,7 @@ select throws_ok(format($$select public.asm_admin('assignment_create', '{"assess
 select pg_temp.put('assign', (public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'batchIds', '["f5000000-0000-0000-0000-000000000011"]'::jsonb, 'dueAt', (now() + interval '10 days')::text,
   'events', jsonb_build_array(jsonb_build_object('kind', 'practical', 'title', 'Workshop observation', 'startsAt', (now() + interval '5 days')::text, 'endsAt', (now() + interval '5 days 2 hours')::text)))))::text);
 select is((pg_temp.s('assign')::jsonb->>'created')::int, 1, 'the published version is assigned to batch G1');
-select pg_temp.put('assignment', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and batch_id = 'f5000000-0000-0000-0000-000000000011'));
+select pg_temp.put('assignment', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and intake_id = 'f5000000-0000-0000-0000-000000000011'));
 select pg_temp.as_postgres();
 select is((select array_agg(x order by x) from public.asm_assignment_eligible(pg_temp.v('assignment')) x), array['e5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000013']::uuid[], 'eligible students are the active enrolments of the batch');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
@@ -192,6 +201,12 @@ select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('
 select throws_ok($$insert into storage.objects(bucket_id, name) values ('assessment-evidence', '00000000-0000-0000-0000-000000000000/q_file/x.pdf')$$, '42501', null, 'the student cannot write under a foreign attempt id');
 select pg_temp.put('ev', (public.asm_student('evidence_register', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'questionId', 'q_file', 'path', pg_temp.v('attempt') || '/q_file/evidence.pdf', 'fileName', 'evidence.pdf', 'mime', 'application/pdf', 'bytes', 1234)))->>'id');
 select ok(pg_temp.v('ev') is not null, 'the uploaded file is registered as evidence');
+-- ASM-IMPORT: an attachment under a text question (config.allowAttachment) is evidence of that question; the answer stays the text
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-evidence', '%s/q_short/photo.png')$$, pg_temp.v('attempt')), 'ASM-IMPORT the student can attach a file under a text question');
+select pg_temp.put('ev_att', (public.asm_student('evidence_register', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'questionId', 'q_short', 'path', pg_temp.v('attempt') || '/q_short/photo.png', 'fileName', 'photo.png', 'mime', 'image/png', 'bytes', 2048)))->>'id');
+select is((select question_id from public.asm_evidence_files where id = pg_temp.v('ev_att')::uuid), 'q_short', 'ASM-IMPORT the attachment is registered as evidence of that question');
+select is((public.asm_student('evidence_remove', jsonb_build_object('id', pg_temp.v('ev_att'))))->>'ok', 'true', 'ASM-IMPORT the student can remove the attachment while the attempt is a draft');
+select is(jsonb_array_length(public.asm_validate_responses('{"tasks":[{"id":"t","title":"T","sections":[{"id":"s","title":"S","questions":[{"id":"q_att","type":"short_answer","label":"Describe","required":true,"markingMode":"criteria","config":{"allowAttachment":true,"attachmentMaxFiles":3},"responseSchema":{"type":"string"}}]}]}]}'::jsonb, '{"q_att": "See the attached photo"}'::jsonb, 'student')), 0, 'ASM-IMPORT asm_validate_responses accepts an answer to a question that takes attachments');
 select throws_ok(format($$select public.asm_student('evidence_register', '{"attemptId": "%s", "questionId": "q_file", "path": "%s/q_file/missing.pdf"}')$$, pg_temp.v('attempt'), pg_temp.v('attempt')), 'P0002', null, 'a path with no uploaded object cannot be registered');
 
 -- drafts, validation, submission
@@ -244,7 +259,7 @@ select throws_ok(format($$select public.asm_trainer('mark_return', '{"id": "%s",
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select is(jsonb_array_length(public.asm_trainer('pending_marking')), 1, 'the batch trainer sees the submission to mark');
 select is((select count(*)::int from public.asm_question_keys where version_id = pg_temp.v('v1')), 8, 'the batch trainer reads the keys of the assigned version');
-select is((select count(*)::int from storage.objects where bucket_id = 'assessment-evidence' and name like pg_temp.v('attempt') || '/%'), 1, 'the batch trainer reads the evidence objects');
+select is((select count(*)::int from storage.objects where bucket_id = 'assessment-evidence' and name like pg_temp.v('attempt') || '/%'), 2, 'the batch trainer reads the evidence objects (the q_file evidence and the ASM-IMPORT attachment object)');
 select pg_temp.put('tget', (public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('attempt'))))::text);
 select is(pg_temp.s('tget')::jsonb->'keys'->0->>'questionId', 'q_short', 'the marking view carries the model answers and guidance');
 select is((select count(*)::int from jsonb_array_elements(pg_temp.s('tget')::jsonb->'results') r where r->>'suggestedOutcome' is not null), 7, 'the marking view shows the auto-check suggestions');
@@ -280,6 +295,29 @@ select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('a
 select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt2'), 'outcome', 'S')))->>'outcome', 'S', 'attempt 2 is Satisfactory');
 select is((select state from public.asm_attempts where id = pg_temp.v('attempt2')), 'final', 'a Satisfactory attempt is final');
 select is((select count(*)::int from public.asm_attempts where student_id = 'e5000000-0000-0000-0000-000000000011'), 2, 'the history keeps both attempts');
+
+-- ASM-WORKBOOK: the results sheet / workbook PDF cover (asm_attempt_history): every attempt with task outcomes and assessor names, never keys
+select pg_temp.put('hist', public.asm_attempt_history(pg_temp.v('attempt')::uuid)::text);
+select is((select jsonb_agg(a->>'outcome' order by (a->>'attemptNo')::int) from jsonb_array_elements(pg_temp.s('hist')::jsonb->'attempts') a), '["NYS", "S"]'::jsonb, 'history: both attempts of the assignment with their outcomes, in order (asked from attempt 1)');
+select is(pg_temp.s('hist')::jsonb->'attempts'->1->>'assessor', 'Tara Trainer', 'history: the assessor who decided attempt 2 is named');
+select is((select r->>'outcome' || '/' || (r->>'assessor') from jsonb_array_elements(pg_temp.s('hist')::jsonb->'attempts'->1->'tasks') r where r->>'taskId' = 't2'), 'S/Tara Trainer', 'history: each task''s outcome and who signed it, per attempt');
+select is((pg_temp.s('hist')::jsonb->'student'->>'name') || '/' || (pg_temp.s('hist')::jsonb->'student'->>'ref'), 'Sam Student/E5000000', 'history: cover details (student name, the short student id)');
+select ok(pg_temp.s('hist') !~ '(modelAnswer|answerKey|assessorGuidance)', 'history: no assessor keys');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select throws_ok(format($$select public.asm_attempt_history('%s')$$, pg_temp.v('attempt2')), '42501', null, 'history: a trainer of another batch is refused');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select is(jsonb_array_length(public.asm_attempt_history(pg_temp.v('attempt2')::uuid)->'attempts'), 2, 'history: the student reads their own results sheet');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select throws_ok(format($$select public.asm_attempt_history('%s')$$, pg_temp.v('attempt2')), '42501', null, 'history: a classmate is refused');
+-- a student number (proposed: enrollment_students.student_number), once Skyline stores one, is the Student ID; the short id is the fallback
+select pg_temp.as_postgres();
+alter table public.enrollment_students add column if not exists student_number text;
+update public.enrollment_students set student_number = 'SLIT-000123' where id = 'e5000000-0000-0000-0000-000000000011';
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is(public.asm_attempt_history(pg_temp.v('attempt'))->'student'->>'ref', 'SLIT-000123', 'history: the student number, when stored, is the Student ID');
+select pg_temp.as_postgres();
+alter table public.enrollment_students drop column student_number;
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 
 -- unit outcome: explicit sign-off by an authorised assessor only
 select throws_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000011", "unitId": "unit-asm-1", "outcome": "C"}')$$, '22023', null, 'no sign-off tick, no outcome');
@@ -325,10 +363,10 @@ select throws_ok($$select public.asm_calendar(current_date, current_date + 400)$
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
 select pg_temp.put('attempt3', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment'))))->'attempt'->>'id');
 select pg_temp.as_postgres();
-update public.batch_enrolments set status = 'withdrawn' where batch_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
-select is((select state || '/' || void_reason from public.asm_attempts where id = pg_temp.v('attempt3')), 'void/left the batch', 'a student who leaves the batch loses the open draft (kept as history)');
+update public.intake_enrolments set status = 'withdrawn' where intake_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
+select is((select state || '/' || void_reason from public.asm_attempts where id = pg_temp.v('attempt3')), 'void/left the intake', 'a student who leaves the batch loses the open draft (kept as history)');
 select is((select count(*)::int from public.asm_assignment_eligible(pg_temp.v('assignment'))), 1, 'and is no longer eligible');
-update public.batch_enrolments set status = 'active' where batch_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
+update public.intake_enrolments set status = 'active' where intake_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
 select is((select count(*)::int from public.asm_notifications where recipient_auth_user = 'a5000000-0000-0000-0000-000000000013' and event = 'reassigned'), 1, 'a student who joins is told about the open assessment');
 
 -- ---------------------------------------------------------------- tenant isolation (D-03)
@@ -455,7 +493,7 @@ select pg_temp.as_postgres();
 select is((select require_trainer_role from public.asm_settings where tenant_id is null), true, 'T3 require_trainer_role defaults to true');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select is((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'), 'batchIds', jsonb_build_array('f5000000-0000-0000-0000-000000000012'), 'dueAt', now() + interval '14 days')))->>'created', '1', 'T3 version 1 is assigned to batch G2');
-select pg_temp.put('assignment2', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and batch_id = 'f5000000-0000-0000-0000-000000000012'));
+select pg_temp.put('assignment2', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and intake_id = 'f5000000-0000-0000-0000-000000000012'));
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
 select pg_temp.put('attemptB', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment2'))))->'attempt'->>'id');
 select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attemptB'), 'responses', pg_temp.responses() || '{"q_tf": true}'::jsonb, 'declaration', '{"signature": "Sue Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T3 student 2 submits on G2');
@@ -669,12 +707,13 @@ select is((select count(*)::int from public.cms_course_units where id = 'unit-as
 
 -- ---------------------------------------------------------------- dated class sessions generated from the weekly pattern
 -- unit-asm-1 now has 60 SLIT hours: 30 theory, 20 practical, 10 assessment. G1 meets Monday theory, Friday workshop, Sunday assessment, 4 hours each.
-insert into public.batch_sessions(batch_id, weekday, slot, start_time, end_time, session_type) values
+insert into public.intake_class_times(intake_id, weekday, slot, start_time, end_time, session_type) values
  ('f5000000-0000-0000-0000-000000000011', 1, 'morning', '09:00', '13:00', 'theory'),
  ('f5000000-0000-0000-0000-000000000011', 5, 'morning', '09:00', '13:00', 'practical'),
  ('f5000000-0000-0000-0000-000000000011', 7, 'morning', '09:00', '13:00', 'assessment');
 insert into hr.public_holidays(holiday_date, name, status)
- select date '2026-01-26', 'Australia Day', 'confirmed' where not exists(select 1 from hr.public_holidays where holiday_date = date '2026-01-26' and status = 'confirmed' and not is_optional);
+ select date '2026-01-26', 'Australia Day', 'confirmed' where not exists(select 1 from hr.public_holidays where holiday_date = date '2026-01-26' and status = 'confirmed' and not is_optional)
+ on conflict (state, holiday_date, name) do update set status = 'confirmed', is_optional = false; -- a synced row still under review counts as confirmed here
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
 select throws_ok($$select public.rto_class_sessions_generate('f5000000-0000-0000-0000-000000000011')$$, '42501', null, 'CLS an editor who is not an RTO Manager cannot generate classes');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
@@ -683,14 +722,18 @@ select is((public.rto_class_sessions_generate('f5000000-0000-0000-0000-000000000
 select is(jsonb_array_length(public.rto_class_sessions_list('f5000000-0000-0000-0000-000000000011', date '2026-01-01', date '2026-06-30')), 16, 'CLS staff can list the dated classes');
 select pg_temp.as_postgres();
 select is((select count(*)::int from public.class_sessions where session_date = date '2026-01-26'), 0, 'CLS a confirmed public holiday is skipped');
-select is((select max(session_date) from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011'), date '2026-03-02', 'CLS the holiday pushes the last theory class a week later');
+select is((select max(session_date) from public.class_sessions where intake_id = 'f5000000-0000-0000-0000-000000000011'), date '2026-03-02', 'CLS the holiday pushes the last theory class a week later');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
 select throws_ok($$select public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', true)$$, '42501', null, 'CLS an editor who is not an RTO Manager cannot reset a calendar');
+-- the class id is looked up as postgres (staff read classes through the RPCs, not the table)
+select pg_temp.as_postgres();
+select pg_temp.put('cls_first', (select id::text from public.class_sessions where intake_id = 'f5000000-0000-0000-0000-000000000011' order by session_date limit 1));
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select public.rto_class_session_update((select id from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' order by session_date limit 1), '{"status": "cancelled"}'::jsonb);
+-- classes are never cancelled (CLASS-RESCHEDULE 20261120211741): a class moved by hand is the hand change
+select public.rto_class_session_update(pg_temp.v('cls_first'), '{"startTime": "10:00", "endTime": "14:00"}'::jsonb);
 select is((public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', true))->>'created', '16', 'CLS recreate builds the whole calendar again from the intake start');
 select pg_temp.as_postgres();
-select is((select count(*)::int from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' and (is_manual or status = 'cancelled')), 0, 'CLS recreate drops hand-changed and cancelled classes');
+select is((select count(*)::int from public.class_sessions where intake_id = 'f5000000-0000-0000-0000-000000000011' and (is_manual or status = 'cancelled')), 0, 'CLS recreate drops hand-changed and cancelled classes');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select is((public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', false))->>'removed', '16', 'CLS remove deletes every dated class of the batch');
 select pg_temp.as_postgres();
@@ -713,7 +756,7 @@ select ok(public.rto_break_on(date '2026-01-13'), 'BRK the course''s own break a
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select public.rto_class_sessions_reset('f5000000-0000-0000-0000-000000000011', true);
 select pg_temp.as_postgres();
-select is((select count(*)::int from public.class_sessions where batch_id = 'f5000000-0000-0000-0000-000000000011' and session_date between date '2026-01-12' and date '2026-01-18'), 0, 'BRK no classes are generated in the course''s break');
+select is((select count(*)::int from public.class_sessions where intake_id = 'f5000000-0000-0000-0000-000000000011' and session_date between date '2026-01-12' and date '2026-01-18'), 0, 'BRK no classes are generated in the course''s break');
 -- UNIT-PREREQUISITES: prerequisites come from the Training.gov.au text; prerequisite units are laid out first
 update public.cms_course_units set tga_prerequisites = 'ASMU2 Use tools' where id = 'unit-asm-1';
 select is((select array_agg(x) from public.rto_unit_requires('unit-asm-1') x), array['unit-asm-2'], 'PRE a unit''s prerequisites are read from its Training.gov.au text');

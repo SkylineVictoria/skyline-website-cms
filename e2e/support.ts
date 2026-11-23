@@ -60,6 +60,8 @@ export async function createStudentLogin(label = "student") {
   const { email, local } = person(label);
   const id = await createAuthUser(email);
   const agency = sql(`insert into public.agencies(name, code, status) values ('E2E business ${label}', 'E2E-' || substr(md5(random()::text), 1, 8), 'Active') returning id`).split("\n")[0];
+  // AGENT-ONBOARDING-GATE (20261117220000): a business is operational only with an agreement; an uploaded one, as the SQL suites do
+  sql(`insert into public.business_documents(business_id, kind, file_name, storage_path) values ('${agency}', 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/${agency}/agreement.pdf')`);
   const student = sql(`insert into public.enrollment_students(agency_id, full_name, email, phone) values ('${agency}', 'E2E Student', ${q(email)}, ${q(local)}) returning id`).split("\n")[0];
   const profile = sql(`insert into public.portal_profiles(auth_user_id, full_name, email, phone, status) values ('${id}', 'E2E Student', ${q(email)}, ${q(local)}, 'Active') returning id`).split("\n")[0];
   sql(`insert into public.agency_memberships(user_id, agency_id, role, student_id) values ('${profile}', '${agency}', 'student', '${student}')`);

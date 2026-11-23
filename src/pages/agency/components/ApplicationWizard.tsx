@@ -10,8 +10,7 @@ import {
   listApplicationDocuments,
   listInstitutionCourses,
   queueDocumentExtraction,
-  saveApplicationDraft,
-  saveDocumentReview,
+  saveWizardDraft,
   submitApplication,
   uploadApplicationDocument,
   type ApplicationCourseRow,
@@ -35,7 +34,6 @@ import {
   wizardExtractionState,
   type PendingUpload,
   type WizardDoc,
-  type WizardMeta,
   type WizardStep,
 } from "@/pages/agency/lib/wizardConfig";
 import { formatExtractionCandidates } from "@/pages/agency/lib/documentExtraction";
@@ -73,8 +71,6 @@ const AUS_STUDY_STEP: WizardStep | null = ACADEMIC_WIZARD_STEP
   ? { ...ACADEMIC_WIZARD_STEP, title: "Proof of study in Australia", subtitle: "Completion letter, certificate or transcripts showing at least 2 years of study in Australia.", noun: "study record", required: false }
   : null;
 const LAST_STEP = DOC_STEPS + WIZARD_QUESTIONS.length - 1;
-/** Completion shown on the application while the wizard runs: the share of wizard screens done (100 only once submitted). */
-const wizardProgress = (stepIndex: number) => ({ overall: Math.min(95, Math.round(((stepIndex + 1) / (LAST_STEP + 1)) * 100)) });
 const PASSPORT_STEP = WIZARD_STEPS.findIndex((step) => step.id === "passport");
 /** The wizard's steps in order (documents, then questions) and their grouping into four stages; the last one submits the application. */
 const ALL_STEPS = [...WIZARD_STEPS, ...WIZARD_QUESTIONS];
@@ -162,6 +158,41 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [autoSave, setAutoSave] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const [autoSaveError, setAutoSaveError] = useState("");
+  const [inputVersion, setInputVersion] = useState(0);
+  const pendingValues = useRef<Record<string, string>>({});
+  const pendingWizard = useRef<Record<string, unknown>>({});
+  const completedSteps = useRef(new Set<string>());
+  const persistence = useRef<Promise<boolean> | null>(null);
+  const markDirty = () => setInputVersion((version) => version + 1);
+  const persist = useCallback(async (): Promise<boolean> => {
+    if (persistence.current && !(await persistence.current)) return false;
+    const values = pendingValues.current;
+    const wizard = pendingWizard.current;
+    if (!Object.keys(values).length && !Object.keys(wizard).length) return true;
+    pendingValues.current = {};
+    pendingWizard.current = {};
+    setAutoSave("saving");
+    setAutoSaveError("");
+    const task = (async () => {
+      try {
+        await saveWizardDraft(applicationId, { values, wizard });
+        setAutoSave("saved");
+        return true;
+      } catch (error) {
+        pendingValues.current = { ...values, ...pendingValues.current };
+        pendingWizard.current = { ...wizard, ...pendingWizard.current };
+        setAutoSave("failed");
+        setAutoSaveError(error instanceof Error ? error.message : "Changes could not be saved.");
+        return false;
+      }
+    })();
+    persistence.current = task;
+    try { return await task; }
+    finally { if (persistence.current === task) persistence.current = null; }
+  }, [applicationId]);
   const [step, setStep] = useState(() => savedWizardStep(applicationId));
   const [documents, setDocuments] = useState<WizardDoc[]>([]);
   const [pending, setPending] = useState<PendingUpload[]>([]);
@@ -213,10 +244,31 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   }, [documents]);
 
   useEffect(() => {
-    const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(flushApplicationEdits(applicationId));
+    if (!inputVersion) return;
+    const timer = window.setTimeout(() => void persist(), 450);
+    return () => window.clearTimeout(timer);
+  }, [inputVersion, persist]);
+
+  useEffect(() => {
+    const dirty = () => persistence.current || Object.keys(pendingValues.current).length || Object.keys(pendingWizard.current).length;
+    const unload = (event: BeforeUnloadEvent) => { if (dirty()) event.preventDefault(); };
+    const hide = () => { if (document.visibilityState === "hidden" && dirty()) void persist(); };
+    const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(
+      persist().then((saved) => { if (!saved) throw new Error("Save the application before leaving."); }),
+    );
+    window.addEventListener("beforeunload", unload);
+    document.addEventListener("visibilitychange", hide);
     window.addEventListener("portal-before-scope-switch", flush);
-    return () => window.removeEventListener("portal-before-scope-switch", flush);
-  }, [applicationId]);
+    return () => {
+      window.removeEventListener("beforeunload", unload);
+      document.removeEventListener("visibilitychange", hide);
+      window.removeEventListener("portal-before-scope-switch", flush);
+    };
+  }, [persist]);
+
+  const leaveDraft = async () => {
+    if (await persist()) onCancel();
+  };
 
   // On an answer screen the document logic below keeps working on the last document step and stays out of the way.
   const question: WizardQuestion | null = step >= DOC_STEPS ? WIZARD_QUESTIONS[step - DOC_STEPS] ?? null : null;
@@ -256,16 +308,26 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         const pick = (name: string) => (typeof values[name] === "string" ? String(values[name]) : "");
         const courses = Array.isArray(values.courses_of_interest) ? (values.courses_of_interest as unknown[]).map(String) : [];
         if (active) {
-          const pathway = pick("english_pathway");
+          const saved = (application.data.wizard ?? {}) as { activeStep?: string; completedSteps?: string[]; courseChoice?: string; intakeChoice?: string; intakeLabel?: string; intakeJoin?: string; englishChoice?: string; studyChoice?: AusStudyAnswer; cambridgeChoice?: AusStudyAnswer };
+          const last = ALL_STEPS.findIndex((item) => item.id === saved.activeStep);
+          completedSteps.current = new Set(Array.isArray(saved.completedSteps) ? saved.completedSteps : []);
+          if (last >= 0) {
+            const docs = wizardDocs(stored);
+            const missing = WIZARD_STEPS.findIndex((item, index) => index < last && item.required && !docs.some((doc) => doc.category === item.category));
+            setStep(missing >= 0 ? missing : last);
+          }
+          const pathway = saved.englishChoice || pick("english_pathway");
           if (pathway === ENGLISH_PATHWAY.ausStudy) { setEnglishAlt(true); setAusStudy("Yes"); }
           else if (pathway === ENGLISH_PATHWAY.cambridge) { setEnglishAlt(true); setAusStudy("No"); setCambridge("Yes"); }
+          if (saved.studyChoice) { setEnglishAlt(true); setAusStudy(saved.studyChoice); }
+          if (saved.cambridgeChoice) setCambridge(saved.cambridgeChoice);
           setAnswers({
             // "Yes, another language" is selected unless an answer was already given.
             language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), usi_number: pick("usi_number"),
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
-            course: courses[0] ?? "", preferred_intake: pick("preferred_intake"),
+            course: saved.courseChoice ?? courses[0] ?? "", preferred_intake: saved.intakeLabel ?? pick("preferred_intake"),
             // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
-            intake_id: application.courses?.[0]?.intakeId ?? "", intake_join_date: pick("intake_join_date"),
+            intake_id: saved.intakeChoice ?? application.courses?.[0]?.intakeId ?? "", intake_join_date: saved.intakeJoin ?? pick("intake_join_date"),
           });
         }
         // A CMS user (staff) gets the Learning Management course list and, as an RTO Manager, may add an intake; anyone else is refused by rto_admin.
@@ -293,7 +355,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return () => {
       active = false;
     };
-  }, [applicationId]);
+  }, [applicationId, loadAttempt]);
 
   // Extraction is durable and asynchronous: poll only while a document is being
   // read. A sequence guard keeps an older response from replacing newer state.
@@ -486,21 +548,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     setFinishError("");
     try {
       await flushApplicationEdits(applicationId);
-      const application = await getApplication(applicationId);
-      const values = (application?.data.values ?? {}) as Record<string, unknown>;
-      const studentName = [values.first_name, values.last_name].filter((part): part is string => typeof part === "string" && part.trim() !== "").join(" ").trim();
-      const meta: WizardMeta = {
-        completedSteps: WIZARD_STEPS.map((item) => item.id),
-        outstanding: WIZARD_STEPS.filter((item) => item.required && !documentsRef.current.some((doc) => doc.category === item.category))
-          .map((item) => `${item.title} not provided. It is required.`),
-        updatedAt: new Date().toISOString(),
-      };
-      await saveDocumentReview({ applicationId, values: {}, provenance: {}, confirmed: [], wizard: meta as unknown as Record<string, unknown>, studentName: studentName || undefined });
-      // Every screen is done: the application shows 100 % complete.
-      await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { progress: { overall: 100 } }, studentName: "", studentEmail: "", intake: "", completion: 100 });
-      // The server checks the saved draft (portal_validate_submission) and needs its current version.
-      await getApplication(applicationId, true);
+      const application = await getApplication(applicationId, false);
       const receipt = await submitApplication(applicationId, {
         consent: { method: "electronic", confirmed: true, authorised: true, declarationVersion: "1.0", signedDocumentRef: "" },
       });
@@ -579,10 +627,14 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     || (item.id === "visa" ? acceptableVisa.length > 0 : documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1));
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && (!stepHasDoc(item) || (item.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && documents.some((doc) => doc.category === item.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date))));
   // Forward navigation cannot bypass documents marked required by the published admissions rule.
-  const goTo = (index: number) => {
+  const goTo = async (index: number, completed = false) => {
+    if (loading || loadError || finishing) return;
     const bounded = Math.max(0, Math.min(index, LAST_STEP));
+    if (completed && ALL_STEPS[step]) completedSteps.current.add(ALL_STEPS[step].id);
     const missing = bounded > step ? firstMissingBefore(bounded) : -1;
-    setStep(missing >= 0 ? missing : bounded);
+    const next = missing >= 0 ? missing : bounded;
+    pendingWizard.current = { ...pendingWizard.current, activeStep: ALL_STEPS[next]?.id, completedSteps: [...completedSteps.current] };
+    if (await persist()) setStep(next);
   };
 
   /** Saves how the English requirement is met, then moves on from the English step. */
@@ -597,10 +649,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (englishAlt && pathway === ENGLISH_PATHWAY.cambridge) values.english_type = "Cambridge English";
     setSavingEnglish(true);
     try {
-      await flushApplicationEdits(applicationId);
-      await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { values, progress: wizardProgress(step) }, studentName: "", studentEmail: "", intake: "", completion: 0 });
-      goTo(step + 1);
+      if (!(await persist())) return;
+      await saveWizardDraft(applicationId, { values });
+      await goTo(step + 1, true);
     } catch (error) {
       setEnglishSaveError(error instanceof Error ? error.message : "We could not save your English details. Try again.");
     } finally {
@@ -609,6 +660,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   };
   const chooseCambridge = (value: "Yes" | "No") => {
     setCambridge(value);
+    pendingWizard.current.cambridgeChoice = value;
+    markDirty();
     if (value === "No") setEnglishNotMet(true);
   };
   /** From the "requirement not met" dialog back to the start of the English step. */
@@ -638,7 +691,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     touchedRef.current.add(name);
     // A new course clears the intake: intakes belong to one course.
     setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
-    if (name === "course") setIntakeList(null);
+    if (name === "course") {
+      setIntakeList(null);
+      Object.assign(pendingWizard.current, { courseChoice: value, intakeChoice: "", intakeLabel: "", intakeJoin: "" });
+      markDirty();
+    } else if (name !== "mobile" && name !== "ec_phone" || !value || !validateStoredPhone(value)) {
+      const declaration = ["declaration_read", "consent_confirmed", "consent_authorised"];
+      if (!declaration.includes(name) && (name !== "email" || (!emailProblem(value) && role !== "student"))) {
+        pendingValues.current[name] = value;
+        if (name === "email") pendingValues.current.confirm_email = value;
+        markDirty();
+      }
+    }
     setAnswerErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
   };
   /** A value read from a document, corrected on the document step: saved to the draft at once and used by the later screens. */
@@ -648,8 +712,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     setReadSaveError("");
     try {
       await flushApplicationEdits(applicationId);
-      await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { values: { [key]: value } }, studentName: "", studentEmail: "", intake: "", completion: 0 });
+      if (!(await persist())) throw new Error("This correction could not be saved.");
     } catch (error) {
       setReadSaveError(error instanceof Error ? error.message : "We could not save that correction. Try again.");
     }
@@ -661,6 +724,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return institutionCourseOf(label)?.courseId || null;
   };
   const setIntake = (intake: OpenIntake | null) => {
+    Object.assign(pendingWizard.current, { intakeChoice: intake?.id ?? "", intakeLabel: intake?.display ?? "", intakeJoin: intake?.joinDate ?? "" });
+    markDirty();
     setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "", intake_join_date: intake?.joinDate ?? "" }));
     setAnswerErrors((prev) => (prev.preferred_intake ? { ...prev, preferred_intake: "" } : prev));
   };
@@ -678,7 +743,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
    * while the documents were uploaded), with the same starting answers the full form used; anything typed here is kept.
    */
   const hydrateFinish = useCallback(async () => {
-    const application = await getApplication(applicationId, true).catch(() => null);
+    const application = await getApplication(applicationId, false).catch(() => null);
     if (!application) return;
     const values = (application.data.values ?? {}) as Record<string, unknown>;
     const stored = (name: string) => (typeof values[name] === "string" ? String(values[name]).trim() : Array.isArray(values[name]) && (values[name] as unknown[]).length ? "Yes" : "");
@@ -765,8 +830,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (!filled("first_name")) errors.first_name = "Enter the given name as on the passport.";
       if (!filled("last_name")) errors.last_name = "Enter the surname as on the passport.";
       if (!validDate(filled("dob")) || filled("dob") >= todayIso()) errors.dob = "Enter the date of birth.";
-      const mobileProblem = filled("mobile") ? validateStoredPhone(filled("mobile")) : "Enter the student's mobile number.";
-      if (mobileProblem) errors.mobile = mobileProblem;
       const emailIssue = filled("email") ? emailProblem(filled("email")) : "Enter the student's email.";
       if (emailIssue) errors.email = emailIssue;
       oneOf("nationality", "Choose the nationality.");
@@ -809,13 +872,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         oshc_expiry: filled("oshc_require") === "Already Have" ? filled("oshc_expiry") : "",
       });
     } else if (target.id === "declare") {
+      const mobile = filled("mobile");
+      const mobileProblem = mobile ? validateStoredPhone(mobile) : ruleBool("admissions.application_mobile_required", true) ? "Enter the student's mobile number." : "";
+      if (mobileProblem) errors.mobile = mobileProblem;
+      values.mobile = mobile;
+
       // One tick agrees and signs: the name is the student's own (from Personal details), never typed again.
       const signer = filled("declaration_name") || [filled("first_name"), filled("middle_name"), filled("last_name")].filter(Boolean).join(" ");
       if (filled("declaration_read") !== "Yes" || filled("consent_confirmed") !== "Yes" || filled("consent_authorised") !== "Yes")
         errors.declaration_read = "Tick the box to agree and sign.";
       else if (!signer) errors.declaration_read = "Add the student's name on Personal details first.";
       // What the full form used to fill itself: the checklist, USI consent, the agent block and the visa answer.
-      const application = await getApplication(applicationId, true).catch(() => null);
+      const application = await getApplication(applicationId, false).catch(() => null);
       const stored = (application?.data.values ?? {}) as Record<string, unknown>;
       const empty = (name: string) => !String(stored[name] ?? "").trim();
       Object.assign(values, {
@@ -861,9 +929,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     setAnswerSaveError("");
     try {
       await flushApplicationEdits(applicationId);
-      // Reading documents moves the draft on; take its current version before saving.
-      await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { values, ...patch, progress: wizardProgress(step) }, studentName: "", studentEmail: "", intake: "", completion: 0 });
+      if (!(await persist())) return false;
+      await saveWizardDraft(applicationId, { values, ...patch });
+
       return true;
     } catch (error) {
       setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");
@@ -876,7 +944,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const nextFromQuestion = async () => {
     if (!question || !(await saveAnswers(question))) return;
     if (step === LAST_STEP) setFinishing(true);
-    else goTo(step + 1);
+    else await goTo(step + 1, true);
   };
 
   const stepDocs = documents.filter((doc) => doc.category === current.category);
@@ -937,10 +1005,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (loadError) {
       return (
         <div className="space-y-4">
-          <PortalError message={loadError} />
+          <PortalError message={loadError} onRetry={() => setLoadAttempt((attempt) => attempt + 1)} />
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => void leaveDraft()}
             className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 px-4 py-2.5 text-sm font-semibold text-foreground-800 hover:bg-background-100"
           >
             Close
@@ -975,7 +1043,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
             {finishScreen ? (
               <WizardFinishSteps question={question} answers={answers} errors={answerErrors} onChange={setAnswer} onAddress={pickAddress} summary={summary} version={hydrated}
-                studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) setStep(DOC_STEPS + at); }} />
+                studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }} />
             ) : (
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
                 onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId} />
@@ -1003,9 +1071,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           ausStudy={ausStudy}
           cambridge={cambridge}
           allowAusStudy={alternatives.ausStudy} allowCambridge={alternatives.cambridge}
-          onAusStudy={(value) => { setAusStudy(value); if (value === "Yes") setCambridge(""); if (value === "No" && !alternatives.cambridge) setEnglishNotMet(true); }}
+          onAusStudy={(value) => {
+            setAusStudy(value);
+            pendingWizard.current.studyChoice = value;
+            if (value === "Yes") { setCambridge(""); pendingWizard.current.cambridgeChoice = ""; }
+            markDirty();
+            if (value === "No" && !alternatives.cambridge) setEnglishNotMet(true);
+          }}
           onCambridge={chooseCambridge}
-          onBack={() => { setEnglishAlt(false); setAusStudy(""); setCambridge(""); setEnglishSaveError(""); }}
+          onBack={() => {
+            setEnglishAlt(false); setAusStudy(""); setCambridge(""); setEnglishSaveError("");
+            Object.assign(pendingWizard.current, { englishChoice: "", studyChoice: "", cambridgeChoice: "" });
+            markDirty();
+          }}
           error={englishSaveError || uploadRejections[AUS_STUDY_STEP.category] || ""}
           upload={
             <WizardDocumentStep
@@ -1066,22 +1144,27 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     <WizardShell
       title={"New application"}
       subtitle={`Upload the documents, answer a few questions and submit. ${agencyName}`}
-      onClose={onCancel}
-      closeLabel="Cancel and close the wizard"
+      onClose={() => void leaveDraft()}
+      closeLabel="Save and close the wizard"
       stepper={
-        <WizardStages stages={wizardStages} current={step} total={WIZARD_STEPS.length + WIZARD_QUESTIONS.length} stepTitle={allSteps[step]?.title ?? ""} onSelect={goTo} />
+        <WizardStages stages={wizardStages} current={step} total={WIZARD_STEPS.length + WIZARD_QUESTIONS.length} stepTitle={allSteps[step]?.title ?? ""} onSelect={(index) => { void goTo(index); }} />
       }
       footerStart={
         <>
+          <span role="status" className="text-xs text-foreground-600">
+            {autoSave === "saving" ? "Saving…" : autoSave === "saved" ? "Saved" : ""}
+          </span>
+          {autoSave === "failed" ? <button type="button" onClick={() => void persist()} title={autoSaveError}
+            className="text-xs font-semibold text-red-800 underline">Save failed. Retry</button> : null}
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => void leaveDraft()}
             className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium text-foreground-500 transition-colors hover:text-foreground-800"
           >
             <i className="ri-close-line" aria-hidden="true" />
-            Cancel
+            Save and close
           </button>
-          {step > 0 && ready && !submittedRef ? <WizardBackButton onClick={() => goTo(step - 1)} disabled={finishing} /> : null}
+          {step > 0 && ready && !submittedRef ? <WizardBackButton onClick={() => void goTo(step - 1)} disabled={finishing} /> : null}
         </>
       }
       footerEnd={
@@ -1090,7 +1173,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             {onDocStep && !hasFile && !blockedByPassport && !current.required ? (
               <button
                 type="button"
-                onClick={() => goTo(step + 1)}
+                onClick={() => void goTo(step + 1, true)}
                 className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:border-primary-300 hover:text-primary-700"
               >
                 {current.skipLabel}
@@ -1128,7 +1211,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
                   {savingEnglish ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
                 </button>
               ) : (
-                <button type="button" onClick={() => goTo(step + 1)} disabled={locked || blockedByRequiredDocument || pending.some((item) => !item.error)} className={primaryClass}>
+                <button type="button" onClick={() => void goTo(step + 1, true)} disabled={locked || blockedByRequiredDocument || pending.some((item) => !item.error)} className={primaryClass}>
                   Next
                   <i className="ri-arrow-right-line" aria-hidden="true" />
                 </button>

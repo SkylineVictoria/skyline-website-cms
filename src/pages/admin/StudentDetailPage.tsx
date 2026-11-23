@@ -1,6 +1,8 @@
+import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
+import { needsInitialWizard } from "@/pages/agency/lib/portalApplications";
 import { useEffect, useState } from "react";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Button, Card, PageHeader } from "@/pages/admin/components/ui";
@@ -22,6 +24,7 @@ import { formatDate } from "@/pages/agency/lib/portalData";
 export default function StudentDetailPage() {
   const { id = "" } = useParams();
   const { push } = useToast();
+  const navigate = useNavigate();
   const [student, setStudent] = useState<StudentDetail | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [error, setError] = useState("");
@@ -55,6 +58,7 @@ export default function StudentDetailPage() {
     return (
       <div>
         <PageHeader title="Student not found" />
+        {state === "error" ? <Button variant="outline" onClick={() => { setState("loading"); setReload((value) => value + 1); }}>Retry</Button> : null}
         <p role="alert" className="text-sm text-red-700">{state === "error" ? error : "This student could not be found."}</p>
         <Link to="/admin/students" className="mt-3 inline-block text-sm font-semibold text-primary-700 underline">Back to Students</Link>
       </div>
@@ -64,6 +68,8 @@ export default function StudentDetailPage() {
   const counts: Record<string, number> = {};
   for (const a of student.applications) counts[a.status] = (counts[a.status] ?? 0) + 1;
 
+  const drafts = student.applications.filter(needsInitialWizard);
+  const onlyDrafts = drafts.length > 0 && drafts.length === student.applications.length;
   return (
     <div>
       <nav aria-label="Breadcrumb" className="mb-3 flex flex-wrap gap-1.5 text-sm text-foreground-600">
@@ -73,11 +79,16 @@ export default function StudentDetailPage() {
       </nav>
       <PageHeader title={student.name || "Unnamed student"} titleSuffix={<><span className="ml-2 inline-block align-middle"><MessagePersonButton kind="student" refId={student.id} name={student.name} size="sm" /></span></>}
         description={`Student of ${student.business.name}${student.agent ? `, looked after by ${student.agent.name}` : ""}${student.selfEnrolled ? ", enrolled themselves from the website" : ""}. Sign-in: ${studentLoginLabel(student.login)}.`}
-        actions={student.login?.status === "active" ? undefined : (
+        actions={onlyDrafts || student.login?.status === "active" ? undefined : (
           <Button icon="ri-mail-send-line" disabled={inviting || !student.email} onClick={() => void invite()}>
             {inviting ? "Sending…" : student.login?.invitationId ? "Resend invite" : "Invite to sign in"}
           </Button>
         )} />
+
+      {drafts.length ? <div className="mb-4 space-y-3">{drafts.map((draft) => (
+        <FinishApplicationPanel key={draft.id} id={draft.id} email={student.email} canInvite
+          onContinue={() => navigate(`/admin/applications/${draft.id}?wizard=1`)} />
+      ))}</div> : null}
 
       <div className="flex flex-wrap items-start gap-5">
         <Card className="min-w-0 flex-[999_1_560px]">
@@ -92,12 +103,14 @@ export default function StudentDetailPage() {
           <h2 className="mb-3 font-heading text-[15px] font-semibold text-foreground-900">Student details</h2>
           <dl className="space-y-3 text-sm">
             <Row label="Email" value={student.email} />
+            {!onlyDrafts ? <>
             <Row label="Phone" value={student.phone} />
             <Row label="Date of birth" value={student.dateOfBirth ? formatDate(student.dateOfBirth) : ""} />
             <Row label="Passport number" value={student.passportNumber} />
             <Row label="Nationality" value={student.nationality} />
             {student.courseOfInterest ? <Row label="Course of interest" value={student.courseOfInterest} /> : null}
             <div><dt className="text-xs text-foreground-500">Portal access</dt><dd><StudentLoginCell login={student.login} email={student.email} busy={inviting} onInvite={() => void invite()} /></dd></div>
+            </> : null}
             <div><dt className="text-xs text-foreground-500">Business</dt><dd className="flex flex-wrap items-center gap-2"><Link to={`/admin/businesses/${student.business.id}`} className="text-foreground-900 hover:text-primary-700">{student.business.name}</Link><AgencyStatusBadge status={student.business.status} /></dd></div>
             <div><dt className="text-xs text-foreground-500">Agent</dt><dd>{student.agent ? <Link to={`/admin/agents/${student.agent.id}`} className="text-foreground-900 hover:text-primary-700">{student.agent.name}</Link> : <span className="text-foreground-500">Not assigned</span>}</dd></div>
             <Row label="First recorded" value={formatDate(student.createdAt)} />

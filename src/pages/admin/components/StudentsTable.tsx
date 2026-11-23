@@ -251,6 +251,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
               <tbody>
                 {!loaded ? <tr><td colSpan={columns} className="py-10 text-center text-foreground-500">Loading students…</td></tr> : sorted.map((row) => {
                   const disabled = studentStatusOf(row) === "Inactive";
+                  const draftsOnly = Boolean(row.applicationRows?.length && row.applicationRows.every((app) => app.status === "draft"));
                   return (
                     <tr key={row.id} className={`align-top ${inactiveBusiness(row) ? "bg-background-100/70 opacity-60" : disabled ? "bg-background-100/60" : ""}`}
                       title={inactiveBusiness(row) ? "This student's business is inactive" : undefined}>
@@ -260,14 +261,16 @@ This permanently deletes the student and ALL ${total} of their application${tota
                         </Link>
                         <PersonMessageIcon phone={row.phone} name={row.name} email={row.email} />
                         <p className="mt-0.5 text-xs text-foreground-600">{row.email || "No email"}</p>
-                        {row.phone ? <p className="text-xs text-foreground-600">{formatPhone(row.phone)}</p> : null}
-                        {row.passportNumber || row.nationality ? (
+                        {!draftsOnly && row.phone ? <p className="text-xs text-foreground-600">{formatPhone(row.phone)}</p> : null}
+                        {!draftsOnly && (row.passportNumber || row.nationality) ? (
                           <p className="text-xs text-foreground-500">{[row.passportNumber ? `Passport ${row.passportNumber}` : "", row.nationality ?? ""].filter(Boolean).join(" · ")}</p>
                         ) : null}
                         <span className="mt-1.5 flex gap-3 text-xs font-semibold">
-                          <button type="button" disabled={busyId === row.id} onClick={() => setEditing(row)} className="inline-flex items-center gap-1 text-primary-700 hover:underline disabled:opacity-50">
+                          {draftsOnly && !disabled ? (
+                            <Link to={`/admin/students/${row.id}`} className="font-semibold text-primary-700 hover:underline">Finish Application</Link>
+                          ) : !draftsOnly ? <button type="button" disabled={busyId === row.id} onClick={() => setEditing(row)} className="inline-flex items-center gap-1 text-primary-700 hover:underline disabled:opacity-50">
                             <i className="ri-edit-line" aria-hidden="true" /> Edit
-                          </button>
+                          </button> : null}
                           <button type="button" disabled={busyId === row.id} onClick={() => askDelete(row)} className="inline-flex items-center gap-1 text-red-700 hover:underline disabled:opacity-50">
                             <i className="ri-delete-bin-line" aria-hidden="true" /> {busyId === row.id && confirmDelete?.id === row.id ? "Deleting…" : "Delete"}
                           </button>
@@ -301,7 +304,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                             {/* Portal access as plain text (not a second status pill), with Invite when it is needed. */}
                             {(() => {
                               const access = disabled ? "disabled" : row.portalAccess ?? "not_invited";
-                              const canInvite = !disabled && Boolean(row.email) && access !== "active" && access !== "disabled";
+                              const canInvite = !draftsOnly && !disabled && Boolean(row.email) && access !== "active" && access !== "disabled";
                               return <span className="inline-flex flex-wrap items-center gap-1 text-foreground-600" title="Portal access (login)">
                                 <i className="ri-key-2-line" aria-hidden="true" /> Login: {PORTAL_ACCESS_LABEL[access]}
                                 {canInvite ? <button type="button" disabled={busyId === row.id} onClick={() => void invite(row)}
@@ -323,7 +326,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                                   <span className="min-w-0 text-xs">
                                     <Link to={`/admin/applications/${application.id}`} className="font-semibold text-foreground-900 hover:text-primary-700">{application.reference || "Draft"}</Link>
                                     <span className="block text-foreground-600">{[application.course || "No course yet", application.intake ? `Intake ${application.intake}` : "", `${application.completion}%`].filter(Boolean).join(" · ")}</span>
-                                    {!disabled && application.status === "draft" ? <Link to={`/admin/applications/${application.id}?wizard=1`} className="font-semibold text-primary-700 hover:underline"><i className="ri-magic-line" aria-hidden="true" /> Continue in wizard</Link> : null}
+                                    {!disabled && application.status === "draft" ? <Link to={`/admin/applications/${application.id}`} className="font-semibold text-primary-700 hover:underline"><i className="ri-magic-line" aria-hidden="true" /> Finish Application</Link> : null}
                                   </span>
                                   <span className="inline-flex flex-col items-end gap-0.5">
                                     {/* STUDENT-STATUS-MENU (owner, 2026-11-23): the application status (and so Enrolment) can be changed here by hand

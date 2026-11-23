@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import { activateAgent, listBusinesses, sendStudentInvitation, setBusinessStatus, type BusinessStatus } from "@/pages/admin/lib/businessData";
+import { activateAgent, listBusinesses, setBusinessStatus, type BusinessStatus } from "@/pages/admin/lib/businessData";
 import { useToast } from "@/pages/admin/components/toastContext";
 import SearchPick, { type PickOption } from "@/pages/admin/components/SearchPick";
 import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
@@ -9,20 +9,16 @@ import AddStudentRecordDialog, { type AddStudentRecordValue } from "@/pages/admi
 import StudentDetailsStep, { type StudentDraft } from "@/pages/agency/components/StudentDetailsStep";
 import {
   createApplicationForStudent,
-  deleteApplicationDocument,
-  deleteApplicationDraft,
+  createStudentDraft,
   findAgentByProfile,
   getApplication,
   listAgentsOfBusiness,
-  listApplicationDocuments,
-  saveApplicationDraft,
-  saveStudent,
+  sendApplicationInvitation,
   studentAgencyOptions,
   chooseStudentAgency,
   type BusinessAgentOption,
   type StudentMatch,
 } from "@/pages/agency/lib/portalApplications";
-import { formatPhone } from "../../../../../supabase/functions/_shared/validation/identifiers";
 import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import ApplicationWizard from "@/pages/agency/components/ApplicationWizard";
 import { isEditableStatus, loadApplicationStatuses } from "@/lib/applicationStatuses";
@@ -71,19 +67,6 @@ function clearSession(uid: string): void {
 type Phase = "checking" | "student" | "pick" | "agency" | "wizard";
 
 type Business = { id: string; name: string; status: BusinessStatus };
-
-/** A draft started before students were recorded separately still needs its contact details before the wizard. */
-async function saveContact(id: string, student: StudentDraft): Promise<void> {
-  // Saves are version-checked; a draft created a moment ago has no known version until it is read once.
-  await getApplication(id);
-  return saveApplicationDraft(id, {
-    data: { values: { email: student.email, confirm_email: student.email, mobile: student.mobile } },
-    studentName: student.fullName,
-    studentEmail: student.email,
-    intake: "",
-    completion: 0,
-  });
-}
 
 /**
  * New application, down the chain: the student first (an existing student is offered when their email, mobile or passport
@@ -153,33 +136,29 @@ export default function NewApplicationPage() {
   const start = useCallback(async (student: StudentDraft, existing: StudentMatch | null, chosen: { business: Business | null; agent: BusinessAgentOption } | null) => {
     setCreating(true);
     setError("");
-    const notes: string[] = [];
     try {
-      let studentId = existing?.id ?? "";
-      if (!existing) {
-        if (!chosen) throw new Error("Choose the agent who looks after this student.");
-        if (role === "slit_admin" && chosen.business && chosen.business.status !== "Active") {
-          await setBusinessStatus(chosen.business.id, "Active");
-          notes.push(`${chosen.business.name} was activated.`);
-        }
-        if (role === "slit_admin" && chosen.agent.status === "Inactive") {
-          await activateAgent({ agentId: chosen.agent.id, businessId: chosen.business?.id ?? null, name: chosen.agent.name, email: chosen.agent.email, role: chosen.agent.role });
-          notes.push(`${chosen.agent.name} was activated.`);
-        }
-        const saved = await saveStudent({ agentId: chosen.agent.id, fullName: student.fullName, email: student.email, mobile: student.mobile, dateOfBirth: student.dateOfBirth, passportNumber: student.passportNumber });
-        studentId = saved.id;
-        if (saved.reused) notes.push(`${saved.name} was already on record with this passport or email and date of birth, so that record is used.`);
-        else if (student.invite) {
-          try { notes.push(await sendStudentInvitation({ id: saved.id, email: saved.email || student.email, name: saved.name || student.fullName, agencyId: saved.businessId })); }
-          catch (e) { notes.push(`The student's sign-in invitation was not sent${e instanceof Error && e.message ? `: ${e.message}` : "."} Send it from Students.`); }
-        }
-      } else {
-        notes.push(`New application for ${existing.name || "the existing student"}${existing.agentName ? `, looked after by ${existing.agentName}` : ""}.`);
+      if (!existing && !chosen) throw new Error("Choose the business and agent.");
+      if (!existing && chosen?.business && chosen.business.status !== "Active") await setBusinessStatus(chosen.business.id, "Active");
+      if (!existing && chosen?.business && chosen.agent.status === "Inactive") {
+        const { agent, business } = chosen;
+        await activateAgent({ agentId: agent.id, businessId: business!.id, name: agent.name, email: agent.email, role: agent.role });
       }
-      const { id } = await createApplicationForStudent(clientKeyRef.current, studentId);
+      const key = clientKeyRef.current;
+      const id = existing
+        ? (await createApplicationForStudent(key, existing.id)).id
+        : await createStudentDraft(student.email, chosen!.agent.id, key);
       clientKeyRef.current = newClientKey();
-      if (notes.length) push(notes.join(" "));
-      openWizard(id);
+      if (student.invite) {
+        try {
+          await sendApplicationInvitation(id);
+          push("Application invitation sent.");
+        } catch (e) {
+          push(e instanceof Error ? e.message : "Invitation failed. Try again from Finish Application.", "error");
+        }
+        navigate(paths.detail(id), { replace: true });
+      } else {
+        openWizard(id);
+      }
     } catch (e) {
       if (isEmailTakenError(e)) { setEmailError(e); setPhase("student"); return; }
       setError(e instanceof Error ? e.message : "We could not start a new application.");
@@ -187,26 +166,12 @@ export default function NewApplicationPage() {
       setCreating(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, authUser?.id]);
+  }, [role, authUser?.id, paths, navigate]);
 
   const continueFromStudent = async (student: StudentDraft, existing: StudentMatch | null) => {
     setDraft(student);
     setError("");
     setEmailError(null);
-    // A resumed draft keeps its student, business and agent; only the contact details are added to it.
-    if (applicationId) {
-      setCreating(true);
-      try {
-        await saveContact(applicationId, student);
-        setPhase("wizard");
-      } catch (e) {
-        if (isEmailTakenError(e)) { setEmailError(e); return; }
-        setError(e instanceof Error ? e.message : "We could not start a new application.");
-      } finally {
-        setCreating(false);
-      }
-      return;
-    }
     if (existing) { await start(student, existing, null); return; }
     if (role === "agent") {
       // The signed-in agent looks after their own students.
@@ -241,11 +206,7 @@ export default function NewApplicationPage() {
           const statuses = app ? await loadApplicationStatuses() : null;
           if (app && statuses && isEditableStatus(statuses, app.status)) {
             setApplicationId(app.id);
-            // Drafts started before the student step existed must still collect the contact details before the wizard.
-            const values = (app.data?.values ?? {}) as Record<string, unknown>;
-            const saved = { fullName: app.studentName ?? "", email: String(values.email ?? ""), mobile: String(values.mobile ?? ""), dateOfBirth: "", passportNumber: "" };
-            setDraft(saved);
-            setPhase(saved.email && saved.mobile ? "wizard" : "student");
+            setPhase("wizard");
             return;
           }
           clearSession(authUser.id);
@@ -287,29 +248,9 @@ export default function NewApplicationPage() {
     navigate(paths.list, { replace: true });
   };
 
-  // Cancelling discards the unfinished draft and its uploads, then starts a fresh application.
-  const handleCancel = async () => {
-    const uid = authUser?.id;
-    if (uid) clearSession(uid);
-    const abandoned = applicationId;
-    setApplicationId("");
-    setPhase("checking");
-    setCreating(true);
-    setError("");
-    try {
-      const docs = await listApplicationDocuments(abandoned).catch(() => []);
-      await Promise.all(docs.map((doc) => deleteApplicationDocument({ id: doc.id, storagePath: doc.storagePath }).catch(() => undefined)));
-      await deleteApplicationDraft(abandoned).catch(() => undefined);
-      if (role === "student") { navigate(paths.list, { replace: true }); return; }
-      setBusiness(null);
-      setAgent(null);
-      setDraft(null);
-      setPhase("student");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "We could not start a new application.");
-    } finally {
-      setCreating(false);
-    }
+  const handleCancel = () => {
+    if (authUser?.id) clearSession(authUser.id);
+    navigate(paths.list, { replace: true });
   };
 
   // The student picked a business: its active agents are listed.
@@ -456,7 +397,7 @@ export default function NewApplicationPage() {
           description="Start with the student. A student already on record keeps one record with all their applications."
         />
         <div className="mt-6 max-w-2xl rounded-card border border-background-200 bg-background-50 p-6">
-          <StudentDetailsStep initial={draft ?? undefined} busy={creating} error={error} allowStudentWithoutApplication offerInvite={role !== "agent"}
+          <StudentDetailsStep initial={draft ?? undefined} busy={creating} error={error}
             context={role === "slit_admin" ? "admin" : "portal"} emailError={emailError}
             onContinue={(student, existing) => void continueFromStudent(student, existing)}
             cancel={<Link to={paths.list} className={secondary}>Cancel</Link>} />
@@ -478,7 +419,7 @@ export default function NewApplicationPage() {
         <div className="mt-6 flex max-w-2xl items-center justify-between gap-3 rounded-card border border-background-200 bg-background-50 px-4 py-3">
           <span className="min-w-0 text-sm text-foreground-700">
             <span className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Student</span>{" "}
-            <b className="font-medium text-foreground-900">{draft.email}</b> &middot; {formatPhone(draft.mobile)}
+            <b className="font-medium text-foreground-900">{draft.email}</b>
           </span>
         </div>
       ) : null}

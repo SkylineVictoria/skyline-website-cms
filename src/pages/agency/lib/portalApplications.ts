@@ -15,26 +15,26 @@ import type { ApplicationStatus } from "@/pages/agency/lib/portalData";
  */
 
 const draftVersions = new Map<string, number>();
+const wizardSaveStamps = new Map<string, string | null>();
 const draftQueues = new Map<string, Promise<unknown>>();
 if (typeof window !== "undefined") window.addEventListener("portal-scope-changed", () => {
-  draftVersions.clear(); draftQueues.clear();
+  draftVersions.clear(); wizardSaveStamps.clear(); draftQueues.clear();
 });
 export async function flushApplicationEdits(id: string): Promise<void> { await draftQueues.get(id); }
 async function draftCommand(id: string, fn: string, args: Record<string, unknown>): Promise<unknown> {
   const prior = draftQueues.get(id) ?? Promise.resolve();
   const task = prior.catch(() => undefined).then(async () => {
     if (!draftVersions.has(id)) throw new Error("Reload the application before editing.");
-    const { data, error } = await supabase.rpc(fn, { p_application_id: id, p_expected_version: draftVersions.get(id), ...args });
+    const stamp = fn === "portal_wizard_save" ? { p_saved_at: wizardSaveStamps.get(id) ?? null } : {};
+    const { data, error } = await supabase.rpc(fn, { p_application_id: id, p_expected_version: draftVersions.get(id), ...stamp, ...args });
     if (error) throw new Error(error.message);
     draftVersions.set(id, Number(typeof data === "number" ? data : data.draft_version));
+    if (fn === "portal_wizard_save") wizardSaveStamps.set(id, data.saved_at ?? null);
     return data;
   });
   draftQueues.set(id, task);
   return task;
 }
-
-const APP_COLUMNS =
-  "id, reference, status, student_name, student_email, intake, completion, agency_id, assigned_agent_id, created_at, updated_at, submitted_at, is_test";
 
 export interface ApplicationCourseRow {
   courseId: string;
@@ -334,35 +334,22 @@ export interface DocumentRow {
 
 export async function getApplication(id: string, refreshDraftRevision = true): Promise<ApplicationDetail | null> {
   countPortalMetric("applications.detail");
-  const base = `${APP_COLUMNS}, created_by, submitted_by, data, version, draft_version, tenant_id`;
-  let { data, error } = await supabase
-    .from("enrollment_applications")
-    .select(`${base}, student:enrollment_students!enrollment_applications_student_fk(id, details, qualifications)`)
-    .eq("id", id)
-    .maybeSingle();
-  // Before migration 103 the student relation does not exist and every answer is still on the application.
-  if (error && /relationship|enrollment_applications_student_fk/i.test(error.message)) {
-    ({ data, error } = await supabase.from("enrollment_applications").select(base).eq("id", id).maybeSingle());
-  }
+  const { data, error } = await supabase.rpc("portal_wizard_application", { p_application: id });
   if (error) throw new Error(error.message);
   if (!data) return null;
 
   const r = data as Record<string, unknown>;
-  // Student answers live on the student record; the form works on one merged map.
-  const studentRow = (Array.isArray(r.student) ? r.student[0] : r.student) as { id?: string; details?: Record<string, unknown>; qualifications?: unknown } | null | undefined;
-  const rawData = (r.data as Record<string, unknown>) ?? {};
-  const merged: Record<string, unknown> = {
-    ...rawData,
-    values: { ...(studentRow?.details ?? {}), ...((rawData.values as Record<string, unknown> | undefined) ?? {}) },
-  };
-  if (merged.academicQualifications === undefined && Array.isArray(studentRow?.qualifications)) merged.academicQualifications = studentRow.qualifications;
-  if (refreshDraftRevision) draftVersions.set(id, Number(r.draft_version ?? 0));
+  const merged = (r.data as Record<string, unknown>) ?? {};
+  if (refreshDraftRevision) {
+    draftVersions.set(id, Number(r.draft_version ?? 0));
+    wizardSaveStamps.set(id, str(merged.savedAt) || null);
+  }
   const agencyId = str(r.agency_id);
   const [nameMap, agencyMap, courseMap, consents, agentContact] = await Promise.all([
     profileNames([str(r.created_by), str(r.assigned_agent_id), str(r.submitted_by)]),
     fetchAgencyNames([agencyId]),
     fetchCoursesByApplication([id]),
-    listConsents(id),
+    r.status === "draft" ? Promise.resolve([]) : listConsents(id),
     profileContact(str(r.assigned_agent_id)),
   ]);
 
@@ -381,7 +368,7 @@ export async function getApplication(id: string, refreshDraftRevision = true): P
     submittedByName: nameMap.get(str(r.submitted_by)) ?? "",
     studentName: str(r.student_name),
     studentEmail: str(r.student_email),
-    studentId: studentRow?.id ? String(studentRow.id) : null,
+    studentId: str(r.student_id) || null,
     intake: str(r.intake),
     completion: Number(r.completion ?? 0),
     data: merged,
@@ -532,6 +519,44 @@ export async function saveStudent(input: StudentInput): Promise<{ id: string; na
   return { id: str(r.id), name: str(r.name), email: str(r.email), phone: str(r.phone), businessId: str(r.businessId), agentId: r.agentId ? str(r.agentId) : null, reused: Boolean(r.reused) };
 }
 
+/** Creates the student and draft in one transaction. */
+export async function createStudentDraft(email: string, agentId: string, clientKey: string): Promise<string> {
+  const { data, error } = await supabase.rpc("portal_start_student_draft", {
+    p_email: email, p_agent: agentId, p_client_key: clientKey,
+  });
+  if (error) throw new Error(error.message, { cause: error });
+  if (typeof data !== "string") throw new Error("The draft could not be created.");
+  return data;
+}
+
+export async function sendApplicationInvitation(applicationId: string, correctedEmail?: string): Promise<void> {
+  const { error } = await supabase.functions.invoke("student-application-invite", {
+    body: { applicationId, correctedEmail },
+  });
+  if (error) {
+    const detail = error.context instanceof Response ? await error.context.json().catch(() => null) : null;
+    throw new Error(detail?.error ?? "The invitation could not be sent. Try again from Finish Application.");
+  }
+}
+
+export interface WizardSummary {
+  invitationStatus: string;
+  status: string;
+  completion: number;
+  lastSaved: string;
+  lastStep: string | null;
+  updatedBy: string;
+}
+
+export async function getWizardSummary(id: string): Promise<WizardSummary | null> {
+  const { data, error } = await supabase.rpc("portal_wizard_invitation_status", { p_application: id });
+  if (error) throw new Error(error.message);
+  return data as WizardSummary | null;
+}
+
+export const needsInitialWizard = (application: { status: string; submittedAt?: string | null }): boolean =>
+  application.status === "draft" && !application.submittedAt;
+
 /** A new draft application for a student; its business and assigned agent come from the student. */
 export async function createApplicationForStudent(clientKey: string, studentId: string): Promise<{ id: string; reference: string }> {
   const { data, error } = await supabase.rpc("portal_create_student_application", { p_client_key: clientKey, p_student: studentId });
@@ -607,6 +632,10 @@ export interface DraftPatch {
 /** Atomically saves form values while retaining wizard/review metadata under RLS. */
 export async function saveApplicationDraft(id: string, patch: DraftPatch): Promise<void> {
   await draftCommand(id, "portal_save_draft_v2", { p_patch: patch.data });
+}
+
+export async function saveWizardDraft(id: string, patch: Record<string, unknown>): Promise<void> {
+  await draftCommand(id, "portal_wizard_save", { p_patch: patch });
 }
 
 export async function listInstitutionCourses(): Promise<ApplicationCourseRow[]> {

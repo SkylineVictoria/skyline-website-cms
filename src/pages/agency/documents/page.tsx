@@ -3,7 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { getDocumentSignedUrl, listApplicationDocuments, listApplications, type ApplicationListRow, type DocumentRow } from "@/pages/agency/lib/portalApplications";
+import { getDocumentSignedUrl, listApplicationDocuments, listApplications, needsInitialWizard, type ApplicationListRow, type DocumentRow } from "@/pages/agency/lib/portalApplications";
 
 const PdfPages = lazy(() => import("@/components/signing/PdfPages"));
 const size = (bytes: number) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
@@ -20,7 +20,7 @@ export default function PortalDocumentsPage() {
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const applications = await listApplications();
+      const applications = (await listApplications()).filter((application) => !needsInitialWizard(application));
       const perApplication = await Promise.all(applications.map(async (application) => (await listApplicationDocuments(application.id)).map((doc) => ({ ...doc, application }))));
       setApps(applications); setDocs(perApplication.flat());
     } catch (e) { setError(e instanceof Error ? e.message : "We could not load your documents."); }

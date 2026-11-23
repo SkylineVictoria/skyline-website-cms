@@ -54,6 +54,7 @@ export const SCREEN_RULES = [
   "hrms.cover_letter_limit_chars",
   "hrms.job_attachment_limit_mib",
   "hrms.employee_document_max_bytes",
+  "admissions.application_mobile_required",
   "admissions.application_document_limit_mib",
   "admissions.application_document_types",
   "admissions.australian_address_required_fields",

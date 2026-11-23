@@ -27,6 +27,7 @@ import CmsFormPage from "@/pages/form/page";
 import { contentPages } from "@/data/pages";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import AcceptInvitePage from "@/pages/agency/accept-invite/page";
+import ApplicationInvitePage from "@/pages/agency/application-invite/page";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 
 import PortalProviders from "@/pages/agency/components/PortalProviders";
@@ -186,6 +187,7 @@ const routes: RouteObject[] = [
     children: [
       { path: "login", element: <LoginRedirect /> },
       { path: "accept-invite", element: <AcceptInvitePage /> },
+      { path: "application-invite", element: <ApplicationInvitePage /> },
       {
         element: <RequirePortal />,
         children: [

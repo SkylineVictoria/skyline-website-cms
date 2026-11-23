@@ -1,3 +1,4 @@
+import { ruleBool } from "@/lib/businessRules";
 import { useEffect, useState } from "react";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import AddressFields from "@/components/shared/wizard/AddressFields";
@@ -8,7 +9,7 @@ import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 
 const PERSONAL_LABELS: Record<string, string> = {
   title: "Title", gender: "Gender", first_name: "Given name", middle_name: "Middle name", last_name: "Surname", dob: "Date of birth",
-  mobile: "Mobile", email: "Email", nationality: "Nationality", citizenship: "Citizenship", birth_country: "Country of birth",
+  email: "Email", nationality: "Nationality", citizenship: "Citizenship", birth_country: "Country of birth",
   place_of_birth: "Town / city of birth", passport_number: "Passport number", passport_expiry: "Passport expiry",
 };
 const PERSONAL_FIELDS = Object.keys(PERSONAL_LABELS);
@@ -100,11 +101,6 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
             {ask("middle_name") && !prefilled.size ? text("middle_name", "Middle name", { required: false }) : null}
             {ask("last_name") ? text("last_name", "Surname") : null}
             {ask("dob") ? text("dob", "Date of birth", { type: "date" }) : null}
-            {ask("mobile") ? <div>
-              <Label htmlFor="wizard-mobile">Mobile</Label>
-              <PhoneInput key={`mobile-${version}`} id="wizard-mobile" name="mobile" value={v("mobile")} required placeholder="041 234 5678" onValueChange={(e164) => onChange("mobile", e164)} />
-              <FieldError text={errors.mobile} />
-            </div> : null}
             {ask("email") ? text("email", "Email", { type: "email" }) : null}
             {ask("nationality") ? select("nationality", "Nationality") : null}
             {ask("citizenship") ? select("citizenship", "Country of citizenship") : null}
@@ -157,6 +153,11 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
 
       {question.id === "declare" ? (
         <div className="space-y-5">
+          <div>
+            <Label htmlFor="wizard-mobile" required={ruleBool("admissions.application_mobile_required", true)}>Mobile</Label>
+            <PhoneInput key={`mobile-${version}`} id="wizard-mobile" name="mobile" value={v("mobile")} required={ruleBool("admissions.application_mobile_required", true)} placeholder="041 234 5678" onValueChange={(value) => onChange("mobile", value)} />
+            <FieldError text={errors.mobile} />
+          </div>
           <div className="rounded-lg border border-background-200 bg-background-100/60 p-4 text-sm">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
               <dt className="text-foreground-500">Student</dt><dd className="font-medium text-foreground-900">{summary.name || "—"}</dd>

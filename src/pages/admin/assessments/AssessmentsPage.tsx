@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge, Button, Field, Modal, PageHeader, SectionTabs, Select, StatCard, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -11,6 +11,10 @@ import { questionType } from "@/lib/assessment/registry";
 import { asmAdmin, downloadCsv, type AssessmentRow, type AuditRow, type BankRow, type BatchOption, type OutcomeRow, type Overview, type Settings, attemptsRange } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import AttemptDrawer from "./panels/AttemptDrawer";
+import NewAssessmentDialog from "./NewAssessmentDialog";
+import WorkbookHeaderPicker from "@/components/assessment/WorkbookHeaderPicker";
+import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetterhead";
+import { WORKBOOK_HEADER_HINT } from "@/lib/assessment/workbookExport";
 
 const TABS = [
   { id: "library", label: "Library", icon: "ri-book-2-line" }, { id: "submissions", label: "Submissions", icon: "ri-inbox-line" }, { id: "outcomes", label: "Outcomes", icon: "ri-award-line" },
@@ -72,42 +76,8 @@ function Library() {
             {r.archivedAt ? <Badge tone="muted">archived</Badge> : null}
           </li>))}</ul>
       )}
-      {creating ? <CreateDialog courses={courses} templates={(rows ?? []).filter((r) => r.isTemplate || r.currentVersionNo)} onClose={() => setCreating(false)} onCreated={(id) => navigate(`/admin/assessments/${id}`)} /> : null}
+      {creating ? <NewAssessmentDialog courses={courses} onClose={() => setCreating(false)} onSaved={(id) => { setCreating(false); navigate(`/admin/assessments/${id}`); }} /> : null}
     </div>
-  );
-}
-
-export function CreateDialog({ courses, templates, onClose, onCreated }: { courses: RtoCourse[]; templates: AssessmentRow[]; onClose: () => void; onCreated: (id: string) => void }) {
-  const [courseId, setCourseId] = useState(courses[0]?.id ?? ""); const [unitId, setUnitId] = useState(""); const [title, setTitle] = useState(""); const [code, setCode] = useState(""); const [description, setDescription] = useState("");
-  const [source, setSource] = useState<"blank" | "clone" | "import">("blank"); const [fromId, setFromId] = useState(""); const [importText, setImportText] = useState("");
-  const [units, setUnits] = useState<{ id: string; code: string; name: string }[]>([]); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
-  useEffect(() => { if (!courseId) return; rto<CourseDetail>("course_get", { courseId }).then((c) => setUnits(c.units.filter((u) => u.isActive).map((u) => ({ id: u.id ?? "", code: u.code, name: u.name })))).catch(() => setUnits([])); }, [courseId]);
-  const create = async () => {
-    setBusy(true); setError("");
-    try {
-      let imported: unknown;
-      if (source === "import") { try { imported = JSON.parse(importText); } catch { setError("That is not valid JSON."); setBusy(false); return; } }
-      const out = await asmAdmin<{ id?: string; ok?: boolean; errors?: { message: string }[] }>("assessment_create", { courseId, unitId: unitId || null, title: title || (imported as { title?: string } | undefined)?.title, code: code || null, description, fromAssessmentId: source === "clone" ? fromId : undefined, import: source === "import" ? imported : undefined });
-      if (out.ok === false) { setError(out.errors?.map((e) => e.message).join(" ") ?? "Not created."); return; }
-      if (out.id) onCreated(out.id);
-    } catch (e) { setError(fail(e)); } finally { setBusy(false); }
-  };
-  return (
-    <Modal open title="New assessment" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !courseId || (!title && source !== "import") || (source === "clone" && !fromId)} onClick={() => void create()}>Create</Button></>}>
-      <div className="space-y-3">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Course" required><Select value={courseId} onChange={(e) => { setCourseId(e.target.value); setUnitId(""); }}>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</Select></Field>
-          <Field label="Unit of competency"><Select value={unitId} onChange={(e) => setUnitId(e.target.value)}><option value="">Choose later</option>{units.map((u) => <option key={u.id} value={u.id}>{u.code} {u.name}</option>)}</Select></Field>
-          <Field label="Title" required><TextInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Work safely: knowledge and practical" /></Field>
-          <Field label="Code"><TextInput value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. CPCCWHS2001-A1" /></Field>
-        </div>
-        <Field label="Description for students"><TextArea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
-        <Field label="Start from"><Select value={source} onChange={(e) => setSource(e.target.value as typeof source)}><option value="blank">Blank</option><option value="clone">A copy of an existing assessment or template</option><option value="import">A JSON export</option></Select></Field>
-        {source === "clone" ? <Field label="Copy from"><Select value={fromId} onChange={(e) => setFromId(e.target.value)}><option value="">Choose…</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.isTemplate ? "[Template] " : ""}{t.title} ({t.courseName})</option>)}</Select></Field> : null}
-        {source === "import" ? <Field label="Paste the JSON export" hint="Keys and mappings in the file are restored; mapped elements are created on the unit by code."><TextArea rows={6} value={importText} onChange={(e) => setImportText(e.target.value)} /></Field> : null}
-        {error ? <p className="text-sm text-primary-700" role="alert">{error}</p> : null}
-      </div>
-    </Modal>
   );
 }
 
@@ -129,10 +99,10 @@ export function Submissions() {
   const load = useCallback(() => asmAdmin<Overview>("overview", { batchId: batchId || undefined }).then(v => { setOv(v); setError(""); }).catch((e) => setError(fail(e))), [batchId]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void asmAdmin<BatchOption[]>("batch_list", { includeInactive: true }).then(setBatches).catch(e => setError(fail(e))); }, []);
-  const courses = Array.from(new Map(batches.map(b => [b.courseId, { id: b.courseId, name: b.courseName }])).values());
-  const intakes = Array.from(new Map(batches.filter(b => b.courseId === courseId).map(b => [b.intakeId, { id: b.intakeId, name: b.intake }])).values());
-  useEffect(() => { setCourseId(old => courses.some(c => c.id === old) ? old : courses[0]?.id ?? ""); }, [batches]);
-  useEffect(() => { setIntakeId(old => intakes.some(i => i.id === old) ? old : intakes[0]?.id ?? ""); }, [courseId, batches]);
+  const courses = useMemo(() => Array.from(new Map(batches.map(b => [b.courseId, { id: b.courseId, name: b.courseName }])).values()), [batches]);
+  const intakes = useMemo(() => Array.from(new Map(batches.filter(b => b.courseId === courseId).map(b => [b.intakeId, { id: b.intakeId, name: b.intake }])).values()), [batches, courseId]);
+  useEffect(() => { setCourseId(old => courses.some(c => c.id === old) ? old : courses[0]?.id ?? ""); }, [courses]);
+  useEffect(() => { setIntakeId(old => intakes.some(i => i.id === old) ? old : intakes[0]?.id ?? ""); }, [intakes]);
   const pending = ov?.pendingMarking ?? [];
   const units = Array.from(new Set(pending.map(p => p.unitCode).filter((x): x is string => !!x)));
   const assessmentTitles = Array.from(new Set(pending.filter(p => !unitCode || p.unitCode === unitCode).map(p => p.assessmentTitle)));
@@ -262,6 +232,7 @@ function Reports() {
 
 function SettingsTab() {
   const { push } = useToast();
+  const { head, setting } = useWorkbookLetterhead();
   const [s, setS] = useState<Settings | null>(null); const [error, setError] = useState("");
   useEffect(() => { void asmAdmin<Settings>("settings_get").then(setS).catch((e) => setError(fail(e))); }, []);
   if (error) return <ErrorNote text={error} />;
@@ -284,6 +255,10 @@ function SettingsTab() {
       <Field label="Instructions shown on every assessment"><TextArea rows={3} value={s.instructions} onChange={(e) => setS({ ...s, instructions: e.target.value })} /></Field>
       <Field label="Allowed evidence types (MIME, one per line)"><TextArea rows={4} value={s.evidence_allowed_types.join("\n")} onChange={(e) => setS({ ...s, evidence_allowed_types: e.target.value.split("\n").map((x) => x.trim()).filter(Boolean) })} /></Field>
       <Button icon="ri-save-line" onClick={() => void save()}>Save settings</Button>
+      {/* ASM-HEADER: the workbook header picture (saved on its own, at once) */}
+      {setting?.available === false
+        ? <p className="rounded-md border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-700" role="note"><strong>Workbook header</strong>: available once migration 20261123235917 is applied. Until then workbooks use the Skyline logo. Recommended picture: {WORKBOOK_HEADER_HINT}.</p>
+        : <WorkbookHeaderPicker head={head} current={setting?.url ?? null} onSaved={() => push("Workbook header saved.")} />}
     </div>
   );
 }

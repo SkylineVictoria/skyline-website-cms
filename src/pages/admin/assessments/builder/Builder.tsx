@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge, Button, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { Empty } from "@/pages/admin/components/rto/overlay";
 import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
-import { cloneQuestion, cloneSection, cloneTask, earlierQuestionIds, moveItem, newSection, newTask, removeQuestion, updateQuestion } from "@/lib/assessment/definition";
+import { cloneQuestion, cloneSection, cloneTask, earlierQuestionIds, flattenQuestions, moveItem, newSection, newTask, removeQuestion, updateQuestion } from "@/lib/assessment/definition";
 import { GROUP_LABEL, isAnswerable, newQuestion, QUESTION_TYPES, questionType, setQuestionDefaults, withSchema, type TypeGroup } from "@/lib/assessment/registry";
 import { onRules, ruleNumber, ruleObject } from "@/lib/businessRules";
 import type { Definition, Question, QuestionKey, Section, Task } from "@/lib/assessment/types";
@@ -87,6 +87,7 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
           <div className="flex gap-2"><Button size="sm" variant="outline" icon="ri-eye-line" onClick={() => setPreview(true)}>Preview</Button>{!readOnly ? <Button size="sm" icon="ri-add-line" onClick={() => { const t = newTask(`Task ${definition.tasks.length + 1}`); setDef({ ...definition, tasks: [...definition.tasks, t] }); setSel({ kind: "task", taskId: t.id }); }}>Add task</Button> : null}</div>
         </div>
         {definition.tasks.length === 0 ? <Empty icon="ri-file-list-3-line" title="No tasks yet" text="An assessment is tasks, each with sections of questions. Add the first task." /> : null}
+        {(() => { const flagged = flattenQuestions(definition).filter((f) => f.question.importMeta?.confidence === "low"); return flagged.length ? <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status"><i className="ri-error-warning-line mr-1.5" aria-hidden="true" />{flagged.length} imported question{flagged.length === 1 ? "" : "s"} marked <strong>check this</strong>: open each one, fix it and press Checked. <button type="button" className="underline" onClick={() => setSel({ kind: "question", questionId: flagged[0].question.id })}>Go to the first</button></p> : null; })()}
         <TaskList definition={definition} sel={sel} setSel={setSel} readOnly={readOnly} onMoveTask={(f, t) => setDef({ ...definition, tasks: moveItem(definition.tasks, f, t) })}
           onMoveSection={(taskId, f, t) => patchTask(taskId, { sections: moveItem(definition.tasks.find((x) => x.id === taskId)!.sections, f, t) })}
           onMoveQuestion={(taskId, sectionId, f, t) => patchSection(taskId, sectionId, { questions: moveItem(definition.tasks.find((x) => x.id === taskId)!.sections.find((s) => s.id === sectionId)!.questions, f, t) })}
@@ -197,7 +198,7 @@ function QuestionList({ task, section, questions, parentId, depth, ...p }: TaskL
         const type = questionType(q.type); const answerable = isAnswerable(q); if (answerable && !depth) n += 1;
         const selected = p.sel?.kind === "question" && p.sel.questionId === q.id;
         return (
-          <li key={q.id} {...list.itemProps(qi)} className={`rounded-md border bg-background-50 ${selected ? "border-primary-400" : "border-background-200"} ${list.itemProps(qi).className}`}>
+          <li key={q.id} {...list.itemProps(qi)} className={`rounded-md border ${q.importMeta?.confidence === "low" ? "bg-amber-50" : "bg-background-50"} ${selected ? "border-primary-400" : q.importMeta?.confidence === "low" ? "border-amber-300" : "border-background-200"} ${list.itemProps(qi).className}`}>
             <div className="flex items-center gap-1 px-2 py-1.5">
               {!p.readOnly ? <DragHandle {...list.handleProps(qi)} /> : null}
               <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => p.setSel({ kind: "question", questionId: q.id })}>
@@ -206,6 +207,9 @@ function QuestionList({ task, section, questions, parentId, depth, ...p }: TaskL
                 {q.required ? <span className="text-primary-600">*</span> : null}
                 {q.showIf ? <i className="ri-git-branch-line text-foreground-400" title="Conditional" aria-hidden="true" /> : null}
                 {q.assessorOnly || type?.assessorOnly ? <Badge tone="muted">assessor</Badge> : null}
+                {q.config?.allowAttachment === true ? <i className="ri-attachment-2 text-foreground-400" title="The student can attach files" aria-hidden="true" /> : null}
+                {q.importMeta?.page ? <span className="shrink-0 text-[11px] text-foreground-500" title="Page in the imported workbook">p.{q.importMeta.page}</span> : null}
+                {q.importMeta?.confidence === "low" ? <Badge tone="warn">check this</Badge> : null}
               </button>
               {!p.readOnly ? <><UpDown index={qi} length={questions.length} onMove={(f, t) => (parentId ? p.onMoveChild(parentId, f, t) : p.onMoveQuestion(task.id, section.id, f, t))} /><Button size="sm" variant="ghost" icon="ri-file-copy-line" aria-label="Duplicate question" onClick={() => p.onDuplicateQuestion(task.id, section.id, q)} /><Button size="sm" variant="ghost" icon="ri-delete-bin-line" aria-label="Delete question" onClick={() => p.onDeleteQuestion(q.id)} /></> : null}
             </div>

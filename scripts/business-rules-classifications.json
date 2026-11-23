@@ -539,5 +539,139 @@
     "fingerprints": [
       "ecbc528b2be57e69da63023087c3fed762d6cf8e070291f32644c2eafd8e8ad7"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-workbook-ui",
+    "reason": "Assessment wizard and page presentation: component props, styling class names, labels and loading states; no operational decision.",
+    "fingerprints": [
+      "2f3ecbd372c025c9d84483ecf8c354026a17645f1de94d3ba3f6e242db8e99e9",
+      "92fd64e17d2e20b8269dbad9883b05fab4b4e4e4a77d167427e68727a2ae8eb9",
+      "ec1a3aab1a8bce4324d4c8cba41dc4317b1caa1325a83aac7d4c4bf87aaa812b",
+      "902ac2664ef16143eb128b6fa2786012f4263848eb78e30a636c2da6828de3f1",
+      "f6c83a4e3746263713677cfff6ab3f6a27c06790824387f7f13c234dd6619192",
+      "99ba46b25bfdc66d2adba310bd2ab167f79e1e10abd8cc19fb9347a4419679f1",
+      "b5a3ed4574f7fbf8658a1246714e4bec74fdb3a92acbd087f8e850f1290f45ba",
+      "71d3da74c5035b9472a9b3a53a3954fb40ba9c3c494918d398e00d5e44d3667b",
+      "d69ae2e96d082f472dc49f26c5fed8391801585d75515ce6896eb9fd8c81a773",
+      "fcf9501ee03c4cf6e243cf762efcb7d3c4220d700f3b6af374480d4fe3c65e56",
+      "48d5eb4397cdfe2fcce8dece58297bc87c9947dae09af5a933981e4a91f14805",
+      "3979249250be7170e071d7d0f5153574b33477ed3b5e40e8ecf1f1871181377b",
+      "e006eadccd9fd78a4a0fa97cc7ab826be0b451d85b254df33c8d6c73e74e44d2",
+      "b98c4092d9ce1e0da15d31c663b7a70487f1436d459897e523fea039239c2af4",
+      "276d4ea961d6f5f06a2ebfd10e64ceadbb58a64ef1f71bc4bb380b4b520bace7",
+      "e35b44bf3592854b55b65c420b50b1b98c5494cb1459f8ca726ba767d758cde4",
+      "3d47c34ce41037afc29637dd26aa00876757ab2b966cfb0246db76c6b6b3cb1a",
+      "6fc2830739a96dbb8f868d0c8c309b0104ccf89d27ab9d0764a0f61bfd678d98",
+      "39005eddbe88a5f15a4356cb0e4001f1a006cef5f524d8a47752777fecb45de1",
+      "5ea16b02792ac26fa2a29de34cb767e0702c8e0e382d66bfb51815539a0d4a9b",
+      "add39927366b088611b359fdaf733639d510a3ce2663eca3e76f4cedb827bb9f",
+      "bbc10c2d77bb6e048fad604c9c36ee33763a55f80a80ee23084500dde69803aa",
+      "031a95d22c6dab01328ead13e5b25a02466d09ed32157846149dfbcc17b81cd7",
+      "abcbeb795897e6e8389c68ab4a56d076189491a05bae19de3ef9eaf60dad5859",
+      "7104cf42fb99ef1706843249409529ebe1d0375a1c55b79af130826d0a043ec8",
+      "164dceac339a716a02b0e9a6a423ab531f1e1aea96ec7f31e83a286fe0f930e9",
+      "73466d9da48d4a58e410f8d58de0c53f6e785c7eb7beceb6feb47f3c82a5f85d",
+      "a0cf3bd08630a79a6eaf183f1b2c9935e6e69193ba54d722312b187a8057165a",
+      "4bb6442fd1a9b48607ff20e984ac74dc0c34c169edff8c4b49f0c31830994b49",
+      "41b836e0e0e9cf183b21296d16beb683e3cd3829f8a2f85eb31d2691b8d3bd38"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-workbook-layout",
+    "reason": "Layout of the student workbook and its PDF (cover, header picture size limit, answer boxes, the form's three attempt columns); the number of attempts allowed stays in the attempts Business Rule.",
+    "fingerprints": [
+      "53a12e2eee815ab1dfb190af3fd05c8c4a241803fa02e5bda2ed21889b0d92d4",
+      "873cfe0847e6de2011dbc3d2c4e0fb4128bd8945accf3db14b859781888e49ab",
+      "7e47cbfe2f116b9aa486e84300cbbcf75c48b52450df539deb418a626263c5ef",
+      "f6061ac6d0c1c3b07648de07cde4c1ec7125507984c9bd6eae7e8a5cb248c6c1",
+      "d0829f72e1cb15a884bdd6cb792c608a667ca1ff37bd477339e37f8fb971ebf2",
+      "496e6a338d483b94348ae78d4f41cdd847e78b4e74d3569694efca2f993efda4",
+      "3384ae591695a8bbc00197baf5c9e25c76c38457f0cd6c2d9230579e9c8ab84a",
+      "9c840b3f5fdaace7cfe43fb7c0f7ba2031581af5cc3daec56109e610832433e5",
+      "8be243e585bd3017073ad84344696b9faf6caaac8b11ab80f6c79f01352bd416",
+      "eb80996b311ba02191865273457d8259676f10526f0d44023f0ccb2b911e8f77",
+      "5cdea15ae6832929e7828a4f78e389be13c3a72dfd22a3d4be2fd3d49f4a65f6",
+      "1bddd884ccf0157ebbd450e5f12cd53af5c46916a5ef83fc02c0f83e3f89cb0a"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-question-editor-defaults",
+    "reason": "Starting values of a new question and its attachment settings, edited per question by the admin; the institution's evidence size and type limits are enforced by the server from its settings.",
+    "fingerprints": [
+      "179e4abc5b0eaef8593f4e15a332b7e154ce05489f980e9439f6883a1e1b74b1",
+      "34e15f75c4591981a4ee53e12b3512af20d83464023b17ac7a576961c5ceb694",
+      "7df83160e7a67c33242a7179c4d20595b7d4ee4bf0aa3c3112d106035dbbaa2a",
+      "615bc841373c4072b19477ea32e3b8463332070314e91580b94edb502bfaa1af",
+      "8b90e6f5e8d8635e0fbdd61f78a1d579a81161d90c1f8b68f36ae93dec45ee38",
+      "7cc3e8d2c4707c2a9d08b7c187300ad0c74dca2677647a8c2049e85a4de9c0c1",
+      "b3f2c96b021a267b2804bda7af098e6163d2a7fa1c7798e81c5a05310ab4261b",
+      "a1e628753e304836f43adf506523fb214a042bfbf14cfb752e3473094c2095c3",
+      "a191a805dba6abdb855827668fabdeeb308159edf3ccc082f5ac7698760c225e",
+      "b2562149190b59849826a5e5c21545ce964754c0defc80965cff62143ac39692",
+      "8437cdb8feea51c92d80087ecfb79b268073378f8c9dfeeba0c2b658bf5ea295",
+      "8cac1a5585a6833837581fbb634a004df50f835546964b371384c5a90f25de5d",
+      "35c45fdad75d0d9baf456e008b66adb3bab558ae61a4c37604db4179b987df89",
+      "5086d235d655621e850e9e25e943ef4909cf574d4e305d2f1c301cfd5525f175",
+      "ae7ca02d30ea298985f23a7eebaf451628d68c4c68d3bf88ae885cf38822fc30",
+      "0c36579f3a9974a6f270806e3394796c00f4cd475e967739cb72b3b54b5a6397",
+      "7a4c22184b541405ab9f0c650945db914bc14c93a01337ebefc3c9568ce9a162",
+      "9f71ac94a83298d388a61eb6f5d3fa37d932d4ce70fd95c557f5a277e3ce1c6d"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-workbook-import",
+    "reason": "Workbook import heuristics (repeated headers, picture sizes, question mapping) that build a draft the admin reviews and edits before it is saved; not operational policy.",
+    "fingerprints": [
+      "8e252a7727b3261b813f4b884e573c6d361d6395f20d972b5d50c20943946fde",
+      "876800174de4bc768898b53b2b3dbf923b860a25d197167c154ab2409053d75c",
+      "c526a5e97e550acfda27a800bce1bee69fba133c8f928e7d5ea0b1edcf26a822",
+      "1ce2c5a9d022be4b6d64b5c5823755f6afa71916a115d7b4cdc8171ad33ead97",
+      "fbab8d3d45d948175dbe05bc353a36e162fcd4952a5c73d77e3f8234a5cc8ac3",
+      "af97723470e7f37dab11c886d2911ab9cda7ac1b0a9d7c97d1a52cddba7da8f6",
+      "2ab9fe699cf28dfb8664dbfb64ac2d73ad48642340f14e17201d1b24da628e0f",
+      "88c7fdd57d89a0b34255efc35d89f6ade91fbfa398f5842caa1ec46e9b558539",
+      "bc245ee151d16d3d83f109be0708b61732e0cecc2c59b7be7788f37d2694fd84",
+      "86babb11781cb51bf1022a536cf1d2b4ee1c47ac35ebc92ad163ee6efb043e38",
+      "ff7080af59e45b291de060131d32e43c97006f855ed589dad4b76499fd0b1f4b",
+      "bb324631e97fd2ca06ec1acee4c274a820141b15d4f3354707bf04788d30095c",
+      "455aa006d962e7d37ccdfa6ced3cb0e108b2f1fe3f0f0f50538a1f9859eb8ffb",
+      "a7acefe4b375818455a39f8f56a2be139c431223ab5dd4493e66f0c3856a7edf",
+      "fd44dbac41a2655e94d41d37fcabebc21d3b20456cff3fa5eef52171322f5bb0",
+      "05929985c0523b16de45bed30e71553efa5a3da2d77786befe50f8eaf73b048e",
+      "eab834a81724029ed872f90b69c5ee822fdda5181aa132995840acb8616192f0",
+      "d2816b09dc5b5743f9bea359074e283c6940cc3099324ecd398eac3c6ba1ecb1",
+      "7964eefe891a491c0ff69f01fd013e2fe9174051331bc3cc748a06719258f858",
+      "3c7d5fb942e5b55038c6aaa40b24bcdd7f6156ad32983da02ab917146de16964",
+      "7510b83feabb3a40727a2ad1edfa6278412601542ae5e713680165aba8201731",
+      "bed1c26833e06e9e8ecbe436d428feb2e6920fd2fa598fbf937b5d248c8a9abc",
+      "487f2e7ccddfa8b3ab8f4db59295fcd40e25d25fc3f0569332cb07eb3cda5855",
+      "d09683b50d87def7c8d6d79e8dababecf58088d8ba389793c93901fc27efab84"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-existing-rule-reads",
+    "reason": "Reads the published Business Rules assessment.attempts_default and assessment.reassessment_window_default through ruleNumber; the literal is only the rule engine's fallback, not a new rule.",
+    "fingerprints": [
+      "ef7412865739d87ac177adc33f06de118ad696efec918e43c99e494a9159c3ae",
+      "36654ba9226cec8f4a627abed1d660456d32351de143a1d5423b74afc7686902",
+      "2031a9cb45ccb157f6f96298cfcb4957d43ff961de4a1417934359d46f62b465"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-db-helpers",
+    "reason": "Assessment database helpers: a display-name lookup for the results sheet and the start of an attempt through the existing asm_next_attempt / asm_due_for (due dates and attempt limits stay in those rules).",
+    "fingerprints": [
+      "bb84c5983f96dddbb6af3ad06c98e79e7b1243580e857d2a228fdd20b76066e3",
+      "e2b7f9e05c8c583c51952a4dd8863bdc24469bff07e1cc48b0e21fee61130e41",
+      "0e63386c4676cd489716140f131d7e676437ceff7201ded322868a68eca9fd71",
+      "19885811efed583c3ff3955d4c3c8c85268c3e68d5f12e5f0597154b002e4c06",
+      "72bf7c2ed4f6e381d8de102a556f729133a4202f3161cc4a66d9feeae41e90b7"
+    ]
   }
 ]

@@ -24,6 +24,8 @@ export interface QuestionType {
   content?: boolean;
   /** Completed by the assessor, never the student. */
   assessorOnly?: boolean;
+  /** New questions of this type are not required (a record filled in only when it applies). */
+  optional?: boolean;
   hasChildren?: boolean;
   markingModes: MarkingMode[];
   defaultMarkingMode: MarkingMode;
@@ -32,6 +34,17 @@ export interface QuestionType {
   /** The response schema written into the definition for the given config (the database validates with it). */
   responseSchema: (config: Record<string, unknown>) => ResponseSchema | undefined;
 }
+
+/** The SLIT workbook's Reasonable Adjustment Strategies Matrix (Appendix A): the defaults of a new adjustment record. */
+export const ADJUSTMENT_CATEGORIES = ["LLN (language, literacy, numeracy)", "Non-English speaking background", "Indigenous – knowledge and understanding", "Age – educational background", "Educational background", "Disability", "Carer responsibilities", "Cultural or religious obligations"];
+export const ADJUSTMENT_STRATEGIES = [
+  "Verbal assessment", "Presentations", "Demonstration of a skill", "Use of diagrams", "Use of supporting documents such as wordlists",
+  "Read printed information to the student", "Clarify information by rephrasing, confirm understanding", "Write down, or have someone else write, oral responses given by the student",
+  "Extra time to complete the assessment", "Culturally appropriate training", "Oral assessment of concepts and practical application", "Flexible delivery",
+  "Group rather than individual assessment", "Practical tasks in the field after demonstration of skills", "Larger font / accessible format of materials",
+  "Specialised equipment or services (e.g. a note-taker)", "Changes to course design (e.g. substituting an assessment task)",
+];
+export const ADJUSTMENT_DECLARATION = "I declare that I have attached all relevant evidence to provide reasonable adjustment. The training package guidelines and criteria have not been compromised in the process of providing reasonable adjustment to the student. I declare that I have conducted a fair, valid, reliable and flexible assessment. I have provided explanation of reasonable adjustments in the assessment.";
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 const optionIds = (config: Record<string, unknown>): string[] => ((config.options as Option[] | undefined) ?? []).map((o) => o.id);
@@ -142,6 +155,14 @@ export const QUESTION_TYPES: QuestionType[] = [
     responseSchema: (c) => ({ type: "object", requiredKeys: ((c.items as ChecklistItem[] | undefined) ?? []).map((i) => i.id) }),
   },
   {
+    // ASM-WORKBOOK item 7: the workbook's "Appendix A – Reasonable Adjustments", recorded by the trainer / assessor per attempt
+    id: "adjustment_record", label: "Reasonable adjustment record", icon: "ri-hand-heart-line", group: "assessor", assessorOnly: true, optional: true,
+    hint: "Appendix A: whether reasonable adjustments were applied, where, the category and strategies used, signed by the trainer / assessor.",
+    markingModes: ["none"], defaultMarkingMode: "none", keyKind: "none",
+    defaultConfig: { intro: "", categories: ADJUSTMENT_CATEGORIES, strategies: ADJUSTMENT_STRATEGIES, declaration: ADJUSTMENT_DECLARATION },
+    responseSchema: () => ({ type: "object" }),
+  },
+  {
     id: "third_party_report", label: "Third-party report", icon: "ri-user-voice-line", group: "assessor", assessorOnly: true, hint: "A supervisor's or employer's report recorded by the assessor.",
     markingModes: ["observation", "none"], defaultMarkingMode: "observation", keyKind: "none",
     defaultConfig: { fields: [{ id: "name", label: "Reporter name" }, { id: "role", label: "Reporter role" }, { id: "report", label: "Report" }] },
@@ -153,6 +174,25 @@ export const QUESTION_TYPES: QuestionType[] = [
     defaultConfig: { text: "" }, responseSchema: () => ({ type: "object", requiredKeys: ["agreed", "signature"] }),
   },
 ];
+
+/**
+ * "Attach image / file" under the answer of any answerable question (ASM-IMPORT). The answer itself is unchanged (the schema above
+ * still validates it); the files are evidence rows (`asm_evidence_files`) carrying the question id. `file_upload` stays the
+ * upload-only type; containers (case study, repeating group) let their children attach; assessor records and the declaration do not.
+ */
+export const ATTACHMENT_DEFAULTS = { allowAttachment: false, attachmentMaxFiles: 3, attachmentMaxMb: 25, attachmentAccept: ["image/jpeg", "image/png", "application/pdf"] as string[] };
+const NO_ATTACHMENT = new Set(["instruction", "content", "file_upload", "case_study", "repeating_group", "observation_checklist", "third_party_report", "adjustment_record", "declaration"]);
+for (const t of QUESTION_TYPES) if (!NO_ATTACHMENT.has(t.id)) t.defaultConfig = { ...t.defaultConfig, ...ATTACHMENT_DEFAULTS, attachmentAccept: [...ATTACHMENT_DEFAULTS.attachmentAccept] };
+/** Whether the type can carry an attachment at all (the builder shows the toggle). */
+export const attachmentCapable = (typeId: string) => !NO_ATTACHMENT.has(typeId) && Boolean(QUESTION_TYPES.find((t) => t.id === typeId));
+export interface AttachmentSettings { maxFiles: number; maxMb: number; accept: string[] }
+/** The question's attachment settings, or null when it takes none. */
+export function attachmentSettings(q: Question): AttachmentSettings | null {
+  const c = q.config ?? {};
+  if (!attachmentCapable(q.type) || c.allowAttachment !== true || q.assessorOnly) return null;
+  const n = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : d);
+  return { maxFiles: n(c.attachmentMaxFiles, ATTACHMENT_DEFAULTS.attachmentMaxFiles), maxMb: n(c.attachmentMaxMb, ATTACHMENT_DEFAULTS.attachmentMaxMb), accept: Array.isArray(c.attachmentAccept) ? (c.attachmentAccept as unknown[]).filter((x): x is string => typeof x === "string") : [] };
+}
 
 export const TYPE_BY_ID: Record<string, QuestionType> = Object.fromEntries(QUESTION_TYPES.map((t) => [t.id, t]));
 export const questionType = (id: string): QuestionType | undefined => TYPE_BY_ID[id];
@@ -175,7 +215,7 @@ export function newId(prefix = "q"): string {
 export function newQuestion(typeId: string): Question {
   const t = TYPE_BY_ID[typeId] ?? TYPE_BY_ID.short_answer;
   const q: Question = {
-    id: newId("q"), type: t.id, label: t.content ? "" : "New question", required: !t.content && t.id !== "likert",
+    id: newId("q"), type: t.id, label: t.content ? "" : "New question", required: !t.content && !t.optional && t.id !== "likert",
     markingMode: t.defaultMarkingMode, config: structuredClone(t.defaultConfig),
   };
   if (t.assessorOnly) q.assessorOnly = true;

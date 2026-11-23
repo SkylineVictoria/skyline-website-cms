@@ -94,6 +94,21 @@ const EXCLUDE = "studio,imgproxy,logflare,vector,supavisor,realtime,postgres-met
 
 // LAB ONLY stand-ins for hosted state the repo cannot replay (file name = position in the migration order). Never shipped.
 const LAB_SHIMS = {
+  // intake_group_name / intake_has_group exist on hosted (made while batches became intakes, 2026-11-19) but no repo migration
+  // defines them, and 20261119223000 uses them in SQL functions (checked at creation). LAB STAND-INS, not the hosted bodies:
+  // the group's name is the intake's label, else its start date; an active intake is a group.
+  // public.hr_staff_document_add exists on hosted only (no repo migration, nothing in the app calls it); 20261121000517 patches
+  // its "Academic" test. LAB STAND-IN with the same signature and that text, so the patch applies; it refuses every call.
+  "20261121000516_lab_shim_hr_staff_document_add.sql": `create or replace function public.hr_staff_document_add(p_profile text, p_category text, p_title text, p_path text, p_bytes integer, p_expires date, p_replaces uuid) returns void
+language plpgsql as $$ begin if p_category = 'Academic' then null; end if; raise exception 'lab stand-in: hr_staff_document_add is not in the repo'; end $$;
+`,
+  "20261119222959_lab_shim_intake_group_functions.sql": `create or replace function public.intake_group_name(p uuid) returns text
+language sql stable security definer set search_path = public as $$
+ select coalesce(nullif(btrim(i.label), ''), to_char(i.start_date, 'DD Mon YYYY')) from public.course_intakes i where i.id = p $$;
+create or replace function public.intake_has_group(p uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+ select coalesce((select i.is_active from public.course_intakes i where i.id = p), false) $$;
+`,
   // 20261102094611 references public.student_profiles(id), a hosted table that no repo migration creates;
   // 20261112035802 (one email = one person) reads and guards its email column.
   "00000000000000_lab_shim_student_profiles.sql":
@@ -216,8 +231,15 @@ async function up() {
   // Hosted applied these files one by one, so the repo files stay as they are.
   const LAB_TWEAKS = { "20261118023417_agent_agreement_required.sql": [["create function pg_temp.patch(", "create or replace function pg_temp.patch("]] };
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
-    let text = fs.readFileSync(path.join(REPO, "supabase", "migrations", file), "utf8");
+    // Line ends, lab copy only: hosted function bodies are CRLF (Windows `db push`) or LF (SQL editor / MCP), and each in-place
+    // patch anchors on what hosted had (20261118234157 spells E'...\r\n...', 20261120063419 E'\n...', 20261119003517 a literal
+    // multi-line string). The lab makes every file LF, and in files that patch function definitions turns the escape \r\n into
+    // \n, so every body and every anchor is LF and they agree.
+    let text = fs.readFileSync(path.join(REPO, "supabase", "migrations", file), "utf8").replace(/\r\n/g, "\n");
+    if (/pg_get_functiondef|prosrc/.test(text)) text = text.replaceAll("\\r\\n", "\\n");
     for (const [from, to] of LAB_TWEAKS[file] ?? []) text = text.replace(from, to);
+    // Files applied by hand in the SQL editor record their own version (20261119211500 and later); the CLI records it too.
+    text = text.replace(/insert into supabase_migrations\.schema_migrations\s*\([^)]*\)\s*values\s*\([\s\S]*?\)\s*on conflict do nothing;/gi, "-- (lab) the file's own schema_migrations row is left to the CLI");
     // Every later file that makes a pg_temp helper too (20261118041529, ...): the same one-session clash, the same lab-only answer.
     text = text.replaceAll("create function pg_temp.", "create or replace function pg_temp.");    fs.writeFileSync(path.join(migrations, HOSTED_LATER[file] ?? file), text);
   }

@@ -1,8 +1,29 @@
 import { Badge, Button, Field, Select, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
-import { typeUi } from "@/components/assessment/registry";
-import { MARKING_LABEL, newId, questionType } from "@/lib/assessment/registry";
+import { ContentLinksEditor, typeUi } from "@/components/assessment/registry";
+import { ATTACHMENT_DEFAULTS, attachmentCapable, MARKING_LABEL, newId, questionType } from "@/lib/assessment/registry";
 import type { Question, QuestionKey } from "@/lib/assessment/types";
 import ConditionEditor from "./ConditionEditor";
+
+/** "Student can attach images / files under the answer" (config.allowAttachment) with its limits. */
+function AttachmentEditor({ q, onChange }: { q: Question; onChange: (patch: Partial<Question>) => void }) {
+  const c = q.config ?? {};
+  const on = c.allowAttachment === true;
+  const set = (patch: Record<string, unknown>) => onChange({ config: { ...ATTACHMENT_DEFAULTS, ...c, ...patch } });
+  const accept = Array.isArray(c.attachmentAccept) ? (c.attachmentAccept as string[]) : ATTACHMENT_DEFAULTS.attachmentAccept;
+  return (
+    <div className="rounded-md border border-background-200 p-3">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-foreground-500">Attachments</p>
+      <Toggle label="The student can attach images or files under the answer" checked={on} onChange={(v) => set({ allowAttachment: v })} />
+      {on ? (
+        <div className="mt-3 grid gap-3 md:grid-cols-3">
+          <Field label="Most files"><TextInput type="number" min={1} value={String(c.attachmentMaxFiles ?? ATTACHMENT_DEFAULTS.attachmentMaxFiles)} onChange={(e) => set({ attachmentMaxFiles: Math.max(1, Number(e.target.value) || 1) })} /></Field>
+          <Field label="Max MB each"><TextInput type="number" min={1} value={String(c.attachmentMaxMb ?? ATTACHMENT_DEFAULTS.attachmentMaxMb)} onChange={(e) => set({ attachmentMaxMb: Math.max(1, Number(e.target.value) || 1) })} /></Field>
+          <Field label="Allowed types (MIME, one per line; empty = any)"><TextArea rows={3} value={accept.join("\n")} onChange={(e) => set({ attachmentAccept: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) })} /></Field>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export interface QuestionEditorProps {
   q: Question;
@@ -12,30 +33,46 @@ export interface QuestionEditorProps {
   keyRow: QuestionKey | undefined;
   onKeyChange: (patch: Partial<QuestionKey>) => void;
   onSaveToBank?: () => void;
+  /**
+   * ASM-REVIEW: the wizard's "More options" under a block edited in place: no header, no import note, no question / help text
+   * fields (they are edited on the page) and, for an instruction block, only its attached links (never its HTML).
+   */
+  compact?: boolean;
 }
 
 /** One question's settings: common fields, the type's own config, marking mode with criteria / rubric, conditions, assessor-only data. */
-export default function QuestionEditor({ q, onChange, candidates, keyRow, onKeyChange, onSaveToBank }: QuestionEditorProps) {
+export default function QuestionEditor({ q, onChange, candidates, keyRow, onKeyChange, onSaveToBank, compact = false }: QuestionEditorProps) {
   const type = questionType(q.type);
   const ui = typeUi(q.type);
   const mode = q.markingMode ?? type?.defaultMarkingMode ?? "criteria";
   const content = type?.content;
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      {compact ? null : <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2"><i className={`${type?.icon ?? "ri-question-line"} text-lg text-foreground-600`} aria-hidden="true" /><span className="font-medium text-foreground-900">{type?.label ?? q.type}</span><Badge tone="muted">{q.id}</Badge></div>
         {onSaveToBank && !content ? <Button size="sm" variant="outline" icon="ri-archive-line" onClick={onSaveToBank}>Save to question bank</Button> : null}
-      </div>
-      {type?.hint ? <p className="text-xs text-foreground-500">{type.hint}</p> : null}
+      </div>}
+      {type?.hint && !compact ? <p className="text-xs text-foreground-500">{type.hint}</p> : null}
+      {q.importMeta && !compact ? (
+        <div className={`flex flex-wrap items-start gap-2 rounded-md border p-3 text-sm ${q.importMeta.confidence === "low" ? "border-amber-300 bg-amber-50 text-amber-900" : "border-background-200 bg-background-100 text-foreground-700"}`} role="note">
+          <i className={`${q.importMeta.confidence === "low" ? "ri-error-warning-line" : "ri-file-search-line"} mt-0.5`} aria-hidden="true" />
+          <span className="min-w-0 flex-1">
+            {q.importMeta.confidence === "low" ? <strong>Check this. </strong> : null}
+            Imported from the workbook{q.importMeta.page ? `, page ${q.importMeta.page}` : ""}.{q.importMeta.note ? ` ${q.importMeta.note}` : ""}
+          </span>
+          <Button size="sm" variant="outline" icon="ri-check-line" onClick={() => onChange({ importMeta: undefined })}>Checked</Button>
+        </div>
+      ) : null}
       {!content ? (
         <div className="grid gap-3 md:grid-cols-2">
-          <div className="md:col-span-2"><Field label="Question" required><TextArea rows={2} value={q.label} onChange={(e) => onChange({ label: e.target.value })} /></Field></div>
-          <div className="md:col-span-2"><Field label="Help text for the student"><TextInput value={q.helpText ?? ""} onChange={(e) => onChange({ helpText: e.target.value })} /></Field></div>
+          {compact ? null : <><div className="md:col-span-2"><Field label="Question" required><TextArea rows={2} value={q.label} onChange={(e) => onChange({ label: e.target.value })} /></Field></div>
+          <div className="md:col-span-2"><Field label="Help text for the student"><TextInput value={q.helpText ?? ""} onChange={(e) => onChange({ helpText: e.target.value })} /></Field></div></>}
           <Toggle label="Required" checked={Boolean(q.required)} onChange={(v) => onChange({ required: v })} />
           {!type?.assessorOnly ? <Toggle label="Completed by the assessor, not the student" checked={Boolean(q.assessorOnly)} onChange={(v) => onChange({ assessorOnly: v })} /> : null}
         </div>
       ) : null}
-      <div className="rounded-md border border-background-200 p-3"><p className="mb-2 text-xs font-medium uppercase tracking-wide text-foreground-500">Settings</p>{ui.Config({ q, onChange })}</div>
+      <div className="rounded-md border border-background-200 p-3"><p className="mb-2 text-xs font-medium uppercase tracking-wide text-foreground-500">{compact && content ? "Attached links" : "Settings"}</p>{compact && content ? <ContentLinksEditor q={q} onChange={onChange} /> : ui.Config({ q, onChange })}</div>
+      {attachmentCapable(q.type) && !q.assessorOnly ? <AttachmentEditor q={q} onChange={onChange} /> : null}
       {!content ? (
         <div className="rounded-md border border-background-200 p-3">
           <p className="mb-2 text-xs font-medium uppercase tracking-wide text-foreground-500">Marking</p>

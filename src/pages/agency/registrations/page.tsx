@@ -12,6 +12,7 @@ import {
 import {
   availableActions, EXCEPTION_TEXT, exportCsv, normaliseCoeNumber, registrationChecklist, validateCorrection, verifyBlockers, VERIFY_PREREQUISITES, type RegistrationAction,
 } from "@/pages/agency/lib/registrationWorkbench";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const EVIDENCE_KINDS = [
   { value: "external_confirmation", label: "External confirmation" },
@@ -210,7 +211,7 @@ export default function RegistrationWorkbenchPage() {
                     <ul className="mt-1 space-y-1">{detail.evidence.map((e) => <li key={e.id}>{EVIDENCE_KINDS.find((k) => k.value === e.kind)?.label ?? e.kind}: {e.description} <span className="text-foreground-500">({e.recordedBy}, {formatDate(e.recordedAt)})</span></li>)}</ul>
                   )}
                   <div className="mt-2 grid gap-2 sm:grid-cols-[180px_1fr_auto]">
-                    <select aria-label="Evidence type" className={field} value={kind} onChange={(e) => setKind(e.target.value)}>{EVIDENCE_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}</select>
+                    <SearchableSelect aria-label="Evidence type" className={field} value={kind} onChange={(e) => setKind(e.target.value)}>{EVIDENCE_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}</SearchableSelect>
                     <input aria-label="Evidence description" className={field} value={description} maxLength={500} placeholder="What does this evidence show?" onChange={(e) => setDescription(e.target.value)} />
                     <button type="button" className={outline} disabled={busy || !description.trim()} onClick={() => void run(open, () => addEvidence(reg.id, kind, description), "Evidence recorded.")}>Add</button>
                   </div>

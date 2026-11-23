@@ -8,6 +8,7 @@ import { Button, Modal } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { shortDate } from "@/pages/admin/lib/rto";
 import { VOE_MAX_HOURS, VOE_MAX_UNITS, voeLayout, voeWeeks, type VoeMethod } from "@/pages/admin/lib/masterDates";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 interface Row { unitId: string; code: string; name: string; hours: number | null; prerequisites: string[]; endDate: string | null }
 interface Master { saved: boolean; startDate: string | null; endDate: string | null; rows: Row[] }
@@ -118,8 +119,8 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
           ? `Every week filled to ${VOE_MAX_HOURS} h: one unit at ${VOE_MAX_HOURS} h, or two units at ${VOE_MAX_HOURS / 2} h + ${VOE_MAX_HOURS / 2} h.`
           : `Choose each unit's hours a week; two units together up to ${VOE_MAX_HOURS} h (20 + 15, 30 + 10). A unit that would go over waits.`}</span>
         {method === "manual" ? <label className="ml-auto flex items-center gap-2 text-xs font-semibold text-foreground-700">Every unit at
-          <select className="rounded-md border border-background-300 bg-background-50 px-2 py-1 text-xs" value="" onChange={e => { if (e.target.value) { setAll(Number(e.target.value)); setDirty(true); } }}>
-            <option value="">h a week…</option>{RATES.map(r => <option key={r} value={r}>{r} h</option>)}</select></label> : null}
+          <SearchableSelect className="rounded-md border border-background-300 bg-background-50 px-2 py-1 text-xs" value="" onChange={e => { if (e.target.value) { setAll(Number(e.target.value)); setDirty(true); } }}>
+            <option value="">h a week…</option>{RATES.map(r => <option key={r} value={r}>{r} h</option>)}</SearchableSelect></label> : null}
       </div>
       {!start ? <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The CoE calendar has no start date yet: go back and save it first.</p> : null}
 
@@ -131,8 +132,8 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
               {r.prerequisites.length ? <span className="block text-xs text-foreground-500">After {r.prerequisites.join(", ")}</span> : null}</td>
             <td className="px-2 py-1.5 text-right">{r.hours}</td>
             <td className="px-2 py-1.5">{method === "manual"
-              ? <select aria-label={`VoE hours a week for ${r.code}`} className="rounded-md border border-background-300 bg-background-50 px-2 py-1 text-sm"
-                value={rates[r.unitId] ?? 20} onChange={e => { setRates(x => ({ ...x, [r.unitId]: Number(e.target.value) })); setDirty(true); }}>{RATES.map(v => <option key={v} value={v}>{v} h</option>)}</select>
+              ? <SearchableSelect aria-label={`VoE hours a week for ${r.code}`} className="rounded-md border border-background-300 bg-background-50 px-2 py-1 text-sm"
+                value={rates[r.unitId] ?? 20} onChange={e => { setRates(x => ({ ...x, [r.unitId]: Number(e.target.value) })); setDirty(true); }}>{RATES.map(v => <option key={v} value={v}>{v} h</option>)}</SearchableSelect>
               : <span className="text-foreground-800" title="Automatic: 40 h when the unit runs alone, 20 h beside another unit">{r.rates.join(" / ")} h</span>}</td>
             <td className="px-2 py-1.5 text-right">{weeksLabel(r.days)}</td>
             <td className="whitespace-nowrap px-2 py-1.5">{shortDate(r.startDate)}</td>

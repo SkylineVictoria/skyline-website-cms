@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { intakeKey, openIntakes, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { supabase } from "@/pages/admin/lib/supabase";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export const NO_INTAKES_MESSAGE = "This course has no open intakes at the moment, so the application cannot be submitted for it yet. Contact admissions, or choose another course.";
 export const FALLBACK_MESSAGE = "No intake dates are published for this course yet: choose the month you would like to start. Admissions will confirm the date.";
@@ -155,7 +156,7 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
           </div>
         </div>
       ) : null}
-      {calendarMode ? (needsLoad ? null : load ? <StartCalendar options={intakes.filter((i) => i.studyLoad === load)} value={value} disabled={disabled} keyOf={keyOf} onPick={(o) => onChange(o)} /> : null) : <select id={id} value={shown.some((i) => keyOf(i) === value) ? value : ""} disabled={disabled || !courseId || loading || needsLoad || (none && !addable)} aria-invalid={Boolean(error) || none}
+      {calendarMode ? (needsLoad ? null : load ? <StartCalendar options={intakes.filter((i) => i.studyLoad === load)} value={value} disabled={disabled} keyOf={keyOf} onPick={(o) => onChange(o)} /> : null) : <SearchableSelect id={id} value={shown.some((i) => keyOf(i) === value) ? value : ""} disabled={disabled || !courseId || loading || needsLoad || (none && !addable)} aria-invalid={Boolean(error) || none}
         aria-describedby={`${id}-help`} className={className} data-testid="intake-select"
         onChange={(e) => { if (e.target.value === ADD_INTAKE_VALUE) { onAdd?.(); return; } onChange(intakes.find((i) => keyOf(i) === e.target.value) ?? null); }}>
         <option value="">{!courseId ? "Choose the course first" : loading ? "Loading intakes…" : none ? "No open intakes" : needsLoad ? "Choose CoE or VoE first" : fallback ? "Select a start month" : "Select a start date"}</option>
@@ -166,7 +167,7 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
           return groups.map((g) => { const list = shown.filter((i) => (i.id ?? i.name) === g); return <optgroup key={g} label={list[0].name}>{list.map(optionOf)}</optgroup>; });
         })()}
         {addable ? <option value={ADD_INTAKE_VALUE} data-testid="intake-add-option">+ Add new intake…</option> : null}
-      </select>}
+      </SearchableSelect>}
       <p id={`${id}-help`} className={`mt-1 text-xs ${none || state.failed ? "text-primary-700" : "text-foreground-500"}`} role={none || state.failed ? "alert" : undefined} data-testid="intake-help">
         {help}
         {none && addable ? <> <button type="button" onClick={onAdd} className="font-semibold text-primary-700 underline underline-offset-2" data-testid="intake-add-button">Add new intake</button></> : null}

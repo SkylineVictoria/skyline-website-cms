@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { friendlyDbError, shortDate } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Options = {
   applications: { id: string; reference: string; status: string; courseCode: string | null }[];
@@ -70,20 +71,20 @@ export default function ReAddToIntake({ studentId, onDone }: { studentId: string
         {options === null && !error ? <p className="text-foreground-500">Loading…</p> : null}
         {options ? <>
           <label className="block"><span className="mb-1 block text-xs font-semibold text-foreground-600">Application</span>
-            <select className={field} value={application} disabled={busy || !!done} onChange={(e) => setApplication(e.target.value)}>
+            <SearchableSelect className={field} value={application} disabled={busy || !!done} onChange={(e) => setApplication(e.target.value)}>
               {options.applications.length ? null : <option value="">No submitted application</option>}
               {options.applications.map((a) => <option key={a.id} value={a.id}>{a.reference} · {a.status.replace(/_/g, " ")} · {a.courseCode ?? "course missing"}</option>)}
-            </select></label>
+            </SearchableSelect></label>
           <label className="block"><span className="mb-1 block text-xs font-semibold text-foreground-600">Intake</span>
-            <select className={field} value={intake} disabled={busy || !!done} onChange={(e) => setIntake(e.target.value)}>
+            <SearchableSelect className={field} value={intake} disabled={busy || !!done} onChange={(e) => setIntake(e.target.value)}>
               {options.intakes.length ? null : <option value="">No open intake</option>}
               {options.intakes.map((i) => <option key={i.id} value={i.id}>{i.courseCode} · {i.name} · {i.load.toUpperCase()} · {shortDate(i.startDate)}{i.endDate ? ` – ${shortDate(i.endDate)}` : ""}</option>)}
-            </select></label>
+            </SearchableSelect></label>
           <label className="block"><span className="mb-1 block text-xs font-semibold text-foreground-600">Joins on</span>
-            <select className={field} value={joinOn} disabled={busy || !!done || !chosen} onChange={(e) => setJoinOn(e.target.value)}>
+            <SearchableSelect className={field} value={joinOn} disabled={busy || !!done || !chosen} onChange={(e) => setJoinOn(e.target.value)}>
               {joinDates.length ? null : <option value="">Today (no upcoming unit start)</option>}
               {joinDates.map((d) => <option key={d.date} value={d.date}>{shortDate(d.date)} · {d.firstDay ? "day one of the intake" : d.unitCode ? `${d.unitCode}${d.unitName ? ` ${d.unitName}` : ""}` : "unit start"}</option>)}
-            </select></label>
+            </SearchableSelect></label>
           <label className="block"><span className="mb-1 block text-xs font-semibold text-foreground-600">Reason (kept on the record)</span>
             <textarea className={field} rows={2} maxLength={500} value={reason} disabled={busy || !!done} onChange={(e) => setReason(e.target.value)} /></label>
         </> : null}

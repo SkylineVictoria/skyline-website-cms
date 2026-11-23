@@ -1,5 +1,6 @@
 import { WIZARD_INPUT, FieldError, WizardLabel, WizardTextField } from "@/components/shared/wizard/fields";
 import { ADDRESS_LINE_MAX, AU_STATES, isAustralia, type Address, type AddressProblems } from "../../../../supabase/functions/_shared/validation/person";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /**
  * An address: street, line 2, suburb, state, postcode and country. For Australia the state is a list (ACT, NSW, …) and the
@@ -29,11 +30,11 @@ export default function AddressFields({ idPrefix, value, errors, onChange, testI
       {australian ? (
         <div>
           <WizardLabel htmlFor={`${idPrefix}state`}>State or territory</WizardLabel>
-          <select id={`${idPrefix}state`} name="address_state" value={value.state.toUpperCase()} aria-invalid={Boolean(errors.state)} className={WIZARD_INPUT}
+          <SearchableSelect id={`${idPrefix}state`} name="address_state" value={value.state.toUpperCase()} aria-invalid={Boolean(errors.state)} className={WIZARD_INPUT}
             data-testid={testId("address_state")} onChange={(e) => onChange("state", e.target.value)}>
             <option value="">Select</option>
             {AU_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
-          </select>
+          </SearchableSelect>
           <FieldError text={errors.state} />
         </div>
       ) : (

@@ -4,6 +4,7 @@ import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 import { accessLabels, bulkAdmin, categories, categoryLabel, categoryTitle, downloadResource, listResources, splitCategoryTitle, type BulkPolicy, type Category, type Resource } from "@/pages/admin/lib/bulkResources";
 
 import { supabase } from "@/pages/admin/lib/supabase";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** A document saved straight to the unit (Add from documents, no AI reader): a unit_contents file whose title carries its category. */
 type UnitDoc = { id: string; title: string; file_name: string | null; size_bytes: number | null; storage_path: string | null; visible_to_students: boolean };
@@ -170,10 +171,10 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
               <input className="rounded-lg border border-background-300 px-2.5 py-1.5 text-sm font-normal text-foreground-900" value={edit.title} maxLength={180}
                 onChange={e => setEditing({ ...edit, title: e.target.value })} /></label>
             <label className="flex flex-col gap-1 text-xs font-semibold text-foreground-600">Category
-              <select className="rounded-lg border border-background-300 px-2.5 py-1.5 text-sm font-normal text-foreground-900" value={edit.category}
+              <SearchableSelect className="rounded-lg border border-background-300 px-2.5 py-1.5 text-sm font-normal text-foreground-900" value={edit.category}
                 onChange={e => { const category = e.target.value as Category; setEditing({ ...edit, category, visible: category === "learning" || category === "self_assessment" ? edit.visible : false }); }}>
                 {categories.map(c => <option key={c} value={c}>{categoryLabel(c, policy)}</option>)}
-              </select></label>
+              </SearchableSelect></label>
             <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={edit.visible} disabled={edit.category === "assessment" || edit.category === "assessor"}
               onChange={e => setEditing({ ...edit, visible: e.target.checked })} />Students can see it{edit.category === "assessment" || edit.category === "assessor" ? " (never for assessments and assessor resources)" : ""}</label>
             <div className="flex gap-2 sm:col-span-2">
@@ -200,11 +201,11 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
                 ? <button type="button" className={button} disabled={busy} onClick={() => void act("unpublish", { id: resource.id })}>Unpublish</button>
                 : <button type="button" className={button} disabled={busy || status === "Superseded" || !policy?.allow_publication} onClick={() => { setPublishing(resource); setChecked(false); }}>Publish</button>}
               {resource.category === "assessment" && <>
-                <select className={button + " max-w-56"} aria-label={`Link assessment for ${resource.title}`} disabled={busy} value={resource.assessment_id ?? ""}
+                <SearchableSelect className={button + " max-w-56"} aria-label={`Link assessment for ${resource.title}`} disabled={busy} value={resource.assessment_id ?? ""}
                   onChange={e => void act("link", { id: resource.id, assessmentId: e.target.value })}>
                   <option value="">Assessment resource only</option>
                   {assessments.map(a => <option value={a.id} key={a.id}>{a.title}</option>)}
-                </select>
+                </SearchableSelect>
                 {resource.assessment_id
                   ? <Link className="text-violet-800 dark:text-violet-300 underline" to={`/admin/assessments/${resource.assessment_id}`}>Open assessment</Link>
                   : <button type="button" className={button} disabled={busy} onClick={() => void createAssessment(resource)}>Create assessment draft</button>}

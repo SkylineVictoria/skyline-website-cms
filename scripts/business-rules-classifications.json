@@ -673,5 +673,31 @@
       "19885811efed583c3ff3955d4c3c8c85268c3e68d5f12e5f0597154b002e4c06",
       "72bf7c2ed4f6e381d8de102a556f729133a4202f3161cc4a66d9feeae41e90b7"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "ui-select-shared-dropdown",
+    "reason": "The native <select> tag swapped for the shared SearchableSelect (same props, the same <option>s and onChange); the values and any rule they carry are unchanged.",
+    "fingerprints": [
+      "b3bee9a28aa7a78f3efb8bf2820a96ec19b02f2be2b10f93579b8a669f33ebfc",
+      "108d74dda2ce33bfc3026a027cab295b96e54ee718f82cf894413ec91dd27b67",
+      "7878a7b909eaf4ca513cd4fb779b201f87d66d7da2e6d412be272591622fe8d6",
+      "13637f22037d914dd19d41390f40d099bfeb268258018781c47eb394a4d4a725",
+      "685e8fc45123277cf2bba6d9d317501d092eec38c578cb53673a6bd11caa9dcc",
+      "1efd0d9c82516cf4ae2c8c77bd8a934511eb75cc95c9ad176827198c1ccd0791",
+      "9f009ef79fe954b863caaef0803f923218a69f450bf0a464a9555dce79d8dca1",
+      "6ef1eb3a72452a71c7e9ab2839053f7fc28082122c62c80a89d853bc4f04abd3",
+      "2cec48f41bb6857241619c19ce1e55f745123a611aef8d99febe6e54b1b5135d",
+      "a7f58c3f877230f5e08ed6b6ad8c02aea47905ccae1b4e6825ca29f170362a5e",
+      "c8ba357e977dd82d457b5c0ae6113cbb0b6e0014d32d6fee9b80a7b2b6b9677c",
+      "be552baf45a840796a4dc90659165c886c3516c937ec350cc8389373b642066c",
+      "54cb86d34aa6891ed5749a664e2531a0ef65dee74a95dd5ddf1b5fa907df3dfd",
+      "ec39e31562962b4b758825b0f39ec90ccf4bf6477e941140d2e43237effe22a2",
+      "17b4224f044c4153f474bc8b5aadeac4d08d241fb9eec7a17e8f9c1e42cae75c",
+      "e054b9d970776e4199577d19c2feae8a52553093f3c7a53f13251e534a927aaa",
+      "ce31630188bc75cbd1d5fa5feac7cc09b4ded24bc876451c05c5ec46e58a2eff",
+      "cf7c0d5e8fe56be2fe0e5a1c4c4cce2013e80afbc2205e13e4fa8badef331609",
+      "a44e38150cb5d91c1c13e89c6a812aa56f1a8ed5f00c37f334220b89bede6a6d"
+    ]
   }
 ]

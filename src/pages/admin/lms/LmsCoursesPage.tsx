@@ -19,6 +19,7 @@ import VoeCalendarEditor, { VoeTab } from "./VoeCalendarEditor";
 import WeeklyClassBookingDialog, { type DraftWeek } from "@/pages/admin/components/rto/WeeklyClassBooking";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Tab = "overview" | "units" | "master" | "voe" | "prereq" | "coeDaily" | "voeDaily";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -473,9 +474,9 @@ export default function LmsCoursesPage() {
         <div className="mt-2 flex items-center gap-2 text-xs">
           <button type="button" aria-pressed={activeOnly} onClick={() => setActiveOnly(v => !v)}
             className={"rounded-full border px-2.5 py-1 font-semibold " + (activeOnly ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-600")}>Active only</button>
-          {campuses.length ? <select aria-label="Campus" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={campus} onChange={e => setCampus(e.target.value)}>
+          {campuses.length ? <SearchableSelect aria-label="Campus" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={campus} onChange={e => setCampus(e.target.value)}>
             <option value="">All campuses</option>{campuses.map(x => <option key={x} value={x}>{x}</option>)}
-          </select> : null}
+          </SearchableSelect> : null}
           <span className="ml-auto text-foreground-500">{visible.length} course{visible.length === 1 ? "" : "s"}</span>
         </div>
         <div className="mt-3 max-h-[70vh] space-y-1 overflow-auto">

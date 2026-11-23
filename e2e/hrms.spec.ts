@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { createAdmin, resetRateLimits, setHrMailMode, signInAsAdmin, signInThroughTheForm, signOutEverywhere, signedInClient, sql, staffAt } from "./support";
+import { createAdmin, resetRateLimits, setHrMailMode, signInAsAdmin, signInThroughTheForm, signOutEverywhere, signedInClient, sql, staffAt, choose, selectOf } from "./support";
 
 /**
  * HRMS (time & attendance, leave, public holidays, pay periods, Xero export) in the browser, against the LOCAL lab only.
@@ -118,7 +118,7 @@ test("a leave request goes to the manager, who approves it from Leave approvals;
   expect(leaveDay).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   await openMyHr(page, employee.email);
   await expect(page.getByTestId("my-leave-balance-annual")).toContainText("38.00 h");
-  await page.getByTestId("my-leave-type").selectOption({ label: "Annual leave" });
+  await choose(page.getByTestId("my-leave-type"), { label: "Annual leave" });
   await page.getByTestId("my-leave-start").fill(leaveDay);
   await page.getByTestId("my-leave-note").fill("E2E day off");
   await page.getByTestId("my-leave-send").click();
@@ -157,7 +157,7 @@ test("a confirmed public holiday appears in My HR and on the timesheet; a 'revie
   await signOutEverywhere(page);
   await signInAsAdmin(page, admin.email);
   await page.goto("/admin/staff/holidays");
-  await page.getByTestId("holiday-year").selectOption(holiday.slice(0, 4));
+  await choose(page.getByTestId("holiday-year"), holiday.slice(0, 4));
   await page.getByTestId(`holiday-confirm-${holiday}`).click();
   await expect(page.getByTestId("holiday-notice")).toContainText("confirmed");
   await expect(page.getByTestId(`holiday-${holiday}`)).toContainText("Confirmed");
@@ -173,7 +173,7 @@ test("the manager approves the fortnightly timesheet from Team timesheets; self-
   sql(`insert into hr.time_events(profile_id, kind, at, source, recorded_by) values ('${employee.id}', 'punch_in', now() - interval '30 hours', 'web', '${uid}'), ('${employee.id}', 'punch_out', now() - interval '22 hours', 'web', '${uid}')`);
   await openMyHr(page, manager.email);
   await page.goto("/staff/team/timesheets");
-  await page.getByTestId("timesheet-schedule").selectOption({ label: `${FORTNIGHTLY} (fortnightly)` });
+  await choose(page.getByTestId("timesheet-schedule"), { label: `${FORTNIGHTLY} (fortnightly)` });
   await expect(page.getByTestId(`timesheet-row-${employee.id}`)).toBeVisible();
   await expect(page.getByTestId(`timesheet-row-${manager.id}`)).toHaveCount(0);
   await expect(page.getByTestId(`timesheet-leave-${employee.id}`)).toContainText("7.60 h");
@@ -201,8 +201,8 @@ test("HR locks the fortnightly period (leave accrues) and exports it to Xero; th
   const { error } = await adminClient.rpc("hr_admin_time_correct", { p_profile: employee.id, p_supersedes: null, p_kind: "punch_in", p_at: new Date().toISOString(), p_reason: "late" });
   expect(error?.message).toContain("locked");
   await page.goto("/admin/staff/xero-export");
-  await page.getByTestId("xero-schedule").selectOption({ label: `${FORTNIGHTLY} (fortnightly)` });
-  await page.getByTestId("xero-period").selectOption(currentPeriodId);
+  await choose(page.getByTestId("xero-schedule"), { label: `${FORTNIGHTLY} (fortnightly)` });
+  await choose(page.getByTestId("xero-period"), currentPeriodId);
   await expect(page.getByTestId(`xero-employee-${employee.id}`)).toContainText("approved");
   await page.getByTestId("xero-export").click();
   await page.getByRole("button", { name: "Export", exact: true }).click();
@@ -224,8 +224,8 @@ test("a monthly period with an 8-hour shift is approved, locked and exported too
   await signOutEverywhere(page);
   await signInAsAdmin(page, admin.email);
   await page.goto("/admin/staff/xero-export");
-  await page.getByTestId("xero-schedule").selectOption({ label: `${MONTHLY} (monthly)` });
-  await page.getByTestId("xero-period").selectOption(monthlyPeriodId);
+  await choose(page.getByTestId("xero-schedule"), { label: `${MONTHLY} (monthly)` });
+  await choose(page.getByTestId("xero-period"), monthlyPeriodId);
   await expect(page.getByTestId(`xero-employee-${monthlyEmployee.id}`)).toContainText("approved");
   await page.getByTestId("xero-export").click();
   await page.getByRole("button", { name: "Export", exact: true }).click();

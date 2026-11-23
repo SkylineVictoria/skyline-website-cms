@@ -11,6 +11,7 @@ import PendingCredentialsForm from './PendingCredentialsForm';
 import CommConnectionForm, { COMM_CONNECTORS } from './CommConnectionForm';
 import Microsoft365Panel from '@/pages/admin/components/Microsoft365Panel';
 import { m365Label, useMicrosoft365 } from '@/pages/admin/lib/microsoft365';
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** Microsoft 365 (2026-11-20) is its own entry, first, with the one status Email Management shows (app-only Microsoft Graph checks). */
 const M365 = 'microsoft365';
@@ -293,10 +294,10 @@ export default function ConnectionsPage() {
               <label className="block">{app.label}<input className={inputClass} value={clientId} onChange={event => setClientId(event.target.value)} required maxLength={300} /></label>
               <label className="block">Client secret<input className={inputClass} type="password" autoComplete="new-password" value={secret} onChange={event => setSecret(event.target.value)} required maxLength={3000} /></label>
               {definition.id === 'docusign' && <label className="block">DocuSign environment
-                <select className={inputClass} value={environment} onChange={event => setEnvironment(event.target.value === 'demo' ? 'demo' : 'production')}>
+                <SearchableSelect className={inputClass} value={environment} onChange={event => setEnvironment(event.target.value === 'demo' ? 'demo' : 'production')}>
                   <option value="production">Live</option>
                   <option value="demo">Demo</option>
-                </select>
+                </SearchableSelect>
               </label>}
               <Button type="submit" disabled={busy || !clientId.trim() || !secret.trim()}>Save &amp; sign in</Button>
               {setup.configured && <Button type="button" variant="outline" disabled={busy} onClick={() => {
@@ -339,10 +340,10 @@ export default function ConnectionsPage() {
             });
           }}>
             {definition.id === 'stripe' && <label className="block">Credential type
-              <select className={inputClass} value={kind} onChange={event => { setKind(event.target.value); setSecret(''); }}>
+              <SearchableSelect className={inputClass} value={kind} onChange={event => { setKind(event.target.value); setSecret(''); }}>
                 <option value="api_key">API key</option>
                 <option value="webhook_secret">Webhook signing secret</option>
-              </select>
+              </SearchableSelect>
             </label>}
             <label className="block">{kind === 'webhook_secret' ? 'Webhook signing secret' : definition.id === 'stripe' ? 'Stripe secret or restricted API key' : 'API key'}
               <input className={inputClass} type="password" autoComplete="new-password" value={secret} onChange={event => setSecret(event.target.value)} required maxLength={8000} />

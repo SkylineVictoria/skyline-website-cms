@@ -3,6 +3,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { accessLabels, bulkAdmin, bulkBucket, categories, categoryLabel, downloadResource,
   type Audience, type BulkPolicy, type Category, type CourseOption, type ImportFile, type ImportJob,
   type UnitOption } from "@/pages/admin/lib/bulkResources";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Decision = { unit: string; category: Category; audience: Audience; reviewed?: boolean; previousId?: string; skipExisting?: boolean };
 type Filter = "all" | "ready" | "low" | "unmatched" | "duplicates" | "restricted" | "failed";
@@ -229,10 +230,10 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><button type="button" className="text-sm font-semibold text-violet-800 dark:text-violet-300" onClick={onClose}>← Units</button>
         <h1 className="mt-2 font-heading text-2xl font-bold text-slate-950 dark:text-slate-50">AI Bulk Upload</h1></div>
-      <select className={control} aria-label="Open a recent import" value={job} onChange={e => showJob(e.target.value)} disabled={busy}>
+      <SearchableSelect className={control} aria-label="Open a recent import" value={job} onChange={e => showJob(e.target.value)} disabled={busy}>
         <option value="">New import</option>
         {jobs.map(j => <option value={j.id} key={j.id}>{new Date(j.created_at).toLocaleString()} · {j.id.slice(0, 8)}</option>)}
-      </select>
+      </SearchableSelect>
     </header>
     <ol aria-label="Import progress" className="grid grid-cols-3 gap-2 rounded-xl border border-background-200 bg-background-50 p-3">
       {["Upload files", "Classify files", "Review and save"].map((label, index) => <li key={label} aria-current={stage === index ? "step" : undefined}
@@ -244,16 +245,16 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
     {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-800" role="alert">{error}</p>}
     <div className="grid min-w-0 items-start gap-3 sm:grid-cols-2">
       <label className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-3 text-sm font-semibold">Course
-        <select className={control + " mt-2 w-full"} value={course} disabled={busy} onChange={e => { setCourse(e.target.value); setHint(""); }}>
+        <SearchableSelect className={control + " mt-2 w-full"} value={course} disabled={busy} onChange={e => { setCourse(e.target.value); setHint(""); }}>
           <option value="">All courses</option>
           {courses.map(c => <option value={c.id} key={c.id}>{c.code} · {c.name}</option>)}
-        </select>
+        </SearchableSelect>
       </label>
       <label className="min-w-0 rounded-xl border border-background-200 bg-background-50 p-3 text-sm font-semibold">Unit hint
-        <select className={control + " mt-2 w-full"} value={hint} disabled={busy} onChange={e => setHint(e.target.value)}>
+        <SearchableSelect className={control + " mt-2 w-full"} value={hint} disabled={busy} onChange={e => setHint(e.target.value)}>
           <option value="">Match all units</option>
           {units.filter(u => !course || u.course_id === course).map(u => <option value={u.id} key={u.id}>{u.code} · {u.name}</option>)}
-        </select>
+        </SearchableSelect>
       </label>
       <div className="min-w-0 space-y-4 sm:col-span-2">
         <section className="space-y-3 rounded-xl border border-background-200 bg-background-50 p-4">
@@ -295,9 +296,9 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
             <button type="button" className={primary} disabled={busy || !selectedReady} onClick={() => void approve()}>Approve {selectedReady} selected</button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select className={control} aria-label="Filter documents" value={filter} onChange={e => setFilter(e.target.value as Filter)}>
+            <SearchableSelect className={control} aria-label="Filter documents" value={filter} onChange={e => setFilter(e.target.value as Filter)}>
               {filters.map(([id, label]) => <option value={id} key={id}>{label}</option>)}
-            </select>
+            </SearchableSelect>
             <button className={button} disabled={!ready.length || busy} type="button" onClick={() => setSelection(old => [...new Set([...old, ...ready.map(f => f.id)])])}>Select ready ({ready.length})</button>
             {!!selection.length && <button className={button} type="button" onClick={() => setSelection([])}>Clear selection</button>}
           </div>
@@ -328,7 +329,7 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
                       {file.result.assessmentPurpose && <p>{file.result.assessmentPurpose}</p>}</details>}
                     {isReview && <button type="button" className="mt-1 text-xs font-semibold text-violet-800 dark:text-violet-300 underline" onClick={() => void open(file)}>Preview file</button>}
                   </td>
-                  <td className={mobileCell} data-column="Course">{isReview ? <select className={control + " w-28"} aria-label={`Course for ${file.name}`} value={targetCourse}
+                  <td className={mobileCell} data-column="Course">{isReview ? <SearchableSelect className={control + " w-28"} aria-label={`Course for ${file.name}`} value={targetCourse}
                     onChange={e => {
                       const courseId = e.target.value;
                       setDisplayCourse(old => ({ ...old, [file.id]: courseId }));
@@ -336,19 +337,19 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
                       const direct = options.find(u => u.code.toUpperCase() === file.result?.unitCode?.toUpperCase());
                       update(file, { unit: direct?.id ?? "", previousId: "", skipExisting: false, reviewed: false });
                     }}><option value="">{file.result?.courseCode ?? "Choose course"}</option>
-                    {courses.map(c => <option value={c.id} key={c.id}>{c.code}</option>)}</select> : "—"}</td>
-                  <td className={mobileCell} data-column="Unit">{isReview ? <select className={control + " w-36"} aria-label={`Unit for ${file.name}`} value={value.unit}
+                    {courses.map(c => <option value={c.id} key={c.id}>{c.code}</option>)}</SearchableSelect> : "—"}</td>
+                  <td className={mobileCell} data-column="Unit">{isReview ? <SearchableSelect className={control + " w-36"} aria-label={`Unit for ${file.name}`} value={value.unit}
                     onChange={e => update(file, { unit: e.target.value, previousId: "", skipExisting: false, reviewed: false })}>
                     <option value="">{file.result?.unitCode ?? "Choose unit"}</option>
-                    {unitOptions.map(u => <option value={u.id} key={u.id}>{u.code} · {u.name}</option>)}</select> : "—"}</td>
-                  <td className={mobileCell} data-column="Category">{isReview ? <select className={control + " w-32"} aria-label={`Category for ${file.name}`} value={value.category}
+                    {unitOptions.map(u => <option value={u.id} key={u.id}>{u.code} · {u.name}</option>)}</SearchableSelect> : "—"}</td>
+                  <td className={mobileCell} data-column="Category">{isReview ? <SearchableSelect className={control + " w-32"} aria-label={`Category for ${file.name}`} value={value.category}
                     onChange={e => update(file, { category: e.target.value as Category, reviewed: false })}>
-                    {categories.map(c => <option value={c} key={c}>{categoryLabel(c, policy)}</option>)}</select> : file.result ? categoryLabel(file.result.category, policy) : "—"}</td>
+                    {categories.map(c => <option value={c} key={c}>{categoryLabel(c, policy)}</option>)}</SearchableSelect> : file.result ? categoryLabel(file.result.category, policy) : "—"}</td>
                   {/* // rule-policy: business lms.bulk_confidence Shows the confidence comparison from the published review setting. */}
                   <td data-column="Confidence" className={mobileCell + (low(file, policy) ? " font-semibold text-amber-800" : "")}>{file.result ? `${Math.round(file.result.confidence)}%` : "—"}</td>
-                  <td className={mobileCell} data-column="Access">{isReview ? <select className={control} aria-label={`Access for ${file.name}`} value={restrictedAccess ? "assessor" : value.audience}
+                  <td className={mobileCell} data-column="Access">{isReview ? <SearchableSelect className={control} aria-label={`Access for ${file.name}`} value={restrictedAccess ? "assessor" : value.audience}
                     disabled={restrictedAccess} onChange={e => update(file, { audience: e.target.value as Audience, reviewed: false })}>
-                    {Object.entries(accessLabels).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</select> : "—"}</td>
+                    {Object.entries(accessLabels).map(([id, name]) => <option value={id} key={id}>{name}</option>)}</SearchableSelect> : "—"}</td>
                   <td className="min-w-40 space-y-1 p-2 max-sm:block">
                     <p className={restrictedAccess ? "font-semibold text-amber-800" : "font-semibold"}>
                       {restrictedAccess && isReview ? "Restricted" : isReview && canApprove(file) ? "Ready" : file.state === "processing" && file.extension === "zip" ? "Extracting" : stateLabel[file.state]}
@@ -358,11 +359,11 @@ export default function BulkResourceWorkspace({ courses: initialCourses, units: 
                     {rowErrors[file.id] && <p className="text-xs text-red-800">{rowErrors[file.id]}</p>}
                     {isReview && identical && <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={!!value.skipExisting}
                       onChange={e => update(file, { skipExisting: e.target.checked })} />Skip existing</label>}
-                    {isReview && !identical && duplicates.length > 0 && <select className={control + " max-w-40"} aria-label={`Version for ${file.name}`} value={value.previousId ?? ""}
+                    {isReview && !identical && duplicates.length > 0 && <SearchableSelect className={control + " max-w-40"} aria-label={`Version for ${file.name}`} value={value.previousId ?? ""}
                       onChange={e => update(file, { previousId: e.target.value })}>
                       <option value="">Separate resource</option>
                       {duplicates.map(r => <option key={r.id} value={r.id}>New version of {r.title}</option>)}
-                    </select>}
+                    </SearchableSelect>}
                     {isReview && (policy?.confirm_each || restricted(file) || low(file, policy) || matched(file, courses).length !== 1) &&
                       <label className="flex items-center gap-1 text-xs"><input type="checkbox" checked={!!value.reviewed} onChange={e => update(file, { reviewed: e.target.checked })} />Reviewed</label>}
                     {["review", "failed", "uploading"].includes(file.state) && <button className="mr-2 text-xs underline" type="button" disabled={busy} onClick={() => void action("exclude", file)}>Exclude</button>}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, listTickets, type TicketRow } from "@/lib/supportTickets";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const STATUS_FILTERS: { value: string; label: string }[] = [
   { value: "active", label: "Active" }, { value: "", label: "All" }, { value: "resolved", label: "Resolved" }, { value: "closed", label: "Closed" },
@@ -40,9 +41,9 @@ export default function TicketList({ linkTo, handler = false, reloadKey = 0 }: {
           ))}
         </div>
         {handler ? (
-          <select aria-label="Assigned" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)} className="rounded-md border border-background-300 px-2 py-1.5 text-sm">
+          <SearchableSelect aria-label="Assigned" value={scope} onChange={(e) => setScope(e.target.value as typeof scope)} className="rounded-md border border-background-300 px-2 py-1.5 text-sm">
             <option value="all">Everyone&apos;s</option><option value="mine">Assigned to me</option><option value="unassigned">Unassigned</option>
-          </select>
+          </SearchableSelect>
         ) : null}
         <form className="ml-auto flex min-w-[200px] flex-1 sm:flex-none" onSubmit={(e) => { e.preventDefault(); setQuery(search.trim()); }}>
           <input aria-label="Search tickets" placeholder="Search ref, subject, name" value={search} onChange={(e) => setSearch(e.target.value)}

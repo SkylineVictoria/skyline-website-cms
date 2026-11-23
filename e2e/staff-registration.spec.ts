@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { PDF, pdfFor, applyAsStaff, candidateAction, createAdmin, createEditor, expectStatus, hrMails, inDays, journeyFromDocumentLink, linkToken, onboard, person, resetRateLimits, shot, sideBySide, signInAsAdmin, signedInClient, sql, staffAdmin, waitForHrMail } from "./support";
+import { PDF, pdfFor, applyAsStaff, candidateAction, createAdmin, createEditor, expectStatus, hrMails, inDays, journeyFromDocumentLink, linkToken, onboard, person, resetRateLimits, shot, sideBySide, signInAsAdmin, signedInClient, sql, staffAdmin, waitForHrMail, choose, selectOf } from "./support";
 
 // Staff enrolment v2 end to end, against the LOCAL lab stack only (scripts/lab/staff-lab.mjs e2e): the public form without a login,
 // onboarding by emailed link, the admin review, the offer signed on the page, activation by the Auth invite, and My HR.
@@ -223,14 +223,14 @@ test("onboarding wizard on a phone: required documents, checks on the field, add
   await shot(page, "staff-wizard-personal-phone");
   await page.locator("#staff-emergency_phone").fill("0422333444");
   // The mobile has the country picker, +61 first; a number without enough digits is refused on the field.
-  await expect(page.getByTestId("staff-step-personal").getByLabel("Country code").first()).toHaveValue("61");
+  await expect(selectOf(page.getByTestId("staff-step-personal").getByLabel("Country code").first())).toHaveValue("61");
   // The lookup fails: the box says so, and the address is typed by hand.
   await page.locator("#address-search").fill("1 Outage St");
   await expect(page.getByTestId("staff-address-search")).toContainText("Address search is unavailable right now.");
   await shot(page, "staff-wizard-address-unavailable");
   await page.getByTestId("staff-address_street").fill("5 Typed Ave");
   await page.getByTestId("staff-address_suburb").fill("Carlton");
-  await page.getByTestId("staff-address_state").selectOption("VIC");
+  await choose(page.getByTestId("staff-address_state"), "VIC");
   await page.getByTestId("staff-address_postcode").fill("30");
   await expect(page.getByText("Enter the 4-digit postcode.")).toBeVisible();
   await page.getByTestId("staff-address_postcode").fill("3053");

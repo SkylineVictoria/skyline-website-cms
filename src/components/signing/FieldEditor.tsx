@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import PdfPages from "./PdfPages";
 import { AUTO_FIELDS, type SignFieldType } from "@/lib/signingApi";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export interface EditorField { key: string; type: SignFieldType; owner: string; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value?: string }
 /** Who a field belongs to: a signer (or a signer role on a template), or the sender for printed text. */
@@ -289,9 +290,9 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
   return <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row" data-testid="field-editor">
     <aside className="max-h-[38%] shrink-0 space-y-4 overflow-y-auto pr-1 lg:max-h-none lg:w-[260px]" data-testid="field-panel">
       <label className="block text-label font-medium text-foreground-800">Fields for
-        <select value={current?.id ?? ""} onChange={(e) => { setOwner(e.target.value); setArmed(null); }} className="mt-1 w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" data-testid="field-owner">
+        <SearchableSelect value={current?.id ?? ""} onChange={(e) => { setOwner(e.target.value); setArmed(null); }} className="mt-1 w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" data-testid="field-owner">
           {owners.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-        </select>
+        </SearchableSelect>
       </label>
       <div className="flex items-center gap-2 text-xs text-foreground-600"><span className="inline-block h-3 w-3 rounded-sm" style={{ background: colourOf(current?.id ?? "") }} /> Fields of this person are shown in this colour.</div>
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
@@ -314,8 +315,8 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
       {chosen && <div className="space-y-3 rounded-md border border-background-300 p-3 text-sm" data-testid="field-details">
         <p className="font-semibold">{FIELD_KINDS[chosen.type].label} · page {chosen.page}</p>
         <label className="block text-xs">Belongs to
-          <select value={chosen.owner} onChange={(e) => update({ owner: e.target.value })} className="mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm">
-            {owners.filter((o) => !o.textOnly || chosen.type === "text").map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select></label>
+          <SearchableSelect value={chosen.owner} onChange={(e) => update({ owner: e.target.value })} className="mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm">
+            {owners.filter((o) => !o.textOnly || chosen.type === "text").map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</SearchableSelect></label>
         {owners.find((o) => o.id === chosen.owner)?.textOnly
           ? <label className="block text-xs">Text to print (variables allowed)<input value={chosen.value ?? ""} maxLength={500} onChange={(e) => update({ value: e.target.value })} placeholder="{{student.full_name}}" className="mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm" /></label>
           : <>{(chosen.type === "text" || chosen.type === "checkbox") && <label className="block text-xs">Label shown to the signer<input value={chosen.label} maxLength={120} onChange={(e) => update({ label: e.target.value })} className="mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm" /></label>}

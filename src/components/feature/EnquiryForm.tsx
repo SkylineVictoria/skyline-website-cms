@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export type FormField = {
   name: string;
@@ -146,7 +147,7 @@ export default function EnquiryForm({
                 className={fieldClass}
               />
             ) : field.type === "select" ? (
-              <select
+              <SearchableSelect
                 id={`${formId}-${field.name}`}
                 name={field.name}
                 required={field.required}
@@ -161,7 +162,7 @@ export default function EnquiryForm({
                     {option}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             ) : (
               <input
                 id={`${formId}-${field.name}`}

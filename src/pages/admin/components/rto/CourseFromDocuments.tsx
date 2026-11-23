@@ -13,6 +13,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { autoPickElectives, checkElectives, groupSizes, parseElectiveRules, type ElectiveUnit } from "../../../../../supabase/functions/tga-course-import/packaging";
 import { bulkAdmin, categories, categoryLabel, type BulkPolicy, type Category } from "@/pages/admin/lib/bulkResources";
 import { loadUnitHours, rto, saveUnitHours, suggestHours, weeksForHours, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 interface Review {
   code: string; name: string; core: { code: string; name: string }[]; electives: { code: string; name: string; groups: string[] }[];
@@ -495,15 +496,15 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
           <span className="min-w-0 flex-1 break-all">{f.name}</span>
           {f.error ? <span className="text-red-700">{f.error}</span>
             : review ? <span className="flex flex-wrap gap-2">
-              <select aria-label={`Unit for ${f.name}`} className="rounded-md border border-background-300 px-2 py-1 text-xs" disabled={!!syncing}
+              <SearchableSelect aria-label={`Unit for ${f.name}`} className="rounded-md border border-background-300 px-2 py-1 text-xs" disabled={!!syncing}
                 value={unitOf(f)} onChange={e => setMapping(m => ({ ...m, [f.name]: e.target.value }))}>
                 <option value={NONE}>Course document (not on a unit)</option>
                 {courseUnits.map(u => <option key={u.code} value={u.code}>{u.code}{u.name ? ` · ${u.name}` : ""}</option>)}
-              </select>
-              {<select aria-label={`Category for ${f.name}`} className="rounded-md border border-background-300 px-2 py-1 text-xs" disabled={!!syncing || !unitOf(f)}
+              </SearchableSelect>
+              {<SearchableSelect aria-label={`Category for ${f.name}`} className="rounded-md border border-background-300 px-2 py-1 text-xs" disabled={!!syncing || !unitOf(f)}
                 value={categoryOf(f)} onChange={e => setCategory(c => ({ ...c, [f.name]: e.target.value as Category }))}>
                 {categories.map(c => <option key={c} value={c}>{categoryLabel(c, policy)}</option>)}
-              </select>}
+              </SearchableSelect>}
             </span>
             : <span className="text-foreground-500">{new Set(codesIn(`${f.path}\n${f.text}`, UNIT)).size} unit codes</span>}
         </li>)}</ul>

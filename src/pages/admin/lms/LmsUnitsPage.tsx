@@ -13,6 +13,7 @@ import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
 
 import { bulkAdmin, categories, categoryLabel, listResources, splitCategoryTitle, type ImportFile, type ImportJob, type Resource } from "@/pages/admin/lib/bulkResources";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
 /** A unit's documents for the list (owner, 2026-11-23: "see all docs inside units on the main page"): its Learning content,
@@ -447,8 +448,8 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         </label>
         {([["all","All"],["core","Core"],["elective","Electives"],["prereq","Prerequisite units"],["needs","Needs prerequisites"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={type===value} onClick={()=>setType(value)}
           className={"rounded-full border px-2.5 py-1 font-semibold " + (type===value ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-600")}>{label}</button>)}
-        <select aria-label="Unit status" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={status} onChange={e=>setStatus(e.target.value)}>
-          <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
+        <SearchableSelect aria-label="Unit status" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={status} onChange={e=>setStatus(e.target.value)}>
+          <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></SearchableSelect>
         <label className="flex items-center gap-1.5 text-foreground-600"><input type="checkbox" checked={showDocs} onChange={event => setShowDocs(event.target.checked)} />Show document names</label>
       </div>
       {hoursError ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{hoursError}</p> : null}

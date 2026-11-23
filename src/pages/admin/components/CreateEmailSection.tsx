@@ -4,6 +4,7 @@ import { checkOffice365Address, createOffice365, fetchEmailPeople, linkOffice365
   useMicrosoft365, usernameProblem, type EmailPerson, type MailboxKind, type Office365Existing, type Office365Lookup } from "@/pages/admin/lib/microsoft365";
 import { formatSignedAt } from "@/lib/signedTime";
 import { ruleText } from "@/lib/businessRules";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /*
  * Administration > Email Management > Create Email (owner 2026-11-20).
@@ -169,13 +170,13 @@ export function CreateEmailForm({ initialKind, personId: givenPerson, personQuer
     <section className={panel}><h2 className="text-lg font-semibold">New email account</h2><p className={"mt-1 " + muted}>Select an existing CRM or HRMS record. No duplicate person records will be created.</p>
       <div className="mt-6 space-y-5">
         <div><label htmlFor="person-type" className="mb-2 block text-sm font-medium">Person type</label>
-          <select id="person-type" className={field + " disabled:opacity-60"} disabled={locked} value={kind} onChange={(e) => { setKind(e.target.value as MailboxKind); setResult(null); }} data-testid="email-kind">
-            {(Object.keys(KIND_LABEL) as MailboxKind[]).filter((k) => k !== "agent" || agentMailboxOffered()).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}</select>
+          <SearchableSelect id="person-type" className={field + " disabled:opacity-60"} disabled={locked} value={kind} onChange={(e) => { setKind(e.target.value as MailboxKind); setResult(null); }} data-testid="email-kind">
+            {(Object.keys(KIND_LABEL) as MailboxKind[]).filter((k) => k !== "agent" || agentMailboxOffered()).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}</SearchableSelect>
           <p className="mt-2 text-xs text-foreground-500">{kind === "student" ? "Student accounts: @student.slit.edu.au with Office 365 A1 for students." : "Staff accounts (employees, trainers, agents): @slit.edu.au with Office 365 A1 for faculty."}</p></div>
         <div><label htmlFor="person-record" className="mb-2 block text-sm font-medium">Existing person</label>
-          <select id="person-record" disabled={locked || !status?.connected || !people?.length} className={field + " disabled:opacity-60"} value={personId} onChange={(e) => { setPersonId(e.target.value); setResult(null); }} data-testid="email-person">
+          <SearchableSelect id="person-record" disabled={locked || !status?.connected || !people?.length} className={field + " disabled:opacity-60"} value={personId} onChange={(e) => { setPersonId(e.target.value); setResult(null); }} data-testid="email-person">
             <option value="">{!status?.connected ? (loading ? "Checking Microsoft 365…" : "Needs the Microsoft 365 connection") : peopleError ? "Could not load the list" : people === null ? "Loading…" : people.length ? `Choose a person (${people.length})` : "No people of this type"}</option>
-            {(people ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.email ? ` · ${p.email}` : ""}{p.mailbox ? " · has Microsoft 365" : ""}</option>)}</select>
+            {(people ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.email ? ` · ${p.email}` : ""}{p.mailbox ? " · has Microsoft 365" : ""}</option>)}</SearchableSelect>
           {peopleError ? <p role="alert" className="mt-2 text-xs text-red-700">{peopleError}</p> : null}
           <p className="mt-2 text-xs text-foreground-500">Source: existing {kind === "student" ? "CRM student" : kind === "agent" ? "CRM agent" : "HRMS staff"} profiles</p></div>
 
@@ -221,8 +222,8 @@ export function CreateEmailForm({ initialKind, personId: givenPerson, personQuer
               placeholder={look ? (possible.length && !differentPerson ? "Choose above first" : "firstname.lastname") : "firstname.lastname"} data-testid="email-username" />
             <span className="flex items-center border-l border-background-200 px-2 text-sm text-foreground-600">@</span>
             <label htmlFor="email-domain" className="sr-only">Domain</label>
-            <select id="email-domain" className="border-l border-background-200 bg-white px-2 text-sm disabled:opacity-60" value={domain} disabled={!domains.length} onChange={(e) => setDomain(e.target.value)} data-testid="email-domain">
-              {domains.length ? domains.map((d) => <option key={d} value={d}>{d}</option>) : <option value="">{kind === "student" ? "student.slit.edu.au" : "slit.edu.au"}</option>}</select>
+            <SearchableSelect id="email-domain" className="border-l border-background-200 bg-white px-2 text-sm disabled:opacity-60" value={domain} disabled={!domains.length} onChange={(e) => setDomain(e.target.value)} data-testid="email-domain">
+              {domains.length ? domains.map((d) => <option key={d} value={d}>{d}</option>) : <option value="">{kind === "student" ? "student.slit.edu.au" : "slit.edu.au"}</option>}</SearchableSelect>
           </div>
           <div id="email-name-status" aria-live="polite" className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             {problem && (edited || username) ? <span className="text-red-700" data-testid="email-username-error">{problem}</span>

@@ -12,6 +12,7 @@ import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
 import { businessDropdownStatuses, deleteBlockReason, isSlitAdmin } from "@/pages/admin/lib/businessData";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const PAGE_SIZE = 25;
 /** Active and Invited are worked out on the device from the active businesses (up to this many). */
@@ -230,14 +231,14 @@ export default function BusinessesPage() {
                         if (row.status === "Onboarding") return row.onboardingLabel ? <OnboardingStatusPill label={row.onboardingLabel} /> : <AgencyStatusBadge status="Onboarding" />;
                         return (
                           <>
-                            <select id={`business-status-${row.id}`} value={shown} disabled={busyId === row.id}
+                            <SearchableSelect id={`business-status-${row.id}`} value={shown} disabled={busyId === row.id}
                               onChange={(e) => { if (e.target.value === "Inactive") setConfirm(row); else if (e.target.value === "Active" && row.status !== "Active") void change(row, "Active"); }}
                               className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${isInvited ? "border-amber-200 bg-amber-50 text-amber-900" : row.status === "Active" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-background-300 bg-background-100 text-foreground-600"}`}>
                               {isInvited ? <option value="Invited">Invited</option> : null}
                               {dropdownStatuses.map((item) => (
                                 <option key={item.value} value={item.value} disabled={isInvited && item.value === "Active"}>{busyId === row.id && item.value === shown ? "Saving…" : item.label}</option>
                               ))}
-                            </select>
+                            </SearchableSelect>
                             {isInvited ? (
                               <button type="button" disabled={busyId === row.id} onClick={() => void resend(row)}
                                 className="mt-1.5 flex cursor-pointer items-center gap-1 whitespace-nowrap text-xs font-semibold text-primary-700 hover:underline disabled:cursor-not-allowed disabled:opacity-60">

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { registeredAgentsPage } from "@/data/pages";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const tableBlock = registeredAgentsPage.blocks.find((block) => block.type === "table");
 const columns = tableBlock && tableBlock.type === "table" ? tableBlock.columns : [];
@@ -52,7 +53,7 @@ export default function AgentsTable() {
           </button>
           <label className="flex items-center gap-2 text-sm text-foreground-600">
             Show
-            <select
+            <SearchableSelect
               value={pageSize}
               onChange={(event) => {
                 setPageSize(Number(event.target.value));
@@ -65,7 +66,7 @@ export default function AgentsTable() {
                   {size}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
           </label>
         </div>
       </div>

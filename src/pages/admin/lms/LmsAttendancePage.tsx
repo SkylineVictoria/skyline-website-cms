@@ -4,6 +4,7 @@ import { useListPane } from "@/pages/admin/lib/listPane";
 import { supabase } from "@/pages/admin/lib/supabase";
 import AttendanceSummary from "./AttendanceSummary";
 import { bestIntake, rto, rtoFlow, type RtoCourse, type RtoIntake, type BatchPageData } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Mark = "present" | "absent" | "late" | "excused";
 type History = { date: string; unitId: string; state: string };
@@ -90,7 +91,7 @@ export default function LmsAttendancePage() {
         {!batchId?<p className="py-10 text-center text-sm text-foreground-500">No intake of this course has its classes set up yet. Set up an intake's room, trainer and class times first.</p>:!batch||batch.batch.id!==batchId?<p className="py-10 text-center text-sm text-foreground-500">Loading intake…</p>:<>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <label className="block text-xs font-semibold text-foreground-500">Class date<input type="date" className={input+" mt-1"} value={date} onChange={e=>setDate(e.target.value)}/></label>
-            <label className="block text-xs font-semibold text-foreground-500">Unit<select className={input+" mt-1"} value={unitId} onChange={e=>setUnitId(e.target.value)}>{units.map(u=><option key={u.intakeUnitId} value={u.intakeUnitId}>{u.code} — {u.name}</option>)}</select></label>
+            <label className="block text-xs font-semibold text-foreground-500">Unit<SearchableSelect className={input+" mt-1"} value={unitId} onChange={e=>setUnitId(e.target.value)}>{units.map(u=><option key={u.intakeUnitId} value={u.intakeUnitId}>{u.code} — {u.name}</option>)}</SearchableSelect></label>
             <div className="text-xs font-semibold text-foreground-500">Trainer<p className="mt-1 truncate py-2 text-sm font-semibold text-foreground-950">{batch.batch.trainers.map(t=>t.name).join(", ")||"Not assigned"}</p></div>
           </div>
           <div className="mt-5 flex gap-5 border-b border-background-200">{(["mark","history","summary"] as const).map(t=><button type="button" key={t} aria-pressed={mode===t} className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold "+(mode===t?"border-primary-600 text-primary-700":"border-transparent text-foreground-500 hover:text-foreground-800")} onClick={()=>setMode(t)}>{t==="mark"?"Mark attendance":t==="history"?"History":"Attendance rates"}</button>)}</div>

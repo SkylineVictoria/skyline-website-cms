@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { generateClassSessions, loadClassSessions, rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** courseId null: the break applies to every course. */
 interface BreakRow { id: string; label: string; startDate: string; endDate: string; courseId: string | null }
@@ -122,10 +123,10 @@ export default function LmsTermBreaksPage() {
     {draft && <section className={card + " p-5"} aria-label={draft.id ? "Edit break" : "Add break"}>
       <h2 className="font-heading text-lg font-bold text-foreground-950">{draft.id ? "Edit break" : "Add break"}</h2>
       {perCourse && <label className="mt-3 block text-sm font-medium text-foreground-800">Applies to
-        <select className={inputClass + " mt-1"} value={draft.courseId ?? ""} onChange={e => setDraft(d => d && { ...d, courseId: e.target.value || null })}>
+        <SearchableSelect className={inputClass + " mt-1"} value={draft.courseId ?? ""} onChange={e => setDraft(d => d && { ...d, courseId: e.target.value || null })}>
           <option value="">All courses</option>
           {courses.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
-        </select></label>}
+        </SearchableSelect></label>}
       <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px_180px]">
         <label className="block text-sm font-medium text-foreground-800">Name
           <input autoFocus maxLength={80} placeholder="e.g. Term 1 break" className={inputClass + " mt-1"} value={draft.label} onChange={e => setDraft(d => d && { ...d, label: e.target.value })} /></label>
@@ -149,10 +150,10 @@ export default function LmsTermBreaksPage() {
     <section className={card + " min-w-0 p-5"}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="font-heading text-lg font-bold text-foreground-950">{showPast ? "All breaks" : "Current and upcoming breaks"}</h2>
-        {perCourse && <select aria-label="Show breaks for" className="rounded-lg border border-background-300 bg-background-50 px-3 py-1.5 text-sm" value={filter} onChange={e => setFilter(e.target.value)}>
+        {perCourse && <SearchableSelect aria-label="Show breaks for" className="rounded-lg border border-background-300 bg-background-50 px-3 py-1.5 text-sm" value={filter} onChange={e => setFilter(e.target.value)}>
           <option value="">Every course</option>
           {courses.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
-        </select>}
+        </SearchableSelect>}
         {pastCount > 0 && <label className="flex items-center gap-2 text-sm text-foreground-600">
           <input type="checkbox" checked={showPast} onChange={e => setShowPast(e.target.checked)} />Show {pastCount} past</label>}
       </div>

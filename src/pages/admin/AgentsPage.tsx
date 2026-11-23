@@ -12,6 +12,7 @@ import { agentOnboardingWords, deactivateAgent, listAgentDirectory, resendInvita
 import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import { useListParams } from "@/pages/admin/lib/listParams";
 import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const PAGE_SIZE = 100;
 const KEYS = ["q", "status", "sort", "dir"] as const;
@@ -190,7 +191,7 @@ export default function AgentsPage() {
                         <Link to={`/admin/businesses/${r.businessId}`} className="mt-1 inline-block text-xs font-semibold text-primary-700 hover:underline">Open the business</Link>
                       </div> : <>
                       <label className="sr-only" htmlFor={`status-${r.key}`}>Status for {r.name}</label>
-                      <select id={`status-${r.key}`} value={r.status} disabled={busyKey === r.key} onChange={(e) => changeStatus(r, e.target.value)}
+                      <SearchableSelect id={`status-${r.key}`} value={r.status} disabled={busyKey === r.key} onChange={(e) => changeStatus(r, e.target.value)}
                         className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${STATUS_SELECT[r.status]}`}>
                         {/* The backend's agent statuses. Invited follows from the invitation, so it is never chosen here;
                             Active from Inactive opens the activation dialog; Inactive asks first. */}
@@ -200,7 +201,7 @@ export default function AgentsPage() {
                             {item.label}
                           </option>
                         ))}
-                      </select>
+                      </SearchableSelect>
                       {r.status === "Active" && !r.profileId ? <p className="mt-1 text-2xs font-medium text-amber-700">Hasn't set a password yet</p> : null}
                       {awaitingPassword(r) && r.email ? (
                         <button type="button" disabled={busyKey === r.key} onClick={() => void resend(r)}

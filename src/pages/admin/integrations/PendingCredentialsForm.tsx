@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button } from '@/pages/admin/components/ui';
 import { pendingCredentialRequest } from './api';
 import { inputClass } from './state';
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /**
  * Setup for an app whose connector is not built yet (USI, VEVO, PRISMS, DataZoo): the administrator can store the access
@@ -34,10 +35,10 @@ export default function PendingCredentialsForm({ connectionId, name, saved, busy
       <label className="block">Account or client ID (optional)<input className={inputClass} autoComplete="off" value={accountId} onChange={event => setAccountId(event.target.value)} maxLength={300} /></label>
       <label className="block">Organisation or provider code (optional)<input className={inputClass} autoComplete="off" value={organisationCode} onChange={event => setOrganisationCode(event.target.value)} maxLength={100} /></label>
       <label className="block">Environment
-        <select className={inputClass} value={environment} onChange={event => setEnvironment(event.target.value === 'production' ? 'production' : 'test')}>
+        <SearchableSelect className={inputClass} value={environment} onChange={event => setEnvironment(event.target.value === 'production' ? 'production' : 'test')}>
           <option value="test">Test</option>
           <option value="production">Live</option>
-        </select>
+        </SearchableSelect>
       </label>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" disabled={busy}>{saved ? 'Replace details' : 'Save details'}</Button>

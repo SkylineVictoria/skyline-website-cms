@@ -6,6 +6,7 @@ import AddressSearch, { type AddressPick } from "@/components/shared/wizard/Addr
 import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
 import { DECLARATION_TERMS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const PERSONAL_LABELS: Record<string, string> = {
   title: "Title", gender: "Gender", first_name: "Given name", middle_name: "Middle name", last_name: "Surname", dob: "Date of birth",
@@ -51,10 +52,10 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   const select = (name: string, label: string, options: string[] = optionsOf(name), required = true) => (
     <div>
       <Label htmlFor={`wizard-${name}`} required={required}>{label}</Label>
-      <select id={`wizard-${name}`} name={name} value={v(name)} aria-invalid={Boolean(errors[name])} className={INPUT} onChange={(e) => onChange(name, e.target.value)}>
+      <SearchableSelect id={`wizard-${name}`} name={name} value={v(name)} aria-invalid={Boolean(errors[name])} className={INPUT} onChange={(e) => onChange(name, e.target.value)}>
         <option value="">Select</option>
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
+      </SearchableSelect>
       <FieldError text={errors[name]} />
     </div>
   );

@@ -18,6 +18,7 @@ import { markSessionSeen } from "@/lib/loginRouting";
 import { checkSession, retryUntil } from "@/lib/authSession";
 import { portalAccessMessage } from "@/pages/agency/lib/applicationAccess";
 import { currentPortalScope, setPortalScope, flushPortalBeforeSwitch, type PortalScope } from "@/lib/portalScope";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 function basePathPrefix(): string {
   const base = __BASE_PATH__.split("/").filter(Boolean).join("/");
@@ -326,10 +327,10 @@ export function PortalAuthProvider({ children }: { children: ReactNode }) {
         none could be chosen, so nobody is left without one. */}
     {authUser && scopes.length > 0 && !selectedScope && !identityLoading ? <div className="border-b border-background-200 bg-background-50 px-5 py-3">
       <label className="flex items-center gap-3 text-sm">Institution
-        <select aria-label="Institution" className="rounded border border-background-300 px-3 py-2" value={selectedScope?.key ?? ""} disabled={identityLoading} onChange={(event) => void selectScope(event.target.value)}>
+        <SearchableSelect aria-label="Institution" className="rounded border border-background-300 px-3 py-2" value={selectedScope?.key ?? ""} disabled={identityLoading} onChange={(event) => void selectScope(event.target.value)}>
           {!selectedScope ? <option value="">Choose an institution</option> : null}
           {scopes.map((scope) => <option key={scope.key} value={scope.key}>{scope.name}</option>)}
-        </select>
+        </SearchableSelect>
       </label>
     </div> : null}
     {children}

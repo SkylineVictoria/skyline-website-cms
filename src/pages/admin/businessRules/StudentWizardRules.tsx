@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Definition, Rule, Snapshot } from "./model";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** Student-facing validation settings backed by the existing published Business Rules. */
 const STEPS = [
@@ -152,15 +153,15 @@ export default function StudentWizardRules({ snapshot, publish, busy, showAdvanc
                     })}
                   </div> :
                   type === "boolean" ?
-                  <select id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
+                  <SearchableSelect id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
                     <option value="true">Yes</option><option value="false">No</option>
-                  </select> :
+                  </SearchableSelect> :
                   ["number", "percentage", "days", "hours", "weeks", "currency"].includes(type) ?
                   <input id={id} type="number" disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" /> :
                   type === "dropdown" && version.definition.options.length ?
-                  <select id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
+                  <SearchableSelect id={id} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm">
                     {version.definition.options.map(option => <option key={option} value={option}>{option}</option>)}
-                  </select> :
+                  </SearchableSelect> :
                   <textarea id={id} rows={typeof value === "object" ? 5 : 2} disabled={busy || !editable} value={shown} onChange={e => setEdits(old => ({ ...old, [id]: e.target.value }))} className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 font-mono text-xs" />}
                 {edits[id] !== undefined && <div className="flex justify-end gap-2 sm:col-span-2"><button type="button" onClick={() => setEdits(old => { const next = { ...old }; delete next[id]; return next; })} className="px-3 py-1.5 text-xs text-foreground-600">Cancel</button><button type="button" disabled={busy || !editable} onClick={() => void saveRule(id)} className="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">Publish change</button></div>}
               </>}

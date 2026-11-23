@@ -15,6 +15,7 @@ import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
 import { checkApplicationAnswers, F04_TITLES } from "../../supabase/functions/_shared/validation/abr";
 import { ruleText } from "@/lib/businessRules";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /*
  * The signing page a link holder opens (/sign#t=token): the offer letter a student signs, or any other document sent for signature.
@@ -446,9 +447,9 @@ export default function SigningPage() {
                   className="absolute flex cursor-not-allowed items-center gap-1 overflow-hidden rounded-sm border-2 border-dashed border-background-400 bg-background-200/80 px-1 text-2xs text-foreground-500 sm:text-xs" style={style}>
                   {f.type === "checkbox" ? <input type="checkbox" disabled aria-hidden="true" className="h-3 w-3" /> : null}<span className="truncate">{f.label}</span></div>;
                 // The contact's title on the Agent Application Form is chosen from a list (Mr, Mrs, Ms, Miss, Dr, Other).
-                if (f.type === "text" && f.key === "contact_title") return <select key={f.id} data-field={f.id} aria-label={f.label || "Title"} value={values[f.id] ?? ""}
+                if (f.type === "text" && f.key === "contact_title") return <SearchableSelect key={f.id} data-field={f.id} aria-label={f.label || "Title"} value={values[f.id] ?? ""}
                   onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-base leading-none sm:text-sm`} style={style} data-testid="contact-title">
-                  <option value="">Title…</option>{F04_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}</select>;
+                  <option value="">Title…</option>{F04_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}</SearchableSelect>;
                 if (f.type === "text") return <input key={f.id} data-field={f.id} aria-label={f.label || "Text field"} placeholder={f.label || "Type here"} value={values[f.id] ?? ""} maxLength={500}
                   onChange={(e) => setText(f, e.target.value)} className={`${frame} px-1 text-base leading-none sm:text-sm`} style={style} />;
                 if (f.type === "checkbox") return <label key={f.id} data-field={f.id} className={`${frame} flex cursor-pointer items-center justify-center`} style={style} title={f.label || "Checkbox"}>

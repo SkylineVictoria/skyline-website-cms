@@ -17,6 +17,7 @@ import { commissionText, correctionFlagged, F04_ATTACHMENTS, F04_DECLARATION_INT
 import { allDeclarations, COMPANY_KEYS, COMPANY_LABEL, COUNTRIES, declarationsState, F04_STEP, F04_STEPS as STEPS, f04Problems, f04Values, initialF04, reviewChanges, stepOfKey, visibleSteps, type F04Mode, isAustralia, keyOf, NUMBERS, POSITIONS, QUESTIONS, readChips, readChoice, choiceUnnamed, correctionDraft, correctionScope, withSignedAnswers,
   REF_PARTS, REVIEW_STEP, SERVICES, TRADING_SAME_HINT, writeChips, writeChoice, yesNo, type F04Draft } from "./f04WizardLogic";
 import { commissionSuggested } from "@/pages/agency/lib/admissionsRules";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /*
  * The Agent Application Form (F04) as a short step-by-step wizard (owner briefs 2026-11-19; round 3 "less typing, nicer finish"), built
@@ -629,9 +630,9 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             {has("contact_title") ? frame(["contact_title"], <div>
               <WizardLabel htmlFor="f04-contact_title" required={isRequired("contact_title")}>Title</WizardLabel>
-              <select id="f04-contact_title" value={a.contact_title ?? ""} aria-invalid={Boolean(shown.contact_title)} className={WIZARD_INPUT} data-testid="f04-contact_title" onChange={(e) => set("contact_title", e.target.value)}>
+              <SearchableSelect id="f04-contact_title" value={a.contact_title ?? ""} aria-invalid={Boolean(shown.contact_title)} className={WIZARD_INPUT} data-testid="f04-contact_title" onChange={(e) => set("contact_title", e.target.value)}>
                 <option value="">Select</option>{F04_TITLES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+              </SearchableSelect>
               <FieldError text={shown.contact_title} />
             </div>, "the title") : null}
             {has("contact_position") ? <div className="sm:col-span-2">{frame(["contact_position"], <ChoiceChips id="contact_position" label="Position" value={a.contact_position ?? ""} error={shown.contact_position} required={isRequired("contact_position")} onChange={(v) => set("contact_position", v)} />, "the position")}</div> : null}
@@ -650,9 +651,9 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
                 <div className="sm:col-span-3">{text("office_suburb", "Suburb or city", { autoComplete: "address-level2", required: false, noFrame: true })}</div>
                 {australian ? <div className="sm:col-span-1">
                   <WizardLabel htmlFor="f04-office_state" required={false}>State</WizardLabel>
-                  <select id="f04-office_state" value={(a.office_state ?? "").toUpperCase()} className={WIZARD_INPUT} data-testid="f04-office_state" onChange={(e) => set("office_state", e.target.value)}>
+                  <SearchableSelect id="f04-office_state" value={(a.office_state ?? "").toUpperCase()} className={WIZARD_INPUT} data-testid="f04-office_state" onChange={(e) => set("office_state", e.target.value)}>
                     <option value="">—</option>{AU_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </div> : <div className="sm:col-span-1">{text("office_province", "Province / region", { required: false, noFrame: true })}</div>}
                 <div className="sm:col-span-2">{text("office_postcode", "Postcode", { inputMode: australian ? "numeric" : "text", autoComplete: "postal-code", maxLength: 10, required: false, noFrame: true })}</div>
                 <div className="sm:col-span-6">{text("office_country", "Country", { autoComplete: "country-name", noFrame: true })}</div>

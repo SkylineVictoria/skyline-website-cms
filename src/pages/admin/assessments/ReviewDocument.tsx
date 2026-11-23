@@ -18,6 +18,7 @@ import type { Definition, Question, QuestionKey, Section, Task } from "@/lib/ass
 import { AdjustmentSheet, DetailsTables, WorkbookCover, WorkbookHeader } from "@/components/assessment/WorkbookTables";
 import { CONTENT_TYPES, footerParts, titleSubline, helpRepeatsLabel, INFO_HEADING, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering, type QuestionNumber, type WorkbookUnitInfo } from "@/lib/assessment/workbookLayout";
 import type { WorkbookLetterhead } from "@/lib/assessment/workbookExport";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export interface ReviewActions {
   patchQuestion: (id: string, patch: Partial<Question>) => void;
@@ -146,7 +147,7 @@ function OptionsInPlace({ q, onChange }: { q: Question; onChange: (patch: Partia
   );
 }
 
-const TypeOptions = () => <>{(Object.keys(GROUP_LABEL) as TypeGroup[]).map((g) => <optgroup key={g} label={GROUP_LABEL[g]}>{QUESTION_TYPES.filter((t) => t.group === g).map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</optgroup>)}</>;
+const TypeOptions = () => <>{(Object.keys(GROUP_LABEL) as TypeGroup[]).map((g) => <optgroup key={g} label={GROUP_LABEL[g]}>{QUESTION_TYPES.filter((t) => t.group === g).map((t) => <option key={t.id} value={t.id} data-icon={t.icon} data-description={t.hint}>{t.label}</option>)}</optgroup>)}</>;
 
 export default function ReviewDocument({ definition, title, onTitle, unit, qualification, version, letterhead, selected, onSelect, actions }: {
   definition: Definition;
@@ -199,7 +200,7 @@ export default function ReviewDocument({ definition, title, onTitle, unit, quali
         <div className="space-y-3 border-t border-background-200 p-3">
           {!CONTENT_TYPES.has(q.type) ? (
             <label className="flex items-center gap-2 text-xs text-foreground-600">Question type
-              <select className="h-8 rounded-md border border-background-300 bg-background-50 px-2 text-xs" value={q.type} onChange={(e) => actions.changeType(q, e.target.value)}><TypeOptions /></select>
+              <SearchableSelect className="h-8 rounded-md border border-background-300 bg-background-50 px-2 text-xs" value={q.type} onChange={(e) => actions.changeType(q, e.target.value)}><TypeOptions /></SearchableSelect>
             </label>
           ) : null}
           <QuestionEditor compact q={q} onChange={(patch) => actions.patchQuestion(q.id, patch)} candidates={earlierQuestionIds(definition, q.id)} keyRow={actions.keyOf(q.id)} onKeyChange={(patch) => actions.patchKey(q.id, patch)} />
@@ -293,10 +294,10 @@ export default function ReviewDocument({ definition, title, onTitle, unit, quali
               {s.questions.map((q, qi) => questionBlock(task, s, q, s.questions, qi, null))}
               <label className="inline-flex items-center gap-1.5 text-xs text-foreground-600">
                 <i className="ri-add-line text-primary-700" aria-hidden="true" />
-                <select aria-label={`Add to ${s.title || `task ${ti + 1}`}`} className="h-8 cursor-pointer rounded-md border border-dashed border-primary-300 bg-background-50 px-2 text-xs font-semibold text-primary-700" value=""
+                <SearchableSelect aria-label={`Add to ${s.title || `task ${ti + 1}`}`} className="h-8 cursor-pointer rounded-md border border-dashed border-primary-300 bg-background-50 px-2 text-xs font-semibold text-primary-700" value=""
                   onChange={(e) => { if (e.target.value) actions.add(task.id, s.id, e.target.value); }}>
-                  <option value="">Add a question or text…</option><TypeOptions />
-                </select>
+                  <option value="" hidden>Add a question or text…</option><TypeOptions />
+                </SearchableSelect>
               </label>
             </div>
           ))}

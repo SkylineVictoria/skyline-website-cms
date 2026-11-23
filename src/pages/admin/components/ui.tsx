@@ -12,6 +12,7 @@ import {
   type SelectHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
+import SearchableSelect, { type SearchableSelectProps } from "@/components/ui/SearchableSelect";
 import { uploadCmsImage } from "@/pages/admin/lib/storage";
 
 /* ------------------------------------------------------------------ Button */
@@ -158,11 +159,12 @@ export function TextArea({ className = "", rows = 4, ...rest }: TextareaHTMLAttr
   return <textarea rows={rows} className={`${inputBase} ${className}`} {...rest} />;
 }
 
-export function Select({ className = "", children, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+/** UI-SELECT: the shared searchable dropdown (a drop-in for <select>: same props, <option> / <optgroup> children). */
+export function Select({ className = "", children, ...rest }: SearchableSelectProps) {
   return (
-    <select className={`${inputBase} cursor-pointer ${className}`} {...rest}>
+    <SearchableSelect className={`${inputBase} cursor-pointer ${className}`} {...rest}>
       {children}
-    </select>
+    </SearchableSelect>
   );
 }
 

@@ -11,6 +11,7 @@ import StatusBadge from "@/components/shared/application-status/StatusBadge";
 import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
 import Toast from "@/components/shared/application-form/Toast";
 import { useToast } from "@/components/shared/application-form/useToast";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type SortKey = "reference" | "student" | "agency" | "agent" | "status" | "completion" | "created" | "updated";
 
@@ -231,7 +232,7 @@ export default function ApplicationsTable({
                 className="w-full bg-transparent text-sm text-foreground-900 placeholder:text-foreground-400 focus:outline-none"
               />
             </label>
-            <select
+            <SearchableSelect
               value={status}
               onChange={(e) => {
                 setStatus(e.target.value);
@@ -246,9 +247,9 @@ export default function ApplicationsTable({
                   {choice.label}
                 </option>
               ))}
-            </select>
+            </SearchableSelect>
             {agencies && !fixedAgencyId ? (
-              <select
+              <SearchableSelect
                 value={agencyId}
                 onChange={(e) => {
                   setAgencyId(e.target.value);
@@ -263,7 +264,7 @@ export default function ApplicationsTable({
                     {a.name}
                   </option>
                 ))}
-              </select>
+              </SearchableSelect>
             ) : null}
           </div>
         </div>

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { bestIntake, rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 import type { Completion } from "@/pages/CertificatePage";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Unit = { code: string; name: string; outcome: string | null; date: string | null };
 type Row = { enrolmentId: string; studentId: string; studentName: string; enrolmentStatus: string; units: Unit[]; completions: Completion[] };
@@ -61,8 +62,8 @@ export default function LmsCompletionPage() {
         <p className="text-sm text-foreground-500">When every unit is marked Competent, issue the certificate and record of results. A statement of attainment lists the units achieved so far. RTO Managers issue and revoke.</p>
       </header>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="text-xs font-semibold text-foreground-500">Course<select className={select + " mt-1"} value={courseId} onChange={(e) => setCourseId(e.target.value)}>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</select></label>
-        <label className="text-xs font-semibold text-foreground-500">Intake<select className={select + " mt-1"} value={intakeId} onChange={(e) => setIntakeId(e.target.value)}>{courseIntakes.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
+        <label className="text-xs font-semibold text-foreground-500">Course<SearchableSelect className={select + " mt-1"} value={courseId} onChange={(e) => setCourseId(e.target.value)}>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</SearchableSelect></label>
+        <label className="text-xs font-semibold text-foreground-500">Intake<SearchableSelect className={select + " mt-1"} value={intakeId} onChange={(e) => setIntakeId(e.target.value)}>{courseIntakes.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}</SearchableSelect></label>
       </div>
       {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       {message ? <p role="status" className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">{message}</p> : null}

@@ -15,6 +15,7 @@ import NewAssessmentDialog from "./NewAssessmentDialog";
 import WorkbookHeaderPicker from "@/components/assessment/WorkbookHeaderPicker";
 import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetterhead";
 import { WORKBOOK_HEADER_HINT } from "@/lib/assessment/workbookExport";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const TABS = [
   { id: "library", label: "Library", icon: "ri-book-2-line" }, { id: "submissions", label: "Submissions", icon: "ri-inbox-line" }, { id: "outcomes", label: "Outcomes", icon: "ri-award-line" },
@@ -60,7 +61,7 @@ function Library() {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <TextInput className="max-w-xs" placeholder="Search title or code" value={q} onChange={(e) => setQ(e.target.value)} />
-        <Select className="w-auto" value={courseId} onChange={(e) => setCourseId(e.target.value)}><option value="">All courses</option>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</Select>
+        <Select className="w-auto min-w-[16rem]" aria-label="Course" data-testid="library-course-filter" noMatchText="No courses match" value={courseId} onChange={(e) => setCourseId(e.target.value)}><option value="">All courses</option>{courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}</Select>
         <Toggle label="Show archived" checked={archived} onChange={setArchived} />
         <span className="flex-1" /><Button icon="ri-add-line" onClick={() => setCreating(true)}>New assessment</Button>
       </div>
@@ -128,8 +129,8 @@ export function Submissions() {
         <h3 className="mb-3 font-semibold">3. Submissions</h3>
         {!batchId?<p className="text-sm text-foreground-500">Select an intake to view submissions.</p>:<>
           <div className="grid gap-2 sm:grid-cols-2">
-            <label className="text-xs font-semibold">Unit<select className={input+" mt-1"} value={unitCode} onChange={e=>{setUnitCode(e.target.value);setAssessment("");}}><option value="">All units with pending marking</option>{units.map(u=><option key={u} value={u}>{u}</option>)}</select></label>
-            <label className="text-xs font-semibold">Assessment<select className={input+" mt-1"} value={assessment} onChange={e=>setAssessment(e.target.value)}><option value="">All assessments</option>{assessmentTitles.map(t=><option key={t} value={t}>{t}</option>)}</select></label>
+            <label className="text-xs font-semibold">Unit<SearchableSelect className={input+" mt-1"} value={unitCode} onChange={e=>{setUnitCode(e.target.value);setAssessment("");}}><option value="">All units with pending marking</option>{units.map(u=><option key={u} value={u}>{u}</option>)}</SearchableSelect></label>
+            <label className="text-xs font-semibold">Assessment<SearchableSelect className={input+" mt-1"} value={assessment} onChange={e=>setAssessment(e.target.value)}><option value="">All assessments</option>{assessmentTitles.map(t=><option key={t} value={t}>{t}</option>)}</SearchableSelect></label>
           </div>
           {ov?<div className="my-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[[ov.eligible,"Eligible"],[ov.submitted,"Submitted"],[ov.notStarted+ov.draft,"Not started / Draft"],[ov.overdue,"Overdue"]].map(([value,label])=><div key={label} className="rounded-lg border border-background-200 p-3"><p className="text-xl font-bold">{value}</p><p className="text-xs text-foreground-600">{label}</p></div>)}
@@ -137,7 +138,7 @@ export function Submissions() {
           <p className="mb-3 text-xs text-foreground-500">The table shows submissions awaiting marking. Full submission history remains in the existing assessment workflow.</p>
           <div className="grid gap-2 sm:grid-cols-2">
             <input aria-label="Search student submissions" placeholder="Search student…" className={input} value={studentQuery} onChange={e=>setStudentQuery(e.target.value)}/>
-            <select aria-label="Submission status" className={input} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="all">All pending states</option><option value="submitted">Submitted</option><option value="marking">Marking</option></select>
+            <SearchableSelect aria-label="Submission status" className={input} value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="all">All pending states</option><option value="submitted">Submitted</option><option value="marking">Marking</option></SearchableSelect>
           </div>
           <div className="mt-3 overflow-x-auto rounded-lg border border-background-200">
             <table className="w-full min-w-[460px] text-left text-sm"><thead className="bg-background-100 text-xs"><tr><th className="p-2">Student</th><th className="p-2">Assessment</th><th className="p-2">Attempt</th><th className="p-2">Status</th><th className="p-2">Action</th></tr></thead><tbody className="divide-y divide-background-100">{visible.map(p=><tr key={p.attemptId}><td className="p-2 font-medium">{p.studentName}</td><td className="p-2">{p.assessmentTitle}<p className="text-xs text-foreground-500">{p.unitCode||""}</p></td><td className="p-2">{p.attemptNo}</td><td className="p-2"><Badge tone={p.state==="marking"?"accent":"warn"}>{STATE_LABEL[p.state]??p.state}</Badge></td><td className="p-2"><button type="button" className="font-semibold text-primary-600 underline" onClick={()=>setAttempt(p.attemptId)}>Review</button></td></tr>)}</tbody></table>

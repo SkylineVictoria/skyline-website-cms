@@ -7,6 +7,7 @@ import DraftStatus from "@/pages/admin/components/DraftStatus";
 import { useDraft } from "@/pages/admin/lib/useDraft";
 import CalendlyCard from "@/pages/admin/components/CalendlyCard";
 import { calendlyUrlProblem } from "@/lib/calendly";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export default function ContactPage() {
   const { data, update, logActivity, recordRevision } = useAdminData();
@@ -94,12 +95,12 @@ export default function ContactPage() {
             <TextInput type="number" min={1} max={365} value={draft.offerValidityDays ?? 30} onChange={(e) => set("offerValidityDays", Math.min(365, Math.max(1, Number(e.target.value) || 30)))} />
           </Field>
           <Field label="Date format in letters">
-            <select value={draft.letterDateFormat ?? "DD/MM/YYYY"} onChange={(e) => set("letterDateFormat", e.target.value as AdminSettings["letterDateFormat"])}
+            <SearchableSelect value={draft.letterDateFormat ?? "DD/MM/YYYY"} onChange={(e) => set("letterDateFormat", e.target.value as AdminSettings["letterDateFormat"])}
               className="h-10 w-full rounded-md border border-background-300 bg-background-50 px-3 text-sm">
               <option value="DD/MM/YYYY">DD/MM/YYYY (31/01/2027)</option>
               <option value="D Month YYYY">D Month YYYY (31 January 2027)</option>
               <option value="DD Mon YYYY">DD Mon YYYY (31 Jan 2027)</option>
-            </select>
+            </SearchableSelect>
           </Field>
         </div>
       </Card>

@@ -26,6 +26,7 @@ import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/componen
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
 import { isEmailTakenError } from "@/lib/identity/email";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 function newClientKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -353,20 +354,20 @@ export default function NewApplicationPage() {
             <div className="mt-5 space-y-4">
               <div>
                 <label htmlFor="student-business" className="mb-1.5 block text-label font-medium text-foreground-800">Business <span className="text-primary-600">*</span></label>
-                <select id="student-business" className={selectClass} value={chosenBusinessId} disabled={creating}
+                <SearchableSelect id="student-business" className={selectClass} value={chosenBusinessId} disabled={creating}
                   onChange={(e) => { setChosenBusinessId(e.target.value); setChosenAgentId(""); }}>
                   <option value="">Select your agency</option>
                   {agencyChoices.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
+                </SearchableSelect>
                 {agencyChoices.length === 0 ? <p className="mt-1 text-xs text-foreground-500">No agencies are registered yet. Choose No to apply by yourself.</p> : null}
               </div>
               <div>
                 <label htmlFor="student-agent" className="mb-1.5 block text-label font-medium text-foreground-800">Agent <span className="text-primary-600">*</span></label>
-                <select id="student-agent" className={selectClass} value={chosenAgentId} disabled={creating || !chosenBusinessId || agentsLoading}
+                <SearchableSelect id="student-agent" className={selectClass} value={chosenAgentId} disabled={creating || !chosenBusinessId || agentsLoading}
                   onChange={(e) => setChosenAgentId(e.target.value)}>
                   <option value="">{!chosenBusinessId ? "Choose the business first" : agentsLoading ? "Loading agents…" : agentChoices.length ? "Select your agent" : "This business has no active agents"}</option>
                   {agentChoices.map((a) => <option key={a.id} value={a.id}>{a.name}{a.role === "agency_admin" ? " (business admin agent)" : ""}</option>)}
-                </select>
+                </SearchableSelect>
                 <p className="mt-1 text-xs text-foreground-500">Your agent is not listed? Ask them to register with SLIT, or choose No for now.</p>
               </div>
             </div>

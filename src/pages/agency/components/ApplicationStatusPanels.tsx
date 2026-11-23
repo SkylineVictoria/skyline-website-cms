@@ -9,6 +9,7 @@ import { formatDate } from "@/pages/agency/lib/portalData";
 import { depositReminderText, portalOfferAcceptAllowed } from "@/pages/agency/lib/admissionsRules";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** The reason the latest Action required was sent with (from the status history). */
 const actionRequiredNote = (history: StatusHistoryRow[]) => history.find((row) => row.newStatus === "action_required")?.note ?? "";
@@ -160,11 +161,11 @@ export function AgentMetaEditor({ agentId, agentName, agents, busy, onAssign }: 
       {open ? (
         <span className="fade-in absolute left-0 top-full z-40 mt-1 w-64 rounded-lg border border-background-200 bg-background-50 p-3 shadow-lg" role="dialog" aria-label="Assigned agent">
           <label htmlFor="assign-agent" className="mb-1 block text-xs font-medium uppercase tracking-wide text-foreground-500">Assigned agent</label>
-          <select id="assign-agent" value={choice} onChange={(e) => setChoice(e.target.value)}
+          <SearchableSelect id="assign-agent" value={choice} onChange={(e) => setChoice(e.target.value)}
             className="h-9 w-full rounded-lg border border-background-300 bg-background-50 px-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40">
             <option value="">Unassigned</option>
             {agents.map((agent) => <option key={agent.profileId} value={agent.profileId}>{agent.fullName}</option>)}
-          </select>
+          </SearchableSelect>
           <span className="mt-2 flex justify-end gap-2">
             <button type="button" onClick={() => setOpen(false)} className="h-8 cursor-pointer rounded-lg px-2 text-xs font-medium text-foreground-600 hover:bg-background-100">Cancel</button>
             <button type="button" disabled={busy || choice === (agentId ?? "")} onClick={() => { onAssign(choice); setOpen(false); }}

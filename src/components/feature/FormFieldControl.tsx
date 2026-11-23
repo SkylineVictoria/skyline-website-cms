@@ -1,4 +1,5 @@
 import { acceptAttribute, type RenderField } from "@/lib/formFields";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /**
  * The single field-type renderer used everywhere:
@@ -10,7 +11,7 @@ import { acceptAttribute, type RenderField } from "@/lib/formFields";
  *   Textarea             → multiline textarea (rows)
  *   Number               → number input (min / max / step)
  *   Date                 → date input   (min / max)
- *   Dropdown             → <select>
+ *   Dropdown             → <SearchableSelect>
  *   Radio                → radio button group (NOT a dropdown)
  *   Checkbox             → checkbox group, or a single checkbox when no options
  *   File Upload          → file input (accepted types + max size)
@@ -106,7 +107,7 @@ export default function FormFieldControl({
       ) : null}
 
       {field.type === "Dropdown" ? (
-        <select
+        <SearchableSelect
           id={inputId}
           name={field.id}
           disabled={disabled}
@@ -122,7 +123,7 @@ export default function FormFieldControl({
               {option}
             </option>
           ))}
-        </select>
+        </SearchableSelect>
       ) : field.type === "Radio" ? (
         <fieldset className="flex flex-wrap gap-x-6 gap-y-2 pt-1">
           <legend className="sr-only">{field.label}</legend>

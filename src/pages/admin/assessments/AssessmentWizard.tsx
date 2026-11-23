@@ -32,6 +32,7 @@ import { WorkbookHeader } from "@/components/assessment/WorkbookTables";
 import { autoTitle, decideFiling, filingCourseId, needsUnitStep, type FilingDecision } from "@/lib/assessment/workbookFiling";
 import { asmAdmin, type Settings } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Mode = "workbook" | "manual";
 type StepId = "start" | "upload" | "unit" | "review" | "save";
@@ -389,16 +390,16 @@ export default function AssessmentWizard({ courses, pageCourseId, pageUnitId, pa
           ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block text-sm font-semibold text-foreground-800">Qualification
-              <select className={`${FIELD} mt-1`} value={courseId} onChange={(e) => { const id = e.target.value; setCourseId(id); setUnitId(""); void loadUnits(id); }}>
+              <SearchableSelect className={`${FIELD} mt-1`} noMatchText="No qualifications match" searchPlaceholder="Search by code or name…" value={courseId} onChange={(e) => { const id = e.target.value; setCourseId(id); setUnitId(""); void loadUnits(id); }}>
                 <option value="">Choose…</option>
                 {courses.map((c) => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
-              </select>
+              </SearchableSelect>
             </label>
             <label className="block text-sm font-semibold text-foreground-800">Unit
-              <select className={`${FIELD} mt-1`} value={unitId} disabled={!courseId || unitsLoading} onChange={(e) => setUnitId(e.target.value)}>
+              <SearchableSelect className={`${FIELD} mt-1`} noMatchText="No units match" searchPlaceholder="Search by code or name…" value={unitId} disabled={!courseId || unitsLoading} onChange={(e) => setUnitId(e.target.value)}>
                 <option value="">{unitsLoading ? "Loading units…" : "Choose…"}</option>
                 {units.filter((u) => u.id).map((u) => <option key={u.id} value={u.id}>{u.code} — {u.name}{u.isActive === false ? " (inactive)" : ""}</option>)}
-              </select>
+              </SearchableSelect>
             </label>
           </div>
         </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { cleanUsiDocument, USI_DOCUMENTS, usiDocument, usiDocumentProblems, type UsiDocumentField } from "../../../../supabase/functions/_shared/validation/usi-documents";
 import { UsiCallError, usiConsent, usiCountries, usiCreate, usiLocate, usiState, usiVerify, type Match, type UsiState } from "@/lib/usi";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Tone = "ok" | "warn" | "bad" | "info";
 const TONE: Record<Tone, string> = {
@@ -155,7 +156,7 @@ export default function UsiPanel({ applicationId, usi, onUsi, beforeCall, readOn
       <label key={f.key} htmlFor={id} className="block text-xs font-medium text-foreground-700">
         {f.label}{required ? <span className="text-primary-600"> *</span> : null}
         {f.kind === "select"
-          ? <select id={id} className={`${INPUT} mt-1`} value={value} onChange={(e) => set(e.target.value)}><option value="">Choose…</option>{f.options?.map((o) => <option key={o} value={o}>{o}</option>)}</select>
+          ? <SearchableSelect id={id} className={`${INPUT} mt-1`} value={value} onChange={(e) => set(e.target.value)}><option value="">Choose…</option>{f.options?.map((o) => <option key={o} value={o}>{o}</option>)}</SearchableSelect>
           : <input id={id} type={f.kind === "date" ? "date" : "text"} autoComplete="off" className={`${INPUT} mt-1`} value={value} onChange={(e) => set(f.upper ? e.target.value.toUpperCase() : e.target.value)} />}
         {f.help ? <span className="mt-0.5 block font-normal text-foreground-500">{f.help}</span> : null}
         {docErrors[f.key] ? <span role="alert" className="mt-0.5 block font-normal text-red-700">{docErrors[f.key]}</span> : null}
@@ -241,9 +242,9 @@ export default function UsiPanel({ applicationId, usi, onUsi, beforeCall, readOn
               {state?.createRequestedAt ? <p className="text-xs text-foreground-600">The student / agency asked for a USI on {when(state.createRequestedAt)}.</p> : null}
               <p className="text-xs text-foreground-600">An identity document is always required. Names and date of birth must match the document exactly. The document number is sent to the USI Registry once and never stored.</p>
               <label className="block text-xs font-medium text-foreground-700" htmlFor="usi-doc-type">Identity document
-                <select id="usi-doc-type" className={`${INPUT} mt-1`} value={docType} onChange={(e) => { setDocType(e.target.value); setDocErrors({}); setDocValues((documentPrefill?.() ?? {})[e.target.value] ?? {}); }} data-testid="usi-doc-type">
+                <SearchableSelect id="usi-doc-type" className={`${INPUT} mt-1`} value={docType} onChange={(e) => { setDocType(e.target.value); setDocErrors({}); setDocValues((documentPrefill?.() ?? {})[e.target.value] ?? {}); }} data-testid="usi-doc-type">
                   {USI_DOCUMENTS.map((d) => <option key={d.type} value={d.type}>{d.label}</option>)}
-                </select>
+                </SearchableSelect>
                 {def?.help ? <span className="mt-0.5 block font-normal text-foreground-500">{def.help}</span> : null}
               </label>
               <div className="grid gap-3 sm:grid-cols-2">{def?.fields.map(fieldInput)}</div>
@@ -252,9 +253,9 @@ export default function UsiPanel({ applicationId, usi, onUsi, beforeCall, readOn
               </label>
               {needCountry ? (
                 <label className="block text-xs font-medium text-foreground-700" htmlFor="usi-country">Country of birth (USI list)
-                  <select id="usi-country" className={`${INPUT} mt-1`} value={countryCode} onChange={(e) => setCountryCode(e.target.value)}>
+                  <SearchableSelect id="usi-country" className={`${INPUT} mt-1`} value={countryCode} onChange={(e) => setCountryCode(e.target.value)}>
                     <option value="">{countries ? "Choose…" : "Loading…"}</option>{countries?.map((c) => <option key={c.code} value={c.code}>{c.name}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </label>
               ) : null}
               <button type="button" className={PRIMARY} disabled={!permitted || !!busy || !state?.canCreate} onClick={create} data-testid="usi-create">

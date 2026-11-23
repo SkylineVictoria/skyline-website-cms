@@ -4,6 +4,7 @@ import IntakeSelect from "@/pages/agency/components/IntakeSelect";
 import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /**
  * One answer screen. Inputs are plain form controls named after the application fields; the wizard reads them from the
@@ -76,11 +77,11 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
         <div className="grid grid-cols-1 gap-4">
           <div>
             <Label htmlFor="wizard-course">Course</Label>
-            <select id="wizard-course" name="course" value={answers.course ?? ""} aria-invalid={Boolean(errors.course) || courseOptions?.length === 0} disabled={!courseOptions || courseOptions.length === 0}
+            <SearchableSelect id="wizard-course" name="course" value={answers.course ?? ""} aria-invalid={Boolean(errors.course) || courseOptions?.length === 0} disabled={!courseOptions || courseOptions.length === 0}
               className={INPUT} onChange={(e) => onChange("course", e.target.value)} data-testid="wizard-course">
               <option value="">{courseOptions === null ? "Loading courses…" : courseOptions.length === 0 ? "No courses open" : "Select a course"}</option>
               {(answers.course && courseOptions && !courseOptions.includes(answers.course) ? [answers.course, ...courseOptions] : courseOptions ?? []).map((label) => <option key={label} value={label}>{label}</option>)}
-            </select>
+            </SearchableSelect>
             {courseOptions?.length === 0 ? <p className="mt-1 text-xs text-primary-700" role="alert" data-testid="wizard-no-courses">No courses are open for applications yet. Contact admissions.</p> : null}
             <FieldError text={errors.course} />
           </div>

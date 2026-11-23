@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ConfirmDialog } from "@/pages/admin/components/ui";
 import { assignLicence, fetchDirectory, refreshMicrosoft365, removeLicences, setSignin, useMicrosoft365, type DirectoryPage, type DirectoryRow, type DirectoryType } from "@/pages/admin/lib/microsoft365";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /*
  * Email Management > Account directory (owner 2026-11-21): the tenant's Microsoft 365 users, read live through student-office365
@@ -106,10 +107,10 @@ export default function AccountDirectory({ create }: { create: React.ReactNode }
       <div className="mb-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
         <div className="relative"><label htmlFor="account-search" className="sr-only">Search email accounts</label><i className="ri-search-line absolute left-3 top-3 text-foreground-500" aria-hidden="true" />
           <input id="account-search" className={field + " pl-9"} placeholder="Search by name, email or person type" value={search} onChange={(e) => setSearch(e.target.value)} data-testid="directory-search" /></div>
-        <select aria-label="Type" className={field} value={type} onChange={(e) => { setType(e.target.value); setPage(1); }} data-testid="directory-type">
-          <option value="">All types (not shared)</option>{(Object.keys(TYPE_LABEL) as DirectoryType[]).map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}{data ? ` (${data.counts.byType[t] ?? 0})` : ""}</option>)}</select>
-        <select aria-label="Status" className={field} value={state} onChange={(e) => { setState(e.target.value); setPage(1); }} data-testid="directory-status">
-          <option value="">Any status</option><option value="enabled">Enabled</option><option value="blocked">Sign-in blocked</option></select>
+        <SearchableSelect aria-label="Type" className={field} value={type} onChange={(e) => { setType(e.target.value); setPage(1); }} data-testid="directory-type">
+          <option value="">All types (not shared)</option>{(Object.keys(TYPE_LABEL) as DirectoryType[]).map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}{data ? ` (${data.counts.byType[t] ?? 0})` : ""}</option>)}</SearchableSelect>
+        <SearchableSelect aria-label="Status" className={field} value={state} onChange={(e) => { setState(e.target.value); setPage(1); }} data-testid="directory-status">
+          <option value="">Any status</option><option value="enabled">Enabled</option><option value="blocked">Sign-in blocked</option></SearchableSelect>
       </div>
       {data && !data.adminRolesReadable ? <p role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="directory-admin-roles">
         Removing licences is switched off until Skyline can check which accounts hold an admin role: add the Microsoft Graph application permission <strong>{data.adminRolePermission}</strong> with admin consent.</p> : null}

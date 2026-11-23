@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useLocation, useSearchParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { PortalEmpty, PortalError, PortalLoading } from "../components/PortalUI";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Difficulty = "easy" | "medium" | "advanced";
 type Unit = { id: string; code: string; name: string; enabled: boolean; hasMaterials: boolean };
@@ -189,15 +190,15 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
         </div>
         {assessmentMode
           ? <label className="block space-y-1 text-sm font-semibold">Assessment
-              <select className={control} value={assignment?.id ?? ""} disabled={!!busy} onChange={e => go("assessment", e.target.value)}>
+              <SearchableSelect className={control} value={assignment?.id ?? ""} disabled={!!busy} onChange={e => go("assessment", e.target.value)}>
                 <option value="">Choose an assessment</option>
                 {catalogue.assessments.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
-              </select>
+              </SearchableSelect>
             </label>
           : <label className="block space-y-1 text-sm font-semibold">Unit
-              <select className={control} value={unitId ?? ""} disabled={!!busy} onChange={e => { resetQuestion(); const target = new URLSearchParams(params); target.set("unit", e.target.value); setParams(target); }}>
+              <SearchableSelect className={control} value={unitId ?? ""} disabled={!!busy} onChange={e => { resetQuestion(); const target = new URLSearchParams(params); target.set("unit", e.target.value); setParams(target); }}>
                 {catalogue.units.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}
-              </select>
+              </SearchableSelect>
             </label>}
         <fieldset disabled={!!busy} className="space-y-2">
           <legend className="font-heading text-sm font-bold">Difficulty</legend>
@@ -210,10 +211,10 @@ export default function StudentPracticePage({ embedded = false }: { embedded?: b
           </div>
         </fieldset>
         {!!progress?.topics.length && <label className="block space-y-1 text-sm font-semibold">Focus topic
-          <select className={control} value={focus} disabled={!!busy} onChange={e => { resetQuestion(); setFocus(e.target.value); }}>
+          <SearchableSelect className={control} value={focus} disabled={!!busy} onChange={e => { resetQuestion(); setFocus(e.target.value); }}>
             <option value="">All topics</option>
             {progress.topics.map(item => <option key={item.topic} value={item.topic}>{item.topic}</option>)}
-          </select>
+          </SearchableSelect>
         </label>}
       </aside>}
 

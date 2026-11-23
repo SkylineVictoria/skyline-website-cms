@@ -15,6 +15,7 @@ import ActivateInIntakeDialog from "@/components/shared/application-status/Activ
 import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
 import { changeApplicationStatus, createApplicationForStudent } from "@/pages/agency/lib/portalApplications";
 import { formatPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 // Up to 100 students load per page and are sorted on this device (like the Agents list).
 const PAGE_SIZE = 100;
@@ -220,11 +221,11 @@ This permanently deletes the student and ALL ${total} of their application${tota
             ...(["active", "invited", "not_invited", "disabled"] as const).map((a) => ({ id: a, label: PORTAL_ACCESS_LABEL[a], count: counts?.access?.[a] ?? null }))]} />
         <label className="flex items-center gap-2 text-sm text-foreground-700">
           <span className="whitespace-nowrap">Enrolment</span>
-          <select value={enrolment} onChange={(e) => { setEnrolment(e.target.value as EnrolmentStage | ""); setPage(1); }} data-testid="students-enrolment-filter"
+          <SearchableSelect value={enrolment} onChange={(e) => { setEnrolment(e.target.value as EnrolmentStage | ""); setPage(1); }} data-testid="students-enrolment-filter"
             className="rounded-md border border-background-300 bg-white px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-primary-100">
             <option value="">Any</option>
             {ENROLMENT_ORDER.map((stage) => <option key={stage} value={stage}>{ENROLMENT_LABEL[stage]}{counts?.enrolment ? ` (${counts.enrolment[stage] ?? 0})` : ""}</option>)}
-          </select>
+          </SearchableSelect>
         </label>
         <div className="flex-1"><SearchBox label="Search students" value={search} onSearch={(v) => { setSearch(v); setPage(1); }}
           placeholder={businessId ? "Search name, email, mobile, passport, agent or application reference" : "Search name, email, mobile, passport, business, agent or application reference"} /></div>
@@ -286,7 +287,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                           const tone = disabled ? ENROLMENT_TONE.none : ENROLMENT_TONE[row.enrolment?.stage ?? "none"] ?? ENROLMENT_TONE.none;
                           return <div className="flex flex-col items-start gap-1 text-xs">
                             <label className="sr-only" htmlFor={`student-status-${row.id}`}>Status for {row.name || row.email}</label>
-                            <select id={`student-status-${row.id}`} value={current} disabled={busyId === row.id || row.status === undefined}
+                            <SearchableSelect id={`student-status-${row.id}`} value={current} disabled={busyId === row.id || row.status === undefined}
                               onChange={(e) => pickStatus(row, e.target.value)}
                               className={`max-w-full cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${tone}`}>
                               {disabled ? <>
@@ -297,7 +298,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                                 {moves.map((a) => <option key={a.action} value={a.to ?? ""}>{a.to === "active" ? "Active (choose intake)" : statusInfo(workflow, a.to ?? "").label}</option>)}
                                 <option value="__inactive">Inactive (switch off student)</option>
                               </>}
-                            </select>
+                            </SearchableSelect>
                             {!disabled && row.enrolment?.stage === "deposit_paid" ? <span className="font-medium text-teal-800">Deposit paid</span> : null}
                             {app ? <Link to={`/admin/applications/${app.id}`} className="text-foreground-700 hover:text-primary-700">
                               {[app.course, app.reference].filter(Boolean).join(" · ") || "Application"}</Link> : null}

@@ -4,6 +4,7 @@ import LetterPreview, { VariableCheck } from "@/components/shared/offer-letter/L
 import { sampleValues, testApplications, testLetterValues, type LetterValues } from "@/lib/offerLetters";
 import { replaceToken, unmappedTokens, type LetterVariable } from "../../../../../supabase/functions/_shared/letter-variables";
 import type { Sections } from "@/lib/templateSections";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Template = Sections & { title: string };
 
@@ -43,11 +44,11 @@ export function UnmappedTokens({ template, registry, onChange }: { template: Tem
               <code className="rounded bg-background-50 px-1.5 py-0.5 text-xs text-red-800">{t.token}</code>
               <span className="text-xs text-amber-900">{t.kind === "legacy" ? "old placeholder" : t.kind === "modifier" ? "unknown modifier (use |upper, |lower, |title or |raw)" : "not a variable"}</span>
               <label className="sr-only" htmlFor={`map-${t.token}`}>Map {t.token} to variable</label>
-              <select id={`map-${t.token}`} value={key} onChange={(e) => setChoice((c) => ({ ...c, [t.token]: e.target.value }))} data-testid="unmapped-map-select"
+              <SearchableSelect id={`map-${t.token}`} value={key} onChange={(e) => setChoice((c) => ({ ...c, [t.token]: e.target.value }))} data-testid="unmapped-map-select"
                 className="h-8 rounded border border-background-300 bg-background-50 px-2 text-xs">
                 <option value="">Map to variable…</option>
                 {registry.map((v) => <option key={v.key} value={v.key}>{v.group} · {v.label}</option>)}
-              </select>
+              </SearchableSelect>
               <Button size="sm" variant="outline" disabled={!key} onClick={() => convert([[t.token, key]])} data-testid="unmapped-convert">Map to variable</Button>
             </li>
           );
@@ -89,10 +90,10 @@ export function LetterTestDialog({ template, registry, mode: initial, onClose }:
           {mode === "application" ? <>
             <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Reference or student name" aria-label="Find an application"
               className="h-9 w-56 rounded-md border border-background-300 bg-background-50 px-2" />
-            <select value={appId} onChange={(e) => setAppId(e.target.value)} aria-label="Application" data-testid="letter-test-application" className="h-9 min-w-56 rounded-md border border-background-300 bg-background-50 px-2">
+            <SearchableSelect value={appId} onChange={(e) => setAppId(e.target.value)} aria-label="Application" data-testid="letter-test-application" className="h-9 min-w-56 rounded-md border border-background-300 bg-background-50 px-2">
               <option value="">{apps === null ? "Loading…" : apps.length ? "Choose an application" : "No applications found"}</option>
               {(apps ?? []).map((a) => <option key={a.id} value={a.id}>{a.reference} · {a.studentName || "Unnamed"} ({a.status.replaceAll("_", " ")})</option>)}
-            </select>
+            </SearchableSelect>
           </> : null}
         </div>
         {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}

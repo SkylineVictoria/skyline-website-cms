@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { abnProblem, formatAbn } from "@/lib/enrolForm";
 import { checkAbnFree, lookupAbn, type AbnDetails } from "@/lib/selfEnrol";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** The business an agent chose: from ABN Lookup, or typed by hand when the lookup is unavailable. */
 export interface ChosenBusiness { abn: string; businessName: string; details: AbnDetails | null }
@@ -136,10 +137,10 @@ export default function AgentBusinessStep({ initial, onChosen }: { initial: Chos
                   <>
                     {found.businessNames.length > 1 ? (
                       <Field label="Trading name to use">
-                        <select value={tradingName} onChange={(e) => setTradingName(e.target.value)}
+                        <SearchableSelect value={tradingName} onChange={(e) => setTradingName(e.target.value)}
                           className="w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm text-foreground-900">
                           {[...found.businessNames, found.legalName].filter((v, i, all) => v && all.indexOf(v) === i).map((name) => <option key={name} value={name}>{name}</option>)}
-                        </select>
+                        </SearchableSelect>
                       </Field>
                     ) : null}
                     <Button type="button" className="w-full" onClick={useDetails}>Use these details</Button>

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { anonClient, createAdmin, createAuthUser, createStudentLogin, person, shot, signInAsAdmin, signInThroughTheForm, PASSWORD, signOutEverywhere, sql } from "./support";
+import { anonClient, createAdmin, createAuthUser, createStudentLogin, person, shot, signInAsAdmin, signInThroughTheForm, PASSWORD, signOutEverywhere, sql, choose, selectOf } from "./support";
 
 /**
  * Assessment Management (ASM-01) in the browser, against the LOCAL lab only: an Admin builds and publishes an assessment with two
@@ -75,16 +75,19 @@ test("the admin builds, publishes and assigns an assessment in the browser", asy
   await page.goto("/admin/assessments");
   await expect(page.getByRole("heading", { name: "Assessments" })).toBeVisible();
   await page.getByRole("button", { name: "New assessment" }).first().click();
-  const dialog = page.getByRole("dialog").or(page.locator(".modal-in"));
-  await dialog.getByLabel("Course").selectOption(courseId);
-  await dialog.getByLabel("Unit of competency").selectOption(unitId);
+  // ASM-ONE-FLOW: the Add assessment wizard (Master Data: nothing pre-selected, so Qualification & unit is a step)
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: /Create manually/ }).click();
+  await choose(dialog.getByLabel("Qualification"), courseId);
+  await choose(dialog.getByLabel("Unit"), unitId);
+  await dialog.getByRole("button", { name: "Next" }).click();
+  await dialog.getByRole("button", { name: "Next" }).click();
   await dialog.getByLabel("Title").fill(`E2E Work safely ${RUN}`);
-  await dialog.getByRole("button", { name: "Create" }).click();
+  await dialog.getByRole("button", { name: "Save as draft" }).click();
   await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/);
   assessmentUrl = page.url().replace(/\?.*$/, "");
 
-  // Builder: one task with a short answer and a single choice.
-  await page.getByRole("button", { name: "Add task" }).click();
+  // Builder: the wizard made Task 1; a short answer and a single choice go into it.
   await page.getByRole("button", { name: "Add question" }).first().click();
   await page.getByRole("button", { name: /Short answer/ }).click();
   await page.getByLabel("Question *").fill("Name two items of PPE and say what each protects.");
@@ -389,8 +392,8 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await expect(wizard.getByText("Start from", { exact: true })).toHaveCount(0); // the old dialog is gone
     await wizard.getByRole("button", { name: /Create manually/ }).click();
     await expect(wizard.getByText("Step 2 of 4 · Qualification & unit")).toBeVisible();
-    await wizard.getByLabel("Qualification").selectOption({ label: "RII50520 — Diploma of Civil Construction Design" });
-    await wizard.getByLabel("Unit").selectOption({ label: "RIICWD525E — Select Pavement surfacing" });
+    await choose(wizard.getByLabel("Qualification"), { label: "RII50520 — Diploma of Civil Construction Design" });
+    await choose(wizard.getByLabel("Unit"), { label: "RIICWD525E — Select Pavement surfacing" });
     await reviewShot(page, "rv-md-unit-step");
     await wizard.getByRole("button", { name: "Next" }).click();
     await expect(wizard.getByTestId("review-document")).toBeVisible();
@@ -400,6 +403,110 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await wizard.getByRole("button", { name: "Save as draft" }).click();
     await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/, { timeout: 30_000 });
     expect(sql(`select count(*) from public.asm_assessments a join public.cms_course_units u on u.id = a.unit_id where a.title = 'E2E Master Data ${RUN}' and u.code = 'RIICWD525E'`)).toBe("1");
+  });
+
+  test("UI-SELECT: the searchable dropdown in the assessment area and on other pages (search, groups, dialog, keyboard, clear)", async ({ page }) => {
+    test.setTimeout(240_000);
+    await signInAsAdmin(page, admin.email);
+    const list = page.getByRole("listbox");
+
+    // Library course filter: search box (more than 7 courses), filtering, Enter picks, the optional filter clears
+    await page.goto("/admin/assessments");
+    const course = page.getByRole("combobox", { name: "Course" });
+    await course.click();
+    await expect(list).toBeVisible();
+    await expect(page.locator("select[data-testid=library-course-filter]")).toBeAttached(); // the real <select> is still in the page
+    const search = page.getByRole("searchbox", { name: "Search the options" });
+    await expect(search).toBeFocused();
+    await search.fill("rii50");
+    await expect(list.getByRole("option")).toHaveCount(1);
+    await expect(list.getByRole("option").first()).toContainText("RII50520");
+    await reviewShot(page, "dd-1-library-filter-search", course);
+    await page.keyboard.press("Enter");
+    await expect(list).toHaveCount(0);
+    await expect(course).toContainText("RII50520");
+    await expect(selectOf(course)).not.toHaveValue("");
+    await course.locator('[aria-label="Clear"]').click();
+    await expect(course).toContainText("All courses");
+    await expect(selectOf(course)).toHaveValue("");
+
+    // inside the wizard dialog: the list opens in a portal over the dialog; Escape closes the list, not the dialog
+    await page.goto("/admin/lms/assessments");
+    await page.getByRole("button", { name: /RII50520/ }).first().click();
+    await page.getByRole("button", { name: /RIICWD525E/ }).first().click();
+    await page.getByRole("button", { name: "+ Add assessment" }).click();
+    const wizard = page.getByRole("dialog");
+    await wizard.getByRole("button", { name: /Create manually/ }).click();
+    await wizard.getByRole("button", { name: "Change" }).click();
+    const qual = wizard.getByRole("combobox", { name: "Qualification" });
+    await qual.click();
+    await expect(list).toBeVisible();
+    await expect(list.getByRole("option", { selected: true })).toContainText("RII50520");
+    await reviewShot(page, "dd-2-wizard-qualification-in-dialog", qual);
+    await page.getByRole("searchbox", { name: "Search the options" }).fill("zzzz");
+    await expect(page.getByText("No qualifications match")).toBeVisible();
+    await reviewShot(page, "dd-3-no-match", qual);
+    await page.keyboard.press("Escape");
+    await expect(list).toHaveCount(0);
+    await expect(wizard).toBeVisible();
+    await expect(qual).toBeFocused();
+    // keyboard: arrows open the unit list, Enter keeps the unit
+    const unit = wizard.getByRole("combobox", { name: "Unit" });
+    await unit.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(list).toBeVisible();
+    await expect(list.getByRole("option", { selected: true })).toContainText("RIICWD525E");
+    await page.keyboard.press("Enter");
+    await expect(unit).toContainText("RIICWD525E");
+
+    // the question-type picker: group headings, icons and descriptions, search
+    await wizard.getByRole("button", { name: "Next" }).click();
+    const picker = wizard.getByRole("combobox", { name: "Add to Questions" });
+    await picker.click();
+    await expect(list.getByText("Text & numbers", { exact: true })).toBeVisible();
+    await expect(list.getByText("Text, images, links and attached documents", { exact: false }).first()).toBeVisible();
+    await expect(list.locator("li[role=option] i[class^=ri-]").first()).toBeVisible();
+    await reviewShot(page, "dd-4-question-type-picker-groups", picker);
+    await page.getByRole("searchbox", { name: "Search the options" }).fill("table");
+    await expect(list.getByRole("option").first()).toContainText(/Table/);
+    await reviewShot(page, "dd-5-question-type-picker-search", picker);
+    await page.keyboard.press("Enter");
+    await expect(wizard.locator("[data-type=table_grid]")).toHaveCount(1);
+    await wizard.getByRole("button", { name: "Close the wizard" }).click();
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
+
+    // other pages that had native selects
+    await page.goto("/admin/assessments?tab=settings");
+    const who = page.getByRole("combobox", { name: "Who may mark and sign off" });
+    await who.click();
+    await expect(list.getByRole("option")).toHaveCount(2);
+    await reviewShot(page, "dd-6-assessment-settings", who);
+    await page.keyboard.press("Escape");
+
+    await page.goto("/admin/integrations/logs");
+    const severity = page.getByRole("combobox", { name: /Severity/ });
+    await severity.click();
+    await expect(list).toBeVisible();
+    await reviewShot(page, "dd-7-integration-logs", severity);
+    await list.getByRole("option").nth(1).click();
+    await expect(list).toHaveCount(0);
+    await expect(selectOf(severity)).not.toHaveValue("");
+
+    await page.goto("/admin/lms/completion");
+    const lmsCourse = page.getByRole("combobox", { name: /^Course/ }).first();
+    await lmsCourse.click();
+    await expect(list).toBeVisible();
+    await page.getByRole("searchbox", { name: "Search the options" }).fill("RII");
+    await reviewShot(page, "dd-8-lms-completion-course", lmsCourse);
+    await page.keyboard.press("Escape");
+
+    // a phone: the list fits the screen
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/admin/assessments");
+    await page.getByRole("combobox", { name: "Course" }).click();
+    const box = await list.boundingBox();
+    expect(box && box.x >= 0 && box.x + box.width <= 390).toBeTruthy();
+    if (process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, "dd-9-phone.png") });
   });
 
   test("the admin creates it from the workbook in the wizard, publishes and assigns it", async ({ page }) => {

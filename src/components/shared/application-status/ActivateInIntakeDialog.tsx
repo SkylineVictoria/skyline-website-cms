@@ -5,6 +5,7 @@ import { FORM_LABEL } from "@/components/shared/application-form/Field";
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { StatusAction } from "@/lib/applicationStatuses";
 import { changeApplicationStatus } from "@/pages/agency/lib/portalApplications";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type JoinDate = { date: string; firstDay: boolean; unitCode: string | null; unitName: string | null };
 type Intake = { id: string; name: string; courseCode: string; startDate: string; endDate: string | null; load: string; joinDates?: JoinDate[] };
@@ -68,15 +69,15 @@ export default function ActivateInIntakeDialog({ application, action, onClose, o
         {options === null && !error ? <p className="text-sm text-foreground-500">Loading intakes…</p> : null}
         {options ? <>
           <label className="block"><span className={`${FORM_LABEL} mb-1 block`}>Intake</span>
-            <select className={field} value={intake} disabled={busy} onChange={(e) => setIntake(e.target.value)} data-testid="activate-intake">
+            <SearchableSelect className={field} value={intake} disabled={busy} onChange={(e) => setIntake(e.target.value)} data-testid="activate-intake">
               {options.intakes.length ? null : <option value="">No open intake for this course</option>}
               {options.intakes.map((i) => <option key={i.id} value={i.id}>{i.courseCode} · {i.name} · {i.load.toUpperCase()} · {day(i.startDate)}{i.endDate ? ` – ${day(i.endDate)}` : ""}</option>)}
-            </select></label>
+            </SearchableSelect></label>
           <label className="block"><span className={`${FORM_LABEL} mb-1 block`}>Starts on (unit)</span>
-            <select className={field} value={joinOn} disabled={busy || !chosen} onChange={(e) => setJoinOn(e.target.value)} data-testid="activate-join">
+            <SearchableSelect className={field} value={joinOn} disabled={busy || !chosen} onChange={(e) => setJoinOn(e.target.value)} data-testid="activate-join">
               {joinDates.length ? null : <option value="">No upcoming unit start in this intake</option>}
               {joinDates.map((d) => <option key={d.date} value={d.date}>{day(d.date)} · {d.firstDay ? "day one of the intake" : d.unitCode ? `${d.unitCode}${d.unitName ? ` ${d.unitName}` : ""}` : "unit start"}</option>)}
-            </select></label>
+            </SearchableSelect></label>
         </> : null}
         {error ? <p className="text-sm text-red-700" role="alert">{error}</p> : null}
       </div>

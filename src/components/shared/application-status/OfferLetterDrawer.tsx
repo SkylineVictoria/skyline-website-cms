@@ -26,6 +26,7 @@ import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
 import { saveOfferSigningLayout } from "@/lib/offerSigningLayout";
 import { issueOfferLetter, offerLetterRecipient, type OfferRecipient } from "@/pages/agency/lib/portalApplications";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const INPUT = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40";
 
@@ -349,11 +350,11 @@ export default function OfferLetterDrawer({ application, onClose, onSent, review
               ) : (
                 <div>
                   <label htmlFor="offer-template" className={`${FORM_LABEL} mb-1 block`}>Template</label>
-                  <select id="offer-template" value={templateId} disabled={!templates?.length} onChange={(e) => { setTemplateId(e.target.value); setBodyEdit(null); setLetter(null); }}
+                  <SearchableSelect id="offer-template" value={templateId} disabled={!templates?.length} onChange={(e) => { setTemplateId(e.target.value); setBodyEdit(null); setLetter(null); }}
                     className="h-10 w-full rounded-lg border border-background-300 bg-background-50 px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-400/40">
                     <option value="">{templates === null ? "Loading templates…" : "Choose a template"}</option>
                     {templates?.map((t) => <option key={t.id} value={t.id}>{t.name} · v{t.version}</option>)}
-                  </select>
+                  </SearchableSelect>
                 </div>
               )}
 

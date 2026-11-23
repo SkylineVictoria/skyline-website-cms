@@ -15,6 +15,7 @@ import {
   DAYS, LOAD_HOURS, clashText, generateClassSessions, loadIntakeLoads, rto, rtoFlow, setIntakeLoad,
   type Clash, type GenerateResult, type IntakeDetail, type LocationRooms, type SessionType, type StaffOption, type StudyLoad,
 } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Row = { key: string; weekday: number; type: SessionType; roomId: string; trainerId: string; start: string; end: string };
 type Hours = { avail: AvailabilityRow[]; uses: RoomUse[] };
@@ -410,21 +411,21 @@ export function WeeklyClassBooking({ intakeId, courseId, load, canEdit, onSaved,
           const roomList = roomsFor(r.type);
           return <tr key={r.key} className={(first ? "border-t border-background-200 " : "") + "align-top"}>
             <td className="px-2 py-1.5 font-semibold text-foreground-900">{first ? DAY_NAMES[r.weekday - 1] : ""}</td>
-            <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: kind`} className={field} value={r.type} disabled={!canEdit || busy}
+            <td className="px-2 py-1.5"><SearchableSelect aria-label={`${DAY_NAMES[r.weekday - 1]}: kind`} className={field} value={r.type} disabled={!canEdit || busy}
               onChange={e => { const type = e.target.value as SessionType; set(r.key, { type, roomId: roomsFor(type).some(x => x.id === r.roomId) ? r.roomId : "" }); }}>
-              {TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></td>
-            <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: room`} className={field + " w-52"} value={r.roomId} disabled={!canEdit || busy} onChange={e => set(r.key, { roomId: e.target.value })}>
+              {TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</SearchableSelect></td>
+            <td className="px-2 py-1.5"><SearchableSelect aria-label={`${DAY_NAMES[r.weekday - 1]}: room`} className={field + " w-52"} value={r.roomId} disabled={!canEdit || busy} onChange={e => set(r.key, { roomId: e.target.value })}>
               <option value="">{roomList.length ? "Room…" : `No ${r.type} room`}</option>{roomList.filter(x => x.id === r.roomId || !roomBusy(x.id, r)).map(x =>
-                <option key={x.id} value={x.id}>{x.label}</option>)}</select></td>
-            <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: trainer`} className={field + " w-44"} value={r.trainerId} disabled={!canEdit || busy} onChange={e => set(r.key, { trainerId: e.target.value })}>
+                <option key={x.id} value={x.id}>{x.label}</option>)}</SearchableSelect></td>
+            <td className="px-2 py-1.5"><SearchableSelect aria-label={`${DAY_NAMES[r.weekday - 1]}: trainer`} className={field + " w-44"} value={r.trainerId} disabled={!canEdit || busy} onChange={e => set(r.key, { trainerId: e.target.value })}>
               <option value="">Trainer…</option>{staff.filter(x => x.id === r.trainerId || !trainerBusy(x.id, r)).map(x =>
-                <option key={x.id} value={x.id}>{x.name}</option>)}</select></td>
-            <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: start`} className={field} value={r.start} disabled={!canEdit || busy} onChange={e => set(r.key, { start: e.target.value })}>
+                <option key={x.id} value={x.id}>{x.name}</option>)}</SearchableSelect></td>
+            <td className="px-2 py-1.5"><SearchableSelect aria-label={`${DAY_NAMES[r.weekday - 1]}: start`} className={field} value={r.start} disabled={!canEdit || busy} onChange={e => set(r.key, { start: e.target.value })}>
               <option value="">—</option>{TIMES.slice(0, -1).filter(t => t === r.start || slotFree(r, toMin(t), toMin(t) + 30)).map(t =>
-                <option key={t} value={t}>{clock(t)}</option>)}</select></td>
-            <td className="px-2 py-1.5"><select aria-label={`${DAY_NAMES[r.weekday - 1]}: end`} className={field} value={r.end} disabled={!canEdit || busy} onChange={e => set(r.key, { end: e.target.value })}>
+                <option key={t} value={t}>{clock(t)}</option>)}</SearchableSelect></td>
+            <td className="px-2 py-1.5"><SearchableSelect aria-label={`${DAY_NAMES[r.weekday - 1]}: end`} className={field} value={r.end} disabled={!canEdit || busy} onChange={e => set(r.key, { end: e.target.value })}>
               <option value="">—</option>{TIMES.filter(t => t === r.end || (!r.start ? slotFree(r, toMin(t) - 30, toMin(t)) : toMin(t) > toMin(r.start) && slotFree(r, toMin(r.start), toMin(t)))).map(t =>
-                <option key={t} value={t}>{clock(t)}</option>)}</select>
+                <option key={t} value={t}>{clock(t)}</option>)}</SearchableSelect>
               {msg ? <span role="alert" className="mt-0.5 block max-w-[260px] text-xs font-semibold text-red-700">{msg}</span> : null}</td>
             <td className="px-2 py-1.5 text-right tabular-nums">{hoursOf(r) || ""}</td>
             <td className="whitespace-nowrap px-2 py-1.5 text-right">{canEdit ? <>

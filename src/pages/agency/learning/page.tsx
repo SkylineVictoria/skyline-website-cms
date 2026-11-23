@@ -110,6 +110,8 @@ export default function StudentLearningPage() {
                       </button>
                       {isOpen ? (
                         <div className="space-y-3 px-4 pb-4">
+                          <Link className="inline-flex items-center gap-1 rounded-md border border-violet-200 px-3 py-1.5 text-sm font-semibold text-violet-800 dark:text-violet-300"
+                            to={`/agency/practice?unit=${encodeURIComponent(u.unitId)}`}><i className="ri-focus-3-line" aria-hidden="true" />Practise this unit</Link>
                           {(imports[u.unitId] ?? []).map(resource => <div key={resource.id} className="rounded-lg border border-background-200 bg-white p-3">
                             <p className="text-xs text-foreground-600">{categoryLabel(resource.category)}</p>
                             <p className="font-semibold text-foreground-900">{resource.title}</p>

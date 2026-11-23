@@ -1065,3 +1065,9 @@ New application status `active` (Active, after Enrolled). Transitions `set_<stat
 
 ## Student portal Messages (owner 2026-11-23; migration `20261123161517_student_portal_messages`)
 Communication Hub channel `portal`: the student writes from Student portal › Messages (`student_comm_send`, 20 an hour) into their own conversation (person_kind student, made on first use by `student_comm_conversation`); staff reply with "Student portal" (`comm_send_portal`, admins). The student sees their conversation on every channel except internal notes and Teams shares (`student_comm_thread`).
+
+## Student Practice
+
+Migration `20261123173000_student_practice.sql` adds private practice question and request records. Deploy the JWT-verified `student-practice` function from clean `main` after applying the migration. It uses the existing server-side `OPENAI_API_KEY` and `OPENAI_DOCUMENT_MODEL`. Set `EF_STUDENT_PRACTICE_MODEL` to select a different Responses model with structured output and the required file support.
+
+Publish the four settings in **Business Rules & Policies → Student practice** to activate generation. A zero daily batch setting permits ongoing generation. Students need a unit enrolment and a supported learner-visible note or file. Assessment practice uses the assignment title and published learning materials from its unit. The official assessment questions, marking keys and submissions are excluded. Feedback becomes available after submitting the practice answer. If a source is withdrawn, its questions are no longer offered.

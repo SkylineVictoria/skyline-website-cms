@@ -76,6 +76,12 @@ const SECTIONS: Section[] = [
     { id: "lms.bulk_self_assessment_label", question: "Self-Assessment category name", kind: { type: "text" } },
     { id: "lms.bulk_assessor_label", question: "Assessor Resources category name", kind: { type: "text" } },
   ] },
+  { title: "Student practice", icon: "ri-focus-3-line", settings: [
+    { id: "lms.practice_enabled", question: "Enable AI student practice", kind: { type: "yesno", on: "On", off: "Off" } },
+    { id: "lms.practice_daily_batches", question: "Daily AI question batches per student", help: "Use 0 for unlimited generation.", kind: { type: "number", unit: "batches", min: 0, max: 100 } },
+    { id: "lms.practice_level_evidence", question: "Answers needed to demonstrate a difficulty level", kind: { type: "number", unit: "answers", min: 1, max: 100 } },
+    { id: "lms.practice_level_accuracy", question: "Accuracy needed to demonstrate a difficulty level", kind: { type: "number", unit: "%", min: 1, max: 100 } },
+  ] },
   { title: "Staff", icon: "ri-team-line", settings: [
     { id: "hrms.applicant_document_checklist", question: "Documents new staff must upload", help: "The others are still asked for, but can be skipped.", kind: { type: "staffDocs" } },
     // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules.
@@ -154,7 +160,7 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
       <ul className="divide-y divide-background-100">{section.settings.map(s => {
         const rule = byId.get(s.id);
         const current = rule ? liveDefinition(rule) : undefined;
-        const draft = s.id.startsWith("lms.bulk_") && rule?.versions[0]?.state === "draft" ? rule.versions[0].definition : undefined;
+        const draft = (s.id.startsWith("lms.bulk_") || s.id.startsWith("lms.practice_")) && rule?.versions[0]?.state === "draft" ? rule.versions[0].definition : undefined;
         const live = current ?? draft;
         const configuring = !!draft && !current;
         // rule-policy: technical missing-rule A setting whose rule is not installed is simply not shown.

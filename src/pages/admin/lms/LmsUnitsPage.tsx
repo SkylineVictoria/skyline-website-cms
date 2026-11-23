@@ -7,7 +7,6 @@ import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestH
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import UnitHoursEditor from "./UnitHoursEditor";
 import { supabase } from "@/pages/admin/lib/supabase";
-import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
 import { bulkAdmin, categories, categoryLabel, listResources, splitCategoryTitle, type ImportFile, type ImportJob, type Resource } from "@/pages/admin/lib/bulkResources";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
@@ -38,7 +37,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
   const [page, setPage] = useState(1);
-  const [drawerTab, setDrawerTab] = useState<"content" | "details" | "learning" | "assessments" | "resources">("details");
+  const [drawerTab, setDrawerTab] = useState<"details" | "learning" | "assessments" | "resources">("details");
   const [hours, setHours] = useState<Record<string, UnitHours>>({});
   const [hoursError, setHoursError] = useState("");
   const [hoursDraft, setHoursDraft] = useState<HoursSplit | null>(null);
@@ -55,6 +54,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     void supabase.rpc("asm_is_admin").then(({ data }) => setCanManageResources(data === true));
   }, []);
   const [canEdit, setCanEdit] = useState(false);
+  const [canEditContent, setCanEditContent] = useState(false);
   const [docs, setDocs] = useState<Record<string, UnitDocs>>({});
   const [showDocs, setShowDocs] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -64,8 +64,10 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, me] = await Promise.all([rto<RtoCourse[]>("course_list"), rto<{rtoManager:boolean}>("me")]);
+      const [list, me] = await Promise.all([rto<RtoCourse[]>("course_list"), rto<{rtoManager:boolean; admin?:boolean}>("me")]);
       setCourses(list); setCanEdit(me.rtoManager);
+      // Learning content and documents: Admins too (20261123121517 unit_content_admin_edit); units, hours: RTO Managers only.
+      setCanEditContent(me.rtoManager || me.admin === true);
       setCourseId(prev => embeddedCourseId ?? (list.some(c => c.id === prev) ? prev : (list[0]?.id ?? "")));
       const wanted = embeddedCourseId ? list.filter(c => c.id === embeddedCourseId) : list;
       const results = await Promise.allSettled(wanted.map(c => rto<CourseDetail>("course_get", {courseId:c.id})));
@@ -156,6 +158,8 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     setSelected(entry); setAdding(false); setDraft({...entry.unit}); setNotice("");
     setHoursDraft(shown ? { slitHours: shown.slitHours, theoryHours: shown.theoryHours, practicalHours: shown.practicalHours, assessmentHours: shown.assessmentHours } : null);
     setDrawerTab("details");
+    // The unit opens in place of the list: bring it into view.
+    if (!embeddedCourseId) window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const hoursSum = hoursDraft ? hoursDraft.theoryHours + hoursDraft.practicalHours + hoursDraft.assessmentHours : 0;
   const hoursValid = !!hoursDraft && [hoursDraft.slitHours, hoursDraft.theoryHours, hoursDraft.practicalHours, hoursDraft.assessmentHours]
@@ -240,7 +244,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         </button>;
       })}</div>
     </aside>}
-    <section className="min-w-0 rounded-2xl border border-background-200 bg-background-50 p-5 shadow-sm">
+    <section className={"min-w-0 rounded-2xl border border-background-200 bg-background-50 p-5 shadow-sm" + ((selected || adding) && draft ? " hidden" : "")}>
       {!selectedCourse ? <p className="py-20 text-center text-sm text-foreground-500">{loading ? "Loading…" : "Select a course."}</p> : <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
@@ -329,23 +333,24 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
       </div> : null}
       </>}
     </section>
-    </div>
-    {(selected || adding) && draft ? <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={()=>{setSelected(null);setAdding(false);setDraft(null);}}>
-      <section role="dialog" aria-modal="true" aria-label="Unit details" className="flex h-full w-full max-w-2xl flex-col bg-background-50 shadow-xl" onClick={e=>e.stopPropagation()}>
+    {(selected || adding) && draft ? <div className="min-w-0">
+      <section aria-label="Unit" className="flex min-w-0 flex-col rounded-2xl border border-background-200 bg-background-50 shadow-sm">
         <div className="flex items-start justify-between gap-3 border-b border-background-200 px-6 py-4">
-          <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{draft.code} · {selectedCourse?.code} · {draft.unitType === "core" ? "Core" : "Elective"}{draft.isActive ? "" : " · inactive"}</p>
+          <div className="min-w-0">
+            <button type="button" onClick={()=>{setSelected(null);setAdding(false);setDraft(null);}} className="mb-2 inline-flex items-center gap-1 text-sm font-semibold text-primary-700 hover:underline">
+              <i className="ri-arrow-left-line" aria-hidden="true" />All units</button>
+            <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{draft.code} · {selectedCourse?.code} · {draft.unitType === "core" ? "Core" : "Elective"}{draft.isActive ? "" : " · inactive"}</p>
             <h2 className="font-heading text-lg font-bold text-foreground-950">{draft.name || "New unit"}</h2></div>
-          <button type="button" onClick={()=>{setSelected(null);setDraft(null);}} aria-label="Close" className="rounded-lg p-1 text-foreground-500 hover:bg-background-100"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
+          <button type="button" onClick={()=>{setSelected(null);setAdding(false);setDraft(null);}} aria-label="Back to all units" className="rounded-lg p-1 text-foreground-500 hover:bg-background-100"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
         </div>
         <div role="tablist" className="flex flex-wrap gap-x-5 border-b border-background-200 px-6">
-          {([["details","Details"],["learning","Learning content"],["resources","Resources"],["assessments","Assessments"],["content","Training.gov.au"]] as const).filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
+          {([["details","Details"],["learning","Learning content"],["resources","Resources"],["assessments","Assessments"]] as const).filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
             <button key={id} type="button" role="tab" aria-selected={drawerTab===id} onClick={()=>setDrawerTab(id)}
               className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (drawerTab===id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
         </div>
-        <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
-          {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
-          {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEdit} /> : null}
-          {drawerTab==="resources" && draft.id && selectedCourse ? <UnitResourcesPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEdit}
+        <div className="px-6 py-4">
+          {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEditContent} /> : null}
+          {drawerTab==="resources" && draft.id && selectedCourse ? <UnitResourcesPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEditContent}
             canManage={canManageResources} onBulk={() => setBulk({ hint: draft.id })} /> : null}
           {drawerTab==="assessments" && draft.id && selectedCourse ? <UnitAssessmentsPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEdit} /> : null}
           {drawerTab==="details" ? <div className="space-y-5">
@@ -399,5 +404,6 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
             {busy ? "Saving…" : adding ? "Add unit" : hoursDraft && draft.id && !hours[draft.id]?.confirmedAt ? "Accept hours and save" : "Save unit"}</button>
         </div> : null}
       </section></div> : null}
+    </div>
   </div>;
 }

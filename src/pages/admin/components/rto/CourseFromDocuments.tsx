@@ -116,9 +116,13 @@ async function readFile(file: File): Promise<ReadFile[]> {
  *  Assessor Resources), guessed from its file name; staff change it before Sync. */
 function guessCategory(path: string): Category {
   const name = baseName(path).toLowerCase();
+  const folders = path.toLowerCase().split("/").slice(0, -1);
   if (/self[\s_-]*assess/.test(name)) return "self_assessment";
-  if (/benchmark|marking|mapping|assessor|observation|instruction|answer|solution|rubric|validation/.test(name)) return "assessor";
-  if (/assess|task|quiz|test|exam|project|portfolio/.test(name)) return "assessment";
+  // A folder named for the audience decides first: Assessor… holds assessor material; Student / Learner never does.
+  if (folders.some(f => /assessor|trainer|marking/.test(f))) return "assessor";
+  const forStudents = folders.some(f => /student|learner/.test(f));
+  if (!forStudents && /benchmark|marking|mapping|assessor|answer|solution|rubric|validation/.test(name)) return "assessor";
+  if (/assess|task|quiz|test|exam|project|portfolio|observation|instruction/.test(name)) return "assessment";
   return "learning";
 }
 /** Students see learning material and self-assessments; assessment packs and assessor material stay staff only. */
@@ -155,12 +159,15 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
   /** The category picked per document (by name); unset = the guess from its file name. */
   const [category, setCategory] = useState<Record<string, Category>>({});
   const [policy, setPolicy] = useState<BulkPolicy | null>(null);
+  /** Only RTO Managers and Admins may save files onto units (database rule unit_content_can_edit); null while unknown. */
+  const [rtoManager, setRtoManager] = useState<boolean | null>(null);
   const categoryOf = (f: ReadFile) => category[f.name] ?? guessCategory(f.path);
   // The AI Bulk Upload policy (file types, sizes, category names); without it (no permission) documents go to Learning content.
   useEffect(() => {
     if (!open) return;
     let live = true;
     bulkAdmin<BulkPolicy>("policy").then(p => { if (live) setPolicy(p); }, () => { if (live) setPolicy(null); });
+    rto<{ rtoManager: boolean; admin?: boolean }>("me").then(me => { if (live) setRtoManager(me.rtoManager === true || me.admin === true); }, () => { if (live) setRtoManager(null); });
     return () => { live = false; };
   }, [open]);
   /** Staff confirm the packaging rules the system cannot check by itself (as in Add units). */
@@ -256,6 +263,7 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
 
   /** Each mapped document into its unit's Learning content (staff only); a file already there by name is not added again. */
   async function saveDocuments(detail: CourseDetail): Promise<Outcome[]> {
+    if (rtoManager === false) return docs.map(f => ({ file: f.path, unit: unitOf(f), status: "failed" as const, reason: "only an Admin or RTO Manager can save documents onto units" }));
     const ids = new Map(detail.units.filter(u => u.id && u.isActive).map(u => [norm(u.code), u.id as string]));
     const out: Outcome[] = [];
     // A document matched to a unit that did not make it onto the course goes to the course unit it is about instead, if any.
@@ -456,6 +464,9 @@ export default function CourseFromDocuments({ open, courses, onClose, onCreated 
       </div> : null}
 
       {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">{error}</p> : null}
+      {rtoManager === false && files.length ? <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
+        Your account is neither an <b>Admin</b> nor an <b>RTO Manager</b>, so the documents cannot be saved onto the units.
+        An admin turns on <b>Users › edit › RTO Manager</b> for you; then press Sync again (saved files are not added twice).</p> : null}
       {note ? <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">{note}</p> : null}
 
       {review ? <div className="space-y-3">

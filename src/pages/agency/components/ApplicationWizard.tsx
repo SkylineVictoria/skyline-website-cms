@@ -12,16 +12,22 @@ import {
   queueDocumentExtraction,
   saveApplicationDraft,
   saveDocumentReview,
+  submitApplication,
   uploadApplicationDocument,
   type ApplicationCourseRow,
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
 import { detailRequired, portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
+import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
+import { CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { addressProblems, emailProblem } from "../../../../supabase/functions/_shared/validation/person";
+import { validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
+import type { AddressPick } from "@/components/shared/wizard/AddressSearch";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
-import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { OTHER_LANGUAGE, WIZARD_QUESTIONS, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
 import {
@@ -68,11 +74,13 @@ const AUS_STUDY_STEP: WizardStep | null = ACADEMIC_WIZARD_STEP
   : null;
 const LAST_STEP = DOC_STEPS + WIZARD_QUESTIONS.length - 1;
 const PASSPORT_STEP = WIZARD_STEPS.findIndex((step) => step.id === "passport");
-/** The wizard's steps in order (documents, then questions) and their grouping into four stages (the fourth, Review, follows the wizard). */
+/** The wizard's steps in order (documents, then questions) and their grouping into four stages; the last one submits the application. */
 const ALL_STEPS = [...WIZARD_STEPS, ...WIZARD_QUESTIONS];
-const STAGE_OF: Record<string, string> = { language: "about", usi: "about", emergency: "about", course: "course" };
-const STAGE_TITLES: Record<string, string> = { documents: "Documents", about: "About you", course: "Course" };
-const stageRanges = ["documents", "about", "course"].flatMap((id) => {
+const STAGE_OF: Record<string, string> = {
+  personal: "about", address: "about", language: "about", identifier: "about", usi: "about", emergency: "about", course: "course", study: "course", declare: "submit",
+};
+const STAGE_TITLES: Record<string, string> = { documents: "Documents", about: "About the student", course: "Course", submit: "Submit" };
+const stageRanges = ["documents", "about", "course", "submit"].flatMap((id) => {
   const idx = ALL_STEPS.map((item, i) => ((STAGE_OF[item.id] ?? "documents") === id ? i : -1)).filter((i) => i >= 0);
   return idx.length ? [{ id, title: STAGE_TITLES[id], from: idx[0], to: idx[idx.length - 1] }] : [];
 });
@@ -136,6 +144,18 @@ const isOverseasLicence = (doc: WizardDoc) =>
   doc.category === "Driving Licence" && doc.extraction === "done" && !!doc.extracted &&
   (doc.extracted.address_type === "Overseas Address" || (!doc.extracted.au_street && Boolean(doc.extracted.ov_street)));
 
+/** WIZARD-FULL: the answers the new screens hold, and the ones the wizard fills itself on Submit (as the full form did). */
+const FINISH_FIELDS = Object.values(FINISH_SCREEN_FIELDS).flat();
+const SCREEN_OF_FIELD = new Map(Object.entries(FINISH_SCREEN_FIELDS).flatMap(([screen, names]) => names.map((name) => [name, screen] as const)));
+const OTHER_SCREENS: Record<string, string> = {
+  language_home: "language", language_other: "language", has_usi: "usi", usi_number: "usi", ec_name: "emergency", ec_phone: "emergency", ec_in_au: "emergency",
+  courses_of_interest: "course", preferred_intake: "course",
+};
+const USI_CONSENT_TEXT = "I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.";
+const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00`).getTime());
+const sameName = (a: string, b: string) => a.trim().replace(/\s+/g, " ").toLowerCase() === b.trim().replace(/\s+/g, " ").toLowerCase();
+
 export default function ApplicationWizard({ applicationId, agencyName, onFinish, onCancel }: Props) {
   const { profile, role } = usePortalAuth();
 
@@ -181,6 +201,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [englishNotMet, setEnglishNotMet] = useState(false);
   const [englishSaveError, setEnglishSaveError] = useState("");
   const [savingEnglish, setSavingEnglish] = useState(false);
+  // WIZARD-FULL: answers typed on the new screens are never replaced by values read later from the draft.
+  const touchedRef = useRef(new Set<string>());
+  const [submittedRef, setSubmittedRef] = useState("");
+  // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
+  const [hydrated, setHydrated] = useState(0);
 
   useEffect(() => {
     documentsRef.current = documents;
@@ -447,8 +472,13 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   /* ------------------------------------------------------------- finish */
 
   // Extraction fills empty fields of the draft on the server and never replaces
-  // an entered value, so finishing only waits for in-flight work, then records
-  // the outstanding items and the student name and opens the full form.
+  // an entered value, so finishing only waits for in-flight work, records the
+  // outstanding items and the student name, then submits the application
+  // (WIZARD-FULL: the declaration and both confirmations were given on the last screen).
+  // After Submit the success screen closes itself, or Continue closes it sooner: onFinish runs only once.
+  const finishedRef = useRef(false);
+  const leaveOnce = useRef(() => { if (!finishedRef.current) { finishedRef.current = true; onFinish(); } });
+  useEffect(() => { leaveOnce.current = () => { if (!finishedRef.current) { finishedRef.current = true; onFinish(); } }; }, [onFinish]);
   const complete = useCallback(async () => {
     if (completingRef.current) return;
     completingRef.current = true;
@@ -465,15 +495,26 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         updatedAt: new Date().toISOString(),
       };
       await saveDocumentReview({ applicationId, values: {}, provenance: {}, confirmed: [], wizard: meta as unknown as Record<string, unknown>, studentName: studentName || undefined });
-      // The full form opens on its Student declaration page (step 14).
-      try { window.sessionStorage.setItem(openDeclarationKey(applicationId), "1"); } catch { /* session storage unavailable */ }
-      onFinish();
+      // The server checks the saved draft (portal_validate_submission) and needs its current version.
+      await getApplication(applicationId, true);
+      const receipt = await submitApplication(applicationId, {
+        consent: { method: "electronic", confirmed: true, authorised: true, declarationVersion: "1.0", signedDocumentRef: "" },
+      });
+      try { window.localStorage.removeItem(wizardStepKey(applicationId)); } catch { /* storage unavailable */ }
+      setSubmittedRef(receipt || application?.reference || "Submitted");
+      window.setTimeout(() => leaveOnce.current(), 2200);
     } catch (error) {
-      setFinishError(error instanceof Error ? error.message : "We could not open the application form.");
+      const message = error instanceof Error ? error.message : "We could not submit the application.";
+      // "Required field missing: title" and the like: say which screen holds it, so the agent can go straight there.
+      const field = message.match(/:\s*([a-z_]+)\s*$/)?.[1] ?? "";
+      const screen = SCREEN_OF_FIELD.get(field) ?? OTHER_SCREENS[field] ?? "";
+      const at = screen ? WIZARD_QUESTIONS.findIndex((item) => item.id === screen) : -1;
+      setFinishError(at >= 0 ? `${message}. Fix it on "${WIZARD_QUESTIONS[at].title}", then submit again.` : message);
+      if (at >= 0) setStep(DOC_STEPS + at);
       setFinishing(false);
       completingRef.current = false;
     }
-  }, [applicationId, onFinish]);
+  }, [applicationId]);
 
   const busy = pending.some((item) => !item.error) || documents.some((doc) => isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
   useEffect(() => {
@@ -589,6 +630,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const institutionCourseOf = (label: string) => institutionCourses?.find((item) => `${item.code} - ${item.title}` === label) ?? null;
   const staffCourseOf = (label: string) => staffCourses?.find((c) => staffCourseLabel(c) === label) ?? null;
   const setAnswer = (name: string, value: string) => {
+    touchedRef.current.add(name);
     // A new course clears the intake: intakes belong to one course.
     setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
     if (name === "course") setIntakeList(null);
@@ -612,6 +654,48 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (created) { setIntake(created); pendingIntake.current = null; }
   };
   const currentCourseId = answers.course ? courseIdOf(answers.course) : null;
+
+  /**
+   * WIZARD-FULL: the new screens start from the draft as it is now (the passport, licence and academic files were read into it
+   * while the documents were uploaded), with the same starting answers the full form used; anything typed here is kept.
+   */
+  const hydrateFinish = useCallback(async () => {
+    const application = await getApplication(applicationId, true).catch(() => null);
+    if (!application) return;
+    const values = (application.data.values ?? {}) as Record<string, unknown>;
+    const stored = (name: string) => (typeof values[name] === "string" ? String(values[name]).trim() : Array.isArray(values[name]) && (values[name] as unknown[]).length ? "Yes" : "");
+    const hasAcademic = documentsRef.current.some((doc) => doc.category === "Academic");
+    setAnswers((prev) => {
+      const next = { ...prev };
+      const fill = (name: string, value: string) => { if (!touchedRef.current.has(name)) next[name] = value; };
+      for (const name of FINISH_FIELDS) fill(name, stored(name));
+      const gender = next.gender ?? "";
+      if (!next.title) fill("title", gender === "Male" ? "Mr" : gender === "Female" ? "Miss" : "");
+      if (!next.citizenship) fill("citizenship", next.nationality ?? "");
+      if (!next.birth_country) fill("birth_country", next.citizenship || next.nationality || "");
+      if (!next.au_country) fill("au_country", "Australia");
+      if (!next.atsi) fill("atsi", "No");
+      if (!next.disability) fill("disability", "No");
+      if (!next.employment) fill("employment", "Unemployed - Seeking Part-Time Work - 07");
+      if (!next.secondary_enrolled) fill("secondary_enrolled", "No");
+      if (!next.prior_ed && hasAcademic) fill("prior_ed", "Yes");
+      if (!next.study_reason) fill("study_reason", "For personal interest or self-development - 09");
+      if (!next.rpl) fill("rpl", "No");
+      if (!next.oshc_require) fill("oshc_require", "No");
+      if (!next.hear_about) fill("hear_about", role === "student" ? "" : "Agent");
+      if (!next.declaration_name) fill("declaration_name", [next.first_name, next.middle_name, next.last_name].filter(Boolean).join(" "));
+      fill("declaration_date", todayIso());
+      return next;
+    });
+    setHydrated((n) => n + 1);
+  }, [applicationId, role]);
+  const finishScreen = question && FINISH_SCREEN_FIELDS[question.id] ? question.id : "";
+  const loaded = !loading && !loadError;
+  useEffect(() => { if (loaded && finishScreen) void hydrateFinish(); }, [loaded, finishScreen, hydrateFinish]);
+  const pickAddress = (pick: AddressPick) => {
+    for (const [name, value] of [["au_street", pick.line], ["au_line2", pick.line2], ["au_suburb", pick.suburb], ["au_state", pick.state.toUpperCase()], ["au_zip", pick.postcode], ["au_country", "Australia"]] as const) setAnswer(name, value);
+    touchedRef.current.add("address_source:search");
+  };
 
   /** Checks the screen's answers and saves them to the draft; false when something is missing or the save failed. */
   const saveAnswers = async (target: WizardQuestion): Promise<boolean> => {
@@ -645,6 +729,73 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // An Australian number means the contact is in Australia (the form no longer asks).
       values.ec_in_au = phone.startsWith("+61") ? "Yes" : "No";
       setAnswers((prev) => ({ ...prev, ec_phone: phone }));
+    } else if (target.id === "personal") {
+      const oneOf = (name: string, message: string) => { if (!optionsOf(name).includes(filled(name))) errors[name] = message; };
+      oneOf("title", "Choose the title.");
+      oneOf("gender", "Choose the gender.");
+      if (!filled("first_name")) errors.first_name = "Enter the given name as on the passport.";
+      if (!filled("last_name")) errors.last_name = "Enter the surname as on the passport.";
+      if (!validDate(filled("dob")) || filled("dob") >= todayIso()) errors.dob = "Enter the date of birth.";
+      const mobileProblem = filled("mobile") ? validateStoredPhone(filled("mobile")) : "Enter the student's mobile number.";
+      if (mobileProblem) errors.mobile = mobileProblem;
+      const emailIssue = filled("email") ? emailProblem(filled("email")) : "Enter the student's email.";
+      if (emailIssue) errors.email = emailIssue;
+      oneOf("nationality", "Choose the nationality.");
+      oneOf("citizenship", "Choose the country of citizenship.");
+      oneOf("birth_country", "Choose the country of birth.");
+      if (!filled("passport_number")) errors.passport_number = "Enter the passport number.";
+      if (!validDate(filled("passport_expiry"))) errors.passport_expiry = "Enter the passport expiry date.";
+      for (const name of FINISH_SCREEN_FIELDS.personal) values[name] = filled(name);
+      values.confirm_email = filled("email");
+    } else if (target.id === "address") {
+      const problems = addressProblems({ street: filled("au_street"), line2: filled("au_line2"), suburb: filled("au_suburb"), state: filled("au_state"), postcode: filled("au_zip"), country: "Australia" });
+      if (problems.street) errors.au_street = problems.street;
+      if (problems.line2) errors.au_line2 = problems.line2;
+      if (problems.suburb && detailRequired("au_suburb")) errors.au_suburb = problems.suburb;
+      if (problems.state && (detailRequired("au_state") || filled("au_state"))) errors.au_state = problems.state;
+      if (problems.postcode && (detailRequired("au_zip") || filled("au_zip"))) errors.au_zip = problems.postcode;
+      // The portal's address is always an Australian one (as the full form fixes it).
+      Object.assign(values, { address_type: "Australian Address", au_street: filled("au_street"), au_line2: filled("au_line2"), au_suburb: filled("au_suburb"),
+        au_state: filled("au_state").toUpperCase(), au_zip: filled("au_zip"), au_country: "Australia",
+        address_source: touchedRef.current.has("address_source:search") ? "search" : "manual" });
+    } else if (target.id === "identifier") {
+      const labels: Record<string, string> = { atsi: "Choose an answer.", employment: "Choose the employment status.", disability: "Choose an answer.",
+        secondary_enrolled: "Choose Yes or No.", school_level: "Choose the highest completed school level.", prior_ed: "Choose an answer." };
+      for (const name of FINISH_SCREEN_FIELDS.identifier) {
+        if (!optionsOf(name).includes(filled(name))) errors[name] = labels[name];
+        values[name] = filled(name);
+      }
+    } else if (target.id === "study") {
+      for (const [name, message] of [["study_reason", "Choose the main reason."], ["rpl", "Choose Yes or No."], ["oshc_require", "Choose an answer."], ["hear_about", "Choose how the student heard about SLIT."]] as const) {
+        if (!optionsOf(name).includes(filled(name))) errors[name] = message;
+      }
+      if (filled("oshc_require") === "No" && filled("oshc_self_confirm") !== "Yes") errors.oshc_self_confirm = "Confirm the student will arrange their own health cover.";
+      for (const name of ["oshc_start_date", "oshc_expiry"]) if (filled(name) && !validDate(filled(name))) errors[name] = "Enter a valid date.";
+      Object.assign(values, {
+        study_reason: filled("study_reason"), rpl: filled("rpl"), oshc_require: filled("oshc_require"), hear_about: filled("hear_about"),
+        oshc_start_date: filled("oshc_require") === "Yes" ? filled("oshc_start_date") : "",
+        oshc_self_confirm: filled("oshc_require") === "No" && OSHC_SELF_CONFIRM ? [OSHC_SELF_CONFIRM] : [],
+        oshc_provider: filled("oshc_require") === "Already Have" ? filled("oshc_provider") : "",
+        oshc_policy_number: filled("oshc_require") === "Already Have" ? filled("oshc_policy_number") : "",
+        oshc_expiry: filled("oshc_require") === "Already Have" ? filled("oshc_expiry") : "",
+      });
+    } else if (target.id === "declare") {
+      if (filled("declaration_read") !== "Yes") errors.declaration_read = "Tick to confirm the declaration was read and agreed.";
+      if (!filled("declaration_name")) errors.declaration_name = "Enter the full name of the person making the declaration.";
+      if (!filled("digital_signature")) errors.digital_signature = "Type the full name to sign.";
+      else if (!sameName(filled("declaration_name"), filled("digital_signature"))) errors.digital_signature = "The signature must be the same name as the declarant.";
+      if (filled("consent_confirmed") !== "Yes" || filled("consent_authorised") !== "Yes") errors.consent = "Tick both confirmations to submit.";
+      // What the full form used to fill itself: the checklist, USI consent, the agent block and the visa answer.
+      const application = await getApplication(applicationId, true).catch(() => null);
+      const stored = (application?.data.values ?? {}) as Record<string, unknown>;
+      const empty = (name: string) => !String(stored[name] ?? "").trim();
+      Object.assign(values, {
+        declaration_name: filled("declaration_name"), digital_signature: filled("digital_signature"), declaration_date: todayIso(),
+        checklist: CHECKLIST_OPTIONS, usi_consent: [USI_CONSENT_TEXT], address_type: "Australian Address", au_country: "Australia",
+        ...(empty("via_agent") ? { via_agent: "Yes" } : {}),
+        ...(empty("agent_agency") && agencyName ? { agent_agency: agencyName } : {}),
+        ...(empty("holds_visa") ? { holds_visa: documentsRef.current.some((doc) => doc.category === "Visa") ? "Yes" : "No" } : {}),
+      });
     } else {
       if (!filled("course")) errors.course = "Choose the course.";
       const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
@@ -756,12 +907,33 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         </div>
       );
     }
+    if (submittedRef) {
+      return (
+        <div className="py-8 text-center" role="status" data-testid="wizard-submitted">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-background-50"><i className="ri-check-line text-3xl" aria-hidden="true" /></span>
+          <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Application submitted</h3>
+          <p className="mt-1 text-sm text-foreground-600">Reference {submittedRef}. SLIT admissions will review it; you will be emailed about each step.</p>
+          <button type="button" onClick={() => leaveOnce.current()} className={`${primaryClass} mt-5`}>Continue</button>
+        </div>
+      );
+    }
     if (question) {
+      const summary: FinishSummary = {
+        name: [answers.first_name, answers.middle_name, answers.last_name].filter(Boolean).join(" "),
+        course: answers.course ?? "",
+        intake: answers.preferred_intake ?? "",
+        documents: [...new Set(documents.filter((doc) => !dismissed.has(doc.id)).map((doc) => doc.category))],
+      };
       return (
         <>
           <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
-            <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
-              onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId} />
+            {finishScreen ? (
+              <WizardFinishSteps question={question} answers={answers} errors={answerErrors} onChange={setAnswer} onAddress={pickAddress} summary={summary} version={hydrated}
+                studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) setStep(DOC_STEPS + at); }} />
+            ) : (
+              <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
+                onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId} />
+            )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>
         </>
@@ -843,12 +1015,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   return (
     <WizardShell
-      title={"Add New Form \u2014 document wizard"}
-      subtitle={`Upload documents to prefill the application, then continue to the full form. ${agencyName}`}
+      title={"New application"}
+      subtitle={`Upload the documents, answer a few questions and submit. ${agencyName}`}
       onClose={onCancel}
       closeLabel="Cancel and close the wizard"
       stepper={
-        <WizardStages stages={wizardStages} current={step} total={WIZARD_STEPS.length + WIZARD_QUESTIONS.length} stepTitle={allSteps[step]?.title ?? ""} onSelect={goTo} after="Review" />
+        <WizardStages stages={wizardStages} current={step} total={WIZARD_STEPS.length + WIZARD_QUESTIONS.length} stepTitle={allSteps[step]?.title ?? ""} onSelect={goTo} />
       }
       footerStart={
         <>
@@ -860,11 +1032,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             <i className="ri-close-line" aria-hidden="true" />
             Cancel
           </button>
-          {step > 0 && ready ? <WizardBackButton onClick={() => goTo(step - 1)} disabled={finishing} /> : null}
+          {step > 0 && ready && !submittedRef ? <WizardBackButton onClick={() => goTo(step - 1)} disabled={finishing} /> : null}
         </>
       }
       footerEnd={
-        ready ? (
+        ready && !submittedRef ? (
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
             {onDocStep && !hasFile && !blockedByPassport && !current.required ? (
               <button
@@ -883,19 +1055,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <>
                 {finishing ? (
                   <button type="button" onClick={() => void complete()} className="cursor-pointer text-xs font-semibold text-primary-700 underline">
-                    Continue now
+                    Submit now
                   </button>
                 ) : null}
                 <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers} className={primaryClass}>
                   {finishing ? (
                     <>
                       <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
-                      Finishing&hellip;
+                      Submitting&hellip;
                     </>
                   ) : (
                     <>
-                      Finish
-                      <i className="ri-arrow-right-circle-line" aria-hidden="true" />
+                      Submit application
+                      <i className="ri-send-plane-line" aria-hidden="true" />
                     </>
                   )}
                 </button>
@@ -965,8 +1137,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           {ready ? (
             <div className="border-t border-background-200 px-5 py-3 text-center md:px-6">
               <p className="text-2xs text-foreground-400">
-                Nothing is submitted from this wizard. Documents are stored privately against this draft; the student
-                application is submitted only from the full form after review.
+                Everything is saved to this draft as you go. The application is submitted only when you press Submit
+                application on the last screen.
               </p>
             </div>
           ) : null}

@@ -18,6 +18,7 @@ export interface LmsMenuEntry {
 }
 export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "courses", label: "Courses", route: "/admin/lms/courses", icon: "ri-book-open-line", dependencies: [], primaryAction: "Add Course" },
+  { id: "units", label: "Units", route: "/admin/lms/units", icon: "ri-stack-line", dependencies: ["course"] },
   // An intake is the class group (room, trainer, class times, students).
   { id: "intakes", label: "Intakes", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
   // Timetable: three links (owner, 2026-11-19: less clutter). Trainers, rooms, students and the intakes timeline are tabs of the

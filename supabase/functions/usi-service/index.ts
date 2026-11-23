@@ -209,10 +209,47 @@ async function reverify(service: SupabaseClient) {
   return json({ checked: work.length, outcomes: tally });
 }
 
+/** Each crypto step the connection needs, in this runtime (error names and messages only; no key material). */
+async function primitives(cfg: UsiConfig) {
+  const steps: { step: string; ok: boolean; detail?: string }[] = [];
+  const step = async (name: string, fn: () => unknown) => {
+    try { const r = await fn(); steps.push({ step: name, ok: true, detail: typeof r === 'string' ? r : undefined }); return r; }
+    catch (e) { steps.push({ step: name, ok: false, detail: `${(e as Error)?.name ?? 'Error'}: ${String((e as Error)?.message ?? e).slice(0, 200)}` }); return null; }
+  };
+  const nodeCrypto = await import('node:crypto');
+  const { Buffer } = await import('node:buffer');
+  const { decryptPkcs12ShroudedKey } = await import('../_shared/usi/pkcs12.ts');
+  const { keystoreText } = await import('../_shared/usi/soap.ts');
+  const xml = await step('keystore secret decodes to XML', () => { const t = keystoreText(cfg.keystoreXml); if (!t.includes('<credential ')) throw Error('no <credential> in the keystore'); return `${t.length} characters`; }) as string | null;
+  const text = xml ? keystoreText(cfg.keystoreXml) : '';
+  const block = text.split('<credential ').slice(1).find((b) => b.includes(`id="${cfg.credentialId}"`)) ?? '';
+  const enc = Buffer.from((block.match(/<protectedPrivateKey>([\s\S]*?)<\/protectedPrivateKey>/)?.[1] ?? '').replace(/\s/g, ''), 'base64');
+  await step('sha1 / sha256 / hmac-sha1', () => { nodeCrypto.createHash('sha1').update('x').digest(); nodeCrypto.createHash('sha256').update('x').digest(); nodeCrypto.createHmac('sha1', Buffer.alloc(32, 1)).update('x').digest(); return 'ok'; });
+  await step('des-ede3-cbc decipher', () => { const d = nodeCrypto.createDecipheriv('des-ede3-cbc', Buffer.alloc(24, 1), Buffer.alloc(8, 2)); d.setAutoPadding(false); Buffer.concat([d.update(Buffer.alloc(8)), d.final()]); return 'ok'; });
+  const pkcs8 = await step('PKCS#12 3DES key decryption', () => decryptPkcs12ShroudedKey(enc, cfg.password)) as Uint8Array | null;
+  const key = pkcs8 ? await step('createPrivateKey (plain PKCS#8 DER)', () => nodeCrypto.createPrivateKey({ key: Buffer.from(pkcs8), format: 'der', type: 'pkcs8' })) as import('node:crypto').KeyObject | null : null;
+  if (key) {
+    await step('createPublicKey + export spki', () => { nodeCrypto.createPublicKey(key).export({ type: 'spki', format: 'der' }); return 'ok'; });
+    await step('sign rsa-sha256', () => `${nodeCrypto.sign('sha256', Buffer.from('<SignedInfo/>'), key).length} bytes`);
+  }
+  const p7 = Buffer.from((block.match(/<publicCertificate>([\s\S]*?)<\/publicCertificate>/)?.[1] ?? '').replace(/\s/g, ''), 'base64');
+  await step('X509Certificate from the PKCS#7 bundle', () => {
+    for (let i = 0; i < p7.length - 8; i++) {
+      if (p7[i] === 0x30 && p7[i + 1] === 0x82 && p7[i + 4] === 0x30 && p7[i + 5] === 0x82) {
+        try { const c = new nodeCrypto.X509Certificate(p7.subarray(i, i + (p7[i + 2] << 8) + p7[i + 3] + 4)); c.publicKey.export({ type: 'spki', format: 'der' }); return `parsed, valid to ${c.validTo}`; } catch { /* next offset */ }
+      }
+    }
+    throw Error('no certificate could be parsed');
+  });
+  return steps;
+}
+
 /** The kit's 3PT cases end to end in this runtime: 6 Verify samples, GetCountries, Create (DVS mock), Locate, Verify of the new USI. */
 async function selftest() {
   const cfg = config();
   if (cfg.environment !== 'test') return json({ error: 'The self-test runs only in the test (3PT) environment.' }, 403);
+  const crypto = await primitives(cfg);
+  if (crypto.some((s) => !s.ok)) return json({ environment: cfg.environment, runtime: { deno: Deno.version.deno }, crypto, passed: 0, total: 0, results: [], failures: [] });
   const failures: { case: string; op: string; status: number; request: string; response: string }[] = [];
   let currentCase = '', fetches = 0;
   const f: typeof fetch = (input, init) => { if (String(input).includes('softwareauthorisations')) fetches++; return fetch(input, init); };
@@ -221,7 +258,11 @@ async function selftest() {
   const run = async (name: string, expect: string, fn: () => Promise<unknown>, check: (r: any) => boolean) => {
     currentCase = name;
     try { const r = await fn(); results.push({ case: name, expect, pass: check(r), result: r }); return r; }
-    catch (e) { const pass = check({ error: e instanceof UsiError ? e : null }); results.push({ case: name, expect, pass, error: errorText(e), code: errorCode(e) }); return null; }
+    catch (e) {
+      const pass = check({ error: e instanceof UsiError ? e : null });
+      results.push({ case: name, expect, pass, error: e instanceof UsiError ? errorText(e) : `${(e as Error)?.name}: ${String((e as Error)?.message ?? e).slice(0, 200)}`, code: errorCode(e) });
+      return null;
+    }
   };
   const samples = [
     { usi: 'BNGH7C75FN', firstName: 'Maryam', familyName: 'Fredrick', dateOfBirth: '1966-05-25', expect: 'valid' },
@@ -271,7 +312,7 @@ async function selftest() {
   await run('locate someone who does not exist', 'NoMatch',
     () => client.locate({ userReference: 'skyline-selftest', gender: 'F', firstName: 'Nobody', familyName: 'Skylinenomatch' + letters(6), dateOfBirth: '1990-01-01', email: `nobody.${letters(6)}@example.com` }),
     (r) => r?.result === 'NoMatch');
-  return json({ environment: cfg.environment, runtime: { deno: Deno.version.deno }, tokenRequests: fetches, passed: results.filter((r) => r.pass).length, total: results.length, results, failures });
+  return json({ environment: cfg.environment, runtime: { deno: Deno.version.deno }, crypto, tokenRequests: fetches, passed: results.filter((r) => r.pass).length, total: results.length, results, failures });
 }
 
 /* ------------------------------------------------------------------ entry */

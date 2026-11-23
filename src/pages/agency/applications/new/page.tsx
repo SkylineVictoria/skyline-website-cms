@@ -283,7 +283,8 @@ export default function NewApplicationPage() {
 
   const handleFinish = () => {
     if (authUser?.id) clearSession(authUser.id);
-    navigate(paths.detail(applicationId), { replace: true });
+    // Submitted from the wizard: on to the applications list (the review queue), not the form.
+    navigate(paths.list, { replace: true });
   };
 
   // Cancelling discards the unfinished draft and its uploads, then starts a fresh application.

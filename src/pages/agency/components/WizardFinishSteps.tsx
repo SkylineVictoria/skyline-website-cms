@@ -53,6 +53,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
       <FieldError text={errors[name]} />
     </fieldset>
   );
+
   const tick = (name: string, label: string) => (
     <label className="flex items-start gap-2 text-sm text-foreground-800">
       <input type="checkbox" name={name} checked={v(name) === "Yes"} onChange={(e) => onChange(name, e.target.checked ? "Yes" : "")} className="mt-0.5 h-4 w-4 accent-primary-500" />
@@ -149,23 +150,27 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
             <ul className="max-h-48 list-disc space-y-1.5 overflow-y-auto rounded-lg border border-background-200 bg-background-50 py-3 pl-8 pr-4 text-xs leading-relaxed text-foreground-700">
               {DECLARATION_TERMS.map((term) => <li key={term}>{term}</li>)}
             </ul>
-            <div className="mt-2">{tick("declaration_read", studentRole ? "I have read and agree to the declaration above." : "The student has read and agrees to the declaration above.")}</div>
-            <FieldError text={errors.declaration_read} />
           </div>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {text("declaration_name", "Full name of the person making the declaration")}
-            {text("digital_signature", "Digital signature: type the same full name")}
-          </div>
-          <p className="text-xs text-foreground-600">Declaration date: <strong className="font-medium text-foreground-900">{v("declaration_date")}</strong></p>
-          <div className="space-y-2 rounded-lg border border-background-200 p-4">
-            {tick("consent_confirmed", studentRole
-              ? "I have reviewed this application and want to submit it."
-              : "I confirm the student has reviewed this application and authorised its submission.")}
-            {tick("consent_authorised", studentRole
-              ? "I confirm the information and documents are my own and true."
-              : "I confirm I am the agent handling this application and am authorised to submit it on the student's behalf.")}
-            <FieldError text={errors.consent} />
-          </div>
+          {/* One tick agrees, confirms and signs (owner, 2026-11-23: no name typed again, no second or third tick). */}
+          {(() => {
+            const signer = v("declaration_name") || summary.name;
+            const agreed = v("declaration_read") === "Yes" && v("consent_confirmed") === "Yes" && v("consent_authorised") === "Yes";
+            const set = (on: boolean) => {
+              const yes = on ? "Yes" : "";
+              onChange("declaration_read", yes); onChange("consent_confirmed", yes); onChange("consent_authorised", yes);
+              onChange("declaration_name", signer); onChange("digital_signature", on ? signer : "");
+            };
+            return <div className="rounded-lg border border-primary-200 bg-primary-50/50 p-4">
+              <label className="flex items-start gap-3 text-sm text-foreground-900">
+                <input type="checkbox" name="declaration_read" checked={agreed} onChange={(e) => set(e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-primary-500" data-testid="wizard-agree" />
+                <span className="leading-snug">{studentRole
+                  ? "I have read and agree to the declaration, and the information and documents in this application are my own and true."
+                  : "The student has read and agrees to the declaration, the information and documents are theirs and true, and I am authorised to submit this application for them."}</span>
+              </label>
+              <p className="mt-2 pl-8 text-xs text-foreground-600">Signed electronically as <strong className="font-medium text-foreground-900">{signer || "the student"}</strong> on {v("declaration_date")}.</p>
+              <FieldError text={errors.declaration_read || errors.consent} />
+            </div>;
+          })()}
         </div>
       ) : null}
     </div>

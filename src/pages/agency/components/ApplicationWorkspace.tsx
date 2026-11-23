@@ -1883,7 +1883,8 @@ export default function ApplicationWorkspace({
   const missingNow = isReview ? collectMissing().missing : [];
   const documentProblems = isReview ? sections.map((_, index) => documentProblem(index)) : [];
   const crossFieldProblems = isReview ? sections.map((_, index) => fieldProblems(index)) : [];
-  const footerMessage = stageOpen ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
+  // A submitted (read-only) application is not being filled in: no "still needs details" line under it.
+  const footerMessage = stageOpen && !readOnly ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
   const firstSubmit = canSubmitFrom(workflow, application.status);
   // Action required: whoever the backend allows (the student, the agent, staff) corrects the form and resubmits it from here.
   const resubmitHere = actionsFor(workflow, application.status, "applicant")

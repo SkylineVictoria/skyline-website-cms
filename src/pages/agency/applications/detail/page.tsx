@@ -173,6 +173,8 @@ export default function ApplicationDetailPage() {
 
   const handleWizardFinish = async () => {
     closeWizard();
+    // Once submitted, it goes to the review queue: staff and agents see it in the applications list, a student in theirs.
+    if (application && application.status === "draft") { navigate(paths.list, { replace: true }); return; }
     setTab("form");
     setWorkspaceKey((key) => key + 1);
     await load();

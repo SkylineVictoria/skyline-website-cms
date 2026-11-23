@@ -73,6 +73,8 @@ const AUS_STUDY_STEP: WizardStep | null = ACADEMIC_WIZARD_STEP
   ? { ...ACADEMIC_WIZARD_STEP, title: "Proof of study in Australia", subtitle: "Completion letter, certificate or transcripts showing at least 2 years of study in Australia.", noun: "study record", required: false }
   : null;
 const LAST_STEP = DOC_STEPS + WIZARD_QUESTIONS.length - 1;
+/** Completion shown on the application while the wizard runs: the share of wizard screens done (100 only once submitted). */
+const wizardProgress = (stepIndex: number) => ({ overall: Math.min(95, Math.round(((stepIndex + 1) / (LAST_STEP + 1)) * 100)) });
 const PASSPORT_STEP = WIZARD_STEPS.findIndex((step) => step.id === "passport");
 /** The wizard's steps in order (documents, then questions) and their grouping into four stages; the last one submits the application. */
 const ALL_STEPS = [...WIZARD_STEPS, ...WIZARD_QUESTIONS];
@@ -154,7 +156,6 @@ const OTHER_SCREENS: Record<string, string> = {
 const USI_CONSENT_TEXT = "I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.";
 const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00`).getTime());
-const sameName = (a: string, b: string) => a.trim().replace(/\s+/g, " ").toLowerCase() === b.trim().replace(/\s+/g, " ").toLowerCase();
 
 export default function ApplicationWizard({ applicationId, agencyName, onFinish, onCancel }: Props) {
   const { profile, role } = usePortalAuth();
@@ -495,6 +496,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         updatedAt: new Date().toISOString(),
       };
       await saveDocumentReview({ applicationId, values: {}, provenance: {}, confirmed: [], wizard: meta as unknown as Record<string, unknown>, studentName: studentName || undefined });
+      // Every screen is done: the application shows 100 % complete.
+      await getApplication(applicationId, true);
+      await saveApplicationDraft(applicationId, { data: { progress: { overall: 100 } }, studentName: "", studentEmail: "", intake: "", completion: 100 });
       // The server checks the saved draft (portal_validate_submission) and needs its current version.
       await getApplication(applicationId, true);
       const receipt = await submitApplication(applicationId, {
@@ -502,7 +506,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       });
       try { window.localStorage.removeItem(wizardStepKey(applicationId)); } catch { /* storage unavailable */ }
       setSubmittedRef(receipt || application?.reference || "Submitted");
-      window.setTimeout(() => leaveOnce.current(), 2200);
+      // A student reads the thank-you message and closes it; agents and staff move on by themselves.
+      if (role !== "student") window.setTimeout(() => leaveOnce.current(), 2200);
     } catch (error) {
       const message = error instanceof Error ? error.message : "We could not submit the application.";
       // "Required field missing: title" and the like: say which screen holds it, so the agent can go straight there.
@@ -514,7 +519,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       setFinishing(false);
       completingRef.current = false;
     }
-  }, [applicationId]);
+  }, [applicationId, role]);
 
   const busy = pending.some((item) => !item.error) || documents.some((doc) => isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
   useEffect(() => {
@@ -594,7 +599,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     try {
       await flushApplicationEdits(applicationId);
       await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { values }, studentName: "", studentEmail: "", intake: "", completion: 0 });
+      await saveApplicationDraft(applicationId, { data: { values, progress: wizardProgress(step) }, studentName: "", studentEmail: "", intake: "", completion: 0 });
       goTo(step + 1);
     } catch (error) {
       setEnglishSaveError(error instanceof Error ? error.message : "We could not save your English details. Try again.");
@@ -669,6 +674,17 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       const next = { ...prev };
       const fill = (name: string, value: string) => { if (!touchedRef.current.has(name)) next[name] = value; };
       for (const name of FINISH_FIELDS) fill(name, stored(name));
+      // Nothing typed twice: what the student record already has (the name and email given when the student was added)
+      // fills the boxes the passport did not.
+      const fullName = application.studentName.trim().replace(/\s+/g, " ");
+      if (fullName && !next.first_name && !next.last_name) {
+        const parts = fullName.split(" ");
+        fill("first_name", parts[0] ?? "");
+        if (parts.length > 1) fill("last_name", parts[parts.length - 1]);
+        if (parts.length > 2 && !next.middle_name) fill("middle_name", parts.slice(1, -1).join(" "));
+      }
+      if (!next.email && application.studentEmail) fill("email", application.studentEmail.trim());
+      if (!next.confirm_email && next.email) fill("confirm_email", next.email);
       const gender = next.gender ?? "";
       if (!next.title) fill("title", gender === "Male" ? "Mr" : gender === "Female" ? "Miss" : "");
       if (!next.citizenship) fill("citizenship", next.nationality ?? "");
@@ -780,20 +796,32 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         oshc_expiry: filled("oshc_require") === "Already Have" ? filled("oshc_expiry") : "",
       });
     } else if (target.id === "declare") {
-      if (filled("declaration_read") !== "Yes") errors.declaration_read = "Tick to confirm the declaration was read and agreed.";
-      if (!filled("declaration_name")) errors.declaration_name = "Enter the full name of the person making the declaration.";
-      if (!filled("digital_signature")) errors.digital_signature = "Type the full name to sign.";
-      else if (!sameName(filled("declaration_name"), filled("digital_signature"))) errors.digital_signature = "The signature must be the same name as the declarant.";
-      if (filled("consent_confirmed") !== "Yes" || filled("consent_authorised") !== "Yes") errors.consent = "Tick both confirmations to submit.";
+      // One tick agrees and signs: the name is the student's own (from Personal details), never typed again.
+      const signer = filled("declaration_name") || [filled("first_name"), filled("middle_name"), filled("last_name")].filter(Boolean).join(" ");
+      if (filled("declaration_read") !== "Yes" || filled("consent_confirmed") !== "Yes" || filled("consent_authorised") !== "Yes")
+        errors.declaration_read = "Tick the box to agree and sign.";
+      else if (!signer) errors.declaration_read = "Add the student's name on Personal details first.";
       // What the full form used to fill itself: the checklist, USI consent, the agent block and the visa answer.
       const application = await getApplication(applicationId, true).catch(() => null);
       const stored = (application?.data.values ?? {}) as Record<string, unknown>;
       const empty = (name: string) => !String(stored[name] ?? "").trim();
       Object.assign(values, {
-        declaration_name: filled("declaration_name"), digital_signature: filled("digital_signature"), declaration_date: todayIso(),
+        declaration_name: signer, digital_signature: signer, declaration_date: todayIso(),
         checklist: CHECKLIST_OPTIONS, usi_consent: [USI_CONSENT_TEXT], address_type: "Australian Address", au_country: "Australia",
         ...(empty("via_agent") ? { via_agent: "Yes" } : {}),
-        ...(empty("agent_agency") && agencyName ? { agent_agency: agencyName } : {}),
+        ...(empty("agent_agency") && (application?.agencyName || agencyName) ? { agent_agency: application?.agencyName || agencyName } : {}),
+        // The agent's own details come from the application's assigned agent, else the signed-in agent: never typed.
+        ...(() => {
+          const self = role === "agent" || role === "agency_admin";
+          const agentName = application?.agentName || (self ? profile?.fullName ?? "" : "");
+          const agentEmail = application?.agentEmail || (self ? profile?.email ?? "" : "");
+          const agentPhone = application?.agentPhone || (self ? profile?.phone ?? "" : "");
+          return {
+            ...(empty("agent_contact_name") && agentName ? { agent_contact_name: agentName } : {}),
+            ...(empty("agent_email") && agentEmail ? { agent_email: agentEmail } : {}),
+            ...(empty("agent_phone") && agentPhone ? { agent_phone: agentPhone } : {}),
+          };
+        })(),
         ...(empty("holds_visa") ? { holds_visa: documentsRef.current.some((doc) => doc.category === "Visa") ? "Yes" : "No" } : {}),
       });
     } else {
@@ -822,7 +850,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       await flushApplicationEdits(applicationId);
       // Reading documents moves the draft on; take its current version before saving.
       await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { values, ...patch }, studentName: "", studentEmail: "", intake: "", completion: 0 });
+      await saveApplicationDraft(applicationId, { data: { values, ...patch, progress: wizardProgress(step) }, studentName: "", studentEmail: "", intake: "", completion: 0 });
       return true;
     } catch (error) {
       setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");
@@ -911,9 +939,14 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       return (
         <div className="py-8 text-center" role="status" data-testid="wizard-submitted">
           <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-background-50"><i className="ri-check-line text-3xl" aria-hidden="true" /></span>
-          <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Application submitted</h3>
-          <p className="mt-1 text-sm text-foreground-600">Reference {submittedRef}. SLIT admissions will review it; you will be emailed about each step.</p>
-          <button type="button" onClick={() => leaveOnce.current()} className={`${primaryClass} mt-5`}>Continue</button>
+          {role === "student" ? <>
+            <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Thank you for submitting your application</h3>
+            <p className="mt-1 text-sm text-foreground-600">Skyline will review it and update you. Your reference is {submittedRef}.</p>
+          </> : <>
+            <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Application submitted</h3>
+            <p className="mt-1 text-sm text-foreground-600">Reference {submittedRef}. It is now with SLIT admissions for review.</p>
+          </>}
+          <button type="button" onClick={() => leaveOnce.current()} className={`${primaryClass} mt-5`}>{role === "student" ? "OK" : "Continue"}</button>
         </div>
       );
     }

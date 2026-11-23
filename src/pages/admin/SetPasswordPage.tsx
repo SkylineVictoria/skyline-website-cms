@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/pages/admin/lib/authContext";
-import { AdminLoading, Button, Field, TextInput } from "@/pages/admin/components/ui";
+import { AdminError, AdminLoading, Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { hadSession, loginUrl } from "@/lib/loginRouting";
 
 const MIN_LENGTH = 10;
@@ -13,17 +13,17 @@ const MIN_LENGTH = 10;
  * is handled by the single shared /reset-password screen instead.
  */
 export default function AdminSetPasswordPage() {
-  const { user, authLoading, changePassword, logout } = useAuth();
+  const { user, authLoading, authError, retryAuth, changePassword, logout } = useAuth();
   const navigate = useNavigate();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  if (authLoading) {
+  if (authLoading || (authError && !user)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background-100">
-        <AdminLoading label="Checking your session…" />
+        {authError ? <AdminError message={authError} onRetry={retryAuth} /> : <AdminLoading label="Checking your session…" />}
       </div>
     );
   }

@@ -27,7 +27,7 @@ function initials(name: string) {
 }
 
 export default function AdminLayout() {
-  const { user, authLoading, logout } = useAuth();
+  const { user, authLoading, authError, retryAuth, logout } = useAuth();
   const { data, status, error, reload } = useAdminData();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -47,10 +47,10 @@ export default function AdminLayout() {
     return () => { window.removeEventListener("online", up); window.removeEventListener("offline", down); };
   }, []);
 
-  if (authLoading) {
+  if (authLoading || (authError && !user)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background-100">
-        <AdminLoading label="Checking your session…" />
+        {authError ? <AdminError message={authError} onRetry={retryAuth} /> : <AdminLoading label="Checking your session…" />}
       </div>
     );
   }

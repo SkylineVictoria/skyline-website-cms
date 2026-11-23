@@ -62,7 +62,8 @@ export default function StudentAssessmentsPage() {
                 <p className="mt-1 text-sm text-foreground-800"><i className="ri-calendar-event-line mr-1 text-foreground-500" aria-hidden="true" />Due {fmtDateTime(a.dueAt)}{a.attempts.length ? ` · ${a.attempts.length} of ${a.maxAttempts} attempts used` : ""}</p>
                 {a.events.length ? <ul className="mt-1 text-xs text-foreground-600">{a.events.map((e, i) => <li key={i}><i className="ri-map-pin-line mr-1" aria-hidden="true" />{e.title}: {fmtDateTime(e.startsAt)}{e.room ? ` · ${e.room}` : ""}</li>)}</ul> : null}
               </div>
-              <div className="flex flex-col items-end gap-2"><Badge tone={s.tone}>{s.label}</Badge><Link to={`/agency/assessments/${a.assignmentId}`}><Button size="sm" icon="ri-arrow-right-line">{a.attempts.length ? "Open" : "Start"}</Button></Link></div>
+              <div className="flex flex-col items-end gap-2"><Badge tone={s.tone}>{s.label}</Badge><Link to={`/agency/assessments/${a.assignmentId}`}><Button size="sm" icon="ri-arrow-right-line">{a.attempts.length ? "Open" : "Start"}</Button></Link>
+                {a.unitCode && <Link className="rounded-md border border-violet-200 px-2.5 py-1.5 text-xs font-semibold text-violet-800 dark:text-violet-300" to={`/agency/practice?assessment=${a.assignmentId}`}>Practise this assessment</Link>}</div>
             </div>
           </li>); })}</ul>
       )) : null}

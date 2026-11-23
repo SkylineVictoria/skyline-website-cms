@@ -96,6 +96,7 @@ import AssessmentDetailPage from "@/pages/admin/assessments/AssessmentDetailPage
 import StudentAssessmentsPage from "@/pages/agency/assessments/page";
 import StudentAssessmentPage from "@/pages/agency/assessments/detail/page";
 import StudentLearningPage from "@/pages/agency/learning/page";
+import StudentPracticePage from "@/pages/agency/practice/page";
 import StudentTimetablePage from "@/pages/agency/timetable/page";
 import StaffTimetablePage from "@/pages/staff/TimetablePage";
 import CertificatePage from "@/pages/CertificatePage";
@@ -198,6 +199,7 @@ const routes: RouteObject[] = [
           { path: "assessments", element: <StudentAssessmentsPage /> },
           { path: "assessments/:id", element: <StudentAssessmentPage /> },
           { path: "learning", element: <StudentLearningPage /> },
+          { path: "practice", element: <StudentPracticePage /> },
           { path: "timetable", element: <StudentTimetablePage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },
           { path: "bookings", element: <BookingsHub /> },

@@ -17,6 +17,7 @@ type Kind =
   | { type: "number"; unit: string; min?: number; max?: number; step?: number }
   | { type: "yesno"; on: string; off: string }
   | { type: "choice" }
+  | { type: "text" }
   | { type: "checklist"; options: string[]; labels?: Record<string, string> }
   | { type: "staffDocs" };
 type Setting = { id: string; question: string; help?: string; kind: Kind };
@@ -59,6 +60,21 @@ const SECTIONS: Section[] = [
     { id: "lms.join_dates", question: "Start dates a student may choose", kind: { type: "choice" } },
     // rule-policy: technical settings-catalogue Plain-language label for an existing rule; its value lives in Business Rules.
     { id: "lms.optional_holidays_stop_classes", question: "No classes on optional public holidays", kind: { type: "yesno", on: "Yes", off: "No" } },
+  ] },
+  { title: "LMS bulk upload", icon: "ri-file-upload-line", settings: [
+    { id: "lms.bulk_max_mib", question: "Maximum size per uploaded file", kind: { type: "number", unit: "MiB", min: 1, max: 25 } },
+    { id: "lms.bulk_max_files", question: "Maximum documents per import", kind: { type: "number", unit: "files", min: 1, max: 1000 } },
+    { id: "lms.bulk_formats", question: "Allowed file extensions", kind: { type: "checklist", options: ["zip","pdf","docx","pptx","xlsx","png","jpg","jpeg","webp","mp4","webm"] } },
+    { id: "lms.bulk_confidence", question: "Flag AI classifications below", kind: { type: "number", unit: "%", min: 0, max: 100 } },
+    { id: "lms.bulk_instructions", question: "Additional instructions for the AI", kind: { type: "text" } },
+    { id: "lms.bulk_default_audience", question: "Default access for student-safe material", kind: { type: "choice" } },
+    { id: "lms.bulk_duplicates", question: "Handle identical documents", kind: { type: "choice" } },
+    { id: "lms.bulk_confirm_each", question: "Require an individual review for every document", kind: { type: "yesno", on: "Yes", off: "No" } },
+    { id: "lms.bulk_allow_publication", question: "Allow administrators to publish imported resources", kind: { type: "yesno", on: "Yes", off: "No" } },
+    { id: "lms.bulk_learning_label", question: "Learning Materials category name", kind: { type: "text" } },
+    { id: "lms.bulk_assessment_label", question: "Assessments category name", kind: { type: "text" } },
+    { id: "lms.bulk_self_assessment_label", question: "Self-Assessment category name", kind: { type: "text" } },
+    { id: "lms.bulk_assessor_label", question: "Assessor Resources category name", kind: { type: "text" } },
   ] },
   { title: "Staff", icon: "ri-team-line", settings: [
     { id: "hrms.applicant_document_checklist", question: "Documents new staff must upload", help: "The others are still asked for, but can be skipped.", kind: { type: "staffDocs" } },
@@ -137,25 +153,29 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
     <Card className="overflow-hidden p-0">
       <ul className="divide-y divide-background-100">{section.settings.map(s => {
         const rule = byId.get(s.id);
-        const live = rule ? liveDefinition(rule) : undefined;
+        const current = rule ? liveDefinition(rule) : undefined;
+        const draft = s.id.startsWith("lms.bulk_") && rule?.versions[0]?.state === "draft" ? rule.versions[0].definition : undefined;
+        const live = current ?? draft;
+        const configuring = !!draft && !current;
         // rule-policy: technical missing-rule A setting whose rule is not installed is simply not shown.
         if (!rule || !live) return null;
         const stored = s.kind.type === "staffDocs" ? staffDocsValue(live.value) : live.value;
         const value = s.id in edits ? edits[s.id] : stored;
-        const typed = s.kind.type === "number";
+        const typed = s.kind.type === "number" || s.kind.type === "text";
         const commit = (v: unknown) => {
           // rule-policy: technical settings-catalogue Saves only a real change; an empty or unchanged number box is put back.
-          if (v == null || sameValue(v, stored)) { setEdits(old => { const next = { ...old }; delete next[s.id]; return next; }); return; }
+          if (v == null || (!configuring && sameValue(v, stored))) { setEdits(old => { const next = { ...old }; delete next[s.id]; return next; }); return; }
           void save(s, rule, live, v);
         };
-        const onChange = (v: unknown) => { setSaved(""); if (typed) setEdits(old => ({ ...old, [s.id]: v })); else commit(v); };
+        const onChange = (v: unknown) => { setSaved(""); if (typed || configuring) setEdits(old => ({ ...old, [s.id]: v })); else commit(v); };
         return <li key={s.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid={`setting-${s.id}`}
-          onBlur={typed ? e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) commit(value); } : undefined}
-          onKeyDown={typed ? e => { if (e.key === "Enter") commit(value); if (e.key === "Escape") setEdits(old => { const next = { ...old }; delete next[s.id]; return next; }); } : undefined}>
+          onBlur={typed && !configuring ? e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) commit(value); } : undefined}
+          onKeyDown={typed && !configuring ? e => { if (e.key === "Enter") commit(value); if (e.key === "Escape") setEdits(old => { const next = { ...old }; delete next[s.id]; return next; }); } : undefined}>
           <span className="min-w-0 text-sm text-foreground-900" title={s.help}>{s.question}</span>
           <span className="flex shrink-0 items-center gap-2">
             {/* // rule-policy: technical settings-catalogue Shows a saved tick after an existing rule changes. */}
             {saved === s.id ? <span className="text-xs font-medium text-green-700" role="status"><i className="ri-check-line" aria-hidden="true" /> Saved</span> : null}
+            {configuring && <Button size="sm" variant="outline" disabled={busy || value == null} onClick={() => commit(value)}>Publish setting</Button>}
             <Control setting={s} value={value} options={live.options} onChange={onChange} disabled={busy} />
           </span>
         </li>;
@@ -172,9 +192,11 @@ function Control({ setting, value, options, onChange, disabled }: { setting: Set
       value={typeof value === "number" ? value : ""} onChange={e => onChange(e.target.value === "" ? null : e.target.valueAsNumber)} />
     <span className="text-foreground-600">{k.unit}</span>
   </label>;
+  if (k.type === "text") return <TextInput className="!w-64" value={String(value ?? "")} disabled={disabled}
+    aria-label={setting.question} onChange={e => onChange(e.target.value)} />;
   if (k.type === "yesno") return <Toggle checked={value === true} disabled={disabled} label={value === true ? k.on : k.off} onChange={onChange} />;
   if (k.type === "choice") return <Select className="!w-auto max-w-xs" disabled={disabled} aria-label={setting.question} value={String(value ?? "")} onChange={e => onChange(e.target.value)}>
-    {options.map(o => <option key={o}>{o}</option>)}
+    {options.map(o => <option key={o} value={o}>{{ student_staff: "Student & Staff", staff: "Staff", assessor: "Assessor only", review: "Review duplicates", skip_identical: "Skip identical files" }[o] ?? o}</option>)}
   </Select>;
   const list = Array.isArray(value) ? (value as string[]) : [];
   const opts = k.type === "staffDocs" ? STAFF_DOCS : k.options;

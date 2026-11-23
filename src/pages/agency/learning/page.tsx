@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Completion } from "@/pages/CertificatePage";
+import { categoryLabel, downloadResource, listResources, type Resource } from "@/pages/admin/lib/bulkResources";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import StudyProgress, { type ProgressCourse } from "@/pages/admin/components/StudyProgress";
@@ -19,6 +20,7 @@ const size = (n: number | null) => (!n ? "" : n < 1024 * 1024 ? `${Math.max(1, M
 export default function StudentLearningPage() {
   const [courses, setCourses] = useState<Course[] | null>(null);
   const [error, setError] = useState("");
+  const [imports, setImports] = useState<Record<string, Resource[]>>({});
   const [open, setOpen] = useState<string | null>(null);
   const [certs, setCerts] = useState<Completion[]>([]);
   const [progress, setProgress] = useState<ProgressCourse[]>([]);
@@ -35,6 +37,18 @@ export default function StudentLearningPage() {
     if (current) setOpen((o) => o ?? `${list[0].enrolmentId}:${current.unitId}`);
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!open) return;
+    const unitId = open.slice(open.indexOf(":") + 1);
+    let active = true;
+    void listResources(unitId).then(rows => {
+      if (active) setImports(old => ({ ...old, [unitId]: rows.filter(r => r.published_at && r.audience === "student_staff") }));
+    }).catch(e => {
+      if (active && !/function.*lms_bulk_resources|schema cache/i.test(String(e))) setError("Published resources could not be loaded.");
+    });
+    return () => { active = false; };
+  }, [open]);
 
   const openFile = async (item: Item) => {
     if (!item.path) return;
@@ -90,13 +104,19 @@ export default function StudentLearningPage() {
                         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-background-100">
                         <span className="min-w-0">
                           <span className="block font-semibold text-foreground-950">{u.code ? `${u.code} ` : ""}{u.name}</span>
-                          <span className="block text-xs text-foreground-500">{u.startDate ? `${fmt(u.startDate)} – ${fmt(u.endDate)} · ` : ""}{u.items.length} item{u.items.length === 1 ? "" : "s"}</span>
+                          <span className="block text-xs text-foreground-500">{u.startDate ? `${fmt(u.startDate)} – ${fmt(u.endDate)} · ` : ""}{u.items.length + (imports[u.unitId]?.length ?? 0)} items</span>
                         </span>
                         <i className={isOpen ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" />
                       </button>
                       {isOpen ? (
                         <div className="space-y-3 px-4 pb-4">
-                          {!u.items.length ? <p className="text-sm text-foreground-500">Your trainer has not added materials for this unit yet.</p> : u.items.map((it) => (
+                          {(imports[u.unitId] ?? []).map(resource => <div key={resource.id} className="rounded-lg border border-background-200 bg-white p-3">
+                            <p className="text-xs text-foreground-600">{categoryLabel(resource.category)}</p>
+                            <p className="font-semibold text-foreground-900">{resource.title}</p>
+                            <button type="button" className="mt-2 text-sm font-semibold text-primary-700 underline"
+                              onClick={() => void downloadResource(resource.path, resource.name).catch(() => setError("This file could not be opened."))}>Open {resource.name}</button>
+                          </div>)}
+                          {!u.items.length && !imports[u.unitId]?.length ? <p className="text-sm text-foreground-500">Your trainer has not added materials for this unit yet.</p> : u.items.map((it) => (
                             <div key={it.id} className="rounded-lg border border-background-200 bg-white p-3">
                               <p className="flex items-center gap-2 font-semibold text-foreground-900"><i className={KIND_ICON[it.kind]} aria-hidden="true" />{it.title}</p>
                               {it.body ? <p className="mt-1 whitespace-pre-wrap text-sm text-foreground-700">{it.body}</p> : null}

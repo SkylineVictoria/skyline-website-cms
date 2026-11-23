@@ -118,4 +118,4 @@ export const BUSINESS_RULE_IDS = new Set([
   "support.ticket_categories", "support.ticket_priority_default", "support.requester_can_close",
   "website.assistant_daily_answers",
 ]);
-export const isSystemRule = (rule: Rule) => !BUSINESS_RULE_IDS.has(rule.identifier);
+export const isSystemRule = (rule: Rule) => !rule.identifier.startsWith("lms.bulk_") && !BUSINESS_RULE_IDS.has(rule.identifier);

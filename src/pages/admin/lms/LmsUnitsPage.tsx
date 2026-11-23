@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import BulkResourceWorkspace from "./BulkResourceWorkspace";
+import UnitResourcesPanel from "./UnitResourcesPanel";
 import UnitContentPanel from "./UnitContentPanel";
 import UnitAssessmentsPanel from "./UnitAssessmentsPanel";
 import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestHours, weeksForHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
@@ -23,7 +25,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
   const [page, setPage] = useState(1);
-  const [drawerTab, setDrawerTab] = useState<"content" | "details" | "learning" | "assessments">("details");
+  const [drawerTab, setDrawerTab] = useState<"content" | "details" | "learning" | "assessments" | "resources">("details");
   const [hours, setHours] = useState<Record<string, UnitHours>>({});
   const [hoursError, setHoursError] = useState("");
   const [hoursDraft, setHoursDraft] = useState<HoursSplit | null>(null);
@@ -34,6 +36,11 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const [status, setStatus] = useState("all");
   const [selected, setSelected] = useState<Entry | null>(null);
   const [draft, setDraft] = useState<RtoUnit | null>(null);
+  const [bulk, setBulk] = useState<{ hint?: string } | null>(null);
+  const [canManageResources, setCanManageResources] = useState(false);
+  useEffect(() => {
+    void supabase.rpc("asm_is_admin").then(({ data }) => setCanManageResources(data === true));
+  }, []);
   const [canEdit, setCanEdit] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -153,6 +160,9 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     } catch(e) { setNotice(e instanceof Error ? e.message : "Unable to save unit."); }
     finally { setBusy(false); }
   };
+  if (bulk) return <BulkResourceWorkspace courses={courses}
+    units={rows.flatMap(({ course, unit }) => unit.id ? [{ id: unit.id, code: unit.code, name: unit.name, course_id: course.id }] : [])}
+    unitHint={bulk.hint} onClose={() => setBulk(null)} />;
   return <div className={embeddedCourseId ? "space-y-4" : "mx-auto max-w-[1500px] space-y-5 pb-12"}>
     {editingHours && selectedCourse ? <UnitHoursEditor course={selectedCourse} onClose={() => setEditingHours(false)}
       onSaved={() => { void refreshHours(selectedCourse.id); void reloadCourse(selectedCourse.id); }} /> : null}
@@ -161,6 +171,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     {!embeddedCourseId && <header className="flex flex-wrap items-end justify-between gap-3">
       <div><h1 className="font-heading text-2xl font-bold text-foreground-950">Units</h1>
         <p className="text-sm text-foreground-500">Units of each course, with their Training.gov.au content.</p></div>
+      {canManageResources && <button type="button" className="rounded-lg bg-primary-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => setBulk({})}>AI Bulk Upload</button>}
     </header>}
     {error ? <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error} <button className="ml-2 underline" onClick={() => void load()}>Retry</button></p> : null}
     <div className={embeddedCourseId ? "" : "grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]"}>
@@ -249,14 +260,16 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
             <h2 className="font-heading text-lg font-bold text-foreground-950">{draft.name || "New unit"}</h2></div>
           <button type="button" onClick={()=>{setSelected(null);setDraft(null);}} aria-label="Close" className="rounded-lg p-1 text-foreground-500 hover:bg-background-100"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
         </div>
-        <div role="tablist" className="flex gap-5 border-b border-background-200 px-6">
-          {([["details","Details"],["learning","Learning content"],["assessments","Assessments"],["content","Training.gov.au"]] as const).filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
+        <div role="tablist" className="flex flex-wrap gap-x-5 border-b border-background-200 px-6">
+          {([["details","Details"],["learning","Learning content"],["resources","Resources"],["assessments","Assessments"],["content","Training.gov.au"]] as const).filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
             <button key={id} type="button" role="tab" aria-selected={drawerTab===id} onClick={()=>setDrawerTab(id)}
               className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (drawerTab===id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
           {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
           {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEdit} /> : null}
+          {drawerTab==="resources" && draft.id && selectedCourse ? <UnitResourcesPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id}
+            canManage={canManageResources} onBulk={() => setBulk({ hint: draft.id })} /> : null}
           {drawerTab==="assessments" && draft.id && selectedCourse ? <UnitAssessmentsPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEdit} /> : null}
           {drawerTab==="details" ? <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">

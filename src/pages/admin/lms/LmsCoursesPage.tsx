@@ -81,7 +81,7 @@ const PURGE_LABELS: Record<string, string> = {
   "course_fee_items": "fee line", "course_fee_setups": "fee setup", "course_master_units": "master timetable row", "enrollment_application_courses": "application course choice",
   "rto_enrolment_units": "student unit", "lms_intake_students": "intake allocation", "course_term_breaks": "term break", "intake_groups": "intake group",
 };
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 || /s$/.test(word) ? "" : "s"}`;
 function describePurge(tables: PurgeCounts): string[] {
   const rows = Object.entries(tables).map(([table, c]) => {
     const short = table.replace(/^public\./, "").replace(/^"|"$/g, "");

@@ -158,7 +158,7 @@ export interface OfferView {
 export const offerLink = {
   open: async (t: string) => { const r = await invoke({ action: "offer_open", t }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
   viewUrl: async (t: string, which: "offer" | "signed") => String((await invoke({ action: "offer_view_url", t, which })).url ?? ""),
-  sign: async (t: string, name: string, consent: boolean) => { const r = await invoke({ action: "offer_sign", t, name, consent }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
+  sign: async (t: string, name: string, consent: boolean, signature?: string | null) => { const r = await invoke({ action: "offer_sign", t, name, consent, ...(signature ? { signature } : {}) }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
   decline: async (t: string, reason: string) => { await invoke({ action: "offer_decline", t, reason, confirm: true }); },
 };
 
@@ -166,16 +166,17 @@ export const offerLink = {
 export interface OfferApi {
   open(): Promise<{ view: OfferView; consent: string }>;
   viewUrl(which: "offer" | "signed"): Promise<string>;
-  sign(name: string): Promise<{ view: OfferView; consent: string }>;
+  /** OFFER-SIGNATURES: `signature` is the PNG the person drew (base64), printed on the signed copy. */
+  sign(name: string, signature?: string | null): Promise<{ view: OfferView; consent: string }>;
   /** STAFF-OFFER-FULL-PART-TIME: turn the offer down (optional reason); the record moves to Rejected / Withdrawn. */
   decline(reason: string): Promise<void>;
 }
-export const offerApiForLink = (t: string): OfferApi => ({ open: () => offerLink.open(t), viewUrl: (which) => offerLink.viewUrl(t, which), sign: (name) => offerLink.sign(t, name, true), decline: (reason) => offerLink.decline(t, reason) });
+export const offerApiForLink = (t: string): OfferApi => ({ open: () => offerLink.open(t), viewUrl: (which) => offerLink.viewUrl(t, which), sign: (name, signature) => offerLink.sign(t, name, true, signature), decline: (reason) => offerLink.decline(t, reason) });
 /** The signed-in person's own offer: the function resolves the session to their record; nobody else's can be reached. */
 export const myOfferApi: OfferApi = {
   open: async () => { const r = await invoke({ action: "offer_open" }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
   viewUrl: async (which) => String((await invoke({ action: "offer_view_url", which })).url ?? ""),
-  sign: async (name) => { const r = await invoke({ action: "offer_sign", name, consent: true }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
+  sign: async (name, signature) => { const r = await invoke({ action: "offer_sign", name, consent: true, ...(signature ? { signature } : {}) }); return { view: r.view as OfferView, consent: String(r.consent ?? "") }; },
   decline: async (reason) => { await invoke({ action: "offer_decline", reason, confirm: true }); },
 };
 /** STAFF-OFFER-FULL-PART-TIME: after signing the offer, a private link to the document wizard for the signed-in person (nothing emailed). */

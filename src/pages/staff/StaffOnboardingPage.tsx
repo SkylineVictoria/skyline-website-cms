@@ -11,6 +11,7 @@ import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardNotice } fro
 import WizardStepper from "@/components/shared/wizard/WizardStepper";
 import { STAFF_WIZARD_STEPS, type WizardExtractionState } from "@/pages/agency/lib/wizardConfig";
 import type { StaffDocument } from "@/lib/staffApi";
+import SignaturePad from "@/components/signing/SignaturePad";
 import { FieldError as SaveError, LinkInvalidError, myOfferApi, onboarding, takeLinkToken, type OnboardingView } from "@/lib/staffOnboardingApi";
 import { STAFF_WIZARD, detailsOf, isBeingRead, licenceGaveAddress, prefillNote, stepComplete, stepFields, taxSuperRows, wizardProblems, type PrefillField, type StaffWizardStepId } from "@/lib/staffOnboardingWizard";
 import { STAFF_DOC_LABEL, staffDocKinds, todayIso, type StaffDocCategory } from "@/lib/staffStatus";
@@ -234,6 +235,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
   const signsOffer = view.status === "offer_sent";
   const [signName, setSignName] = useState("");
   const [signAgreed, setSignAgreed] = useState(false);
+  const [signImage, setSignImage] = useState<string | null>(null);
   const [consentText, setConsentText] = useState("");
   useEffect(() => {
     if (!signsOffer) return;
@@ -362,7 +364,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
 
   const submit = async () => {
     setSubmitError("");
-    if (signsOffer && (!signName.trim() || !signAgreed)) { setSubmitError("Type your full name and tick the box to sign the offer."); return; }
+    if (signsOffer && (!signName.trim() || !signImage || !signAgreed)) { setSubmitError("Type your full name, draw your signature and tick the box to sign the offer."); return; }
     if (!(await flush())) return;
     setSubmitting(true);
     try {
@@ -370,7 +372,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
       try { window.sessionStorage.removeItem(STEP_KEY); } catch { /* storage unavailable */ }
       if (signsOffer) {
         // The documents are in; now the offer is signed (the server refuses a signature before the documents).
-        try { await myOfferApi.sign(signName.trim()); }
+        try { await myOfferApi.sign(signName.trim(), signImage); }
         catch (e) {
           setSubmitError(`Your details and documents were sent, but the offer could not be signed: ${e instanceof Error ? e.message : "please try again"}. Sign it from My HR.`);
           window.setTimeout(() => window.location.assign("/staff"), 4000);
@@ -748,6 +750,11 @@ function Wizard({ view, token, onChange, onError }: Props) {
               <span className="font-medium text-foreground-800">Your full name</span>
               <input value={signName} onChange={(e) => setSignName(e.target.value)} autoComplete="name" maxLength={200} className={WIZARD_INPUT} data-testid="staff-sign-name" />
             </label>
+            <div className="mt-3 text-sm" data-testid="staff-sign-pad">
+              <span className="mb-1 block font-medium text-foreground-800">Your signature</span>
+              <SignaturePad onChange={setSignImage} />
+              <span className="mt-1 block text-xs text-foreground-600">Draw it with your finger, a pen or the mouse. It is printed on your signed offer letter with today&apos;s date.</span>
+            </div>
             <label className="mt-3 flex cursor-pointer items-start gap-2.5 text-sm text-foreground-800">
               <input type="checkbox" checked={signAgreed} onChange={(e) => setSignAgreed(e.target.checked)} className="mt-0.5 h-4 w-4" data-testid="staff-sign-agree" />
               <span>{consentText || "I have read the offer letter and I accept it."}</span>

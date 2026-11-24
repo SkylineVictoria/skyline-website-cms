@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { formatSignedAt } from "@/lib/signedTime";
+import SignaturePad from "@/components/signing/SignaturePad";
 import { LinkInvalidError, NoOfferError, myDocumentsLink, type OfferApi, type OfferView } from "@/lib/staffOnboardingApi";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
@@ -20,9 +21,10 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true, a
   const [error, setError] = useState("");
   const [pdfUrl, setPdfUrl] = useState("");
   const [name, setName] = useState("");
+  const [signature, setSignature] = useState<string | null>(null);
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [fieldError, setFieldError] = useState<{ name?: string; consent?: string }>({});
+  const [fieldError, setFieldError] = useState<{ name?: string; consent?: string; signature?: string }>({});
   // STAFF-OFFER-FULL-PART-TIME: Accept (sign) or Decline (optional reason, confirmed once).
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
@@ -46,15 +48,16 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true, a
   const sign = async (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
-    const problems: { name?: string; consent?: string } = {};
+    const problems: { name?: string; consent?: string; signature?: string } = {};
     if (!name.trim()) problems.name = "Type your full name to sign.";
+    if (!signature) problems.signature = "Draw your signature.";
     if (!agreed) problems.consent = "Tick the box to agree.";
     setFieldError(problems);
-    if (problems.name || problems.consent) return;
+    if (problems.name || problems.consent || problems.signature) return;
     setBusy(true);
     setError("");
     try {
-      const r = await api.sign(name.trim());
+      const r = await api.sign(name.trim(), signature);
       setView(r.view);
       loadPdf(r.view);
       onSigned?.(r.view);
@@ -158,6 +161,11 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true, a
               <TextInput value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={200} aria-invalid={Boolean(fieldError.name)} />
             </Field>
             {fieldError.name ? <p className="mt-1 text-xs text-primary-700" role="alert">{fieldError.name}</p> : null}
+          </div>
+          <div className="mt-4 text-sm" data-testid="offer-sign-pad">
+            <span className="mb-1 block font-medium text-foreground-800">Your signature</span>
+            <SignaturePad onChange={setSignature} />
+            {fieldError.signature ? <p className="mt-1 text-xs text-primary-700" role="alert">{fieldError.signature}</p> : null}
           </div>
           <label className="mt-4 flex cursor-pointer items-start gap-2.5 text-sm text-foreground-800">
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-background-400 text-primary-600 focus:ring-primary-200" />

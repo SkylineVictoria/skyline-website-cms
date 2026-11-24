@@ -133,15 +133,19 @@ export async function queryAgencies(filters: { search?: string; status?: string;
 }
 
 export async function getAgency(id: string): Promise<AgencySummary | null> {
-  const { data, error } = await supabase
+  const query = (withApplications: boolean) => supabase
     .from("agencies")
-    .select(`${AGENCY_COLUMNS}, created_at, agents:agency_memberships(count), applications:enrollment_applications(count)`)
+    .select((withApplications ? `${AGENCY_COLUMNS}, created_at, agents:agency_memberships(count), applications:enrollment_applications(count)`
+      : `${AGENCY_COLUMNS}, created_at, agents:agency_memberships(count)`) as string)
     .eq("id", id)
     .eq("agents.role", "agent")
     .maybeSingle();
+  let { data, error } = await query(true);
+  // A login that may not read applications directly still gets the business (the count shows 0; the business page shows its own counts).
+  if (error && (error.code === "42501" || /permission denied/i.test(error.message))) ({ data, error } = await query(false));
   if (error) throw new Error(error.message);
   if (!data) return null;
-  const r = data as Record<string, unknown>;
+  const r = data as unknown as Record<string, unknown>;
   const counted = (value: unknown) => Number((value as Array<{ count?: number }> | undefined)?.[0]?.count ?? 0);
   return { ...mapAgency(r), createdAt: String(r.created_at ?? ""), agentCount: counted(r.agents), applicationCount: counted(r.applications) };
 }

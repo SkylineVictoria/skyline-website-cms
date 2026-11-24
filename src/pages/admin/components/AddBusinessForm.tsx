@@ -15,6 +15,8 @@ import { ruleText } from "@/lib/businessRules";
 import { isEmailTakenError } from "@/lib/identity/email";
 import OmaraAgentsPanel, { type OmaraSelection } from "@/pages/admin/components/OmaraAgentsPanel";
 import { omaraLink, type OmaraFacts } from "@/lib/omaraApi";
+import { BranchList, MapsSearchBox } from "@/pages/admin/components/OfficeLocations";
+import { saveOffices, type OfficeLocation } from "@/pages/admin/lib/offices";
 
 type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string; officePostcode?: string; website?: string };
 
@@ -80,6 +82,10 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   // Google Maps: the office found for this ABN (null: none / not set up), and a note when it was looked for and not found.
   const [office, setOffice] = useState<Office | null>(null);
   const [officeNote, setOfficeNote] = useState("");
+  // Search Google Maps by hand (2026-11-24): another branch / office when the one found is wrong or none was found.
+  const [mapsOn, setMapsOn] = useState(false);
+  const [mapsOpen, setMapsOpen] = useState(false);
+  const [branches, setBranches] = useState<OfficeLocation[]>([]);
   const [familyName, setFamilyName] = useState("");
   // OMARA (2026-11-24): what the register search uses (set once per lookup, so editing the form does not search again) and the agents ticked.
   const [omaraFacts, setOmaraFacts] = useState<OmaraFacts | null>(null);
@@ -96,6 +102,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   // Look the ABN up once it is complete and valid (Fetch from ABN and leaving the field look it up again); a newer ABN discards an older answer.
   useEffect(() => {
     setDetails(null); setExisting(null); setLookupError(""); setEditing(false); setAbr(null); setAbrFailure(null); setOffice(null); setOfficeNote("");
+    setMapsOn(false); setMapsOpen(false); setBranches([]);
     setOmaraFacts(null); setOmaraSel({ marns: [], evidence: {} });
     if (abnProblem) { setLookupLoading(false); return; }
     let cancelled = false;
@@ -109,6 +116,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         const places: PlacesLookup | undefined = abrResult?.places;
         const found = places?.ok && places.place ? officeFrom(places.place) : null;
         setOffice(found);
+        setMapsOn(Boolean(places?.configured));
         setOfficeNote(places?.configured && !found ? places.message || "Not found on Google Maps: the agency fills in the office address." : "");
         if (abrResult?.configured) {
           setMode("abr");
@@ -253,7 +261,14 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         try { const n = await omaraLink(id, omaraSel.marns, omaraSel.evidence); omaraNote = ` ${n} registered migration agent${n === 1 ? "" : "s"} linked.`; }
         catch (linkError) { omaraNote = ` The registered migration agents were not linked (${linkError instanceof Error ? linkError.message : "error"}): link them from the business page.`; }
       }
-      onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message: message + omaraNote });
+      // Branches: saved on the new business (the head office went with the create call).
+      let branchNote = "";
+      const filled = branches.filter(b => b.street.trim() || b.suburb.trim());
+      if (filled.length) {
+        try { await saveOffices(id, null, filled); branchNote = ` ${filled.length} branch${filled.length === 1 ? "" : "es"} saved.`; }
+        catch (branchError) { branchNote = ` The branches were not saved (${branchError instanceof Error ? branchError.message : "error"}): add them on the business page.`; }
+      }
+      onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message: message + omaraNote + branchNote });
     } catch (e) {
       if (isEmailTakenError(e)) { setErrors({}); setEmailError(e); return; }
       const text = e instanceof Error ? e.message : "";
@@ -354,9 +369,27 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const officeInputBox = (key: "street" | "suburb" | "postcode" | "country" | "website" | "phone", label: string, props: { inputMode?: "numeric" | "url" | "tel"; maxLength?: number } = {}) => (
     <Field label={label}><TextInput disabled={saving} inputMode={props.inputMode} maxLength={props.maxLength} value={office?.[key] ?? ""} onChange={e => setOfficeField(key, key === "postcode" ? e.target.value.replace(/\D/g, "").slice(0, 4) : e.target.value)} /></Field>
   );
+  const mapsHint = form.name || confirmed.tradingName || details?.businessNames?.[0] || details?.legalName || "";
+  const pickPlace = (p: PlaceDetails) => {
+    setOffice(officeFrom(p)); setOfficeNote(""); setMapsOpen(false);
+    if (p.street || p.suburb) setForm(prev => ({ ...prev, address: placeAddressLine(p) || prev.address }));
+  };
+  const mapsSearch = () => !mapsOn ? null : !mapsOpen ? (
+    <Button type="button" variant="secondary" icon="ri-search-line" disabled={saving} onClick={() => setMapsOpen(true)} data-testid="places-search-open">
+      {office ? "Change head office with Google Maps" : "Search Google Maps"}
+    </Button>
+  ) : <div className="mt-3"><MapsSearchBox id="places-search-input" initialQuery={[mapsHint, office?.suburb].filter(Boolean).join(" ")} disabled={saving} onPick={pickPlace} onCancel={() => setMapsOpen(false)} /></div>;
+  // Branches (2026-11-24): a business with several locations adds each one (Google Maps or by hand); saved on the business after it is created.
+  const branchesPanel = () => (abr || details) ? (
+    <section className="mt-4 rounded-lg border border-background-200 p-4" aria-label="Branches" data-testid="add-business-branches">
+      <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground-900"><i className="ri-store-2-line text-sky-700" aria-hidden="true" />Branches {branches.length ? `(${branches.length})` : ""}</p>
+      <p className="mb-3 mt-0.5 text-xs text-foreground-600">Other locations of this business. Optional; you can also add them later on the business page.</p>
+      <BranchList branches={branches} onChange={setBranches} disabled={saving} searchHint={mapsHint} />
+    </section>
+  ) : null;
   const officePanel = () => office ? (
     <section className="mt-4 rounded-lg border border-sky-300 bg-sky-50 p-4" aria-label="Office details from Google Maps" data-testid="places-details">
-      <p className="flex items-center gap-1.5 text-sm font-semibold text-sky-900"><i className="ri-map-pin-line" aria-hidden="true" />Found on Google Maps: check this is the right office</p>
+      <p className="flex items-center gap-1.5 text-sm font-semibold text-sky-900"><i className="ri-map-pin-line" aria-hidden="true" />Head office from Google Maps: check this is the right office</p>
       <p className="mt-0.5 text-xs text-sky-800">
         {office.name}{office.mapsUri ? <>{" · "}<a href={office.mapsUri} target="_blank" rel="noreferrer" className="underline" data-testid="places-link">Open in Google Maps</a></> : null}
         {" · "}Printed on the application form; you and the agency can still change it.
@@ -373,9 +406,16 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         <div>{officeInputBox("website", "Website", { inputMode: "url" })}{error("website")}</div>
         {officeInputBox("phone", "Business phone", { inputMode: "tel" })}
       </div>
-      <div className="mt-3"><Button type="button" variant="secondary" icon="ri-close-line" disabled={saving} onClick={() => setOffice(null)} data-testid="places-discard">Not this business</Button></div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button type="button" variant="secondary" icon="ri-close-line" disabled={saving} onClick={() => { setOffice(null); if (mapsOn) setMapsOpen(true); }} data-testid="places-discard">Not this business</Button>
+        {mapsOpen ? null : mapsSearch()}
+      </div>
+      {mapsOpen ? mapsSearch() : null}
     </section>
-  ) : officeNote && (abr || details) ? <p className="mt-3 text-xs text-foreground-500" data-testid="places-note"><i className="ri-map-pin-line" aria-hidden="true" /> {officeNote}</p> : null;
+  ) : (abr || details) && (officeNote || mapsOn) ? <div className="mt-3 space-y-2">
+    {officeNote ? <p className="text-xs text-foreground-500" data-testid="places-note"><i className="ri-map-pin-line" aria-hidden="true" /> {officeNote}</p> : null}
+    {mapsSearch()}
+  </div> : null;
 
   return (
     <form onSubmit={submit} noValidate>
@@ -410,7 +450,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         </div>
 
         {mode === "abr" && !existing ? abrPanel() : null}
-        {mode === "abr" && !existing && abr ? officePanel() : null}
+        {mode === "abr" && !existing && abr ? <>{officePanel()}{branchesPanel()}</> : null}
         {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} /> : null}
         {abrManual && !existing ? (
           <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
@@ -460,7 +500,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
             )}
           </section>
         ) : null}
-        {mode !== "abr" && legacyReady && details ? officePanel() : null}
+        {mode !== "abr" && legacyReady && details ? <>{officePanel()}{branchesPanel()}</> : null}
         {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} /> : null}
       </>)}
 

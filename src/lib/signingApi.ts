@@ -321,6 +321,9 @@ export type AbnLookupResult = ({ configured: boolean; ok: true; details: AbrDeta
 export type PlacesLookup = { configured: boolean; ok: boolean; place?: PlaceDetails; reason?: string; message?: string; cached?: boolean };
 /** The office details staff confirmed on Add business (kept on the business profile, blank keys only, for the F04). */
 export interface BusinessPlacesInput { street: string; suburb: string; state: string; postcode: string; country: string; website: string; phone: string; placeId?: string; mapsUri?: string; name?: string; source: "google" | "staff" }
+/** Add business > Search Google Maps (2026-11-24): any text, up to five places to pick from; nothing saved until the business is saved. */
+export type PlacesSearchResult = { configured: boolean; ok: boolean; places?: PlaceDetails[]; reason?: string; message?: string };
+export const searchGooglePlaces = (query: string, state?: string) => signingAction<PlacesSearchResult>({ action: "agent_onboarding_places_search", query, ...(state ? { state } : {}) });
 /** Integrations > Connections > Google Maps > Check connection (administrators): one Text Search with the key in use; never returns the key. */
 export type GoogleMapsCheck = { ok: boolean; reason?: string; status?: number; code?: string; message?: string; source: "connection" | "fallback_secret" | "none" };
 export const checkGoogleMapsConnection = () => signingAction<GoogleMapsCheck>({ action: "integration_google_maps_check" });

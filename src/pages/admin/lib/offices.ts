@@ -27,3 +27,10 @@ export const saveAdminMarn = async (agencyId: string, marn: string) => {
   const { error } = await supabase.rpc("agency_admin_marn_set", { p_agency: agencyId, p_marn: marn });
   if (error) throw new Error(error.message);
 };
+
+/** People added by hand on Add business (agencies.profile.key_people, agency_people_set). */
+export interface KeyPerson { fullName: string; role?: string; email?: string; phone?: string; marn?: string }
+export const saveKeyPeople = async (agencyId: string, people: KeyPerson[]) => {
+  const { error } = await supabase.rpc("agency_people_set", { p_agency: agencyId, p_people: people });
+  if (error) throw new Error(error.message);
+};

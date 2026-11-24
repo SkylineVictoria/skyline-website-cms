@@ -17,7 +17,8 @@ import { isEmailTakenError } from "@/lib/identity/email";
 import OmaraAgentsPanel, { type AgentRecord, type OmaraSelection } from "@/pages/admin/components/OmaraAgentsPanel";
 import { omaraLink, type OmaraFacts } from "@/lib/omaraApi";
 import { BranchList, MapsSearchBox } from "@/pages/admin/components/OfficeLocations";
-import { saveAdminMarn, saveOffices, type OfficeLocation } from "@/pages/admin/lib/offices";
+import { saveAdminMarn, saveKeyPeople, saveOffices, type KeyPerson, type OfficeLocation } from "@/pages/admin/lib/offices";
+import KeyPeopleList from "@/pages/admin/components/KeyPeopleList";
 
 type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string; officePostcode?: string; website?: string };
 
@@ -85,6 +86,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const givenName = nameWords.length > 1 ? nameWords.slice(0, -1).join(" ") : (nameWords[0] ?? "");
   const familyName = nameWords.length > 1 ? nameWords[nameWords.length - 1] : "";
   const [omaraAgents, setOmaraAgents] = useState<AgentRecord[]>([]);
+  // People added by hand (CEO, directors, staff the search did not find): offered as the Admin too, saved on the business.
+  const [keyPeople, setKeyPeople] = useState<KeyPerson[]>([]);
   // The PhoneInput keeps its own text: a new key shows a picked person's phone.
   const [phoneKey, setPhoneKey] = useState(0);
   // "This person will be the Admin" popup: on picking / adding a person, and again on Create when the person changed since.
@@ -92,6 +95,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [adminConfirmedFor, setAdminConfirmedFor] = useState("");
   // The picked registered agent's MARN (kept on the business for the application form) and whether the best match was filled in by itself.
   const [adminMarn, setAdminMarn] = useState("");
+  // A MARN typed for a person added by hand: kept on the business for the application form (never linked as a register record).
+  const [typedMarn, setTypedMarn] = useState("");
   const [adminAuto, setAdminAuto] = useState<null | { confidence: number }>(null);
   // Google Maps: the office found for this ABN (null: none / not set up), and a note when it was looked for and not found.
   const [office, setOffice] = useState<Office | null>(null);
@@ -214,16 +219,19 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     if (digits.startsWith("0")) return `+61${digits.slice(1)}`;
     return "";
   };
-  const suggestions: PersonSuggestion[] = omaraAgents.map(a => ({ fullName: a.fullName, email: a.email, phone: a.phone, marn: a.marn,
-    note: [`${a.confidence}% match`, [a.suburb, a.state].filter(Boolean).join(" ")].filter(Boolean).join(" · ") }));
+  const suggestions: PersonSuggestion[] = [
+    ...keyPeople.map(p => ({ fullName: p.fullName, email: p.email ?? "", phone: p.phone ?? "", marn: p.marn || undefined, note: p.role || "Added by hand" })),
+    ...omaraAgents.map(a => ({ fullName: a.fullName, email: a.email, phone: a.phone, marn: a.marn,
+    note: [`${a.confidence}% match`, [a.suburb, a.state].filter(Boolean).join(" ")].filter(Boolean).join(" · ") }))];
   const pickPerson = (person: PersonSuggestion) => {
-    setFullName(person.fullName); setAdminMarn(person.marn ?? ""); setAdminAuto(null);
+    setFullName(person.fullName); setAdminMarn(omaraAgents.some(a => a.marn === person.marn) ? person.marn ?? "" : ""); setAdminAuto(null);
+    if (person.marn && !omaraAgents.some(a => a.marn === person.marn)) setTypedMarn(person.marn);
     patch({ businessEmail: person.email || form.businessEmail, phone: toE164(person.phone) || form.phone, ...(mode !== "abr" ? { primaryContact: person.fullName } : {}) });
     setPhoneKey(k => k + 1);
     setAdminAsk({ then: "none" });
   };
   const addNewPerson = (name: string) => {
-    setFullName(name); setAdminMarn(""); setAdminAuto(null);
+    setFullName(name); setAdminMarn(""); setTypedMarn(""); setAdminAuto(null);
     patch({ businessEmail: "", phone: "", ...(mode !== "abr" ? { primaryContact: name } : {}) });
     setPhoneKey(k => k + 1);
     setAdminAsk({ then: "none" });
@@ -323,11 +331,14 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         const a = omaraAgents.find(x => x.marn === adminMarn);
         if (a) linkEvidence[adminMarn] = { confidence: a.confidence, evidence: [...(a.evidence ?? []), "Business admin agent"] };
       }
-      if (adminMarn) { try { await saveAdminMarn(id, adminMarn); } catch { /* staff type it on the application form */ } }
+      const marnForForm = adminMarn || typedMarn;
+      if (marnForForm) { try { await saveAdminMarn(id, marnForForm); } catch { /* staff type it on the application form */ } }
       if (linkMarns.length) {
         try { const n = await omaraLink(id, linkMarns, linkEvidence); omaraNote = ` ${n} registered migration agent${n === 1 ? "" : "s"} linked.`; }
         catch (linkError) { omaraNote = ` The registered migration agents were not linked (${linkError instanceof Error ? linkError.message : "error"}): link them from the business page.`; }
       }
+      // People added by hand: kept on the business.
+      if (keyPeople.length) { try { await saveKeyPeople(id, keyPeople); } catch { /* re-add them on the business later */ } }
       // Branches: saved on the new business (the head office went with the create call).
       let branchNote = "";
       const filled = branches.filter(b => b.street.trim() || b.suburb.trim());
@@ -523,6 +534,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         {mode === "abr" && !existing ? abrPanel() : null}
         {mode === "abr" && !existing && abr ? <>{officePanel()}{branchesPanel()}</> : null}
         {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} /> : null}
+        {mode === "abr" && !existing && abr ? <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} /> : null}
         {abrManual && !existing ? (
           <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
             <p className="text-sm font-semibold text-foreground-900">Business details (typed by hand)</p>
@@ -573,6 +585,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         ) : null}
         {mode !== "abr" && legacyReady && details ? <>{officePanel()}{branchesPanel()}</> : null}
         {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} /> : null}
+        {mode !== "abr" && legacyReady && details ? <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} /> : null}
       </>)}
 
       {ready ? box(<>

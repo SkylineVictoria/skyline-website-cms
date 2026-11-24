@@ -13,6 +13,8 @@ import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalDat
 import EmailField from "@/components/identity/EmailField";
 import { ruleText } from "@/lib/businessRules";
 import { isEmailTakenError } from "@/lib/identity/email";
+import OmaraAgentsPanel, { type OmaraSelection } from "@/pages/admin/components/OmaraAgentsPanel";
+import { omaraLink, type OmaraFacts } from "@/lib/omaraApi";
 
 type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string; officePostcode?: string; website?: string };
 
@@ -79,6 +81,9 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [office, setOffice] = useState<Office | null>(null);
   const [officeNote, setOfficeNote] = useState("");
   const [familyName, setFamilyName] = useState("");
+  // OMARA (2026-11-24): what the register search uses (set once per lookup, so editing the form does not search again) and the agents ticked.
+  const [omaraFacts, setOmaraFacts] = useState<OmaraFacts | null>(null);
+  const [omaraSel, setOmaraSel] = useState<OmaraSelection>({ marns: [], evidence: {} });
 
   const [form, setForm] = useState<AgencyFormState>(EMPTY_AGENCY_FORM);
   const [editing, setEditing] = useState(false);
@@ -91,6 +96,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   // Look the ABN up once it is complete and valid (Fetch from ABN and leaving the field look it up again); a newer ABN discards an older answer.
   useEffect(() => {
     setDetails(null); setExisting(null); setLookupError(""); setEditing(false); setAbr(null); setAbrFailure(null); setOffice(null); setOfficeNote("");
+    setOmaraFacts(null); setOmaraSel({ marns: [], evidence: {} });
     if (abnProblem) { setLookupLoading(false); return; }
     let cancelled = false;
     setLookupLoading(true);
@@ -111,6 +117,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
             const d = abrResult.details;
             const trading = d.businessNames[0] ?? d.entityName;
             setAbr(d);
+            setOmaraFacts({ abn, names: [trading, d.entityName, ...d.businessNames].filter(Boolean), website: found?.website || null,
+              postcode: found?.postcode || d.postcode || null, state: found?.state || d.state || null });
             setConfirmed({ legalEntity: d.entityName, tradingName: trading, otherName: false, gst: d.gstRegistered ? "yes" : "no", state: d.state, postcode: d.postcode, override: false, reason: "" });
             setForm(prev => ({ ...prev, registrationNumber: abn, name: trading, code: suggestAgencyCode(trading, suffix.current), country: "Australia",
               address: (found && placeAddressLine(found)) || [d.state, d.postcode].filter(Boolean).join(" "), status: "Active" }));
@@ -128,6 +136,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         const business = result.business as AgencyAbnDetails | undefined;
         if (!business || business.abn !== abn || !business.legalName) throw new Error("The lookup returned an unexpected business. Try again.");
         setDetails(business);
+        setOmaraFacts({ abn, names: [business.legalName, ...business.businessNames].filter(Boolean), website: found?.website || null,
+          postcode: found?.postcode || business.postcode || null, state: found?.state || business.state || null });
         setExisting(already);
         setForm(prev => ({
           ...prev, registrationNumber: abn, name: business.legalName, code: suggestAgencyCode(business.legalName, suffix.current),
@@ -237,7 +247,13 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       const message = data.warning
         ? `Business added. ${data.warning}`
         : `Business added. Nothing has been emailed yet: prepare the application (details, agreement terms, witness) and send it to ${email}.${data.abrWarning ? ` ${data.abrWarning}` : ""}`;
-      onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message });
+      // OMARA: the registered migration agents staff ticked are linked to the new business (never added as its agents).
+      let omaraNote = "";
+      if (omaraSel.marns.length) {
+        try { const n = await omaraLink(id, omaraSel.marns, omaraSel.evidence); omaraNote = ` ${n} registered migration agent${n === 1 ? "" : "s"} linked.`; }
+        catch (linkError) { omaraNote = ` The registered migration agents were not linked (${linkError instanceof Error ? linkError.message : "error"}): link them from the business page.`; }
+      }
+      onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message: message + omaraNote });
     } catch (e) {
       if (isEmailTakenError(e)) { setErrors({}); setEmailError(e); return; }
       const text = e instanceof Error ? e.message : "";
@@ -395,6 +411,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
 
         {mode === "abr" && !existing ? abrPanel() : null}
         {mode === "abr" && !existing && abr ? officePanel() : null}
+        {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} /> : null}
         {abrManual && !existing ? (
           <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
             <p className="text-sm font-semibold text-foreground-900">Business details (typed by hand)</p>
@@ -444,6 +461,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
           </section>
         ) : null}
         {mode !== "abr" && legacyReady && details ? officePanel() : null}
+        {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} /> : null}
       </>)}
 
       {ready ? box(<>

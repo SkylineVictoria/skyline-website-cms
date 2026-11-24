@@ -4724,3 +4724,151 @@ test("letter {{#if discount}} rows print only for the courses that have a discou
   // Other blocks still resolve on their own after a discount block.
   assert.equal(letterBlocks.expandLetterBlocks("<p>{{#if discount}}</p><p>D</p><p>{{/if}}</p><p>{{#if gst}}</p><p>G</p><p>{{/if}}</p>", 1, { discounts: [true], gst: false }), "<p>D</p>");
 });
+
+// OMARA migration agent discovery (2026-11-24). FIXTURE: a trimmed SAVED COPY (fetched 2026-11-24, plain GET) of one public OMARA register
+// detail page (ContactID 82da41e4-a252-e311-9402-005056ab0eca), kept only to test the parser offline; it is not a live check.
+const OMARA_FIXTURE = `<html><head><title>Registered migration agent details · OMARA Self-Service Portal</title><script>var x = "<label class=\\"resgister-fullname\\">Not this</label>";</script></head><body>
+<h1>Registered migration agent details</h1>
+<div class="container register-details"><div class="row"><div class="col-sm-8">
+ <label class="resgister-fullname">Dharmendrakumar Dilipbhai Patel</label><br/>
+ <label class="resgister-label">Migration agent registration number: &nbsp;</label><label class="resgister-value">0956090</label><br/>
+ <label class="resgister-label">Current status: &nbsp;</label><label class="resgister-value">Registered</label><br/>
+ <label class="resgister-label">Agent most recent registration commenced on </label>
+ <label class="resgister-value" id="regDate">
+ 2025-03-14 01:00 PM
+ </label><br/>
+ <h3>Contact details</h3><br/>
+ <table>
+ <tr><td class="label-contact-details"> Business name </td><td> Aussizz Migration and Education Consultants (Melbourne) </td></tr>
+ <tr><td> Business address </td><td> Level 1/ 7-9 Elizabeth Street
+Melbourne VIC 3000
+Australia
+ </td></tr>
+ <tr><td> Phone </td><td> 61396023435 </td></tr>
+ <tr><td> Email address </td><td> <a href="mailto:director@aussizzgroup.com">director@aussizzgroup.com<a> </td></tr>
+ <tr><td> Website </td><td> <a id="weburl" href="www.aussizz.com" target="_blank">www.aussizz.com<a> </td></tr>
+ </table></div></div>
+ <div class="row"><div class="col-sm-12"><h4>Other business associated with this agent</h4></div>
+ <div class="col-sm-12"><span>There are no records to display.</span><span>You don't have permissions to view these records.</span></div></div></div>
+<label class="label-last-upd">The register of agents was last updated on</label>&nbsp;<label id="lastUpdated">2026-09-16 05:50 AM</label>
+</body></html>`;
+const omara = await load.import<typeof import("../supabase/functions/_shared/omara.ts")>("../supabase/functions/_shared/omara.ts");
+const omaraCore = await load.import<typeof import("../supabase/functions/omara-discovery/core.ts")>("../supabase/functions/omara-discovery/core.ts");
+const OMARA_ID = "82da41e4-a252-e311-9402-005056ab0eca";
+const omaraUrl = (id: string) => `https://portal.mara.gov.au/search-the-register-of-migration-agents/register-of-migration-agent-details/?ContactID=${id}`;
+const AUSSIZZ = { names: ["Aussizz", "Aussizz Group", "Aussizz Migration", "Aussizz Migration and Education Consultants"], website: "aussizz.com" };
+
+test("OMARA (2026-11-24): the saved detail page parses into the official record (MARN, status, commenced, business, branch address, contacts, register date); other businesses withheld", () => {
+  const a = omara.parseOmaraDetail(OMARA_FIXTURE, omaraUrl(OMARA_ID.toUpperCase()), "2026-11-24T00:00:00.000Z");
+  assert.ok(a);
+  assert.deepEqual([a.marn, a.fullName, a.status, a.registrationCommencedAt], ["0956090", "Dharmendrakumar Dilipbhai Patel", "Registered", "2025-03-14T13:00:00.000Z"]);
+  assert.deepEqual([a.businessName, a.addressLine, a.suburb, a.state, a.postcode, a.country], ["Aussizz Migration and Education Consultants (Melbourne)", "Level 1/ 7-9 Elizabeth Street", "Melbourne", "VIC", "3000", "Australia"]);
+  assert.deepEqual([a.phone, a.email, a.website, a.contactId, a.registerUpdatedAt, a.otherBusinesses, a.disciplinary],
+    ["61396023435", "director@aussizzgroup.com", "www.aussizz.com", OMARA_ID, "2026-09-16T05:50:00.000Z", "unavailable", null]);
+  assert.equal(a.sourceUrl, omaraUrl(OMARA_ID), "canonical link (lower-case ContactID)");
+  assert.equal(omara.parseOmaraDetail("<html><h1>Search for registered migration agents</h1></html>", omaraUrl(OMARA_ID), "x"), null, "not a detail page");
+  assert.equal(omara.parseOmaraDetail(OMARA_FIXTURE.replace("0956090", "95609"), omaraUrl(OMARA_ID), "x"), null, "a MARN has 7 digits");
+  assert.deepEqual(omara.splitAddress(["227, Findon Road, Findon SOUTH AUSTRALIA 5023", "Australia"]), { addressLine: "227, Findon Road", suburb: "Findon", state: "SA", postcode: "5023", country: "Australia" });
+});
+
+test("OMARA: only detail pages on allowed .gov.au hosts are read; ContactIDs deduped; queries capped; matching scores name, website / email domain and location", async () => {
+  assert.deepEqual(omara.parseDetailUrl(`${omaraUrl(OMARA_ID)}&x=1`), { contactId: OMARA_ID, url: omaraUrl(OMARA_ID) });
+  for (const bad of [omaraUrl(OMARA_ID).replace("https", "http"), omaraUrl(OMARA_ID).replace("portal.mara.gov.au", "portal.mara.gov.au.evil.com"),
+    "https://portal.mara.gov.au/search-the-register-of-migration-agents/?ContactID=" + OMARA_ID, omaraUrl("not-a-guid"), "https://evil.example/x", "javascript:alert(1)"]) {
+    assert.equal(omara.parseDetailUrl(bad), null, bad);
+  }
+  assert.deepEqual(omara.allowedHosts(["portal.mara.gov.au", "evil.com", "https://www.mara.gov.au/x"]), ["portal.mara.gov.au", "www.mara.gov.au"]);
+  assert.deepEqual(omara.allowedHosts(["evil.com"]), ["portal.mara.gov.au"], "a rule edit cannot point the reader elsewhere");
+  const q = omara.buildQueries({ names: ["Aussizz Migration and Education Consultants Pty Ltd"], website: "https://www.aussizz.com/" }, 4);
+  assert.equal(q.length, 4);
+  assert.ok(q[0].startsWith('site:portal.mara.gov.au "Aussizz Migration and Education Consultants Pty Ltd" "Registered migration agent details"'));
+  assert.equal(q[1], 'site:portal.mara.gov.au "aussizz.com"');
+  assert.ok(omara.nameVariants(["Aussizz Group Pty Ltd"]).includes("Aussizz"), "legal ending stripped");
+  const melb = omara.parseOmaraDetail(OMARA_FIXTURE, omaraUrl(OMARA_ID), "t")!;
+  const m = omara.scoreMatch(melb, AUSSIZZ);
+  assert.equal(m.confidence, 88);
+  assert.deepEqual(m.evidence, ['Business name contains "Aussizz Migration and Education Consultants"', "Same website (aussizz.com)", "Email domain aussizzgroup.com matches the business name"]);
+  assert.equal(omara.scoreMatch({ businessName: "OZEE Migration Services", website: "https://OZEEMIGRATION.COM.AU", email: "sumit@ozeemigration.com.au", postcode: "5023", state: "SA", suburb: "" }, AUSSIZZ).confidence, 0,
+    "trade words alone (Migration) are not a match");
+  assert.equal(omara.scoreMatch(melb, { ...AUSSIZZ, postcode: "3000" }).confidence, 98);
+});
+
+test("OMARA: Brave / Tavily request shapes, hits filtered to the register, one GET per page in order with the pause, MARN dedupe, search-only beyond the cap, no key = manual", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const slept: number[] = [];
+  const other = "5767a795-f53d-eb11-9450-000d3ad152db";
+  const page = (id: string, marn: string) => OMARA_FIXTURE.replace("0956090", marn).replace(OMARA_ID, id);
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url: String(url), init });
+    if (String(url).startsWith(omara.BRAVE_URL)) return Response.json({ web: { results: [
+      { url: omaraUrl(OMARA_ID), title: "Registered migration agent details", description: "Aussizz" },
+      { url: omaraUrl(OMARA_ID.toUpperCase()) + "&a=1", title: "dup", description: "" },
+      { url: omaraUrl(other), title: "Registered migration agent details", description: "Aussizz Chermside" },
+      { url: "https://example.com/aussizz", title: "not the register", description: "" }] } });
+    if (String(url) === omara.TAVILY_URL) return Response.json({ results: [{ url: omaraUrl(OMARA_ID), title: "t", content: "c" }] });
+    if (String(url) === omaraUrl(OMARA_ID)) return new Response(page(OMARA_ID, "0956090"));
+    if (String(url) === omaraUrl(other)) return new Response(page(other, "0956090")); // same MARN on a second ContactID: deduped
+    return new Response("nope", { status: 404 });
+  }) as unknown as typeof fetch;
+  const opts = { provider: "brave" as const, key: "BSA-test-key-0123456789", fetch: fakeFetch, sleep: async (ms: number) => { slept.push(ms); }, now: () => new Date("2026-11-24T00:00:00Z"),
+    maxQueries: 2, maxPages: 20, gapMs: 1000, threshold: 60, allowed: ["portal.mara.gov.au"] };
+  const out = await omara.discover(AUSSIZZ, opts);
+  const brave = calls.filter((c) => c.url.startsWith(omara.BRAVE_URL));
+  assert.equal(brave.length, 2, "capped at maxQueries");
+  assert.equal((brave[0].init.headers as Record<string, string>)["X-Subscription-Token"], "BSA-test-key-0123456789");
+  assert.match(brave[0].url, /[?&]q=site%3Aportal\.mara\.gov\.au%20%22Aussizz%22/);
+  assert.match(brave[0].url, /&count=20$/);
+  const pages = calls.filter((c) => c.url.startsWith("https://portal.mara.gov.au"));
+  assert.deepEqual(pages.map((c) => c.url), [omaraUrl(OMARA_ID), omaraUrl(other)], "one GET per ContactID, in order");
+  assert.equal((pages[0].init.headers as Record<string, string>)["User-Agent"], "Mozilla/5.0 (compatible; SLIT-CMS)");
+  assert.ok(slept.every((ms) => ms === 1000) && slept.length === 2, "a pause between searches and between pages");
+  assert.equal(out.agents.length, 1, "deduped by MARN");
+  assert.equal(out.agents[0].verification, "verified");
+  assert.equal(out.pagesFetched, 2);
+  // Tavily: POST with include_domains.
+  calls.length = 0;
+  await omara.discover(AUSSIZZ, { ...opts, provider: "tavily", key: "tvly-abcdefgh12345", maxQueries: 1 });
+  const tav = JSON.parse(String(calls[0].init.body));
+  assert.deepEqual([calls[0].init.method, tav.api_key, tav.include_domains, tav.max_results], ["POST", "tvly-abcdefgh12345", ["portal.mara.gov.au"], 20]);
+  // Page cap: the rest is "found in search, not verified".
+  calls.length = 0;
+  const capped = await omara.discover(AUSSIZZ, { ...opts, maxQueries: 1, maxPages: 1 });
+  assert.deepEqual(capped.agents.map((a) => a.verification).sort(), ["search_only", "verified"]);
+  // A refused key stops the searches and is reported.
+  const refused = await omara.discover(AUSSIZZ, { ...opts, fetch: (async () => Response.json({ error: { detail: "bad token" } }, { status: 401 })) as unknown as typeof fetch });
+  assert.equal(refused.searches, 1);
+  assert.match(refused.errors[0], /HTTP 401: bad token/);
+  // No key: nothing is searched or fetched.
+  calls.length = 0;
+  const none = await omara.discover(AUSSIZZ, { ...opts, key: null });
+  assert.deepEqual([none.configured, calls.length], [false, 0]);
+
+  // The Edge Function core: admins only, no key -> configured false (manual), discovered records saved, run recorded with the cost.
+  const service: [string, Record<string, unknown>][] = [];
+  const ports = (o: { admin?: boolean; key?: string | null } = {}) => ({
+    isAdmin: async () => o.admin ?? true, callerId: async () => "00000000-0000-0000-0000-000000000001",
+    rpc: async (fn: string) => fn === "business_rule_values" ? { data: { "omara.max_search_queries": 1, "omara.request_gap_ms": 10 }, error: null } : { data: { linked: 1 }, error: null },
+    service: async (fn: string, args: Record<string, unknown>) => { service.push([fn, args]); return fn === "integration_search_api_key" ? (o.key === undefined ? "BSA-test-key-0123456789" : o.key) : "run-1"; },
+    agentsByContact: async () => [], agentByMarn: async () => null, agencyFacts: async () => null,
+    fetch: fakeFetch, sleep: async () => {}, now: () => new Date("2026-11-24T00:00:00Z"),
+  });
+  await assert.rejects(omaraCore.handle({ action: "discover", names: ["Aussizz"] }, ports({ admin: false })), /Only administrators/);
+  const manual = await omaraCore.handle({ action: "discover", names: ["Aussizz"] }, ports({ key: null }));
+  assert.deepEqual([manual.configured, (manual.agents as unknown[]).length], [false, 0]);
+  service.length = 0;
+  const found = await omaraCore.handle({ action: "discover", names: ["Aussizz"], website: "aussizz.com" }, ports());
+  assert.equal((found.agents as unknown[]).length, 1);
+  assert.ok(service.some(([fn, a]) => fn === "omara_agent_upsert" && (a.p as { marn: string }).marn === "0956090"));
+  const run = service.find(([fn]) => fn === "omara_discovery_run_record")![1].p as Record<string, unknown>;
+  assert.deepEqual([run.provider, run.estCostUsd, run.pagesFetched], ["brave", 0.005, 2]);
+  assert.equal(omaraCore.settingsFrom({ "omara.request_gap_ms": 10 }).gapMs, 500, "never faster than 500 ms");
+  // Pasted links: only OMARA detail pages; no search is made.
+  calls.length = 0;
+  const imported = await omaraCore.handle({ action: "import_urls", urls: [omaraUrl(OMARA_ID), "https://example.com/x"], names: ["Aussizz"] }, ports());
+  assert.deepEqual([(imported.agents as unknown[]).length, (imported.rejected as string[]).length], [1, 1]);
+  assert.ok(calls.every((c) => !c.url.startsWith(omara.BRAVE_URL)));
+  // These agents are never SLIT education agents: nothing here writes public.agents.
+  assert.ok(!/from\("agents"\)|\.from\('agents'\)|insert into public\.agents/.test(read("supabase/functions/omara-discovery/index.ts") + read("supabase/functions/omara-discovery/core.ts") + read("supabase/functions/_shared/omara.ts")));
+  assert.ok(read("src/pages/admin/components/OmaraAgentsPanel.tsx").includes("not for marketing"));
+  assert.ok(read("supabase/config.toml").includes("[functions.omara-discovery]\n# OMARA-DISCOVERY") && /\[functions\.omara-discovery\][\s\S]*?verify_jwt = true/.test(read("supabase/config.toml")));
+});

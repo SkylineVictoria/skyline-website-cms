@@ -119,3 +119,8 @@ verify_jwt = true
 
 [functions.student-application-invite]
 verify_jwt = true
+
+[functions.omara-discovery]
+# OMARA-DISCOVERY: administrators (cms_is_admin with the caller's JWT) find a business's registered migration agents on the public OMARA
+# register: Brave Search / Tavily (key in Integrations › Connections) finds public detail pages, then one plain GET per page, gently.
+verify_jwt = true

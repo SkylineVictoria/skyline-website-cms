@@ -3,11 +3,18 @@ import { supabase } from '@/pages/admin/lib/supabase';
 import { Button } from '@/pages/admin/components/ui';
 import { inputClass } from './state';
 import { checkGoogleMapsConnection } from '@/lib/signingApi';
+import { omaraCheckConnection } from '@/lib/omaraApi';
 
 /** Connectors used by the Communication Hub. Their details are kept here, in Integrations, like every other external account. */
 export const COMM_CONNECTORS = ['clicksend', 'whatsapp', 'microsoft_teams'] as const;
 /** Connectors whose details this form saves in Vault (integration_comm_credentials_save): the hub's, and Google Maps (business auto-fill). */
-export const VAULT_FORM_CONNECTORS = [...COMM_CONNECTORS, 'google_maps'] as const;
+export const VAULT_FORM_CONNECTORS = [...COMM_CONNECTORS, 'google_maps', 'brave_search', 'tavily'] as const;
+/** Web search APIs for OMARA migration agent discovery (2026-11-24): one API key each, the same checks as the database. */
+const SEARCH_KEY: Record<string, { re: RegExp; label: string; hint: string; link: string; help: string }> = {
+  brave_search: { re: /^\S{20,200}$/, label: 'Brave Search', hint: 'A Brave Search API key is 20 to 200 characters with no spaces.', link: 'https://api-dashboard.search.brave.com/app/keys',
+    help: 'Create a key in the Brave Search API dashboard (Web Search plan).' },
+  tavily: { re: /^tvly-\S{8,195}$/, label: 'Tavily', hint: 'A Tavily API key starts with tvly-.', link: 'https://app.tavily.com/home', help: 'Copy your API key from the Tavily dashboard.' },
+};
 /** The browser-side format check of a Google Maps key (the database checks the same). */
 const GOOGLE_KEY = /^AIza[0-9A-Za-z_-]{30,}$/;
 type Summary = { saved: boolean; username?: string; from?: string | null; phoneNumberId?: string; displayNumber?: string | null; channels?: string[]; keyEnd?: string };
@@ -34,21 +41,22 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
   const reset = () => { setA(''); setB(''); setC(''); setChannels([{ name: '', url: '' }]); setEditing(false); };
 
   const maps = connectorId === 'google_maps';
+  const search = SEARCH_KEY[connectorId];
   const fields = connectorId === 'clicksend' ? { username: a, apiKey: b, from: c }
     : connectorId === 'whatsapp' ? { phoneNumberId: a, token: b, displayNumber: c }
-    : maps ? { apiKey: b }
+    : maps || search ? { apiKey: b }
     : { channels: channels.filter(x => x.name.trim() || x.url.trim()) };
-  const ready = connectorId === 'microsoft_teams' ? channels.some(x => x.name.trim() && x.url.trim()) : maps ? GOOGLE_KEY.test(b.trim()) : !!a.trim() && !!b.trim();
+  const ready = connectorId === 'microsoft_teams' ? channels.some(x => x.name.trim() && x.url.trim()) : maps ? GOOGLE_KEY.test(b.trim()) : search ? search.re.test(b.trim()) : !!a.trim() && !!b.trim();
 
   const save = () => perform(async () => {
     await rpc('integration_comm_credentials_save', { p_connection: connectionId, p_fields: fields });
     reset(); await refresh();
-    onNotice(maps ? 'Google Maps key saved. Use Check connection to test it.' : 'Details saved. The Communication Hub can use this connection now.');
+    onNotice(maps ? 'Google Maps key saved. Use Check connection to test it.' : search ? `${search.label} key saved. Use Check connection to test it.` : 'Details saved. The Communication Hub can use this connection now.');
   });
   const clear = () => perform(async () => {
     await rpc('integration_comm_credentials_clear', { p_connection: connectionId });
     reset(); await refresh();
-    onNotice(maps ? 'Google Maps disconnected. Add business no longer fills the office from Google Maps (unless the server fallback key is set).' : 'Connection disconnected. The Communication Hub no longer offers it.');
+    onNotice(search ? `${search.label} disconnected. Add business offers only pasted OMARA links unless the other search service is set up.` : maps ? 'Google Maps disconnected. Add business no longer fills the office from Google Maps (unless the server fallback key is set).' : 'Connection disconnected. The Communication Hub no longer offers it.');
   });
 
   const saved = summary?.saved === true;
@@ -58,12 +66,13 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
         <div className="space-y-2 text-sm">
           <p>Details saved{connectorId === 'clicksend' ? ` (username ${summary?.username}${summary?.from ? `, sender ${summary.from}` : ''})`
             : connectorId === 'whatsapp' ? ` (phone number ID ${summary?.phoneNumberId}${summary?.displayNumber ? `, ${summary.displayNumber}` : ''})`
-            : maps ? ` (API key ending ${summary?.keyEnd ?? '…'})`
+            : maps || search ? ` (API key ending ${summary?.keyEnd ?? '…'})`
             : `: ${summary?.channels?.join(', ')}`}. Values are never shown again.</p>
           <p className="text-foreground-600">{connectorId === 'microsoft_teams' ? 'Link a staff team to one of these channels in Communication Hub › Teams › Manage.'
             : maps ? 'Add business fills the office address, website and phone from Google Maps with this key.'
+            : search ? 'Add business finds the business\u2019s registered migration agents on the public OMARA register with this key (Business Rules › omara.search_provider chooses the service).'
             : 'The Communication Hub offers this channel when messaging people. Send a test to check it.'}</p>
-          {maps ? <GoogleMapsCheckButton busy={busy} /> : connectorId !== 'microsoft_teams' && <TestSend channel={connectorId === 'clicksend' ? 'sms' : 'whatsapp'} busy={busy} />}
+          {search ? <SearchCheckButton connector={connectorId as 'brave_search' | 'tavily'} busy={busy} /> : maps ? <GoogleMapsCheckButton busy={busy} /> : connectorId !== 'microsoft_teams' && <TestSend channel={connectorId === 'clicksend' ? 'sms' : 'whatsapp'} busy={busy} />}
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" disabled={busy} onClick={() => setEditing(true)}>Replace details</Button>
             <Button variant="outline" disabled={busy} onClick={() => void clear()}>Disconnect</Button>
@@ -81,6 +90,11 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
             <p className="text-sm">Create an API key in Google Cloud: <a className="underline" href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">APIs &amp; Services › Credentials</a>. Enable Places API (New) and restrict the key to it.</p>
             <label className="block">API key<input className={inputClass} type="password" autoComplete="new-password" value={b} onChange={e => setB(e.target.value)} required maxLength={200} placeholder="AIza…" data-testid="google-maps-key" /></label>
             {b.trim() && !GOOGLE_KEY.test(b.trim()) && <p className="text-xs text-red-700" role="alert">A Google API key starts with AIza and is about 39 characters long.</p>}
+            <p className="text-xs text-foreground-600">The key is kept in the vault and is never shown again; only its last four characters are.</p>
+          </> : search ? <>
+            <p className="text-sm">{search.help} <a className="underline" href={search.link} target="_blank" rel="noreferrer">Open the dashboard</a>. Each search is paid: Business Rules limit the searches per business.</p>
+            <label className="block">API key<input className={inputClass} type="password" autoComplete="new-password" value={b} onChange={e => setB(e.target.value)} required maxLength={200} data-testid="search-api-key" /></label>
+            {b.trim() && !search.re.test(b.trim()) && <p className="text-xs text-red-700" role="alert">{search.hint}</p>}
             <p className="text-xs text-foreground-600">The key is kept in the vault and is never shown again; only its last four characters are.</p>
           </> : connectorId === 'whatsapp' ? <>
             <p className="text-sm">From Meta for Developers › your app › WhatsApp › API Setup, and a System User token from Meta Business Settings (permission whatsapp_business_messaging).</p>
@@ -127,6 +141,26 @@ function GoogleMapsCheckButton({ busy }: { busy: boolean }) {
   return (
     <div className="space-y-1">
       <Button variant="outline" disabled={busy || running} onClick={() => void run()} data-testid="google-maps-check">Check connection</Button>
+      {state && <p className="text-xs" role="status">{state}</p>}
+    </div>
+  );
+}
+
+/** One web search with the saved Brave Search / Tavily key (omara-discovery, administrators only): OK, or the provider's error. */
+function SearchCheckButton({ connector, busy }: { connector: 'brave_search' | 'tavily'; busy: boolean }) {
+  const [state, setState] = useState('');
+  const [running, setRunning] = useState(false);
+  const run = async () => {
+    setRunning(true); setState('Checking…');
+    try {
+      const out = await omaraCheckConnection(connector);
+      setState(out.ok ? `Connection OK: the search answered (${out.results ?? 0} OMARA page${out.results === 1 ? '' : 's'}).` : `The search failed: ${out.message ?? 'unknown reason'}${out.code ? ` (${out.code})` : ''}`);
+    } catch (e) { setState(e instanceof Error ? e.message : 'The check could not run.'); }
+    finally { setRunning(false); }
+  };
+  return (
+    <div className="space-y-1">
+      <Button variant="outline" disabled={busy || running} onClick={() => void run()} data-testid="search-check">Check connection</Button>
       {state && <p className="text-xs" role="status">{state}</p>}
     </div>
   );

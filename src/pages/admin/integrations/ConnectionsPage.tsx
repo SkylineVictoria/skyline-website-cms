@@ -15,13 +15,15 @@ import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** Microsoft 365 (2026-11-20) is its own entry, first, with the one status Email Management shows (app-only Microsoft Graph checks). */
 const M365 = 'microsoft365';
-/** Connectors set up with CommConnectionForm (details in Vault): the Communication Hub's and Google Maps. */
+/** Connectors set up with CommConnectionForm (details in Vault): the Communication Hub's, Google Maps and the OMARA search APIs. */
 const isVaultFormConnector = (id: string | null | undefined) => !!id && (VAULT_FORM_CONNECTORS as readonly string[]).includes(id);
 /** What each entry is for, where the name alone is not enough. */
 const PURPOSE: Record<string, string> = {
   microsoft365: 'Email Management and student emails (Skyline\u2019s Entra app).',
   microsoft_teams: 'Posts Communication Hub messages to Teams channels (channel links). Separate from Microsoft 365 email.',
   google_maps: 'Fills a business\u2019s office address, website and phone on Add business (Places API (New)).',
+  brave_search: 'Finds a business\u2019s registered migration agents on the public OMARA register (Add business).',
+  tavily: 'Finds a business\u2019s registered migration agents on the public OMARA register (alternative to Brave Search).',
 };
 
 type OAuthSetup = {

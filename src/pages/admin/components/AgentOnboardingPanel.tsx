@@ -22,7 +22,9 @@ const reasonMin = () => Math.max(1, Math.round(ruleNumber("agents.onboarding_rea
  * to each referee it names; at References received (or earlier with a typed reason) the agreement (P06). Each document's status and
  * signed copy, each referee's request (reminder, change of email, a signed form received by email), the override and the history.
  */
-export default function AgentOnboardingPanel({ business, onChanged }: { business: BusinessDetail; onChanged: () => Promise<void> }) {
+export default function AgentOnboardingPanel({ business, onChanged, view = "full" }: { business: BusinessDetail; onChanged: () => Promise<void>;
+  /** "documents": only the signed and reference document lists (the business page's Documents tab); "full": the onboarding without them. */
+  view?: "full" | "documents" }) {
   const { push } = useToast();
   const [rows, setRows] = useState<OnboardingRow[] | null>(null);
   const [error, setError] = useState("");
@@ -84,24 +86,9 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
   const profile = PROFILE_LABELS.filter(([key]) => (business.profile ?? {})[key]);
   // The register's facts kept when the application form was sent (or first opened): read-only.
   const abrFacts = abrFactLines(((business.profile ?? {}) as Record<string, unknown>).abr_facts as Partial<AbrFacts> | null);
-  return <>
-    <Card className="p-5" data-testid="agent-onboarding-panel">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="font-heading text-base font-semibold text-foreground-950">Agent onboarding</h2>
-          {signedInForce ? <p className="text-sm text-foreground-600">Signed and active. The documents are below; the full history is under Onboarding history.</p> : <p className="text-sm text-foreground-600">Once per business with its agency admin. You prepare the application (business details, the agreement's terms, optionally the witness) and send it; the agency admin signs the application form and the agent agreement once. Both referees get a referee check at once, but you do not wait for them: review the application (edit, send back for correction, or approve). Approving activates the business, countersigns and issues the signed agreement, and sends the sign-in emails.</p>}
-          <p className="mt-1 text-sm font-medium text-foreground-900" data-testid="onboarding-status-line">{statusLine}</p>
-          {agreement.status === "signed" && agreement.commencementDate ? <p className="mt-1 text-sm text-foreground-700">Agreement from <strong>{formatAuDate(agreement.commencementDate)}</strong> to <strong>{formatAuDate(agreement.expiryDate)}</strong> (Item 5).</p> : null}
-        </div>
-        <div className="flex items-center gap-2">
-          {badge}
-          {rows && openForm && !business.onboarding?.readyToActivate ? <Button size="sm" variant="outline" icon="ri-mail-send-line" disabled={!!busy} onClick={() => void resendLink()} data-testid="resend-link">{busy === "resend-link" ? "Sending…" : "Resend link"}</Button> : null}
-          {signedInForce && !canPrepare ? <span className="text-xs text-foreground-500" data-testid="prepare-locked">Agreement signed: a new application can be prepared when it expires.</span> : null}
-          {canPrepare ? <Button size="sm" icon="ri-edit-box-line" disabled={!!busy} onClick={() => setDialog("presend")} data-testid="prepare-application">{draft ? "Continue preparing" : "Prepare application"}</Button> : null}
-        </div>
-      </div>
-      {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
-      {rows === null ? !error && <p className="mt-3 text-sm text-foreground-500">Loading…</p> : null}
+  if (view === "documents") return <Card className="p-5" data-testid="business-onboarding-documents">
+    <h2 className="font-heading text-base font-semibold text-foreground-950">Onboarding documents</h2>
+    {rows === null ? <p className="mt-2 text-sm text-foreground-500">{error || "Loading…"}</p> : !documents.length ? <p className="mt-2 text-sm text-foreground-500">Nothing signed yet.</p> : null}
       {documents.length ? <div className="mt-4 grid gap-3 md:grid-cols-2" data-testid="onboarding-documents">
         {([["signed", "Signed documents", "The application form and the agreement as signed."],
            ["reference", "Reference documents", "Each referee's signed check, kept when it arrives (approval never waits for it)."]] as const).map(([group, title, hint]) => {
@@ -116,6 +103,25 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
           </div>;
         })}
       </div> : null}
+  </Card>;
+  return <>
+    <Card className="p-5" data-testid="agent-onboarding-panel">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-heading text-base font-semibold text-foreground-950">Agent onboarding</h2>
+          {signedInForce ? <p className="text-sm text-foreground-600">Signed and active. The signed copies are in the Documents tab; the full history is under Onboarding history.</p> : <p className="text-sm text-foreground-600">Once per business with its agency admin. You prepare the application (business details, the agreement's terms, optionally the witness) and send it; the agency admin signs the application form and the agent agreement once. Both referees get a referee check at once, but you do not wait for them: review the application (edit, send back for correction, or approve). Approving activates the business, countersigns and issues the signed agreement, and sends the sign-in emails.</p>}
+          <p className="mt-1 text-sm font-medium text-foreground-900" data-testid="onboarding-status-line">{statusLine}</p>
+          {agreement.status === "signed" && agreement.commencementDate ? <p className="mt-1 text-sm text-foreground-700">Agreement from <strong>{formatAuDate(agreement.commencementDate)}</strong> to <strong>{formatAuDate(agreement.expiryDate)}</strong> (Item 5).</p> : null}
+        </div>
+        <div className="flex items-center gap-2">
+          {badge}
+          {rows && openForm && !business.onboarding?.readyToActivate ? <Button size="sm" variant="outline" icon="ri-mail-send-line" disabled={!!busy} onClick={() => void resendLink()} data-testid="resend-link">{busy === "resend-link" ? "Sending…" : "Resend link"}</Button> : null}
+          {signedInForce && !canPrepare ? <span className="text-xs text-foreground-500" data-testid="prepare-locked">Agreement signed: a new application can be prepared when it expires.</span> : null}
+          {canPrepare ? <Button size="sm" icon="ri-edit-box-line" disabled={!!busy} onClick={() => setDialog("presend")} data-testid="prepare-application">{draft ? "Continue preparing" : "Prepare application"}</Button> : null}
+        </div>
+      </div>
+      {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
+      {rows === null ? !error && <p className="mt-3 text-sm text-foreground-500">Loading…</p> : null}
       {draft ? <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="onboarding-draft">
         <p className="font-medium">Not sent yet: nothing has been emailed to {draft.agent.name} ({draft.agent.email}).</p>
         <p className="mt-1">Prepare the application: check and fill in the business details, set the agreement's terms and, if you like, add the SLIT witness (the agency admin adds their own witness when signing). Then send it to the point of contact to sign once (application form and agreement together).

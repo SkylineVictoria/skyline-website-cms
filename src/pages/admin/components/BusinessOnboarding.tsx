@@ -12,11 +12,13 @@ const ACCEPT = ".pdf,.png,.jpg,.jpeg,.doc,.docx";
  * The business's agent agreement: upload a signed copy, or send it to the business admin agent through Skyline Sign.
  * While the business is inactive it is shown as the onboarding checklist, ending with Activate & invite.
  */
-export default function BusinessOnboarding({ business, onChanged, onActivate, activating }: {
+export default function BusinessOnboarding({ business, onChanged, part = "onboarding" }: {
   business: BusinessDetail;
   onChanged: () => Promise<void>;
   onActivate?: () => void;
   activating?: boolean;
+  /** "onboarding": the onboarding panel (Details tab); "documents": every document of the business in one place (Documents tab, 2026-11-24). */
+  part?: "onboarding" | "documents";
 }) {
   const { push } = useToast();
   const [docs, setDocs] = useState<BusinessDocument[] | null>(null);
@@ -26,7 +28,6 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
   const onboarding = business.onboarding;
   const contact = onboarding?.contact ?? null;
   const ready = Boolean(onboarding?.agreementReady);
-  const inactive = business.status !== "Active";
 
   const load = useCallback(async () => {
     try { setDocs(await listBusinessDocuments(business.id)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "We could not load documents."); }
@@ -60,10 +61,11 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
   return (
     <div className="mb-6 space-y-4" data-testid="business-onboarding">
       {/* The Onboarding checklist was removed (owner 2026-11-24: "no need"); the panel below and the header's Activate cover it. */}
-      <AgentOnboardingPanel business={business} onChanged={onChanged} />
+      {part === "onboarding" ? <AgentOnboardingPanel business={business} onChanged={onChanged} /> : <>
+      <AgentOnboardingPanel business={business} onChanged={onChanged} view="documents" />
 
       <details className="rounded-card border border-background-200 bg-background-50 p-4" open={agreements.length > 0} data-testid="uploaded-agreements">
-        <summary className="cursor-pointer text-sm font-medium text-foreground-800">Signed agreement on paper? Upload a copy{agreements.length ? ` (${agreements.length} uploaded)` : ""}</summary>
+        <summary className="cursor-pointer text-sm font-medium text-foreground-800">Uploaded copies: signed agreement on paper? Upload a copy{agreements.length ? ` (${agreements.length} uploaded)` : ""}</summary>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="sr-only">Agent agreement (uploaded copies)</h2>
@@ -100,15 +102,7 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
       </details>
 
       {contact ? <SubjectSigningPanel type="agent" id={contact.agentId} name={contact.name} /> : null}
+      </>}
     </div>
-  );
-}
-
-function Step({ done, label, detail }: { done: boolean; label: string; detail: string }) {
-  return (
-    <li className="flex gap-2">
-      <i className={done ? "ri-checkbox-circle-fill text-green-600" : "ri-checkbox-blank-circle-line text-foreground-400"} aria-hidden="true" />
-      <span><span className="font-medium text-foreground-900">{label}</span><span className="block text-xs text-foreground-600">{detail}</span></span>
-    </li>
   );
 }

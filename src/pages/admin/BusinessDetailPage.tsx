@@ -24,8 +24,8 @@ import OmaraAgentsPanel from "@/pages/admin/components/OmaraAgentsPanel";
 import { listOnboarding } from "@/pages/admin/lib/agentOnboarding";
 import { BusinessOfficesCard } from "@/pages/admin/components/OfficeLocations";
 
-type Tab = "details" | "agents" | "students" | "applications";
-const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
+type Tab = "details" | "documents" | "agents" | "students" | "applications";
+const TAB_IDS: Tab[] = ["details", "documents", "agents", "students", "applications"];
 
 /** Agencies > Businesses > {name}: the business, its agents, their students and the students' applications. The tab lives in the URL. */
 export default function BusinessDetailPage() {
@@ -125,6 +125,7 @@ export default function BusinessDetailPage() {
     : stage ? `Onboarding ${(STAGE_LABEL[stage] ?? stage).toLowerCase()}; start it again.` : "Onboarding not started.";
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: "details", label: "Details" },
+    { id: "documents", label: "Documents" },
     { id: "agents", label: "Agents", count: people + c.inactiveAgents },
     { id: "students", label: "Students", count: c.students },
     { id: "applications", label: "Applications", count: c.applications },
@@ -155,7 +156,7 @@ export default function BusinessDetailPage() {
       />
 
       {onboardingOpen ? (
-        <BusinessOnboarding business={business} onChanged={load} onActivate={() => void change("Active")} activating={busy} />
+        <BusinessOnboarding business={business} onChanged={load} />
       ) : null}
 
       <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-3">
@@ -184,6 +185,7 @@ export default function BusinessDetailPage() {
 
       {tab === "details" ? <DetailsSection agencyId={agency.id} onSaved={load} /> : null}
       {tab === "details" && business.status === "Active" ? <div className="mt-6"><BusinessOnboarding business={business} onChanged={load} /></div> : null}
+      {tab === "documents" ? <BusinessOnboarding business={business} onChanged={load} part="documents" /> : null}
       {tab === "details" ? <BusinessOfficesCard agencyId={business.id} businessName={business.name} /> : null}
       {tab === "details" ? <OmaraAgentsPanel mode="linked" agencyId={business.id} /> : null}
       {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null, holding: !operational && business.status === "Onboarding" && stage !== "declined" }} onChanged={load} /> : null}

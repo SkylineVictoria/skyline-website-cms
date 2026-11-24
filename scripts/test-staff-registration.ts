@@ -4995,3 +4995,10 @@ test("Students (2026-11-24): the finish-application link asks for a password; ag
   const ui = read("src/pages/agency/components/StudentPortalInvite.tsx");
   assert.ok(ui.includes('action: "invite", role: "student", studentId') && ui.includes("portalPasswordResetUrl()"));
 });
+
+test("Employees list (2026-11-24): a Sign-in column; Can sign in only once a password is chosen; active staff without one get Send / Resend sign-in link", () => {
+  const page = read("src/pages/admin/StaffPage.tsx");
+  assert.ok(page.includes('"Status", "Sign-in"]') && page.includes("<EmployeeSignIn row={r}"));
+  assert.ok(page.includes('if (r.hasLogin && r.passwordSet) return { label: "Can sign in"') && page.includes('return { label: "Not invited", tone: "muted" }'));
+  assert.ok(page.includes('row.status === "active" && !(row.hasLogin && row.passwordSet)') && page.includes("staffAdminActions.inviteLogin(row.id)"));
+});

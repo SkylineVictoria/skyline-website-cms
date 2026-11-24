@@ -231,9 +231,11 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     if (person.marn && !omaraAgents.some(a => a.marn === person.marn)) setTypedMarn(person.marn);
     patch({ businessEmail: person.email || form.businessEmail, phone: toE164(person.phone) || form.phone, ...(mode !== "abr" ? { primaryContact: person.fullName } : {}) });
     setPhoneKey(k => k + 1);
+    // Details first, the Admin confirmation last (owner 2026-11-24): someone without an email or mobile on record gets the details form.
+    if (!person.email || !toE164(person.phone)) { setNewAdmin({ name: person.fullName, email: person.email ?? "", phone: toE164(person.phone), problem: "" }); return; }
     setAdminAsk({ then: "none" });
   };
-  // Add new person (owner 2026-11-24: "add name, email and phone in one shot"): one popup with all three that also confirms the Admin.
+  // Add new person (owner 2026-11-24): first full name, email and mobile together, then "This person will be the Admin" as the last screen.
   const [newAdmin, setNewAdmin] = useState<null | { name: string; email: string; phone: string; problem: string }>(null);
   const addNewPerson = (name: string) => setNewAdmin({ name, email: "", phone: "", problem: "" });
   const saveNewAdmin = () => {
@@ -247,8 +249,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     setFullName(name); setAdminMarn(""); setTypedMarn(""); setAdminAuto(null);
     patch({ businessEmail: email, phone: newAdmin.phone, ...(mode !== "abr" ? { primaryContact: name } : {}) });
     setPhoneKey(k => k + 1);
-    setAdminConfirmedFor(`${name.toLowerCase()}|${email}`);
     setNewAdmin(null);
+    setAdminAsk({ then: "none" });
   };
   // Fill all we can (owner 2026-11-24: "so we don't need to fill up the form manually"): the best-matching registered agent with an email
   // or phone becomes the suggested Admin, once, only while the contact is still empty; Create still asks to confirm.
@@ -647,12 +649,12 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         <Button type="submit" icon="ri-save-line" disabled={saving || lookupLoading || !ready || emailBlocking}>{saving ? "Creating…" : "Create business"}</Button>
         {inDialog ? null : cancel}
       </div>
-      <Modal open={!!newAdmin} title="Add the Admin" onClose={() => setNewAdmin(null)} footer={<div className="flex justify-end gap-2">
+      <Modal open={!!newAdmin} title="New person: their details" onClose={() => setNewAdmin(null)} footer={<div className="flex justify-end gap-2">
         <Button type="button" variant="secondary" onClick={() => setNewAdmin(null)}>Cancel</Button>
-        <Button type="button" icon="ri-shield-user-line" onClick={saveNewAdmin} data-testid="new-admin-save">Make them the Admin</Button>
+        <Button type="button" icon="ri-shield-user-line" onClick={saveNewAdmin} data-testid="new-admin-save">Next<i className="ri-arrow-right-line ml-1" aria-hidden="true" /></Button>
       </div>}>
         {newAdmin ? <div className="space-y-3 text-sm">
-          <p className="text-foreground-700">This person becomes the business&rsquo;s <strong>Admin</strong>: they get the application form when you press Send, and the sign-in invitation once the business is activated.</p>
+          <p className="text-foreground-700">Enter their full name, email and mobile. Next, you confirm them as the business&rsquo;s Admin.</p>
           <Field label="Full name" required><TextInput autoFocus value={newAdmin.name} maxLength={120} onChange={e => setNewAdmin({ ...newAdmin, name: e.target.value, problem: "" })} /></Field>
           <Field label="Email" required><TextInput type="email" value={newAdmin.email} maxLength={200} onChange={e => setNewAdmin({ ...newAdmin, email: e.target.value, problem: "" })} /></Field>
           <Field label="Mobile" required>
@@ -664,6 +666,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       </Modal>
       <Modal open={!!adminAsk} title="This person will be the Admin" onClose={() => setAdminAsk(null)} footer={<div className="flex justify-end gap-2">
         <Button type="button" variant="secondary" onClick={() => { setAdminAsk(null); window.setTimeout(() => document.getElementById("add-business-full-name")?.focus(), 0); }}>Choose someone else</Button>
+        <Button type="button" variant="secondary" icon="ri-edit-line" onClick={() => { setAdminAsk(null); setNewAdmin({ name: fullName, email: form.businessEmail, phone: form.phone, problem: "" }); }}>Change details</Button>
         <Button type="button" icon="ri-shield-user-line" onClick={confirmAdmin} data-testid="admin-confirm">{adminAsk?.then === "submit" ? "Yes, create the business" : "Yes, make them the Admin"}</Button>
       </div>}>
         <div className="space-y-2 text-sm text-foreground-700">
@@ -672,8 +675,11 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
             <li>They receive the agent application form when you press Send.</li>
             <li>After the business is activated they get the sign-in invitation and can add the business&rsquo;s other agents.</li>
           </ul>
-          {form.businessEmail || form.phone ? <p className="text-xs text-foreground-600">{[form.businessEmail, form.phone].filter(Boolean).join(" · ")}</p>
-            : <p className="text-xs text-foreground-600">Add their email and mobile next.</p>}
+          <dl className="grid grid-cols-[5rem_1fr] gap-x-2 gap-y-1 rounded-md border border-background-200 bg-background-100 p-3 text-sm">
+            <dt className="text-foreground-500">Name</dt><dd className="font-medium text-foreground-900">{fullName.trim() || "—"}</dd>
+            <dt className="text-foreground-500">Email</dt><dd className="break-all font-medium text-foreground-900">{form.businessEmail || "—"}</dd>
+            <dt className="text-foreground-500">Mobile</dt><dd className="font-medium text-foreground-900">{form.phone || "—"}</dd>
+          </dl>
         </div>
       </Modal>
     </form>

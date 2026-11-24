@@ -71,6 +71,12 @@ Deno.serve(async (req) => {
         const { data } = await service.auth.admin.getUserById(found.user.id);
         return !!(data?.user?.user_metadata as Record<string, unknown> | undefined)?.portal_password_set_at_signing;
       },
+      changeEmail: async (authUserId, email) => {
+        const { error } = await service.auth.admin.updateUserById(authUserId, { email, email_confirm: true });
+        if (error) throw new Error(/already|registered|exists/i.test(error.message)
+          ? "This email already signs in to another account, so the agency admin's login could not be moved to it."
+          : `The sign-in email could not be changed: ${error.message}`);
+      },
     },
     mail,
     abr: { guid: Deno.env.get("EF_ABR_GUID") || Deno.env.get("ABR_GUID") || "" },

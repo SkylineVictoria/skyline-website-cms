@@ -1314,6 +1314,67 @@ export async function googleMapsCheck(ctx: OnboardingContext): Promise<Json> {
   return { ...outcome, source };
 }
 
+// BUSINESS-DOCUMENT-ACTIONS (2026-11-24): the business page's Documents tab. Every check and record is in the database
+// (admin_business_resend_prepare / admin_business_contact_email_change, SLIT administrators only); this sends the emails and moves the login.
+
+/**
+ * Resend application: an unsigned application form is emailed again from the same signing request (a rotated link when it had expired);
+ * a signed one is emailed as the signed application form and agreement, never a certificate.
+ */
+export async function resendBusinessApplication(ctx: OnboardingContext): Promise<Json> {
+  const agencyId = agencyIdOf(ctx.body);
+  const prepared = await ctx.rpc("admin_business_resend_prepare", { p_business: agencyId }) as
+    { mode: "resent" | "signed"; onboardingId: string; to: string; name?: string; businessName?: string; hasForm?: boolean; hasAgreement?: boolean; linkRotated?: boolean; expiresAt?: string };
+  if (prepared.mode === "resent") {
+    const mail = await drainSigningMail(ctx.ports);
+    return { mode: "resent", to: prepared.to, linkRotated: !!prepared.linkRotated, expiresAt: prepared.expiresAt ?? null, mail };
+  }
+  const { provider, config } = ctx.ports.mail;
+  if (!provider || !config.from) throw new SigningError("Email is not set up, so nothing was sent.");
+  const attachments: Array<{ name: string; contentType: string; contentBase64: string }> = [];
+  for (const kind of [prepared.hasForm ? "form" : null, prepared.hasAgreement ? "agreement" : null].filter(Boolean) as string[]) {
+    // agency_onboarding_file refuses every certificate kind; only these two are ever asked for.
+    const file = await ctx.rpc("agency_onboarding_file", { p_id: prepared.onboardingId, p_kind: kind }) as { name: string; base64: string };
+    if (file?.base64) attachments.push({ name: text(file.name, 150).replace(/[^\w .()-]/g, "_"), contentType: "application/pdf", contentBase64: String(file.base64) });
+  }
+  if (!attachments.length) throw new SigningError("The signed documents are not stored yet. Try again in a minute.");
+  if (attachments.reduce((n, a) => n + a.contentBase64.length, 0) > 9_000_000) throw new SigningError("The signed documents are too large to email. Download them instead.");
+  const business = text(prepared.businessName, 120);
+  const outcome = outcomeState(await provider.send({ deliveryId: `onboarding-signed-copy-${prepared.onboardingId}-${Date.now()}`, from: config.from, to: prepared.to,
+    subject: `Your signed documents with Skyline Institute of Technology: ${business}`,
+    textBody: `Hello ${text(prepared.name, 80) || "there"},\n\nAs requested, attached are the signed documents for ${business}: `
+      + attachments.map((a) => a.name).join(", ") + "." + SIGN_OFF,
+    attachments }));
+  if (outcome.state !== "sent") throw new SigningError(`The email could not be sent${outcome.error ? `: ${text(outcome.error, 160)}` : ""}. Nothing was recorded; try again.`);
+  await ctx.rpc("admin_business_signed_copy_logged", { p_business: agencyId, p_onboarding: prepared.onboardingId, p_to: prepared.to, p_files: attachments.map((a) => a.name) });
+  return { mode: "signed", to: prepared.to, files: attachments.map((a) => a.name) };
+}
+
+/**
+ * Change the agency admin's email: the database checks it (unique among agents only) and changes the records; the Auth login moves with
+ * the service role first, and back again if the database then refuses. New signing links go out at once.
+ */
+export async function changeBusinessContactEmail(ctx: OnboardingContext): Promise<Json> {
+  const agencyId = agencyIdOf(ctx.body);
+  const args = { p_business: agencyId, p_email: text(ctx.body.email, 254), p_reason: text(ctx.body.reason, 500) };
+  const check = await ctx.rpc("admin_business_contact_email_change", { ...args, p_apply: false }) as { old: string; new: string; authUserId: string | null };
+  let loginChanged = false;
+  const changeEmail = ctx.ports.portalAccount?.changeEmail;
+  if (check.authUserId) {
+    if (!changeEmail) throw new SigningError("The sign-in email cannot be changed here.");
+    await changeEmail(check.authUserId, check.new);
+    loginChanged = true;
+  }
+  let result: Json;
+  try { result = await ctx.rpc("admin_business_contact_email_change", { ...args, p_apply: true }); }
+  catch (error) {
+    if (loginChanged && changeEmail) { try { await changeEmail(check.authUserId!, check.old); } catch { /* reported below */ } }
+    throw error;
+  }
+  const mail = Number(result?.signingLinks ?? 0) > 0 ? await drainSigningMail(ctx.ports) : null;
+  return { ...result, loginChanged, mail };
+}
+
 export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Promise<Json>> = {
   agent_onboarding_review_save: reviewSave,
   agent_onboarding_presend_open: presendOpen,
@@ -1333,6 +1394,8 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_referee_upload: uploadRefereeForm,
   agent_onboarding_business_create: createBusiness,
   agent_onboarding_business_delete: deleteBusiness,
+  agent_onboarding_business_resend: resendBusinessApplication,
+  agent_onboarding_contact_email: changeBusinessContactEmail,
   agent_onboarding_business_activate: activateBusinessByAdmin,
   agent_onboarding_abn_lookup: abnLookup,
   agent_onboarding_places_search: placesSearch,

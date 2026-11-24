@@ -49,6 +49,8 @@ export interface SigningPorts {
     create(email: string, name: string, password: string): Promise<"created" | "exists">;
     /** Whether this email's account was made with a password chosen while signing (then approval says "sign in", not "set password"). */
     setAtSigning(email: string): Promise<boolean>;
+    /** BUSINESS-DOCUMENT-ACTIONS: moves an existing login to another email (confirmed); throws a plain message when the email is taken. */
+    changeEmail?(authUserId: string, email: string): Promise<void>;
   };
   /** Any other RPC as the caller (the staff record's letter variables, hr_admin_template_values: Admin only in the database). */
   // deno-lint-ignore no-explicit-any

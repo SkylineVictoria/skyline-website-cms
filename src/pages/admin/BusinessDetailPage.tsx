@@ -14,7 +14,7 @@ import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { ApplicationsTab, DetailsTab } from "@/pages/admin/AgencyDetailPage";
-import { agentOnboardingWords, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
+import { agentOnboardingWords, agentSignInStatus, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
 import { formatDate, getAgency, type AgencySummary } from "@/pages/agency/lib/portalData";
 import { activateBusinessOnboarding } from "@/lib/signingApi";
 import { useAuth } from "@/pages/admin/lib/authContext";
@@ -326,14 +326,15 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td><Link to={`/admin/agents/${r.agentId}`} className="font-bold text-foreground-900 hover:text-primary-700">{r.students}</Link></td>
                   <td>{Object.keys(r.statusCounts).length ? <ApplicationStatusPills counts={r.statusCounts} limit={3} /> : <span className="text-xs text-foreground-500">None</span>}</td>
                   {/* Owner 2026-11-24: once the business is Active its admin agent shows Active; what is still open is a sub-status under it. */}
-                  <td><AgentStatusBadge status={r.status === "Invited" && business.status === "Active" ? "Active" : r.status} />
-                    {r.status === "Invited" || (r.status === "Active" && !r.profileId) ? <p className="mt-1 text-2xs font-medium text-amber-700">Sign-in invitation sent, waiting for password</p> : null}
+                  {/* Owner 2026-11-24: Active only once the agent has created their password; Invited until then; Not invited when none was sent. */}
+                  <td><AgentStatusBadge status={agentSignInStatus(r)} />
+                    {agentSignInStatus(r) === "Invited" ? <p className="mt-1 text-2xs font-medium text-amber-700">Waiting for them to create a password</p> : null}
                     {(r.status === "Active" || r.status === "Invited") && r.role === "agency_admin" && refsPending > 0 ? <p className="mt-1 text-2xs font-medium text-sky-800" data-testid="agent-refs-pending">Reference check pending ({refsPending})</p> : null}
                     {r.status === "Onboarding" ? <p className={`mt-1 text-2xs font-medium ${r.onboarding?.ready ? "text-emerald-700" : "text-sky-800"}`} data-testid="agent-onboarding-words">{agentOnboardingWords(r.onboarding)}</p> : null}
                     {r.status === "Declined" ? <p className="mt-1 text-2xs font-medium text-red-700">Rejected; no sign-in</p> : null}</td>
                   <td>
                     <div className="flex flex-wrap justify-end gap-1.5">
-                      {awaitingPassword(r) && r.email ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
+                      {awaitingPassword(r) && r.email ? <Button size="sm" variant={r.invitationId ? "outline" : "primary"} icon="ri-mail-send-line" disabled={busyId === r.agentId} onClick={() => void resend(r)} data-testid={`send-invite-${r.agentId}`}>{busyId === r.agentId ? "Sending…" : r.invitationId ? "Resend invite" : "Send invite"}</Button> : null}
                       {r.status === "Onboarding" ? <span className="text-xs text-foreground-500">Sent at Activate</span>
                         : r.status === "Inactive" || r.status === "Declined"
                         ? !business.operational ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>

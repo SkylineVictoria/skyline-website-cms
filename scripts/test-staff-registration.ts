@@ -4946,6 +4946,20 @@ test("Portal: the business admin agent invites their own agents (Users › Your 
   assert.ok(sql.includes("public.agency_effective_status(a) = 'Active'") && sql.includes("hint = 'business_not_operational'"));
   assert.ok(sql.includes("and (inv.invited_by = p_actor or inv.role in ('agent', 'agency_admin'))"));
   const data = read("src/pages/agency/lib/portalData.ts");
-  assert.ok(data.includes('if (a.hasLogin) return { label: "Can sign in"') && data.includes('return { label: "Not invited yet", tone: "warn", action: "invite" }'));
+  assert.ok(data.includes('if (a.hasLogin) return { label: "Active"') && data.includes('return { label: "Not invited", tone: "warn", action: "invite" }'));
   assert.ok(read("src/pages/agency/users/page.tsx").includes("{!isSlit ? <BusinessAgentInvites"));
+});
+
+test("Agent status (2026-11-24): Active only once the agent has created a password; Invited while the invitation waits; Not invited otherwise", async () => {
+  const src = read("src/pages/admin/lib/businessData.ts");
+  const fn = src.slice(src.indexOf("export function agentSignInStatus"), src.indexOf("export function awaitingPassword"));
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const agentSignInStatus = new Function("agent", fn.replace(/^export function agentSignInStatus\([^)]*\)[^{]*\{/, "").replace(/\}\s*$/, "").replace(/ as AgentStatus/g, "")) as (a: Record<string, unknown>) => string;
+  assert.equal(agentSignInStatus({ status: "Active", profileId: "p1", invitationId: null }), "Active");
+  assert.equal(agentSignInStatus({ status: "Active", profileId: null, invitationId: "i1" }), "Invited");
+  assert.equal(agentSignInStatus({ status: "Invited", profileId: null, invitationId: "i1" }), "Invited");
+  assert.equal(agentSignInStatus({ status: "Active", profileId: null, invitationId: null }), "Not invited");
+  for (const s of ["Inactive", "Onboarding", "Declined"]) assert.equal(agentSignInStatus({ status: s, profileId: null, invitationId: "i1" }), s);
+  for (const f of ["src/pages/admin/BusinessDetailPage.tsx", "src/pages/admin/AgentsPage.tsx", "src/pages/admin/AgentDetailPage.tsx"]) assert.ok(read(f).includes("agentSignInStatus("), f);
+  assert.ok(!read("src/pages/admin/BusinessDetailPage.tsx").includes('r.status === "Invited" && business.status === "Active" ? "Active"'), "Invited is no longer shown as Active");
 });

@@ -482,12 +482,13 @@ export async function listMyBusinessAgents(agencyId?: string | null): Promise<Bu
 }
 /** What the agent's row can do: their sign-in state in words and the one action offered (or why none). */
 export function agentInviteState(a: BusinessAgentRow, now = Date.now()): { label: string; tone: "ok" | "wait" | "warn" | "off"; action: "invite" | "resend" | null } {
-  if (a.hasLogin) return { label: "Can sign in", tone: "ok", action: null };
-  if (a.status === "Inactive" || a.status === "Declined") return { label: "Inactive (ask SLIT to reactivate)", tone: "off", action: null };
+  // Owner 2026-11-24: Active only once they have created their password; Invited until then; Not invited when nothing was sent.
+  if (a.hasLogin) return { label: "Active", tone: "ok", action: null };
+  if (a.status === "Inactive" || a.status === "Declined") return { label: "Inactive", tone: "off", action: null };
   if (!a.email) return { label: "No email", tone: "warn", action: null };
   if (a.invitation?.status === "pending") {
     const expired = Date.parse(a.invitation.expiresAt) < now;
-    return { label: expired ? "Invitation expired" : "Invitation sent", tone: expired ? "warn" : "wait", action: "resend" };
+    return { label: expired ? "Invited (link expired)" : "Invited", tone: expired ? "warn" : "wait", action: "resend" };
   }
-  return { label: "Not invited yet", tone: "warn", action: "invite" };
+  return { label: "Not invited", tone: "warn", action: "invite" };
 }

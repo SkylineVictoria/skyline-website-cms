@@ -8,7 +8,7 @@ import ActivateAgentDialog from "@/pages/admin/components/ActivateAgentDialog";
 import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { agentOnboardingWords, deactivateAgent, listAgentDirectory, resendInvitation, type AgentCounts, type AgentStatus, type DirectoryAgent, awaitingPassword } from "@/pages/admin/lib/businessData";
+import { agentOnboardingWords, deactivateAgent, listAgentDirectory, resendInvitation, type AgentCounts, type AgentStatus, type DirectoryAgent, awaitingPassword, agentSignInStatus } from "@/pages/admin/lib/businessData";
 import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import { useListParams } from "@/pages/admin/lib/listParams";
 import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
@@ -189,6 +189,17 @@ export default function AgentsPage() {
                         <AgentStatusBadge status={r.status} />
                         <p className="mt-1 text-2xs font-medium text-foreground-600">{r.status === "Declined" ? "Rejected; no sign-in" : agentOnboardingWords(r.onboarding)}</p>
                         <Link to={`/admin/businesses/${r.businessId}`} className="mt-1 inline-block text-xs font-semibold text-primary-700 hover:underline">Open the business</Link>
+                      </div> : awaitingPassword(r) ? <div data-testid={`agent-signin-${r.key}`}>
+                        {/* Owner 2026-11-24: Active only once they have created a password; until then Invited (or Not invited). */}
+                        <AgentStatusBadge status={agentSignInStatus(r)} />
+                        <p className="mt-1 text-2xs font-medium text-amber-700">{r.invitationId ? "Waiting for them to create a password" : "No sign-in invitation sent yet"}</p>
+                        <span className="mt-1.5 flex flex-wrap items-center gap-3">
+                          {r.email ? <button type="button" disabled={busyKey === r.key} onClick={() => void resend(r)}
+                            className="flex cursor-pointer items-center gap-1 text-xs font-semibold text-primary-700 hover:underline disabled:cursor-not-allowed disabled:opacity-60">
+                            <i className="ri-mail-send-line" aria-hidden="true" /> {busyKey === r.key ? "Sending…" : r.invitationId ? "Resend invite" : "Send invite"}
+                          </button> : null}
+                          <button type="button" disabled={busyKey === r.key} onClick={() => setConfirm(r)} className="cursor-pointer text-xs font-medium text-foreground-600 hover:underline">Deactivate</button>
+                        </span>
                       </div> : <>
                       <label className="sr-only" htmlFor={`status-${r.key}`}>Status for {r.name}</label>
                       <SearchableSelect id={`status-${r.key}`} value={r.status} disabled={busyKey === r.key} onChange={(e) => changeStatus(r, e.target.value)}
@@ -202,13 +213,6 @@ export default function AgentsPage() {
                           </option>
                         ))}
                       </SearchableSelect>
-                      {r.status === "Active" && !r.profileId ? <p className="mt-1 text-2xs font-medium text-amber-700">Hasn't set a password yet</p> : null}
-                      {awaitingPassword(r) && r.email ? (
-                        <button type="button" disabled={busyKey === r.key} onClick={() => void resend(r)}
-                          className="mt-1.5 flex cursor-pointer items-center gap-1 text-xs font-semibold text-primary-700 hover:underline disabled:cursor-not-allowed disabled:opacity-60">
-                          <i className="ri-mail-send-line" aria-hidden="true" /> {busyKey === r.key ? "Sending…" : "Resend invite"}
-                        </button>
-                      ) : null}
                       </>}
                     </td>
                   </tr>

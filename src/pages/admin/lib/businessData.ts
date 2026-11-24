@@ -466,6 +466,16 @@ export const listAgentDirectory = (f: { search?: string; status?: string; busine
  * Invited; Resend invite sends these agents their invitation again. Reads every agent (100 a page).
  */
 /** Approved or waiting, but has not set a password yet: shown with "Hasn't set a password yet" and Resend invite. */
+/**
+ * What staff and the business admin see as the agent's status (owner 2026-11-24): Active only once the agent has created their password
+ * (a portal login); Invited while a sign-in invitation waits for them; Not invited when none was sent. Onboarding / Inactive / Declined as stored.
+ */
+export type AgentSignInStatus = AgentStatus | "Not invited";
+export function agentSignInStatus(agent: { status: string; profileId: string | null; invitationId?: string | null }): AgentSignInStatus {
+  if (agent.status !== "Active" && agent.status !== "Invited") return agent.status as AgentStatus;
+  if (agent.profileId) return "Active";
+  return agent.invitationId ? "Invited" : "Not invited";
+}
 export function awaitingPassword(agent: { status: string; profileId: string | null }): boolean {
   return (agent.status === "Active" || agent.status === "Invited") && !agent.profileId;
 }

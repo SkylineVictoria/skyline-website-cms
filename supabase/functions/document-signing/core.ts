@@ -41,6 +41,15 @@ export interface SigningPorts {
   /** Any other RPC with the service role (the onboarding follow-up after a signature: public.agency_onboarding_* service functions). */
   // deno-lint-ignore no-explicit-any
   serviceRpc?(name: string, args: Record<string, unknown>): Promise<any>;
+  /**
+   * Agent portal login (owner 2026-11-24: "while signing the application we must create his password"): the signer's Auth account with
+   * the password they chose on the signing page. Never changes an existing account. "exists" also when the email already signs in.
+   */
+  portalAccount?: {
+    create(email: string, name: string, password: string): Promise<"created" | "exists">;
+    /** Whether this email's account was made with a password chosen while signing (then approval says "sign in", not "set password"). */
+    setAtSigning(email: string): Promise<boolean>;
+  };
   /** Any other RPC as the caller (the staff record's letter variables, hr_admin_template_values: Admin only in the database). */
   // deno-lint-ignore no-explicit-any
   callerRpc?(name: string, args: Record<string, unknown>): Promise<any>;
@@ -427,6 +436,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         // Agent Application Form (2026-11-19): the title comes from the list; the two referees need different email addresses. F04 wizard: the
         // declarations, the MARN and the ACN (checkApplicationSubmission); the registration box prints "ACN … / MARN …" from them.
         let submission: ApplicationSubmission | null = null;
+        // The agent portal password chosen on the signing page (business application, signed once); the login is made after the signature.
+        let portalPassword: string | null = null;
         const combinedPlan = record.onboarding as { combined?: boolean; witness?: { preset?: boolean; box?: { page: number; x: number; y: number; w: number; h: number } | null } | null } | null;
         let witness: { name: string; png: unknown } | null = null;
         if (isApplication(record)) {
@@ -451,6 +462,12 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           const checked = checkApplicationAnswers(byKey, { refereeEmailsDistinct: signRules.refereeEmailsDistinct });
           if (checked.error) throw new SigningError(checked.error);
           submission = checkApplicationSubmission(body.application, collectAnswers(fields.map((f) => ({ key: f.key, type: f.type, value: String(values[f.id] ?? f.value ?? "") }))));
+          const chosen = (body.application as { account?: { password?: unknown } } | undefined)?.account?.password;
+          if (typeof chosen === "string" && chosen.length) {
+            if (chosen.length < 8 || chosen.length > 72) throw new SigningError("Your password needs 8 to 72 characters.");
+            if (!/[A-Za-z]/.test(chosen) || !/\d/.test(chosen)) throw new SigningError("Use letters and at least one number in your password.");
+            portalPassword = chosen;
+          }
           // A correction (2026-11-18): only the fields staff flagged can change; the ACN and the MARN stay as reviewed unless flagged.
           if (correction) {
             const flagged = new Set(Object.keys(correction.flags ?? {}));
@@ -558,6 +575,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
             if (witness && witnessPng && ports.serviceRpc) {
               await ports.serviceRpc("agency_onboarding_witness_record", { p_request: record.id, p_name: witness.name, p_png: witnessPng }).catch(() => undefined);
             }
+            // The agent portal login with the password chosen here (never changes an existing account; a failure never undoes the signature).
+            let account: "created" | "exists" | "failed" | null = null;
+            if (portalPassword && combinedPlan?.combined && ports.portalAccount && record.recipient?.email) {
+              account = await ports.portalAccount.create(String(record.recipient.email).toLowerCase(), String(record.recipient.name ?? ""), portalPassword).catch(() => "failed" as const);
+            }
             await ports.later(drainSigningMail(ports));
             // An onboarding document completed: the referee checks go out after the application form; staff hear when the second referee is back.
             // CPU budget (2026-11-20): an application form's follow-up (the split of the combined document, the referee checks, the staff
@@ -571,7 +593,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
               } else await ports.later(inline());
             }
             signTimer?.lap("io_after"); signTimer?.done({ fields: stampFields.length, bytes: signed.length });
-            return { signed: true, complete: after.state === "signed", state: after.state };
+            return { signed: true, complete: after.state === "signed", state: after.state, ...(account ? { account } : {}) };
           } catch (error) {
             const e = error as RpcError;
             // Someone else signed between the plan and the commit: this copy is out of date, render again from the new state.

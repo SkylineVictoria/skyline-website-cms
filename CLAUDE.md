@@ -58,6 +58,7 @@ TODO, IN_PROGRESS, BLOCKED, DONE (DONE needs verified acceptance). Local status 
 - npm: `type-check`, `lint` (covers `src/` only), `build`, `test:*`; `*:integration` and `test:public-assistant:local-acceptance` need local Supabase.
 
 ## Edge Function versions (live)
+Checked 2026-11-24: document-signing deployed by the deploy job from 59af792 (agent_onboarding_places_search answers; Google Maps manual search, head office and branches).
 Checked 2026-11-24 after OMARA-DISCOVERY: omara-discovery 1 (deploy job run 24 from 0b90d79, JWT on).
 Checked 2026-11-24 after GOOGLE-MAPS-CONNECTION: document-signing 57 (deploy job run 23 from 381ef1c, JWT on).
 Checked 2026-11-24 after GOOGLE-MAPS-AUTOFILL: document-signing 56 (deploy job run 22 from 9c8b5bb, JWT on).

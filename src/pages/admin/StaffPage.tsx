@@ -87,8 +87,8 @@ export default function StaffPage() {
                 {status !== "onboarding" ? null : <td data-label="Document link" className="px-4 py-3"><ResendLinkButton row={r} onDone={(m) => { setNotice(m); setReload((n) => n + 1); }} /></td>}
                 <td data-label="Actions" className="px-4 py-3"><div className="flex gap-1.5">
                   <Button size="sm" variant="outline" icon="ri-edit-line" onClick={() => setEditing(r)} data-testid={`staff-edit-${r.id}`}>Edit</Button>
-                  {/* // rule-policy: security delete-guard Active staff cannot be deleted (the database refuses it too); set them Inactive first. */}
-                  <Button size="sm" variant="danger" icon="ri-delete-bin-line" disabled={r.status === "active"} title={r.status === "active" ? "Active staff cannot be deleted. Set them Inactive first." : undefined} onClick={() => { setDeleteError(""); setDeleting(r); }} data-testid={`staff-delete-${r.id}`}>Delete</Button>
+                  {/* Owner 2026-11-24: any staff record can be deleted with everything tied to it, after one confirmation (not your own). */}
+                  <Button size="sm" variant="danger" icon="ri-delete-bin-line" onClick={() => { setDeleteError(""); setDeleting(r); }} data-testid={`staff-delete-${r.id}`}>Delete</Button>
                 </div></td>
               </tr>
             ))}</tbody>
@@ -120,8 +120,10 @@ export default function StaffPage() {
         </Card>
       ) : null}
       {editing ? <StaffEditDialog row={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); setNotice("Details saved."); setReload((n) => n + 1); }} /> : null}
-      <DangerDialog open={!!deleting} title={`Delete ${deleting?.name || deleting?.email || "this person"}?`} intro="Use this for test records or people added by mistake."
-        items={["Their staff record and onboarding history", "Their uploaded documents and sign-in links", `The email ${deleting?.email ?? ""} becomes free to use again`]}
+      <DangerDialog open={!!deleting} title={`Delete ${deleting?.name || deleting?.email || "this person"}?`} intro="Deletes the person and everything tied to them."
+        items={["Their staff record, onboarding, offers, documents and employment", "Their time, leave, timesheet and holiday records", "Their signing documents and Careers job applications",
+          "Their sign-in account, unless they also use the CMS or the portal", "Student results they signed stay (without their name as signer)", `The email ${deleting?.email ?? ""} becomes free to use again`]}
+        confirmLabel="Yes, delete everything"
         busy={deleteBusy} error={deleteError} onCancel={() => setDeleting(null)}
         onConfirm={() => {
           if (!deleting) return;

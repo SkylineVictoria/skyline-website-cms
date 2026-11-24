@@ -1186,6 +1186,28 @@ test("onboarding per business (2026-11-19): Add business checks the blanks befor
   assert.ok(!decline.textBody.includes("Referee 2") && /unable to proceed/.test(decline.textBody), "the decline email is polite and never shows the reason");
 });
 
+test("Google Maps manual search (2026-11-24): any text, up to five places, closed left out, no key / short text / error answered plainly", async () => {
+  const places = await load.import<typeof import("../supabase/functions/_shared/google-places.ts")>("../supabase/functions/_shared/google-places.ts");
+  const sent: string[] = [];
+  const answer = (body: unknown, status = 200) => (async (_url: string, init: RequestInit) => { sent.push(JSON.parse(String(init.body)).textQuery); return Response.json(body, { status }); }) as unknown as typeof fetch;
+  const raw = (id: string, name: string, status = "OPERATIONAL") => ({ id, displayName: { text: name }, businessStatus: status, addressComponents: [{ longText: "Perth", types: ["locality"] }, { longText: "WA", shortText: "WA", types: ["administrative_area_level_1"] }] });
+  const many = Array.from({ length: 7 }, (_, i) => raw(`p${i}`, `Aussizz ${i}`));
+  many[1] = raw("p1", "Aussizz closed", "CLOSED_PERMANENTLY");
+  const found = await places.searchPlaces("Aussizz Melbourne", "k", answer({ places: many }), { state: "VIC" });
+  assert.ok(found.ok && found.places.length === 5 && !found.places.some((p) => p.placeId === "p1"), "five places, closed one left out");
+  assert.equal(sent[0], "Aussizz Melbourne VIC Australia");
+  await places.searchPlaces("12 Smith St, Perth, Australia", "k", answer({ places: [] }));
+  assert.equal(sent[1], "12 Smith St, Perth, Australia", "text naming Australia is sent as typed");
+  const none = await places.searchPlaces("Nothing here", "k", answer({}));
+  assert.deepEqual([none.ok, (none as { reason: string }).reason], [false, "not_found"]);
+  const bad = await places.searchPlaces("Aussizz", "k", answer({}, 403));
+  assert.deepEqual([bad.ok, (bad as { reason: string }).reason], [false, "unavailable"]);
+  const calls = sent.length;
+  assert.equal((await places.searchPlaces("Aussizz", "", answer({}))).ok, false);
+  assert.equal((await places.searchPlaces("ab", "k", answer({}))).ok, false);
+  assert.equal(sent.length, calls, "no key / under 3 letters: no call");
+});
+
 test("Google Maps autofill (2026-11-24): Places (New) Text Search with the field mask, address parts, best match by name and state, cache, missing key skipped, rule off, Add business returns the office and the F04 takes it", async () => {
   const places = await load.import<typeof import("../supabase/functions/_shared/google-places.ts")>("../supabase/functions/_shared/google-places.ts");
   const components = [
@@ -1288,7 +1310,7 @@ test("Google Maps autofill (2026-11-24): Places (New) Text Search with the field
   // The source: the key only from the function's environment, never in the browser code; staff confirm on Add business; Add business keeps it.
   assert.match(read("supabase/functions/document-signing/index.ts"), /Deno\.env\.get\("EF_GOOGLE_MAPS_KEY"\)/);
   assert.ok(!/EF_GOOGLE_MAPS_KEY|X-Goog-Api-Key|places\.googleapis/.test(read("src/pages/admin/components/AddBusinessForm.tsx") + read("src/lib/signingApi.ts")), "the key never reaches the browser");
-  assert.ok(read("src/pages/admin/components/AddBusinessForm.tsx").includes("Found on Google Maps") && read("supabase/functions/document-signing/onboarding.ts").includes(`ctx.rpc("agency_places_attach"`));
+  assert.ok(read("src/pages/admin/components/AddBusinessForm.tsx").includes("Head office") && read("supabase/functions/document-signing/onboarding.ts").includes(`ctx.rpc("agency_places_attach"`));
   assert.ok(read("supabase/functions/.env.example").includes("EF_GOOGLE_MAPS_KEY="));
 });
 

@@ -21,9 +21,11 @@ import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
 import { businessDeleteCheck, isSlitAdmin } from "@/pages/admin/lib/businessData";
 import OmaraAgentsPanel from "@/pages/admin/components/OmaraAgentsPanel";
+import { listOnboarding } from "@/pages/admin/lib/agentOnboarding";
+import { BusinessOfficesCard } from "@/pages/admin/components/OfficeLocations";
 
-type Tab = "details" | "agents" | "students" | "applications";
-const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
+type Tab = "details" | "documents" | "agents" | "students" | "applications";
+const TAB_IDS: Tab[] = ["details", "documents", "agents", "students", "applications"];
 
 /** Agencies > Businesses > {name}: the business, its agents, their students and the students' applications. The tab lives in the URL. */
 export default function BusinessDetailPage() {
@@ -123,6 +125,7 @@ export default function BusinessDetailPage() {
     : stage ? `Onboarding ${(STAGE_LABEL[stage] ?? stage).toLowerCase()}; start it again.` : "Onboarding not started.";
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: "details", label: "Details" },
+    { id: "documents", label: "Documents" },
     { id: "agents", label: "Agents", count: people + c.inactiveAgents },
     { id: "students", label: "Students", count: c.students },
     { id: "applications", label: "Applications", count: c.applications },
@@ -153,7 +156,7 @@ export default function BusinessDetailPage() {
       />
 
       {onboardingOpen ? (
-        <BusinessOnboarding business={business} onChanged={load} onActivate={() => void change("Active")} activating={busy} />
+        <BusinessOnboarding business={business} onChanged={load} />
       ) : null}
 
       <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-3">
@@ -182,6 +185,8 @@ export default function BusinessDetailPage() {
 
       {tab === "details" ? <DetailsSection agencyId={agency.id} onSaved={load} /> : null}
       {tab === "details" && business.status === "Active" ? <div className="mt-6"><BusinessOnboarding business={business} onChanged={load} /></div> : null}
+      {tab === "documents" ? <BusinessOnboarding business={business} onChanged={load} part="documents" /> : null}
+      {tab === "details" ? <BusinessOfficesCard agencyId={business.id} businessName={business.name} /> : null}
       {tab === "details" ? <OmaraAgentsPanel mode="linked" agencyId={business.id} /> : null}
       {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null, holding: !operational && business.status === "Onboarding" && stage !== "declined" }} onChanged={load} /> : null}
       {tab === "students" ? <StudentsTable businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
@@ -216,12 +221,23 @@ function Summary({ label, value, note, warnText, action, onClick }: { label: str
 
 function DetailsSection({ agencyId, onSaved }: { agencyId: string; onSaved: () => Promise<void> }) {
   const [agency, setAgency] = useState<AgencySummary | null>(null);
+  // A failed load is shown with Try again (owner 2026-11-24: "Loading details is not loading"), never an endless "Loading".
+  const [failed, setFailed] = useState("");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
-    void getAgency(agencyId).then((found) => { if (active) setAgency(found); }).catch(() => { if (active) setAgency(null); });
+    setFailed("");
+    void getAgency(agencyId).then((found) => {
+      if (!active) return;
+      setAgency(found);
+      if (!found) setFailed("The business details could not be found.");
+    }).catch((e: unknown) => { if (active) { setAgency(null); setFailed(e instanceof Error ? e.message : "The business details could not be loaded."); } });
     return () => { active = false; };
-  }, [agencyId]);
-  return agency ? <DetailsTab key={agency.id} agency={agency} onSaved={onSaved} /> : <p className="text-sm text-foreground-600">Loading details&hellip;</p>;
+  }, [agencyId, attempt]);
+  if (agency) return <DetailsTab key={agency.id} agency={agency} onSaved={onSaved} />;
+  return failed ? <p role="alert" className="text-sm text-red-700" data-testid="details-error">{failed}{" "}
+    <button type="button" className="font-semibold underline" onClick={() => setAttempt((n) => n + 1)}>Try again</button></p>
+    : <p className="text-sm text-foreground-600">Loading details&hellip;</p>;
 }
 
 /** The business's agents: add, activate, deactivate, and resend a sign-in invitation still waiting. */
@@ -234,6 +250,16 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [confirm, setConfirm] = useState<DirectoryAgent | null>(null);
   const [busyId, setBusyId] = useState("");
+  // Referee checks still out on the business's onboarding (shown under an Active agent as "Reference check pending").
+  const [refsPending, setRefsPending] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void listOnboarding(business.id).then((rows) => {
+      const latest = rows.find((r) => r.kind !== "agent") ?? rows[0];
+      if (live) setRefsPending(latest ? latest.referees.filter((r) => r.status !== "received" && r.status !== "cancelled").length : 0);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [business.id]);
   useEffect(() => {
     let active = true;
     setError("");
@@ -299,7 +325,10 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td className="tabular-nums">{r.marn || <span className="text-xs text-foreground-500">None</span>}</td>
                   <td><Link to={`/admin/agents/${r.agentId}`} className="font-bold text-foreground-900 hover:text-primary-700">{r.students}</Link></td>
                   <td>{Object.keys(r.statusCounts).length ? <ApplicationStatusPills counts={r.statusCounts} limit={3} /> : <span className="text-xs text-foreground-500">None</span>}</td>
-                  <td><AgentStatusBadge status={r.status} />{r.status === "Invited" || (r.status === "Active" && !r.profileId) ? <p className="mt-1 text-2xs font-medium text-amber-700">Invited, waiting for password</p> : null}
+                  {/* Owner 2026-11-24: once the business is Active its admin agent shows Active; what is still open is a sub-status under it. */}
+                  <td><AgentStatusBadge status={r.status === "Invited" && business.status === "Active" ? "Active" : r.status} />
+                    {r.status === "Invited" || (r.status === "Active" && !r.profileId) ? <p className="mt-1 text-2xs font-medium text-amber-700">Sign-in invitation sent, waiting for password</p> : null}
+                    {(r.status === "Active" || r.status === "Invited") && r.role === "agency_admin" && refsPending > 0 ? <p className="mt-1 text-2xs font-medium text-sky-800" data-testid="agent-refs-pending">Reference check pending ({refsPending})</p> : null}
                     {r.status === "Onboarding" ? <p className={`mt-1 text-2xs font-medium ${r.onboarding?.ready ? "text-emerald-700" : "text-sky-800"}`} data-testid="agent-onboarding-words">{agentOnboardingWords(r.onboarding)}</p> : null}
                     {r.status === "Declined" ? <p className="mt-1 text-2xs font-medium text-red-700">Rejected; no sign-in</p> : null}</td>
                   <td>

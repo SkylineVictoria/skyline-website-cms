@@ -3,6 +3,9 @@ import F04Wizard, { type F04PrefillControls } from "@/components/signing/F04Wiza
 import { answersOf, choiceUnnamed, readChoice, POSITIONS, type F04Draft } from "@/components/signing/f04WizardLogic";
 import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, type PresendOpen, type SigningView, type SlitSignatureInput } from "@/lib/signingApi";
 import { useToast } from "@/pages/admin/components/toastContext";
+import { omaraLinked } from "@/lib/omaraApi";
+import { ruleText } from "@/lib/businessRules";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { commissionProblem } from "@/pages/agency/lib/admissionsRules";
 
 /*
@@ -28,6 +31,30 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   // SLIT's signatory (2026-11-21): the sending admin by default, their saved signature when they have one (else typed), dated when sent.
   const [signatory, setSignatory] = useState<F04PrefillControls["signatory"]>({ organisation: "", name: "", position: "", savedSignature: null, signedOn: "", method: "typed", png: null, save: true });
   const [message, setMessage] = useState("");
+  // The registered agents linked to the business, highest match first: the MARN starts with the first (owner 2026-11-24).
+  const [linkedAgents, setLinkedAgents] = useState<{ fullName: string; marn: string; confidence: number }[]>([]);
+  // What the business already tells us (2026-11-24, "we have all info, fill the form"): offices (head office + branches) and people.
+  const [known, setKnown] = useState<{ offices: number; people: number } | null>(null);
+  const [extrasReady, setExtrasReady] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setExtrasReady(false);
+    const linked = omaraLinked(agencyId).then((rows) => {
+      if (live) setLinkedAgents(rows.map((a) => ({ fullName: a.fullName, marn: a.marn, confidence: a.confidence })).sort((x, y) => y.confidence - x.confidence));
+    }).catch(() => undefined);
+    const offices = supabase.rpc("agency_offices_get", { p_agency: agencyId }).then(({ data }) => {
+      const r = data as { head?: { street?: string; suburb?: string }; branches?: unknown[] } | null;
+      if (!live || !r) return;
+      setKnown((k) => ({ people: k?.people ?? 0, offices: (r.head?.street || r.head?.suburb ? 1 : 0) + (r.branches?.length ?? 0) }));
+    });
+    const people = supabase.from("agencies").select("profile").eq("id", agencyId).maybeSingle().then(({ data }) => {
+      const people = Array.isArray((data?.profile as { key_people?: unknown[] } | null)?.key_people) ? ((data!.profile as { key_people: unknown[] }).key_people.length) : 0;
+      if (live) setKnown((k) => ({ offices: k?.offices ?? 0, people }));
+    });
+    // The wizard reads its starting values once: it opens after these are in (or failed).
+    void Promise.allSettled([linked, offices, people]).then(() => { if (live) setExtrasReady(true); });
+    return () => { live = false; };
+  }, [agencyId]);
   const [busy, setBusy] = useState<"" | "save" | "send">("");
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -38,7 +65,16 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
       setOpened(o); setTerms({ ...o.terms, commissionGst: o.terms.commissionGst ?? "" }); setWitness(o.witness); setMessage(o.message);
       // Position chips (2026-11-21): the admin's saved position selects its chip when it is one (CEO / Director / Manager / Owner), else Other with that text.
       const saved = readChoice(o.signatory.position, POSITIONS);
-      setSignatory({ ...o.signatory, position: saved.picked ?? saved.other ?? "", method: o.signatory.savedSignature ? "saved" : "typed", png: null, save: true });
+      // SLIT signatory and witness from Business Rules (owner 2026-11-24: Hardik Amin, CEO; witness Chanpreet Kaur) unless a draft chose someone else.
+      const ruleName = ruleText("agents.slit_signatory_name", "").trim(), rulePosition = ruleText("agents.slit_signatory_position", "").trim();
+      // SLIT's signing authority is set in Business Rules: it always starts there (staff can still change it for one send).
+      const useRule = !!ruleName;
+      const position = useRule && rulePosition ? readChoice(rulePosition, POSITIONS) : saved;
+      setSignatory({ ...o.signatory, name: useRule ? ruleName : o.signatory.name, position: position.picked ?? position.other ?? "",
+        // Someone else's signature is never the sender's saved picture: it starts as their typed name.
+        method: useRule || !o.signatory.savedSignature ? "typed" : "saved", png: null, save: true });
+      const ruleWitness = ruleText("agents.slit_witness_name", "").trim();
+      if (ruleWitness && !o.witness.name && !o.witness.png) setWitness({ name: ruleWitness, png: null });
       setSavedNote(o.savedAt ? `Draft saved ${new Date(o.savedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}${o.savedBy ? ` by ${o.savedBy}` : ""}` : null);
       setError("");
     } catch (e) { setError(e instanceof Error ? e.message : "The application could not be prepared."); }
@@ -47,13 +83,20 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
 
   const view = useMemo(() => {
     if (!opened) return null;
+    // Blank numbers we can work out: offices (head office + branches), staff (linked registered agents + people added by hand),
+    // years as an agent (from the year founded). Students a year and the SLIT target stay for the agency to answer.
+    const founded = Number(String(opened.fields.find((f) => f.key === "agent_year_founded")?.value ?? "").trim());
+    const fill: Record<string, string> = {};
+    if (known?.offices) fill.number_of_offices = String(known.offices);
+    if (linkedAgents.length + (known?.people ?? 0) > 0) fill.staff_count = String(linkedAgents.length + (known?.people ?? 0));
+    if (founded > 1900 && founded <= new Date().getFullYear()) fill.agent_years_as_education_agent = String(new Date().getFullYear() - founded);
     return {
       id: opened.onboardingId ?? "", reference: "", title: `Agent application: ${agencyName}`, state: "draft", message: null, expiresAt: null, signedAt: null, consent: "", documentHash: "", url: "",
       recipient: { id: opened.contact?.id ?? "", name: opened.contact?.name ?? "", email: opened.contact?.email ?? "", role: "Business contact", state: "draft", signed_at: null },
-      fields: opened.fields.map((f) => ({ ...f, x: 0, y: 0, w: 0, h: 0 })), signers: [], onboarding: { id: opened.onboardingId ?? "", kind: "application", agencyName, agencyId, formPages: 2 },
+      fields: opened.fields.map((f) => ({ ...f, x: 0, y: 0, w: 0, h: 0, value: String(f.value ?? "").trim() ? f.value : (fill[f.key ?? ""] ?? f.value) })), signers: [], onboarding: { id: opened.onboardingId ?? "", kind: "application", agencyName, agencyId, formPages: 2 },
       application: { draft: null, facts: opened.facts, savedAt: null, prefill: { agent_acn: opened.acn, agent_marn: opened.marn }, filled: [], attachments: {}, correction: null },
     } as unknown as SigningView;
-  }, [opened, agencyName, agencyId]);
+  }, [opened, agencyName, agencyId, known, linkedAgents.length]);
 
   const dataOf = (state: F04Draft): PresendData => {
     const answers = Object.fromEntries(Object.entries(answersOf(view!.fields, state)).filter(([key, value]) => !REFERENCE.test(key) && key !== "agent_acn" && key !== "agent_marn" && String(value ?? "").trim()));
@@ -98,8 +141,8 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   if (error) return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground-950/55 p-4" role="dialog" aria-modal="true">
     <div className="max-w-md rounded-xl bg-background-50 p-5 text-sm"><p role="alert" className="text-red-700" data-testid="presend-error">{error}</p>
       <button type="button" className="mt-3 rounded-md border border-background-300 px-3 py-1.5" onClick={onClose}>Close</button></div></div>;
-  if (!opened || !view) return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground-950/55" role="status"><span className="rounded-md bg-background-50 px-4 py-2 text-sm">Preparing the application…</span></div>;
+  if (!opened || !view || !extrasReady) return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground-950/55" role="status"><span className="rounded-md bg-background-50 px-4 py-2 text-sm">Preparing the application…</span></div>;
   return <F04Wizard token="" view={view} mode="admin-prefill" codeCheck={{ needed: false, session: null, render: () => null }} onSigned={() => undefined}
     prefill={{ terms, onTerms: setTerms, witness, onWitness: setWitness, signatory, onSignatory: setSignatory, message, onMessage: setMessage, busy, contact: opened.contact, savedNote,
-      onSaveDraft: (s) => void saveDraft(s), onSend: (s) => void send(s), onClose }} />;
+      onSaveDraft: (s) => void saveDraft(s), onSend: (s) => void send(s), onClose, linkedAgents }} />;
 }

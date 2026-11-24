@@ -6,7 +6,7 @@
 import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
   WITNESS_SIGNATURE_KEY, F04_ATTACHMENT_MAX, yesNoDefaults, optionalAnswerGroups, relaxAnswerGroups, REQUIRED_GROUP_LABELS, commissionText, isCommissionGst, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { loadRules, ruleBool, ruleList, ruleNumber, ruleText } from "../_shared/business-rules.ts";
-import { checkPlacesKey, DEFAULT_MATCH_PERCENT, PLACE_F04_KEYS, placeF04Values, searchPlaceCached, stateCode, type PlaceDetails } from "../_shared/google-places.ts";
+import { checkPlacesKey, DEFAULT_MATCH_PERCENT, PLACE_F04_KEYS, placeF04Values, searchPlaceCached, searchPlaces, stateCode, type PlaceDetails } from "../_shared/google-places.ts";
 import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
@@ -306,6 +306,20 @@ export async function abnLookup(ctx: OnboardingContext): Promise<Json> {
   return { configured: true, ok: true, details: outcome.details, fetchedAt: outcome.fetchedAt, cached, ...(places ? { places } : {}) };
 }
 
+/**
+ * Add business > Search Google Maps (owner 2026-11-24): staff search for another office by any text (name, branch, suburb, street) and
+ * pick one of up to five places. Same gate as the ABN lookup; one Text Search, nothing cached or saved until the business is saved.
+ */
+export async function placesSearch(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const key = await placesKey(ctx.ports);
+  if (!key) return { configured: false, ok: false, reason: "not_configured", message: "Google Maps is not set up yet (Integrations > Connections)." };
+  const rules = await onboardingRules(ctx);
+  if (!rules.placesEnabled) return { configured: false, ok: false, reason: "not_configured", message: "Google Maps look-up is switched off in Business Rules." };
+  const outcome = await searchPlaces(String(ctx.body.query ?? ""), key, ctx.ports.places?.fetch ?? fetch, { state: typeof ctx.body.state === "string" ? ctx.body.state : null });
+  return { configured: true, ...outcome };
+}
+
 /** The office details staff confirmed on Add business (Google Maps, possibly edited, or typed): kept on the business profile, blank keys only. */
 function placesInput(raw: unknown): Record<string, string> | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -598,7 +612,9 @@ export async function presendOpen(ctx: OnboardingContext): Promise<Json> {
   });
   const record = prepared.values ?? {};
   return { onboardingId: saved.onboardingId, agency: prepared.agency, contact: prepared.agent, fields, facts,
-    acn: saved.presend?.acn ?? acnDigits(String(answers.agent_acn ?? "")), marn: saved.presend?.marn ?? "", message: saved.presend?.message ?? "",
+    acn: saved.presend?.acn ?? acnDigits(String(answers.agent_acn ?? "")),
+    // The admin's MARN picked on Add business (agencies.profile.admin_marn, 2026-11-24) until staff save another.
+    marn: saved.presend?.marn ?? String((prepared.agency as { profile?: Record<string, unknown> }).profile?.admin_marn ?? "").replace(/\D/g, ""), message: saved.presend?.message ?? "",
     terms: { commencementDate: saved.terms?.commencementDate ?? "", territory: saved.terms?.territory || String(record.agent_territory ?? ""),
       commissionPercent: saved.terms?.commissionPercent != null ? String(saved.terms.commissionPercent) : String(record.agent_commission_percent ?? ""),
       // Never guessed: empty until SLIT staff choose (2026-11-21).
@@ -1015,6 +1031,21 @@ const base64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).rep
 export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitationId: string; email: string; name: string; role: string; agencyName: string; expiresAt: string | null; kind?: "business" | "member" }): Promise<boolean> {
   const { provider, config } = ports.mail;
   if (!provider || !config.from || !config.siteUrl) return false;
+  // The password was chosen while signing the application (2026-11-24): the invitation is unlocked now (the signing link already proved
+  // the email) and the email says "sign in with your email and password", with no set-password link.
+  if (inv.kind !== "member" && ports.portalAccount && await ports.portalAccount.setAtSigning(inv.email).catch(() => false)) {
+    let unlocked = false;
+    try { await serviceRpc(ports, "portal_invitation_preconfirm", { p_invitation: inv.invitationId }); unlocked = true; } catch { unlocked = false; }
+    if (unlocked) {
+      const login = `${config.siteUrl.replace(/\/+$/, "")}/agency/login`;
+      const sent = outcomeState(await provider.send({ deliveryId: `onboarding-activation-${inv.invitationId}-signin`, from: config.from, to: inv.email,
+        subject: `${text(inv.agencyName, 100)} is active: sign in to the Skyline agent portal`,
+        textBody: `Hello ${text(inv.name, 80) || "there"},\n\nYour agent agreement with Skyline Institute of Technology is signed and ${text(inv.agencyName, 120)} is now active. `
+          + `You are the business admin agent for it.\n\nSign in to the agent portal with your email (${inv.email}) and the password you created when you signed the application:\n${login}\n\n`
+          + "Forgot it? Choose Forgot password on the sign-in page." + SIGN_OFF }));
+      return sent.state === "sent";
+    }
+  }
   const token = base64Url(crypto.getRandomValues(new Uint8Array(32)));
   const hash = await sha256Hex(new TextEncoder().encode(token));
   await serviceRpc(ports, "portal_invitation_link_issue", { p_invitation: inv.invitationId, p_token_hash: hash });
@@ -1304,6 +1335,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_business_delete: deleteBusiness,
   agent_onboarding_business_activate: activateBusinessByAdmin,
   agent_onboarding_abn_lookup: abnLookup,
+  agent_onboarding_places_search: placesSearch,
   integration_google_maps_check: googleMapsCheck,
   // Retired (2026-11-19): agents have no onboarding of their own.
   agent_onboarding_add_agent: retired,

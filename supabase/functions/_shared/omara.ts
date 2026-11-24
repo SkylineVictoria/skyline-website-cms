@@ -34,7 +34,11 @@ export interface OmaraAgent {
   disciplinary: { verified: true; url: string; title: string; verifiedAt: string }[] | null;
   rawFields: Record<string, string>;
 }
-export interface BusinessFacts { names: string[]; website?: string | null; postcode?: string | null; state?: string | null; suburb?: string | null }
+export interface BusinessFacts { names: string[]; website?: string | null; postcode?: string | null; state?: string | null; suburb?: string | null;
+  /** Suburbs / cities of the head office and branches (2026-11-24): one more search per place, to find agents at every office. */
+  places?: string[] | null;
+  /** Find a person (2026-11-24, "not seeing its CEO"): search the register for these people's names only, not the business. */
+  people?: string[] | null }
 export interface Match { confidence: number; evidence: string[] }
 export type DiscoveredAgent =
   | (OmaraAgent & Match & { verification: "verified" | "stored"; likely: boolean })
@@ -202,12 +206,32 @@ export function buildQueries(facts: BusinessFacts, max: number): string[] {
   const names = nameVariants(facts.names);
   const q: string[] = [];
   const add = (s: string) => { if (!q.includes(s)) q.push(s); };
+  const people = [...new Set((facts.people ?? []).map((p) => clean(p).replace(/"/g, "")).filter((p) => p.length >= 3))].slice(0, 5);
+  if (people.length) {
+    const brandWord = [...new Set(names.flatMap((n) => coreTokens(n)))].find((t) => t.length >= 4) ?? "";
+    for (const p of people) {
+      add(`site:${OMARA_HOST} "${p}"`);
+      add(`site:${OMARA_HOST} "${p}" "Registered migration agent details"`);
+      if (brandWord) add(`site:${OMARA_HOST} "${p}" "${brandWord}"`);
+    }
+    return q.slice(0, Math.max(1, Math.min(20, Math.floor(max))));
+  }
   const domain = domainOf(facts.website);
   if (names[0]) add(`site:${OMARA_HOST} "${names[0]}" "Registered migration agent details"`);
   if (domain) add(`site:${OMARA_HOST} "${domain}"`);
   for (const n of names) {
     add(`site:${OMARA_HOST} "${n}" "Migration agent registration number"`);
     add(`site:${OMARA_HOST} "${n}" "Registered migration agent details"`);
+  }
+  // Wider (owner 2026-11-24: "I can't find the main people"): the brand word alone, the email domain, and the brand at each office.
+  const brand = [...new Set(names.flatMap((n) => coreTokens(n)))].find((t) => t.length >= 4) ?? "";
+  const brandText = brand ? brand.replace(/\b\w/g, (c) => c.toUpperCase()) : "";
+  if (brandText) add(`site:${OMARA_HOST} "${brandText}"`);
+  if (domain) add(`site:${OMARA_HOST} "@${domain}"`);
+  const label = domainLabel(domain);
+  if (label && label.length >= 4 && label !== brand) add(`site:${OMARA_HOST} "${label}"`);
+  for (const place of [...new Set((facts.places ?? []).map((p) => clean(p)).filter((p) => p.length >= 3))].slice(0, 8)) {
+    if (brandText) add(`site:${OMARA_HOST} "${brandText}" "${place}"`);
   }
   return q.slice(0, Math.max(1, Math.min(20, Math.floor(max))));
 }

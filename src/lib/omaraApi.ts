@@ -5,7 +5,7 @@ import type { DiscoveredAgent, OmaraAgent } from "../../supabase/functions/_shar
 // Registered migration agents found here are never SLIT education agents; their contact details are for verification and onboarding only.
 
 export type { DiscoveredAgent, OmaraAgent };
-export interface OmaraFacts { abn?: string; agencyId?: string; names: string[]; website?: string | null; postcode?: string | null; state?: string | null }
+export interface OmaraFacts { abn?: string; agencyId?: string; names: string[]; website?: string | null; postcode?: string | null; state?: string | null; places?: string[]; people?: string[] }
 export interface OmaraStatus { enabled: boolean; configured: boolean; provider: "brave" | "tavily"; threshold: number; maxPages: number }
 export interface OmaraRun { id: string | null; queries?: string[]; results?: number; pagesFetched: number; searches?: number; estCostUsd?: number; errors: string[] }
 export interface DiscoverAnswer { enabled: boolean; configured: boolean; provider: string; threshold?: number; agents: DiscoveredAgent[]; run?: OmaraRun; message?: string }

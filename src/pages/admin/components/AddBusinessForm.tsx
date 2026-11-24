@@ -1,10 +1,11 @@
 import { normalizeAbn, validateAbn, type AgencyAbnDetails } from "../../../../supabase/functions/_shared/validation/abn";
 import type { AbrDetails } from "../../../../supabase/functions/_shared/validation/abr";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
-import { Button, Card, Field, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import { Button, Card, Field, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
+import AdminPersonPicker, { type PersonSuggestion } from "@/pages/admin/components/AdminPersonPicker";
 import { EMPTY_AGENCY_FORM, suggestAgencyCode, validateAgencyForm, type AgencyFormErrors, type AgencyFormState } from "@/pages/admin/lib/agencyForm";
 import { createBusinessWithOnboarding, lookupAbnDetails, type AbnLookupResult, type BusinessAbrInput, type BusinessPlacesInput, type PlacesLookup } from "@/lib/signingApi";
 import { placeAddressLine, type PlaceDetails } from "../../../../supabase/functions/_shared/google-places";
@@ -13,8 +14,11 @@ import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalDat
 import EmailField from "@/components/identity/EmailField";
 import { ruleText } from "@/lib/businessRules";
 import { isEmailTakenError } from "@/lib/identity/email";
-import OmaraAgentsPanel, { type OmaraSelection } from "@/pages/admin/components/OmaraAgentsPanel";
+import OmaraAgentsPanel, { type AgentRecord, type OmaraSelection } from "@/pages/admin/components/OmaraAgentsPanel";
 import { omaraLink, type OmaraFacts } from "@/lib/omaraApi";
+import { BranchList, MapsSearchBox } from "@/pages/admin/components/OfficeLocations";
+import { saveAdminMarn, saveKeyPeople, saveOffices, type KeyPerson, type OfficeLocation } from "@/pages/admin/lib/offices";
+import KeyPeopleList from "@/pages/admin/components/KeyPeopleList";
 
 type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string; officePostcode?: string; website?: string };
 
@@ -76,11 +80,36 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [abr, setAbr] = useState<AbrDetails | null>(null);
   const [abrFailure, setAbrFailure] = useState<AbrFailure | null>(null);
   const [confirmed, setConfirmed] = useState<Confirmed>(EMPTY_CONFIRMED);
-  const [givenName, setGivenName] = useState("");
+  // Full name (owner 2026-11-24): one searchable box; the application form still gets given and family names (last word = family name).
+  const [fullName, setFullName] = useState("");
+  const nameWords = fullName.trim().split(/\s+/).filter(Boolean);
+  const givenName = nameWords.length > 1 ? nameWords.slice(0, -1).join(" ") : (nameWords[0] ?? "");
+  const familyName = nameWords.length > 1 ? nameWords[nameWords.length - 1] : "";
+  const [omaraAgents, setOmaraAgents] = useState<AgentRecord[]>([]);
+  // People added by hand (CEO, directors, staff the search did not find): offered as the Admin too, saved on the business.
+  const [keyPeople, setKeyPeople] = useState<KeyPerson[]>([]);
+  const [personStart, setPersonStart] = useState<string | null>(null);
+  const startPerson = useCallback((name: string) => setPersonStart(name), []);
+  const clearPersonStart = useCallback(() => setPersonStart(null), []);
+  // The PhoneInput keeps its own text: a new key shows a picked person's phone.
+  const [phoneKey, setPhoneKey] = useState(0);
+  // "This person will be the Admin" popup: on picking / adding a person, and again on Create when the person changed since.
+  const [adminAsk, setAdminAsk] = useState<null | { then: "none" | "submit" }>(null);
+  const [adminConfirmedFor, setAdminConfirmedFor] = useState("");
+  // The picked registered agent's MARN (kept on the business for the application form) and whether the best match was filled in by itself.
+  const [adminMarn, setAdminMarn] = useState("");
+  // A MARN typed for a person added by hand: kept on the business for the application form (never linked as a register record).
+  const [typedMarn, setTypedMarn] = useState("");
+  const [adminAuto, setAdminAuto] = useState<null | { confidence: number }>(null);
   // Google Maps: the office found for this ABN (null: none / not set up), and a note when it was looked for and not found.
   const [office, setOffice] = useState<Office | null>(null);
   const [officeNote, setOfficeNote] = useState("");
-  const [familyName, setFamilyName] = useState("");
+  // Search Google Maps by hand (2026-11-24): another branch / office when the one found is wrong or none was found.
+  const [mapsOn, setMapsOn] = useState(false);
+  const [mapsOpen, setMapsOpen] = useState(false);
+  const [branches, setBranches] = useState<OfficeLocation[]>([]);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [headOpen, setHeadOpen] = useState(false);
   // OMARA (2026-11-24): what the register search uses (set once per lookup, so editing the form does not search again) and the agents ticked.
   const [omaraFacts, setOmaraFacts] = useState<OmaraFacts | null>(null);
   const [omaraSel, setOmaraSel] = useState<OmaraSelection>({ marns: [], evidence: {} });
@@ -96,6 +125,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   // Look the ABN up once it is complete and valid (Fetch from ABN and leaving the field look it up again); a newer ABN discards an older answer.
   useEffect(() => {
     setDetails(null); setExisting(null); setLookupError(""); setEditing(false); setAbr(null); setAbrFailure(null); setOffice(null); setOfficeNote("");
+    setMapsOn(false); setMapsOpen(false); setBranches([]);
     setOmaraFacts(null); setOmaraSel({ marns: [], evidence: {} });
     if (abnProblem) { setLookupLoading(false); return; }
     let cancelled = false;
@@ -109,6 +139,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         const places: PlacesLookup | undefined = abrResult?.places;
         const found = places?.ok && places.place ? officeFrom(places.place) : null;
         setOffice(found);
+        setMapsOn(Boolean(places?.configured));
         setOfficeNote(places?.configured && !found ? places.message || "Not found on Google Maps: the agency fills in the office address." : "");
         if (abrResult?.configured) {
           setMode("abr");
@@ -181,6 +212,65 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     onUseExisting({ agencyId: existing.id, businessId: existing.id, name: existing.name });
   };
 
+  const adminKey = `${fullName.trim().toLowerCase()}|${form.businessEmail.trim().toLowerCase()}`;
+  const toE164 = (phone: string) => {
+    const t = phone.trim();
+    if (!t) return "";
+    const digits = t.replace(/\D/g, "");
+    if (t.startsWith("+")) return `+${digits}`;
+    if (digits.startsWith("61")) return `+${digits}`;
+    if (digits.startsWith("0")) return `+61${digits.slice(1)}`;
+    return "";
+  };
+  const suggestions: PersonSuggestion[] = [
+    ...keyPeople.map(p => ({ fullName: p.fullName, email: p.email ?? "", phone: p.phone ?? "", marn: p.marn || undefined, note: p.role || "Added by hand" })),
+    ...omaraAgents.map(a => ({ fullName: a.fullName, email: a.email, phone: a.phone, marn: a.marn,
+    note: [`${a.confidence}% match`, [a.suburb, a.state].filter(Boolean).join(" ")].filter(Boolean).join(" · ") }))];
+  const pickPerson = (person: PersonSuggestion) => {
+    setFullName(person.fullName); setAdminMarn(omaraAgents.some(a => a.marn === person.marn) ? person.marn ?? "" : ""); setAdminAuto(null);
+    if (person.marn && !omaraAgents.some(a => a.marn === person.marn)) setTypedMarn(person.marn);
+    patch({ businessEmail: person.email || form.businessEmail, phone: toE164(person.phone) || form.phone, ...(mode !== "abr" ? { primaryContact: person.fullName } : {}) });
+    setPhoneKey(k => k + 1);
+    // Details first, the Admin confirmation last (owner 2026-11-24): someone without an email or mobile on record gets the details form.
+    if (!person.email || !toE164(person.phone)) { setNewAdmin({ name: person.fullName, email: person.email ?? "", phone: toE164(person.phone), problem: "" }); return; }
+    setAdminAsk({ then: "none" });
+  };
+  // Add new person (owner 2026-11-24): first full name, email and mobile together, then "This person will be the Admin" as the last screen.
+  const [newAdmin, setNewAdmin] = useState<null | { name: string; email: string; phone: string; problem: string }>(null);
+  const addNewPerson = (name: string) => setNewAdmin({ name, email: "", phone: "", problem: "" });
+  const saveNewAdmin = () => {
+    if (!newAdmin) return;
+    const name = newAdmin.name.trim().replace(/\s+/g, " "), email = newAdmin.email.trim().toLowerCase();
+    const problem = name.split(" ").length < 2 ? "Enter their first and last name."
+      : !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? "Enter their email address."
+      : !parseStoredPhone(newAdmin.phone)?.national ? "Enter their mobile number."
+      : validateStoredPhone(newAdmin.phone) || "";
+    if (problem) { setNewAdmin({ ...newAdmin, problem }); return; }
+    setFullName(name); setAdminMarn(""); setTypedMarn(""); setAdminAuto(null);
+    patch({ businessEmail: email, phone: newAdmin.phone, ...(mode !== "abr" ? { primaryContact: name } : {}) });
+    setPhoneKey(k => k + 1);
+    setNewAdmin(null);
+    setAdminAsk({ then: "none" });
+  };
+  // Fill all we can (owner 2026-11-24: "so we don't need to fill up the form manually"): the best-matching registered agent with an email
+  // or phone becomes the suggested Admin, once, only while the contact is still empty; Create still asks to confirm.
+  useEffect(() => {
+    if (fullName.trim() || form.businessEmail.trim() || adminConfirmedFor) return;
+    const best = omaraAgents.find(a => a.likely && (a.email || a.phone));
+    if (!best) return;
+    setFullName(best.fullName); setAdminMarn(best.marn); setAdminAuto({ confidence: best.confidence });
+    patch({ businessEmail: best.email || "", phone: toE164(best.phone), ...(mode !== "abr" ? { primaryContact: best.fullName } : {}) });
+    setPhoneKey(k => k + 1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [omaraAgents]);
+  const confirmAdmin = () => {
+    const then = adminAsk?.then;
+    setAdminConfirmedFor(adminKey);
+    setAdminAsk(null);
+    if (then === "submit") window.setTimeout(() => formRef.current?.requestSubmit(), 0);
+    else if (!form.businessEmail) window.setTimeout(() => document.getElementById("add-business-email")?.focus(), 0);
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -192,12 +282,12 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         : mode === "abr" && abr && !abr.active ? (cancelledAllowed ? "This ABN is cancelled: tick Add it anyway and give the reason." : "This ABN is cancelled, and a business with a cancelled ABN cannot be added.") : abrFailure?.message || "Look up this ABN successfully before creating the business.") });
       return;
     }
-    const contactName = mode === "abr" ? `${givenName.trim()} ${familyName.trim()}`.trim() : form.primaryContact.trim();
+    const contactName = mode === "abr" ? `${givenName.trim()} ${familyName.trim()}`.trim() : (fullName.trim() || form.primaryContact.trim());
     const checked = validateAgencyForm({ ...form, primaryContact: contactName, registrationNumber: abn }, true);
     const next: Errors = { ...checked.errors };
     if (mode === "abr") {
-      if (!givenName.trim()) next.givenName = "Enter the contact's given name.";
-      if (!familyName.trim()) next.familyName = "Enter the contact's family name.";
+      if (!givenName.trim()) next.givenName = "Enter the admin's full name.";
+      else if (!familyName.trim()) next.givenName = "Enter the first and last name.";
       if (!next.givenName && !next.familyName) { const problem = validateName(contactName); if (problem) next.givenName = problem; }
       if (abr) {
         if (!confirmed.legalEntity.trim()) next.legalEntity = "Enter the legal entity name.";
@@ -206,7 +296,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         if (!abr.active && confirmed.reason.trim().length < 5) next.override = "Say why this business is added although its ABN is cancelled.";
       }
     } else {
-      const problem = validateName(form.primaryContact);
+      const problem = validateName(fullName.trim() || form.primaryContact);
       if (problem) next.primaryContact = problem;
     }
     // The same check as every other phone field: a country code plus a number valid for that country.
@@ -219,6 +309,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       if (next.name || next.code || next.address || next.country) setEditing(true);
       return;
     }
+    if (adminConfirmedFor !== adminKey) { setAdminAsk({ then: "submit" }); return; }
     setSaving(true);
     try {
       // One call (2026-11-19): the business (onboarding until an administrator activates it) and its point of contact are saved, and the
@@ -249,11 +340,29 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         : `Business added. Nothing has been emailed yet: prepare the application (details, agreement terms, witness) and send it to ${email}.${data.abrWarning ? ` ${data.abrWarning}` : ""}`;
       // OMARA: the registered migration agents staff ticked are linked to the new business (never added as its agents).
       let omaraNote = "";
-      if (omaraSel.marns.length) {
-        try { const n = await omaraLink(id, omaraSel.marns, omaraSel.evidence); omaraNote = ` ${n} registered migration agent${n === 1 ? "" : "s"} linked.`; }
+      // The Admin picked from the register is always linked, and their MARN kept for the application form.
+      const linkMarns = [...new Set([...omaraSel.marns, ...(adminMarn ? [adminMarn] : [])])];
+      const linkEvidence = { ...omaraSel.evidence };
+      if (adminMarn && !linkEvidence[adminMarn]) {
+        const a = omaraAgents.find(x => x.marn === adminMarn);
+        if (a) linkEvidence[adminMarn] = { confidence: a.confidence, evidence: [...(a.evidence ?? []), "Business admin agent"] };
+      }
+      const marnForForm = adminMarn || typedMarn;
+      if (marnForForm) { try { await saveAdminMarn(id, marnForForm); } catch { /* staff type it on the application form */ } }
+      if (linkMarns.length) {
+        try { const n = await omaraLink(id, linkMarns, linkEvidence); omaraNote = ` ${n} registered migration agent${n === 1 ? "" : "s"} linked.`; }
         catch (linkError) { omaraNote = ` The registered migration agents were not linked (${linkError instanceof Error ? linkError.message : "error"}): link them from the business page.`; }
       }
-      onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message: message + omaraNote });
+      // People added by hand: kept on the business.
+      if (keyPeople.length) { try { await saveKeyPeople(id, keyPeople); } catch { /* re-add them on the business later */ } }
+      // Branches: saved on the new business (the head office went with the create call).
+      let branchNote = "";
+      const filled = branches.filter(b => b.street.trim() || b.suburb.trim());
+      if (filled.length) {
+        try { await saveOffices(id, null, filled); branchNote = ` ${filled.length} branch${filled.length === 1 ? "" : "es"} saved.`; }
+        catch (branchError) { branchNote = ` The branches were not saved (${branchError instanceof Error ? branchError.message : "error"}): add them on the business page.`; }
+      }
+      onCreated({ agencyId: id, businessId: id, name: form.name.trim(), message: message + omaraNote + branchNote });
     } catch (e) {
       if (isEmailTakenError(e)) { setErrors({}); setEmailError(e); return; }
       const text = e instanceof Error ? e.message : "";
@@ -354,14 +463,40 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const officeInputBox = (key: "street" | "suburb" | "postcode" | "country" | "website" | "phone", label: string, props: { inputMode?: "numeric" | "url" | "tel"; maxLength?: number } = {}) => (
     <Field label={label}><TextInput disabled={saving} inputMode={props.inputMode} maxLength={props.maxLength} value={office?.[key] ?? ""} onChange={e => setOfficeField(key, key === "postcode" ? e.target.value.replace(/\D/g, "").slice(0, 4) : e.target.value)} /></Field>
   );
+  const mapsHint = form.name || confirmed.tradingName || details?.businessNames?.[0] || details?.legalName || "";
+  const pickPlace = (p: PlaceDetails) => {
+    setOffice(officeFrom(p)); setOfficeNote(""); setMapsOpen(false);
+    if (p.street || p.suburb) setForm(prev => ({ ...prev, address: placeAddressLine(p) || prev.address }));
+  };
+  const mapsSearch = () => !mapsOn ? null : !mapsOpen ? (
+    <Button type="button" variant="secondary" icon="ri-search-line" disabled={saving} onClick={() => setMapsOpen(true)} data-testid="places-search-open">
+      {office ? "Change head office with Google Maps" : "Search Google Maps"}
+    </Button>
+  ) : <div className="mt-3"><MapsSearchBox id="places-search-input" initialQuery={[mapsHint, office?.suburb].filter(Boolean).join(" ")} disabled={saving} used={branches} onPick={pickPlace} onCancel={() => setMapsOpen(false)} /></div>;
+  // Branches (2026-11-24): a business with several locations adds each one (Google Maps or by hand); saved on the business after it is created.
+  const branchesPanel = () => (abr || details) ? (
+    <section className="mt-2 rounded-lg border border-background-200 px-3 py-2" aria-label="Branches" data-testid="add-business-branches">
+      <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground-900"><i className="ri-store-2-line text-sky-700" aria-hidden="true" />Branches {branches.length ? `(${branches.length})` : ""}
+        <span className="font-normal text-xs text-foreground-500">optional; also on the business page later</span></p>
+      <BranchList branches={branches} onChange={setBranches} disabled={saving} searchHint={mapsHint} head={office ? { ...office } : null} />
+    </section>
+  ) : null;
+  // Office suburbs for the registered-agent search (Discover again searches the brand at each office).
+  const officePlaces = [...new Set([office?.suburb, ...branches.map(b => b.suburb)].map(p => (p ?? "").trim()).filter(Boolean))];
+  const headEditOpen = headOpen || Boolean(errors.officePostcode || errors.website);
   const officePanel = () => office ? (
-    <section className="mt-4 rounded-lg border border-sky-300 bg-sky-50 p-4" aria-label="Office details from Google Maps" data-testid="places-details">
-      <p className="flex items-center gap-1.5 text-sm font-semibold text-sky-900"><i className="ri-map-pin-line" aria-hidden="true" />Found on Google Maps: check this is the right office</p>
-      <p className="mt-0.5 text-xs text-sky-800">
-        {office.name}{office.mapsUri ? <>{" · "}<a href={office.mapsUri} target="_blank" rel="noreferrer" className="underline" data-testid="places-link">Open in Google Maps</a></> : null}
-        {" · "}Printed on the application form; you and the agency can still change it.
-      </p>
-      <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+    <section className="mt-4 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2" aria-label="Office details from Google Maps" data-testid="places-details">
+      {/* Compact (owner 2026-11-24): the head office on one line; Edit opens its fields (open by itself when one needs fixing). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <i className="ri-building-line text-sky-800" aria-hidden="true" />
+        <p className="min-w-0 flex-1 truncate"><span className="font-semibold text-sky-950">Head office</span>
+          <span className="text-sky-900"> · {placeAddressLine(office) || office.suburb || "No address yet"}{office.phone ? ` · ${office.phone}` : ""}</span></p>
+        {office.mapsUri ? <a href={office.mapsUri} target="_blank" rel="noreferrer" className="text-xs text-sky-800 underline" data-testid="places-link">Open in Google Maps</a> : null}
+        <button type="button" disabled={saving} className="text-xs font-semibold text-primary-700 hover:underline" onClick={() => setHeadOpen(v => !v)} aria-expanded={headEditOpen}>{headEditOpen ? "Close" : "Edit"}</button>
+        <button type="button" disabled={saving} className="text-xs font-semibold text-red-700 hover:underline" onClick={() => { setOffice(null); if (mapsOn) setMapsOpen(true); }} data-testid="places-discard">Not this business</button>
+        {mapsOpen || !mapsOn ? null : <button type="button" disabled={saving} className="text-xs font-semibold text-primary-700 hover:underline" onClick={() => setMapsOpen(true)} data-testid="places-search-open">Change</button>}
+      </div>
+      {headEditOpen ? <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
         {officeInputBox("street", "Street address")}
         {officeInputBox("suburb", "Suburb")}
         <Field label="State">
@@ -372,13 +507,16 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         <div>{officeInputBox("postcode", "Postcode", { inputMode: "numeric", maxLength: 4 })}{error("officePostcode")}</div>
         <div>{officeInputBox("website", "Website", { inputMode: "url" })}{error("website")}</div>
         {officeInputBox("phone", "Business phone", { inputMode: "tel" })}
-      </div>
-      <div className="mt-3"><Button type="button" variant="secondary" icon="ri-close-line" disabled={saving} onClick={() => setOffice(null)} data-testid="places-discard">Not this business</Button></div>
+      </div> : null}
+      {mapsOpen ? mapsSearch() : null}
     </section>
-  ) : officeNote && (abr || details) ? <p className="mt-3 text-xs text-foreground-500" data-testid="places-note"><i className="ri-map-pin-line" aria-hidden="true" /> {officeNote}</p> : null;
+  ) : (abr || details) && (officeNote || mapsOn) ? <div className="mt-3 space-y-2">
+    {officeNote ? <p className="text-xs text-foreground-500" data-testid="places-note"><i className="ri-map-pin-line" aria-hidden="true" /> {officeNote}</p> : null}
+    {mapsSearch()}
+  </div> : null;
 
   return (
-    <form onSubmit={submit} noValidate>
+    <form ref={formRef} onSubmit={submit} noValidate>
       {box(<>
         <div className="max-w-md">
           <Field label="ABN" required hint={errors.registrationNumber || abnShownProblem ? undefined : `Enter the 11-digit ABN to look up the business (${abn.length} of 11 digits).`}>
@@ -410,8 +548,10 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         </div>
 
         {mode === "abr" && !existing ? abrPanel() : null}
-        {mode === "abr" && !existing && abr ? officePanel() : null}
-        {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} /> : null}
+        {mode === "abr" && !existing && abr ? <>{officePanel()}{branchesPanel()}</> : null}
+        {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} onAddByHand={startPerson}>
+          <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} startWith={personStart} onStarted={clearPersonStart} />
+        </OmaraAgentsPanel> : null}
         {abrManual && !existing ? (
           <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
             <p className="text-sm font-semibold text-foreground-900">Business details (typed by hand)</p>
@@ -460,29 +600,32 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
             )}
           </section>
         ) : null}
-        {mode !== "abr" && legacyReady && details ? officePanel() : null}
-        {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} /> : null}
+        {mode !== "abr" && legacyReady && details ? <>{officePanel()}{branchesPanel()}</> : null}
+        {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} onAddByHand={startPerson}>
+          <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} startWith={personStart} onStarted={clearPersonStart} />
+        </OmaraAgentsPanel> : null}
       </>)}
 
       {ready ? box(<>
           <h2 className="font-heading text-base font-semibold">Business admin agent (point of contact)</h2>
           <p className="mt-1 text-xs text-foreground-500">ABN Lookup does not supply contact details. This person becomes the business&rsquo;s first agent, as its business admin agent. The email and mobile below are theirs and are saved on their agent record; their sign-in invitation goes to this email once the business is activated.</p>
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-            {mode === "abr" ? <>
-              <div>
-                <Field label="Given name" required hint={errors.givenName ? undefined : "Printed on the application form."}>
-                  <TextInput disabled={saving} required autoComplete="given-name" value={givenName} aria-invalid={Boolean(errors.givenName)} onChange={e => setGivenName(e.target.value)} />
-                </Field>{error("givenName")}
-              </div>
-              <div>
-                <Field label="Family name" required hint={errors.familyName ? undefined : "Printed on the application form."}>
-                  <TextInput disabled={saving} required autoComplete="family-name" value={familyName} aria-invalid={Boolean(errors.familyName)} onChange={e => setFamilyName(e.target.value)} />
-                </Field>{error("familyName")}
-              </div>
-            </> : input("primaryContact", "Full name", "The business admin agent: the person at the business we deal with.", { required: true, autoComplete: "name" })}
+            <div className="md:col-span-2">
+              <Field label="Full name" required hint={errors.givenName || errors.primaryContact ? undefined : omaraAgents.length
+                ? `Type to search the ${omaraAgents.length} registered agent${omaraAgents.length === 1 ? "" : "s"} found above (fills email and phone), or add a new person.`
+                : "First and last name, printed on the application form."}>
+                <AdminPersonPicker id="add-business-full-name" value={fullName} suggestions={suggestions} disabled={saving} invalid={Boolean(errors.givenName || errors.primaryContact)}
+                  onName={name => { setFullName(name); setAdminAuto(null); if (adminMarn && name.trim().toLowerCase() !== fullName.trim().toLowerCase()) setAdminMarn(""); if (mode !== "abr") patch({ primaryContact: name }); }}
+                  onPick={pickPerson} onAddNew={addNewPerson} />
+              </Field>
+              <button type="button" disabled={saving} className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline" onClick={() => addNewPerson(fullName.trim())} data-testid="admin-add-new">
+                <i className="ri-user-add-line" aria-hidden="true" />Add a new person as the Admin (name, email and mobile)</button>{error("givenName")}{error("primaryContact")}
+              {adminAuto ? <p className="mt-1 text-xs text-emerald-800" data-testid="admin-autofilled"><i className="ri-magic-line mr-1" aria-hidden="true" />Filled from the best match ({adminAuto.confidence}%) on the register. Check it, or search for someone else.</p> : null}
+              {adminMarn ? <p className="mt-1 text-xs text-foreground-600">MARN {adminMarn}: printed on the application form.</p> : null}
+            </div>
             <div>
               <Field label="Their email" hint={errors.businessEmail ? undefined : "Their own email. Nothing is emailed when you add the business: you prepare the application next, and it goes to this email only when you press Send. The sign-in link follows after activation."} required>
-                <EmailField disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}
+                <EmailField id="add-business-email" disabled={saving} required autoComplete="email" value={form.businessEmail} aria-invalid={Boolean(errors.businessEmail)}
                   onChange={(businessEmail) => patch({ businessEmail })} kind="agent" context="admin" serverError={emailError}
                   onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
               </Field>
@@ -492,7 +635,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
               {/* The shared phone control (country code + number, formatted as typed); it writes the E.164 value to a hidden input. */}
               <Field label="Their mobile" required hint={errors.phone ? undefined : "Their own number, saved on their agent record. Choose the country code, then the number, for example 041 234 5678."}>
                 <div onInput={(e) => { const target = e.target as HTMLInputElement; if (target.name === "poc_phone") patch({ phone: target.value }); }}>
-                  <PhoneInput id="add-business-phone" name="poc_phone" value={form.phone} required locked={saving} placeholder="041 234 5678" />
+                  <PhoneInput key={phoneKey} id="add-business-phone" name="poc_phone" value={form.phone} required locked={saving} placeholder="041 234 5678" />
                 </div>
               </Field>
               {error("phone")}
@@ -506,6 +649,39 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         <Button type="submit" icon="ri-save-line" disabled={saving || lookupLoading || !ready || emailBlocking}>{saving ? "Creating…" : "Create business"}</Button>
         {inDialog ? null : cancel}
       </div>
+      <Modal open={!!newAdmin} title="New person: their details" onClose={() => setNewAdmin(null)} footer={<div className="flex justify-end gap-2">
+        <Button type="button" variant="secondary" onClick={() => setNewAdmin(null)}>Cancel</Button>
+        <Button type="button" icon="ri-shield-user-line" onClick={saveNewAdmin} data-testid="new-admin-save">Next<i className="ri-arrow-right-line ml-1" aria-hidden="true" /></Button>
+      </div>}>
+        {newAdmin ? <div className="space-y-3 text-sm">
+          <p className="text-foreground-700">Enter their full name, email and mobile. Next, you confirm them as the business&rsquo;s Admin.</p>
+          <Field label="Full name" required><TextInput autoFocus value={newAdmin.name} maxLength={120} onChange={e => setNewAdmin({ ...newAdmin, name: e.target.value, problem: "" })} /></Field>
+          <Field label="Email" required><TextInput type="email" value={newAdmin.email} maxLength={200} onChange={e => setNewAdmin({ ...newAdmin, email: e.target.value, problem: "" })} /></Field>
+          <Field label="Mobile" required>
+            <PhoneInput id="new-admin-phone" name="new_admin_phone" value={newAdmin.phone} required placeholder="041 234 5678"
+              onValueChange={v => setNewAdmin(prev => (prev ? { ...prev, phone: v, problem: "" } : prev))} />
+          </Field>
+          {newAdmin.problem ? <p role="alert" className="text-xs font-medium text-red-700">{newAdmin.problem}</p> : null}
+        </div> : null}
+      </Modal>
+      <Modal open={!!adminAsk} title="This person will be the Admin" onClose={() => setAdminAsk(null)} footer={<div className="flex justify-end gap-2">
+        <Button type="button" variant="secondary" onClick={() => { setAdminAsk(null); window.setTimeout(() => document.getElementById("add-business-full-name")?.focus(), 0); }}>Choose someone else</Button>
+        <Button type="button" variant="secondary" icon="ri-edit-line" onClick={() => { setAdminAsk(null); setNewAdmin({ name: fullName, email: form.businessEmail, phone: form.phone, problem: "" }); }}>Change details</Button>
+        <Button type="button" icon="ri-shield-user-line" onClick={confirmAdmin} data-testid="admin-confirm">{adminAsk?.then === "submit" ? "Yes, create the business" : "Yes, make them the Admin"}</Button>
+      </div>}>
+        <div className="space-y-2 text-sm text-foreground-700">
+          <p><strong>{fullName.trim() || "This person"}</strong> will be this business&rsquo;s <strong>Admin</strong> (business admin agent and point of contact).</p>
+          <ul className="list-disc space-y-0.5 pl-5">
+            <li>They receive the agent application form when you press Send.</li>
+            <li>After the business is activated they get the sign-in invitation and can add the business&rsquo;s other agents.</li>
+          </ul>
+          <dl className="grid grid-cols-[5rem_1fr] gap-x-2 gap-y-1 rounded-md border border-background-200 bg-background-100 p-3 text-sm">
+            <dt className="text-foreground-500">Name</dt><dd className="font-medium text-foreground-900">{fullName.trim() || "—"}</dd>
+            <dt className="text-foreground-500">Email</dt><dd className="break-all font-medium text-foreground-900">{form.businessEmail || "—"}</dd>
+            <dt className="text-foreground-500">Mobile</dt><dd className="font-medium text-foreground-900">{form.phone || "—"}</dd>
+          </dl>
+        </div>
+      </Modal>
     </form>
   );
 }

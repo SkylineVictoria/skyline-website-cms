@@ -34,6 +34,22 @@ type Attachments = Partial<Record<F04AttachmentKind, { name: string; size: numbe
 /** Autosave: after this pause in typing, and at most once in this many milliseconds (the link allows 60 calls in 10 minutes). */
 const AUTOSAVE_PAUSE = 4000, AUTOSAVE_GAP = 30000;
 const SCRIPT_FONT = "font-['Dancing_Script',cursive]";
+/**
+ * The SLIT witness's typed name as a signature picture (owner 2026-11-24: "just type his name and we will use it"), only after staff
+ * confirm the witness agreed to it. Drawn in the same script font as typed signatures, dark blue on transparent, like a drawn one.
+ */
+async function typedSignaturePng(name: string): Promise<string> {
+  try { await document.fonts.load("64px 'Dancing Script'"); } catch { /* the cursive fallback is used */ }
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = "64px 'Dancing Script', cursive";
+  const width = Math.ceil(ctx.measureText(name).width) + 40;
+  canvas.width = Math.max(200, width); canvas.height = 110;
+  const draw = canvas.getContext("2d")!;
+  draw.font = "64px 'Dancing Script', cursive"; draw.fillStyle = "#0d1a4d"; draw.textBaseline = "middle";
+  draw.fillText(name, 20, 58);
+  return canvas.toDataURL("image/png");
+}
 
 function YesNo({ id, label, value, error, onChange, required, children }: { id: string; label: string; value: string; error?: string; onChange: (v: "YES" | "NO") => void; required: boolean; children?: ReactNode }) {
   return (
@@ -239,8 +255,10 @@ export interface F04PrefillControls {
   message: string; onMessage: (message: string) => void;
   busy: "" | "save" | "send"; contact: { name: string; email: string } | null; savedNote: string | null;
   onSaveDraft: (state: F04Draft) => void; onSend: (state: F04Draft) => void; onClose: () => void;
+  /** Registered migration agents linked to the business, highest match first (2026-11-24): the MARN starts with the first; any can be picked. */
+  linkedAgents?: { fullName: string; marn: string; confidence: number }[];
 }
-const PREFILL_WITNESS_HINT = "Optional. The SLIT witness types their name and draws their signature here (it cannot be typed); it is printed on the agreement's SLIT witness line when you send. Leave it empty and the approver can add the SLIT witness when approving. The agency admin gives their own witness on the form.";
+const PREFILL_WITNESS_HINT = "Optional. The SLIT witness's name and signature (drawn, or their typed name once you confirm they agreed) are printed on the agreement's SLIT witness line when you send. Leave it empty and the approver can add the SLIT witness when approving. The agency admin gives their own witness on the form.";
 
 export default function F04Wizard({ token, view, codeCheck, onSigned, mode: modeProp = "agent", review, prefill }: {
   token: string; view: SigningView;
@@ -255,6 +273,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const correction = view.application?.correction ?? null;
   const mode: F04Mode = modeProp === "admin-review" ? "admin-review" : modeProp === "admin-prefill" ? "admin-prefill" : correction ? "correction" : "agent";
   const admin = mode === "admin-review", correcting = mode === "correction", prefilling = mode === "admin-prefill";
+  const bestLinkedMarn = prefilling ? prefill?.linkedAgents?.[0]?.marn ?? "" : "";
+  const [witnessAgreed, setWitnessAgreed] = useState(false);
   // Staff (review or pre-send) move freely between steps and search addresses with their own session.
   const staff = admin || prefilling;
   const reviewFlags = review?.flags, correctionFlags = correction?.flags;
@@ -282,6 +302,15 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const terms = view.onboarding?.agreement ?? null;
   const witnessPlan = view.onboarding?.witness ?? null;
   const needWitness = combined && !witnessPlan?.preset;
+  // The agent portal password (owner 2026-11-24): chosen here, when the agency admin signs the application and agreement, so after approval
+  // they sign in with this email and password. Not on a correction (the account was made at the first signature).
+  const needPassword = combined && !correcting;
+  const [portalPw, setPortalPw] = useState("");
+  const [portalPw2, setPortalPw2] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const passwordProblem = !needPassword ? "" : portalPw.length < 8 ? "Create your portal password (at least 8 characters)."
+    : !/[A-Za-z]/.test(portalPw) || !/\d/.test(portalPw) ? "Use letters and at least one number in your password."
+    : portalPw !== portalPw2 ? "The two passwords are not the same." : "";
   // Business Rules (agents.agency_witness_on_agreement): the agency's witness may be optional; one given still needs a name and a drawing.
   const witnessOptional = ruleText("agents.agency_witness_on_agreement", "Required") === "Optional";
   const witnessRequired = needWitness && !witnessOptional;
@@ -289,6 +318,13 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const termYears = Math.max(1, Math.round(ruleNumber("agents.agreement_term_years", 2)));
   const [witnessPng, setWitnessPng] = useState<string | null>(null);
   const [state, setState] = useState<F04Draft>(opening);
+  // Prepare the application (2026-11-24): an empty MARN starts with the best-matching linked registered agent, once; staff can change or clear it.
+  const marnDefaulted = useRef(false);
+  useEffect(() => {
+    if (!bestLinkedMarn || marnDefaulted.current) return;
+    marnDefaulted.current = true;
+    setState((s) => (s.marn ? s : { ...s, marn: bestLinkedMarn }));
+  }, [bestLinkedMarn]);
   // What the review opened with: staff changes are the difference from it.
   const [reviewBase, setReviewBase] = useState<F04Draft>(opening);
   const firstStep = mode === "admin-review" ? REVIEW_STEP : order.includes(opening.step) ? opening.step : order[0];
@@ -368,8 +404,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   // The witness (2026-11-20): a full name and a drawn signature, unless staff gave the witness before sending.
   const witnessName = (a[WITNESS_NAME_KEY] ?? "").trim();
   const witnessReady = !needWitness || (witnessOptional && !witnessName && !witnessPng) || (witnessName.length >= 2 && !!witnessPng);
-  const canSubmit = Object.keys(problems).length === 0 && consent && signatureReady && witnessReady && (!codeCheck.needed || !!codeCheck.session);
-  const submitHint = canSubmit ? "" : missing || (!signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code.");
+  const canSubmit = Object.keys(problems).length === 0 && consent && signatureReady && witnessReady && !passwordProblem && (!codeCheck.needed || !!codeCheck.session);
+  const submitHint = canSubmit ? "" : missing || (!signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : passwordProblem ? passwordProblem : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code.");
 
   const save = async () => {
     if (busy === "save") return;
@@ -454,7 +490,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     try {
       await signWithRetry({ action: "sign", token, name: (a.declarant_name ?? "").trim(), agreed: true, signatureKind: method, signatureImage: method === "typed" ? null : picture,
         values: f04Values(fields, state), documentHash: view.documentHash, codeSession: codeCheck.session,
-        application: { acn: state.acn, marn: state.marn.replace(/\s/g, ""), declarations: state.declarations, ...(needWitness ? { witness: { name: witnessName, png: witnessPng } } : {}) } });
+        application: { acn: state.acn, marn: state.marn.replace(/\s/g, ""), declarations: state.declarations, ...(needWitness ? { witness: { name: witnessName, png: witnessPng } } : {}),
+          ...(needPassword && !passwordProblem ? { account: { password: portalPw } } : {}) } });
       closed.current = true;
       await onSigned();
     } catch (e) { setNotice({ tone: "error", text: e instanceof Error ? e.message : "The form could not be submitted. Please try again." }); }
@@ -611,6 +648,13 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
               onChange={(v) => setState((s) => ({ ...s, marn: v.replace(/\D/g, "") }))}>
               <a href={OMARA_REGISTER_URL} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary-700 underline underline-offset-2" data-testid="f04-omara-link">
                 <i className="ri-external-link-line" aria-hidden="true" />Search the OMARA register</a>
+              {prefilling && prefill?.linkedAgents?.length ? <div className="mt-2" data-testid="f04-linked-agents">
+                <p className="text-xs text-foreground-600">Registered agents linked to this business (highest match first). Click one to use its MARN:</p>
+                <div className="mt-1 flex flex-wrap gap-1.5">{prefill.linkedAgents.map((a) => (
+                  <button key={a.marn} type="button" onClick={() => setState((s) => ({ ...s, marn: a.marn }))} aria-pressed={state.marn === a.marn}
+                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${state.marn === a.marn ? "border-primary-500 bg-primary-50 text-primary-800" : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"}`}>
+                    {a.fullName} · {a.marn} · {a.confidence}%</button>))}</div>
+              </div> : null}
             </WizardTextField>, "the MARN")}
           </div>
         </div>
@@ -800,7 +844,17 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
               <WizardTextField id="f04-prefill-witness-name" name="witnessName" label="SLIT witness full name" required={false} value={prefill.witness.name} maxLength={150} onChange={(v) => prefill.onWitness({ ...prefill.witness, name: v })} testId="f04-prefill-witness-name" />
             </div>
             <div>
-              <p className="mb-2 text-label font-medium text-foreground-800">SLIT witness signature (drawn)</p>
+              <p className="mb-2 text-label font-medium text-foreground-800">SLIT witness signature</p>
+              {!prefill.witness.png && prefill.witness.name.trim().length >= 2 ? <div className="mb-3 rounded-md border border-background-200 bg-background-100 p-3" data-testid="f04-prefill-witness-typed">
+                <p className={`text-3xl text-[#0d1a4d] ${SCRIPT_FONT}`}>{prefill.witness.name.trim()}</p>
+                <label className="mt-2 flex items-start gap-2 text-xs text-foreground-700">
+                  <input type="checkbox" className="mt-0.5" checked={witnessAgreed} onChange={(e) => setWitnessAgreed(e.target.checked)} data-testid="f04-prefill-witness-agreed" />
+                  <span>{prefill.witness.name.trim()} has agreed to be the SLIT witness on this agreement and to their typed name being used as their signature.</span>
+                </label>
+                <button type="button" disabled={!witnessAgreed} className="mt-2 cursor-pointer rounded-md bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => void typedSignaturePng(prefill.witness.name.trim()).then((png) => prefill.onWitness({ ...prefill.witness, png }))} data-testid="f04-prefill-witness-use-typed">Use the typed name as the signature</button>
+                <p className="mt-2 text-2xs text-foreground-500">Or draw the signature below.</p>
+              </div> : null}
               {prefill.witness.png ? <div className="flex flex-wrap items-center gap-3">
                 <img src={prefill.witness.png} alt="The SLIT witness's drawn signature" className="max-h-20 rounded border border-background-300 bg-white p-1" data-testid="f04-prefill-witness-image" />
                 <button type="button" className="cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" onClick={() => prefill.onWitness({ ...prefill.witness, png: null })} data-testid="f04-prefill-witness-redraw">Draw again</button>
@@ -903,6 +957,22 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
             {method === "typed" ? <p className={`flex min-h-20 items-center rounded-md border border-background-300 bg-background-50 px-5 py-3 text-4xl text-[#0d1a4d] ${SCRIPT_FONT}`} data-testid="f04-typed-signature">
               {a.declarant_name || <span className="font-sans text-sm text-foreground-400">Your name appears here as your signature</span>}</p> : <SignaturePad onChange={setPicture} />}
           </div>
+          {needPassword ? <div className="rounded-lg border border-primary-200 bg-primary-50/40 p-4" data-testid="f04-portal-password">
+            <p className="text-label font-medium text-foreground-900">Create your agent portal password <span className="text-primary-600">*</span></p>
+            <p className="mt-0.5 text-xs text-foreground-600">Once SLIT approves your business, sign in to the agent portal with your email{view.recipient?.email ? ` (${view.recipient.email})` : ""} and this password. If you already have a Skyline portal account, your current password stays.</p>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-sm"><span className="mb-1 block text-xs font-semibold text-foreground-700">Password</span>
+                <input type={showPw ? "text" : "password"} autoComplete="new-password" value={portalPw} maxLength={72} onChange={(e) => setPortalPw(e.target.value)}
+                  className="w-full rounded-md border border-background-300 bg-white px-3 py-2" data-testid="f04-portal-password-1" /></label>
+              <label className="block text-sm"><span className="mb-1 block text-xs font-semibold text-foreground-700">Confirm password</span>
+                <input type={showPw ? "text" : "password"} autoComplete="new-password" value={portalPw2} maxLength={72} onChange={(e) => setPortalPw2(e.target.value)}
+                  className="w-full rounded-md border border-background-300 bg-white px-3 py-2" data-testid="f04-portal-password-2" /></label>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <label className="flex items-center gap-1.5 text-foreground-700"><input type="checkbox" checked={showPw} onChange={(e) => setShowPw(e.target.checked)} />Show password</label>
+              <span className={passwordProblem && (portalPw || portalPw2) ? "text-amber-800" : "text-foreground-500"}>{passwordProblem && (portalPw || portalPw2) ? passwordProblem : "At least 8 characters, with letters and a number."}</span>
+            </div>
+          </div> : null}
           <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0" data-testid="f04-consent" /><span>{view.consent}<span className="text-primary-600"> *</span></span></label>
           {codeCheck.needed && !codeCheck.session ? codeCheck.render() : null}
         </section>
@@ -952,7 +1022,9 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         subtitle={admin ? <>Agent application of <strong>{view.onboarding?.agencyName ?? "the agency"}</strong> · Review the application, then approve or send it back.</> : <>{prefilling ? `To ${prefill?.contact ? `${prefill.contact.name} (${prefill.contact.email})` : "the point of contact"}, for` : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
         stepper={<div data-testid="f04-stepper"><WizardStepper items={order.map((i) => ({ id: STEPS[i].id, short: STEPS[i].short, icon: STEPS[i].icon, done: i < furthest && Object.keys(allProblems[i]).length === 0 }))} current={order.indexOf(step)} onSelect={(n) => goTo(order[n])} /></div>}
         footerStart={admin ? adminSave : <>
-          {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} /> : null}
+          {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} />
+            // Step 1 of the staff pre-send (owner 2026-11-24: "allow me to go back too"): Back leaves the form for the business page.
+            : prefilling && prefill?.onClose ? <WizardBackButton onClick={prefill.onClose} disabled={!!prefill.busy} /> : null}
           {prefilling ? (prefill?.savedNote ? <span className="text-xs text-foreground-500" data-testid="f04-prefill-saved">{prefill.savedNote}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
         </>}
         footerEnd={adminButtons ?? prefillButtons ?? <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">

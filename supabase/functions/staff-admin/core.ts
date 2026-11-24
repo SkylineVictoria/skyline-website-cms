@@ -346,7 +346,8 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const before = await deps.adminRpc("hr_admin_staff_detail", { p_id: profileId });
       if (before.error) return fromDb(before.error);
       const person = (before.data as { profile?: { status?: string; email?: string; first_name?: string; last_name?: string } }).profile ?? {};
-      if (person.status !== "documents_submitted" && person.status !== "offer_sent") return { status: 400, body: { error: "An offer can be sent after the documents are submitted." } };
+      // STAFF-OFFER-FULL-PART-TIME: the offer may go first (Applied / Invited); documents follow in the wizard once it is signed.
+      if (!["applied", "invited", "documents_submitted", "offer_sent"].includes(String(person.status))) return { status: 400, body: { error: "An offer can be sent while the person is being onboarded." } };
       const email = String(person.email ?? "");
       const name = [person.first_name, person.last_name].filter(Boolean).join(" ");
       // The email is checked before anything is created: a template that cannot be filled stops here.
@@ -496,6 +497,9 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
         p_phone: String(body.phone ?? ""), p_role_type: typeof body.roleType === "string" && body.roleType ? body.roleType : null });
       if (made.error) return fromDb(made.error);
       const newId = (made.data as { profileId: string }).profileId;
+      // STAFF-OFFER-FULL-PART-TIME: "offer first" adds the person without the document email; the offer letter (with their
+      // set-password link) is the first email they get, and the document wizard opens from My HR after they sign.
+      if (body.offerFirst === true) return { status: 200, body: { ok: true, profileId: newId, emailSent: false, offerFirst: true } };
       const sent = await sendLinkFlow("documents", "hr_admin_staff_invite", { p_id: newId, p_purpose: "documents" }, newId);
       return { status: sent.status, body: { ...sent.body, profileId: newId } };
     }

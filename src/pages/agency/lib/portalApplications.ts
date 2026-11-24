@@ -1042,3 +1042,25 @@ export async function deleteApplicationDraft(id: string): Promise<void> {
   const { error } = await supabase.from("enrollment_applications").delete().eq("id", id);
   if (error) throw new Error(error.message);
 }
+
+/** STUDENT-PORTAL-INVITE (2026-11-24): the student's workspace sign-in as the agent, the business admin agent or SLIT sees it. */
+export type StudentPortalStatus = "active" | "no_password" | "invited" | "expired" | "disabled" | "none";
+export interface StudentPortalState { status: StudentPortalStatus; invitationId: string | null; invitedAt: string | null; email: string }
+export async function getStudentPortalState(studentId: string): Promise<StudentPortalState> {
+  const { data, error } = await supabase.rpc("portal_student_portal_state", { p_student: studentId });
+  if (error) throw new Error(error.message || "The student's sign-in could not be loaded.");
+  const r = (data ?? {}) as Record<string, unknown>;
+  return { status: String(r.status ?? "none") as StudentPortalStatus, invitationId: r.invitationId ? String(r.invitationId) : null,
+    invitedAt: r.invitedAt ? String(r.invitedAt) : null, email: String(r.email ?? "") };
+}
+/** What the screen shows and offers for a student's sign-in state (Active only once the student has created a password). */
+export function studentPortalLabel(status: StudentPortalStatus): { label: string; action: "invite" | "resend" | null } {
+  switch (status) {
+    case "active": return { label: "Portal: Active", action: null };
+    case "no_password": return { label: "Portal: no password yet", action: null };
+    case "invited": return { label: "Portal: Invited", action: "resend" };
+    case "expired": return { label: "Portal: Invited (link expired)", action: "resend" };
+    case "disabled": return { label: "Portal: Disabled", action: null };
+    default: return { label: "Portal: Not invited", action: "invite" };
+  }
+}

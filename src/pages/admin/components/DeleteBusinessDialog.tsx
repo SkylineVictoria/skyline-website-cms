@@ -3,7 +3,7 @@ import { Button, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { deleteBusiness, deleteConfirmMatches } from "@/pages/admin/lib/businessData";
 
 /**
- * Delete business (owner 2026-11-20): only offered to a SLIT administrator while the business's application is at "Application sent";
+ * Delete business (owner 2026-11-20): only offered to a SLIT administrator once the business is Inactive (or while its application is at "Application sent");
  * the database checks the same rules again. Everything of the business is removed permanently and silently (nobody is emailed).
  * The administrator types the business name or its ABN to confirm.
  */

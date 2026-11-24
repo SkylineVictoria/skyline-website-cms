@@ -52,7 +52,8 @@ export function settingsFrom(r: RuleValues): Settings {
 function factsFrom(body: Record<string, unknown>, stored: BusinessFacts | null): BusinessFacts {
   const names = [...(Array.isArray(body.names) ? body.names : []).map((n) => str(n, 200)), ...(stored?.names ?? [])].filter(Boolean);
   return { names: [...new Set(names)].slice(0, 8), website: str(body.website) || stored?.website || null,
-    postcode: str(body.postcode, 4) || stored?.postcode || null, state: str(body.state, 3).toUpperCase() || stored?.state || null };
+    postcode: str(body.postcode, 4) || stored?.postcode || null, state: str(body.state, 3).toUpperCase() || stored?.state || null,
+    places: [...new Set([...(Array.isArray(body.places) ? body.places : []).map((p) => str(p, 60)), ...(stored?.places ?? [])].filter(Boolean))].slice(0, 10) };
 }
 
 async function save(ports: Ports, agents: DiscoveredAgent[]): Promise<void> {

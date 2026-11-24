@@ -67,7 +67,8 @@ function AgentCard({ a, checked, onToggle, linked, actions }: {
 
 export default function OmaraAgentsPanel(props:
   | { mode: "select"; facts: OmaraFacts; disabled?: boolean; onSelection: (s: OmaraSelection) => void;
-      /** Every registered agent found (Add business offers them as the business admin agent). */ onFound?: (agents: AgentRecord[]) => void }
+      /** Every registered agent found (Add business offers them as the business admin agent). */ onFound?: (agents: AgentRecord[]) => void;
+      /** Office suburbs (head office, branches): searched too, without starting a new automatic search when they change. */ places?: string[] }
   | { mode: "linked"; agencyId: string }) {
   const facts: OmaraFacts = props.mode === "select" ? props.facts : { agencyId: props.agencyId, names: [] };
   const [status, setStatus] = useState<OmaraStatus | null>(null);
@@ -109,7 +110,8 @@ export default function OmaraAgentsPanel(props:
   const discover = async () => {
     setBusy("discover"); setError(""); setMessage("");
     try {
-      const r = await omaraDiscover(facts);
+      const places = props.mode === "select" ? props.places ?? [] : [];
+      const r = await omaraDiscover(places.length ? { ...facts, places: [...new Set([...(facts.places ?? []), ...places])] } : facts);
       setRan(true);
       if (!r.enabled || !r.configured) { setMessage(r.message ?? "Automatic search is not available. Paste OMARA links instead."); setShowPaste(true); return; }
       mergeFound(r.agents);

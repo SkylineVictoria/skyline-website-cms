@@ -454,6 +454,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
       <BranchList branches={branches} onChange={setBranches} disabled={saving} searchHint={mapsHint} head={office ? { ...office } : null} />
     </section>
   ) : null;
+  // Office suburbs for the registered-agent search (Discover again searches the brand at each office).
+  const officePlaces = [...new Set([office?.suburb, ...branches.map(b => b.suburb)].map(p => (p ?? "").trim()).filter(Boolean))];
   const headEditOpen = headOpen || Boolean(errors.officePostcode || errors.website);
   const officePanel = () => office ? (
     <section className="mt-4 rounded-lg border border-sky-300 bg-sky-50 px-3 py-2" aria-label="Office details from Google Maps" data-testid="places-details">
@@ -520,7 +522,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
 
         {mode === "abr" && !existing ? abrPanel() : null}
         {mode === "abr" && !existing && abr ? <>{officePanel()}{branchesPanel()}</> : null}
-        {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} /> : null}
+        {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} /> : null}
         {abrManual && !existing ? (
           <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
             <p className="text-sm font-semibold text-foreground-900">Business details (typed by hand)</p>
@@ -570,7 +572,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
           </section>
         ) : null}
         {mode !== "abr" && legacyReady && details ? <>{officePanel()}{branchesPanel()}</> : null}
-        {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} /> : null}
+        {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} /> : null}
       </>)}
 
       {ready ? box(<>

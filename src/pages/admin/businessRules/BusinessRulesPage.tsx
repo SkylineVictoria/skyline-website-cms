@@ -7,6 +7,7 @@ import type { AdminMenuItem } from "@/pages/admin/lib/adminMenu";
 import ReschedulingRules from "@/pages/admin/lms/timetable/ReschedulingRules";
 import RuleEditor from "./RuleEditor";
 import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Category, type Rule, type RuleLocation, type Snapshot } from "./model";
+import { institutionTimeZone, institutionToday } from "@/lib/timeZone";
 
 const tabs = [
   { id: "rules", label: "Rules", icon: "ri-list-check" },
@@ -15,8 +16,8 @@ const tabs = [
   { id: "compliance", label: "Compliance & Notes", icon: "ri-shield-check-line" },
 ];
 
-const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: "Australia/Melbourne" });
+const dayInVictoria = () => institutionToday();
+const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: institutionTimeZone() });
 const empty: Snapshot = { rules: [], categories: [], fields: [], history: [] };
 // rule-policy: technical table-labels Displays labels for persisted rule metadata.
 const ruleColumns = ["Rule", "Category", "Type", "Value", "Status", "Effective date", "Last modified", "Actions"];

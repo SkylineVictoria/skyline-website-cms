@@ -6,6 +6,7 @@ import {
 } from "@/lib/hrmsApi";
 import { downloadHolidayTemplate, readHolidayFile, type HolidayImportResult } from "@/lib/holidayImport";
 import { fmtDate, fmtDateTime } from "@/lib/hrTime";
+import { hrNumber } from "@/lib/hrRules";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const NOTICE = "rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-sm text-secondary-900";
@@ -204,12 +205,13 @@ function AddHolidaysDialog({ year, onClose, onDone }: { year: number; onClose: (
   const [busy, setBusy] = useState(false);
   const patch = (key: number, p: Partial<NewEntry>) => setEntries((es) => es.map((e) => (e.key === key ? { ...e, ...p } : e)));
   const days = (e: NewEntry) => (e.startDate && e.endDate && e.endDate >= e.startDate ? Math.round((Date.parse(e.endDate) - Date.parse(e.startDate)) / 86400000) + 1 : e.startDate ? 1 : 0);
+  const maxDays = hrNumber("hrms.holiday_range_max_days", 31);
   const problems = entries.flatMap((e, i) => {
     const p: string[] = [];
     if (!e.name.trim()) p.push(`Holiday ${i + 1}: enter a name.`);
     if (!e.startDate) p.push(`Holiday ${i + 1}: choose the first day.`);
     if (e.endDate && e.startDate && e.endDate < e.startDate) p.push(`Holiday ${i + 1}: the last day is before the first day.`);
-    if (days(e) > 31) p.push(`Holiday ${i + 1}: a range can cover up to 31 days.`);
+    if (days(e) > maxDays) p.push(`Holiday ${i + 1}: a range can cover up to ${maxDays} days.`);
     return p;
   });
   const total = entries.reduce((n, e) => n + days(e), 0);

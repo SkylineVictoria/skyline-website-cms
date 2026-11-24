@@ -3,6 +3,8 @@
 // what an Admin previews is what is sent. No DOM is used: templates are parsed with a small tokenizer and rebuilt from an
 // allow-list, so nothing an editor pastes (scripts, event handlers, styles, frames) survives.
 
+import { htmlEmailDocument } from "./email-html.ts";
+
 export type TemplateType = "offer_letter" | "offer_email" | "document_request" | "document_reupload" | "welcome_login" | "rejection";
 export const TEMPLATE_TYPES: ReadonlyArray<{ type: TemplateType; label: string; kind: "letter" | "email"; description: string; requires: readonly string[] }> = [
   { type: "offer_letter", label: "Offer letter", kind: "letter", description: "The letter itself. It is saved as a PDF against the employee and signed on the page.", requires: [] },
@@ -291,9 +293,8 @@ export function templateText(html: string): string {
   return out.join("\n").trim();
 }
 
-/** A rendered email body wrapped for mail clients (system font, readable width). */
-export const emailHtmlDocument = (bodyHtml: string): string =>
-  `<!doctype html><html><body style="margin:0;padding:24px;background:#f6f7f8"><div style="max-width:640px;margin:0 auto;padding:28px;background:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.55;color:#1f2933">${bodyHtml}</div></body></html>`;
+/** A rendered email body in the branded email layout (_shared/email-html.ts: logo, colour, footer); the subject is its heading. */
+export const emailHtmlDocument = (bodyHtml: string, subject?: string | null): string => htmlEmailDocument(bodyHtml, { heading: subject ?? null });
 
 /* ------------------------------------------------------------------ values */
 

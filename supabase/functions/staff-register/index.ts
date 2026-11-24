@@ -7,7 +7,8 @@ import { backendConfiguration } from "../_shared/config.ts";
 import { selectCaptchaVerifier } from "../_shared/captcha.ts";
 import { MAX_REQUEST_BYTES, handleApply } from "./core.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
-import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
+import { loadRules, ruleNumber, ruleObject } from "../_shared/business-rules.ts";
+import { setInstitutionTimeZoneFrom, TIME_ZONE_RULE } from "../_shared/time-zone.ts";
 
 declare const EdgeRuntime: { waitUntil(task: Promise<unknown>): void };
 
@@ -38,7 +39,7 @@ Deno.serve(async (req) => {
   const configuration = backendConfiguration(SUPABASE_URL, SERVICE_KEY);
   if (configuration) return json(configuration, 503);
   const length = Number(req.headers.get("content-length") ?? "0");
-  if (!Number.isFinite(length) || length > MAX_REQUEST_BYTES) return json({ error: "The resume must be 5 MB or smaller.", field: "resume" }, 413);
+  if (!Number.isFinite(length) || length > MAX_REQUEST_BYTES) return json({ error: "The files are too large. Attach a smaller resume or cover letter.", field: "resume" }, 413);
   if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")) return json({ error: "Unknown action." }, 400);
 
   let form: FormData;
@@ -48,8 +49,11 @@ Deno.serve(async (req) => {
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   const bucket = admin.storage.from("staff-documents");
   const ip = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
-  // Business Rules (HR): the attachment size and the cover letter length; the database checks the same values again.
-  const rules = await loadRules(admin, ["hrms.job_attachment_limit_mib", "hrms.cover_letter_limit_chars"]);
+  // Business Rules (HR): the attachment size, the cover letter length and the application rate limits; the database checks the
+  // size and length again.
+  const rules = await loadRules(admin, ["hrms.job_attachment_limit_mib", "hrms.cover_letter_limit_chars", "hrms.job_application_rate_limits", TIME_ZONE_RULE]);
+  setInstitutionTimeZoneFrom(rules);
+  const rate = ruleObject(rules, "hrms.job_application_rate_limits", { perVisitorPer10Minutes: 5, perEmailPerHour: 3 });
   const result = await handleApply(form, { ip }, {
     captcha,
     // A failed limiter call fails closed: anonymous requests are never allowed through unmetered.
@@ -68,6 +72,8 @@ Deno.serve(async (req) => {
     limits: {
       fileBytes: ruleNumber(rules, "hrms.job_attachment_limit_mib", 5) * 1024 * 1024,
       coverLetterChars: ruleNumber(rules, "hrms.cover_letter_limit_chars", 5000),
+      perVisitor: Number(rate.perVisitorPer10Minutes),
+      perEmail: Number(rate.perEmailPerHour),
     },
   });
   // "Application received", "new application" or "already applied" may have been queued: send after the response.

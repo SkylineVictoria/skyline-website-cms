@@ -11,7 +11,10 @@ import { VOE_MAX_HOURS, VOE_MAX_UNITS, voeLayout, voeWeeks, type VoeMethod } fro
 
 interface Row { unitId: string; code: string; name: string; hours: number | null; prerequisites: string[]; endDate: string | null }
 interface Master { saved: boolean; startDate: string | null; endDate: string | null; rows: Row[] }
-const RATES = [10, 15, 20, 25, 30, 35, 40];
+/** Hours-a-week choices: 10 to the VoE weekly hours (Business Rule lms.voe_weekly_study_hours) in steps of 5, plus the default rate. */
+const rateChoices = () => [...new Set([...Array.from({ length: Math.max(0, Math.floor((VOE_MAX_HOURS - 10) / 5) + 1) }, (_, i) => 10 + i * 5), defaultRate(), VOE_MAX_HOURS])].sort((a, b) => a - b);
+/** A unit's starting hours a week: the VoE hours shared by the units that may run together (40 / 2 = 20 today). */
+const defaultRate = () => VOE_MAX_HOURS / Math.max(1, VOE_MAX_UNITS);
 const th = "px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-foreground-500";
 const weeksLabel = (days: number) => { const w = Math.round((days / 7) * 10) / 10; return Number.isInteger(w) ? String(w) : w.toFixed(1); };
 
@@ -50,7 +53,7 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
         const saved = v.data as { saved: boolean; method: VoeMethod | null; updatedAt: string | null; rows: { unitId: string; rates: number[] }[] };
         if (saved.saved && saved.method) {
           setMethod(saved.method); setSavedAt(saved.updatedAt);
-          if (saved.method === "manual") setRates(Object.fromEntries(saved.rows.map(r => [r.unitId, Number(r.rates[0]) || 20])));
+          if (saved.method === "manual") setRates(Object.fromEntries(saved.rows.map(r => [r.unitId, Number(r.rates[0]) || defaultRate()])));
         }
       }
       setMaster(m.data as Master);
@@ -62,7 +65,7 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
   const isBreak = useMemo(() => (d: string) => breaks.some(b => d >= b.startDate && d <= b.endDate), [breaks]);
   const start = master?.startDate ?? "";
   const units = useMemo(() => (master?.rows ?? []).filter(r => (r.hours ?? 0) > 0)
-    .map(r => ({ unitId: r.unitId, code: r.code, hours: r.hours ?? 0, rate: rates[r.unitId] ?? 20, prerequisites: r.prerequisites })), [master, rates]);
+    .map(r => ({ unitId: r.unitId, code: r.code, hours: r.hours ?? 0, rate: rates[r.unitId] ?? defaultRate(), prerequisites: r.prerequisites })), [master, rates]);
   const plan = useMemo(() => (start ? voeLayout(units, start, isBreak, method) : null), [units, start, isBreak, method]);
   const rows = plan?.rows ?? [];
   const weeks = useMemo(() => (plan && start ? voeWeeks(plan, start, isBreak) : []), [plan, start, isBreak]);
@@ -115,11 +118,11 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
             className={"rounded px-2.5 py-1 text-xs font-semibold " + (method === key ? "bg-background-50 text-foreground-950 shadow-sm" : "text-foreground-600 hover:text-foreground-900")}>{label}</button>)}
         </div>
         <span className="text-xs text-foreground-600">{method === "automatic"
-          ? `Every week filled to ${VOE_MAX_HOURS} h: one unit at ${VOE_MAX_HOURS} h, or two units at ${VOE_MAX_HOURS / 2} h + ${VOE_MAX_HOURS / 2} h.`
-          : `Choose each unit's hours a week; two units together up to ${VOE_MAX_HOURS} h (20 + 15, 30 + 10). A unit that would go over waits.`}</span>
+          ? `Every week filled to ${VOE_MAX_HOURS} h: one unit at ${VOE_MAX_HOURS} h, or the hours shared when up to ${VOE_MAX_UNITS} units run together.`
+          : `Choose each unit's hours a week; units running together up to ${VOE_MAX_HOURS} h. A unit that would go over waits.`}</span>
         {method === "manual" ? <label className="ml-auto flex items-center gap-2 text-xs font-semibold text-foreground-700">Every unit at
           <select className="rounded-md border border-background-300 bg-background-50 px-2 py-1 text-xs" value="" onChange={e => { if (e.target.value) { setAll(Number(e.target.value)); setDirty(true); } }}>
-            <option value="">h a week…</option>{RATES.map(r => <option key={r} value={r}>{r} h</option>)}</select></label> : null}
+            <option value="">h a week…</option>{rateChoices().map(r => <option key={r} value={r}>{r} h</option>)}</select></label> : null}
       </div>
       {!start ? <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">The CoE calendar has no start date yet: go back and save it first.</p> : null}
 
@@ -132,8 +135,8 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
             <td className="px-2 py-1.5 text-right">{r.hours}</td>
             <td className="px-2 py-1.5">{method === "manual"
               ? <select aria-label={`VoE hours a week for ${r.code}`} className="rounded-md border border-background-300 bg-background-50 px-2 py-1 text-sm"
-                value={rates[r.unitId] ?? 20} onChange={e => { setRates(x => ({ ...x, [r.unitId]: Number(e.target.value) })); setDirty(true); }}>{RATES.map(v => <option key={v} value={v}>{v} h</option>)}</select>
-              : <span className="text-foreground-800" title="Automatic: 40 h when the unit runs alone, 20 h beside another unit">{r.rates.join(" / ")} h</span>}</td>
+                value={rates[r.unitId] ?? defaultRate()} onChange={e => { setRates(x => ({ ...x, [r.unitId]: Number(e.target.value) })); setDirty(true); }}>{rateChoices().map(v => <option key={v} value={v}>{v} h</option>)}</select>
+              : <span className="text-foreground-800" title={`Automatic: ${VOE_MAX_HOURS} h when the unit runs alone, shared when it runs beside others`}>{r.rates.join(" / ")} h</span>}</td>
             <td className="px-2 py-1.5 text-right">{weeksLabel(r.days)}</td>
             <td className="whitespace-nowrap px-2 py-1.5">{shortDate(r.startDate)}</td>
             <td className="whitespace-nowrap px-2 py-1.5">{shortDate(r.endDate)}</td>
@@ -154,7 +157,7 @@ export default function VoeCalendarEditor({ course, stepLabel, onClose, nextStep
           </li>)}
         </ul>
       </details> : null}
-      <p className="text-xs text-foreground-500">Allowed: one unit up to {VOE_MAX_HOURS} h a week, or two units together up to {VOE_MAX_HOURS} h (20 + 20, 30 + 10, 15 + 20). A unit starts once its prerequisites have ended. The VoE calendar is kept with the course; intakes still follow the CoE calendar.</p>
+      <p className="text-xs text-foreground-500">Allowed: one unit up to {VOE_MAX_HOURS} h a week, or {VOE_MAX_UNITS} units together up to {VOE_MAX_HOURS} h. A unit starts once its prerequisites have ended. The VoE calendar is kept with the course; intakes still follow the CoE calendar.</p>
     </div> : null}
   </>;
   if (inline) return <div className="space-y-4">{body}<div className="border-t border-background-200 pt-3">{footer}</div></div>;

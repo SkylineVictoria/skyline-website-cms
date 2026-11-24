@@ -1,4 +1,5 @@
 import { m365Checklist, m365Label, useMicrosoft365, type CheckState } from "@/pages/admin/lib/microsoft365";
+import { institutionTimeZone } from "@/lib/timeZone";
 
 /*
  * The one Microsoft 365 status, as a badge and as a panel (owner 2026-11-20): Integrations > Connections > Microsoft 365 and
@@ -59,6 +60,6 @@ export default function Microsoft365Panel({ compact = false }: { compact?: boole
         {status.licences.length ? <ul className="text-sm" data-testid="m365-licences">{status.licences.map((l) => <li key={l.sku}>{l.sku}{l.student ? " (students)" : ""}: {l.available} of {l.total} free</li>)}</ul>
           : <p className="text-sm text-foreground-600">No licences found.</p>}</div>
     </div> : null}
-    {status ? <p className="text-xs text-foreground-500">Checked {new Date(status.checkedAt).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" })}. Credentials stay in server-side secrets.</p> : null}
+    {status ? <p className="text-xs text-foreground-500">Checked {new Date(status.checkedAt).toLocaleString("en-AU", { timeZone: institutionTimeZone(), dateStyle: "medium", timeStyle: "short" })}. Credentials stay in server-side secrets.</p> : null}
   </section>;
 }

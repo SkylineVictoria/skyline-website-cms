@@ -4,6 +4,7 @@ import Microsoft365Panel, { Microsoft365Badge } from "@/pages/admin/components/M
 import CreateEmailSection from "@/pages/admin/components/CreateEmailSection";
 import AccountDirectory from "@/pages/admin/components/AccountDirectory";
 import { fetchEmailAudit, useMicrosoft365, type EmailAuditRow } from "@/pages/admin/lib/microsoft365";
+import { institutionTimeZone } from "@/lib/timeZone";
 
 /*
  * Email Management (2026-11-20): every screen reads the ONE Microsoft 365 status (useMicrosoft365: the same check as Integrations >
@@ -33,8 +34,8 @@ const AUDIT_ACTION: Record<string, string> = { licence_removed: "Licence removed
 function AuditLog() {
   const [rows, setRows] = useState<EmailAuditRow[] | null>(null); const [error, setError] = useState("");
   useEffect(() => { void fetchEmailAudit().then(setRows, (e: unknown) => setError(e instanceof Error ? e.message : "The audit log could not be loaded.")); }, []);
-  const when = (iso: string) => new Date(iso).toLocaleString("en-AU", { timeZone: "Australia/Melbourne", dateStyle: "medium", timeStyle: "short" });
-  return <section className={panel}><div><h2 className="text-lg font-semibold">Account activity</h2><p className={"mt-1 " + muted}>Licences assigned or removed and sign-in blocked or allowed in the Account directory, with who did them (Melbourne time).</p></div>
+  const when = (iso: string) => new Date(iso).toLocaleString("en-AU", { timeZone: institutionTimeZone(), dateStyle: "medium", timeStyle: "short" });
+  return <section className={panel}><div><h2 className="text-lg font-semibold">Account activity</h2><p className={"mt-1 " + muted}>Licences assigned or removed and sign-in blocked or allowed in the Account directory, with who did them ({institutionTimeZone().replace(/_/g, " ")} time).</p></div>
     {error ? <p role="alert" className="mt-4 text-sm text-red-700">{error}</p> : !rows ? <p className="mt-4 text-sm text-foreground-500">Loading…</p> : !rows.length
       ? <div className="mt-5"><Empty icon="ri-file-list-3-line" title="No account changes yet" text="Assigning or removing a licence, or blocking or allowing sign-in, in the Account directory is recorded here." /></div>
       : <div className="mt-5 overflow-x-auto"><table className="w-full min-w-[640px] text-left text-sm" data-testid="email-audit"><thead className="border-b border-background-200 text-foreground-600"><tr>{["Date / time", "Actor", "Action", "Account", "Licence", "Result"].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}</tr></thead>

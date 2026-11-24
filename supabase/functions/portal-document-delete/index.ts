@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
+import { loadRules, ruleList } from "../_shared/business-rules.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "";
@@ -20,8 +21,12 @@ Deno.serve(async (request) => {
   const { data: document, error } = await caller.from("enrollment_application_documents").select("id, application_id, bucket_name, storage_path, category, metadata, enrollment_applications!enrollment_application_documents_application_id_fkey(status)").eq("id", documentId).maybeSingle();
   if (error || !document) return reply({ ok: false, error: "Document not found or not authorised." }, 403);
   const application = Array.isArray(document.enrollment_applications) ? document.enrollment_applications[0] : document.enrollment_applications;
-  if (application?.status !== "draft" && application?.status !== "action_required") return reply({ ok: false, error: "This document is retained because its application is no longer an editable draft." }, 409);
-  if (["Consent", "Offer", "CoE"].includes(String(document.category))) return reply({ ok: false, error: "This document is retained and cannot be permanently deleted here." }, 409);
+  // Business Rules admissions.document_delete_states (Draft, Action required) and admissions.retained_document_categories (Consent, Offer, CoE).
+  const rules = await loadRules(caller, ["admissions.document_delete_states", "admissions.retained_document_categories"]);
+  const deletableStates: string[] = ruleList(rules, "admissions.document_delete_states", ["Draft", "Action required"]).map((label) => label.trim().toLowerCase().replace(/\s+/g, "_"))
+    .filter((state) => state === "draft" || state === "action_required");
+  if (!deletableStates.includes(String(application?.status ?? ""))) return reply({ ok: false, error: "This document is retained because its application is no longer an editable draft." }, 409);
+  if (ruleList(rules, "admissions.retained_document_categories", ["Consent", "Offer", "CoE"]).includes(String(document.category))) return reply({ ok: false, error: "This document is retained and cannot be permanently deleted here." }, 409);
   // Never let a caller-visible metadata row choose an unrelated privileged target.
   const path = String(document.storage_path ?? "");
   const segments = path.split("/");

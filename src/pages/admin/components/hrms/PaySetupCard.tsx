@@ -3,6 +3,7 @@ import { Button, Card, Field, Modal, Select, TextArea, TextInput } from "@/pages
 import { BalanceTable } from "@/pages/admin/LeaveAdminPage";
 import { adjustLeave, getEmployeePay, leaveBalances, saveEmployeePay, type EmployeePay, type EmployeePayForm, type LeaveBalances } from "@/lib/hrmsApi";
 import { WEEKDAY_SHORT, hoursLabel, money, weekdayNames } from "@/lib/hrTime";
+import { hrNumber } from "@/lib/hrRules";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -80,7 +81,7 @@ export default function PaySetupCard({ profileId, hasEmployment }: { profileId: 
                 <option value="">Not set</option><option value="salary">Salary (annual)</option><option value="hourly">Hourly</option>
               </Select></Field>
               <Field label={editing.payBasis === "hourly" ? "Hourly rate (AUD)" : "Annual salary (AUD)"} hint="Display only; Xero is the source of truth."><TextInput type="number" step="0.01" min="0" value={editing.rate} onChange={(e) => setEditing({ ...editing, rate: e.target.value })} data-testid="staff-pay-rate" /></Field>
-              <Field label="Ordinary hours per week" hint={`Blank = the HR default (${pay.effectiveOrdinaryHoursWeek} h)`}><TextInput type="number" step="0.5" min="1" max="80" value={editing.ordinaryHoursWeek} onChange={(e) => setEditing({ ...editing, ordinaryHoursWeek: e.target.value })} data-testid="staff-pay-hours" /></Field>
+              <Field label="Ordinary hours per week" hint={`Blank = the HR default (${pay.effectiveOrdinaryHoursWeek} h); at most ${hrNumber("hrms.staff_weekly_hours_cap", 80)} h`}><TextInput type="number" step="0.5" min="1" max={hrNumber("hrms.staff_weekly_hours_cap", 80)} value={editing.ordinaryHoursWeek} onChange={(e) => setEditing({ ...editing, ordinaryHoursWeek: e.target.value })} data-testid="staff-pay-hours" /></Field>
               <Field label="Award (optional)"><TextInput maxLength={150} value={editing.award} onChange={(e) => setEditing({ ...editing, award: e.target.value })} /></Field>
               <Field label="Xero employee id"><TextInput maxLength={80} value={editing.xeroEmployeeId} onChange={(e) => setEditing({ ...editing, xeroEmployeeId: e.target.value })} data-testid="staff-pay-xero" /></Field>
             </div>

@@ -6,6 +6,7 @@ import {
   type AvailabilityRow, type BookingMe, type BookingRoom, type BookingTrainer, type BookingRow, type DirectoryHost, type MeetingType, type TimeOffRow,
 } from "@/lib/bookingApi";
 import SlotPicker from "./SlotPicker";
+import { ruleNumber, ruleObject } from "@/lib/businessRules";
 import ResourceAvailability, { type ResourceKind } from "./ResourceAvailability";
 import { HoursCard, TimeOffCard } from "./AvailabilityCards";
 import StudentsWeek from "@/pages/admin/lms/timetable/StudentsWeek";
@@ -18,6 +19,13 @@ const DEFAULT_HOURS: AvailabilityRow[] = [1, 2, 3, 4, 5].map((weekday) => ({ wee
 // Business Rules (booking.new_type_*, booking.initial_host_availability) arrive with booking_me(); the constants above are the fallback.
 const newType = (me: BookingMe): MeetingType => ({ ...NEW_TYPE, ...(me.newType ?? {}) });
 const initialHours = (me: BookingMe): AvailabilityRow[] => (me.initialHours?.length ? me.initialHours : DEFAULT_HOURS);
+/** The choices offered for a meeting type (Business Rule booking.type_choices); the value already saved is always offered too. */
+const TYPE_CHOICES = { lengths: [15, 20, 30, 45, 60, 90, 120], buffers: [0, 5, 10, 15, 30, 60], noticeHours: [0, 1, 2, 4, 12, 24, 48], daysAhead: [7, 14, 30, 60, 90] };
+const choices = (key: keyof typeof TYPE_CHOICES, current: number) => {
+  const list = ruleObject("booking.type_choices", TYPE_CHOICES as Record<string, unknown>)[key];
+  const nums = Array.isArray(list) ? list.map(Number).filter((n) => Number.isInteger(n) && n >= 0) : [];
+  return [...new Set([...(nums.length ? nums : TYPE_CHOICES[key]), current])].sort((a, b) => a - b);
+};
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const clock = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return `${h % 12 || 12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "am" : "pm"}`; };
 /** "Monday to Friday, 9 am to 5 pm" for the hours a new booking page starts with. */
@@ -192,7 +200,7 @@ function BookingsTab({ me, onChanged, onError }: { me: BookingMe; onChanged: (me
       </Card>
       {earlier.length ? (
         <Card>
-          <h2 className="border-b border-background-200 px-4 py-3 font-heading text-base font-bold text-foreground-950">Past and cancelled (last 30 days)</h2>
+          <h2 className="border-b border-background-200 px-4 py-3 font-heading text-base font-bold text-foreground-950">Past and cancelled (last {ruleNumber("booking.history_days", 30)} days)</h2>
           <ul className="divide-y divide-background-200">{earlier.map((b) => row(b, false))}</ul>
         </Card>
       ) : null}
@@ -251,7 +259,7 @@ function TypesTab({ me, onDone, onError }: { me: BookingMe; onDone: (next: Booki
         {editing ? (
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="Name" required><TextInput value={editing.name} maxLength={100} placeholder="Intro call" onChange={(e) => set({ name: e.target.value })} /></Field>
-            <Field label="Length" required><Select value={String(editing.duration)} onChange={(e) => set({ duration: Number(e.target.value) })}>{[15, 20, 30, 45, 60, 90, 120].map((m) => <option key={m} value={m}>{m} minutes</option>)}</Select></Field>
+            <Field label="Length" required><Select value={String(editing.duration)} onChange={(e) => set({ duration: Number(e.target.value) })}>{choices("lengths", editing.duration).map((m) => <option key={m} value={m}>{m} minutes</option>)}</Select></Field>
             <div className="md:col-span-2"><Field label="Description"><TextArea rows={2} maxLength={1000} value={editing.description} onChange={(e) => set({ description: e.target.value })} /></Field></div>
             <Field label="Where" required>
               <Select value={editing.locationKind} onChange={(e) => set({ locationKind: e.target.value as MeetingType["locationKind"], locationDetail: "", locationId: null })}>
@@ -272,9 +280,9 @@ function TypesTab({ me, onDone, onError }: { me: BookingMe; onDone: (next: Booki
               </Field>
             ) : null}
             {editing.locationKind === "in_person" && !editing.locationId ? <div className="md:col-span-2"><Field label="Address" required><TextInput value={editing.locationDetail} maxLength={300} onChange={(e) => set({ locationDetail: e.target.value })} /></Field></div> : null}
-            <Field label="Gap around each booking"><Select value={String(editing.buffer)} onChange={(e) => set({ buffer: Number(e.target.value) })}>{[0, 5, 10, 15, 30, 60].map((m) => <option key={m} value={m}>{m ? `${m} minutes` : "None"}</option>)}</Select></Field>
-            <Field label="Shortest notice"><Select value={String(editing.minNoticeHours)} onChange={(e) => set({ minNoticeHours: Number(e.target.value) })}>{[0, 1, 2, 4, 12, 24, 48].map((h) => <option key={h} value={h}>{h ? `${h} hour${h === 1 ? "" : "s"}` : "None"}</option>)}</Select></Field>
-            <Field label="Bookable up to"><Select value={String(editing.maxDaysAhead)} onChange={(e) => set({ maxDaysAhead: Number(e.target.value) })}>{[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days ahead</option>)}</Select></Field>
+            <Field label="Gap around each booking"><Select value={String(editing.buffer)} onChange={(e) => set({ buffer: Number(e.target.value) })}>{choices("buffers", editing.buffer).map((m) => <option key={m} value={m}>{m ? `${m} minutes` : "None"}</option>)}</Select></Field>
+            <Field label="Shortest notice"><Select value={String(editing.minNoticeHours)} onChange={(e) => set({ minNoticeHours: Number(e.target.value) })}>{choices("noticeHours", editing.minNoticeHours).map((h) => <option key={h} value={h}>{h ? `${h} hour${h === 1 ? "" : "s"}` : "None"}</option>)}</Select></Field>
+            <Field label="Bookable up to"><Select value={String(editing.maxDaysAhead)} onChange={(e) => set({ maxDaysAhead: Number(e.target.value) })}>{choices("daysAhead", editing.maxDaysAhead).map((d) => <option key={d} value={d}>{d} days ahead</option>)}</Select></Field>
             <div className="space-y-2 self-end text-sm">
               <label className="flex items-center gap-2"><input type="checkbox" checked={editing.requiresLogin} onChange={(e) => set({ requiresLogin: e.target.checked })} /> Only signed-in people can book</label>
               <label className="flex items-center gap-2"><input type="checkbox" checked={editing.active} onChange={(e) => set({ active: e.target.checked })} /> Can be booked</label>

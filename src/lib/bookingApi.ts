@@ -1,6 +1,7 @@
 // BOOK-01: the in-house booking module (migration 20261113125512_bookings). Every call is a database function; the public
 // ones (host page, free slots, create, manage by emailed token) work signed out.
 import { supabase } from "@/pages/admin/lib/supabase";
+import { institutionTimeZone } from "@/lib/timeZone";
 
 export type LocationKind = "phone" | "video" | "in_person" | "teams";
 export interface BookingIdentity { name: string; email: string; kind: "staff" | "agent" | "student" | "other" }
@@ -40,8 +41,9 @@ export const saveMeetingType = (p: MeetingType) => call<BookingMe>("booking_type
 export const deleteMeetingType = (id: string) => call<BookingMe>("booking_type_delete", { p_id: id });
 export const bookingDirectory = (search: string) => call<DirectoryHost[]>("booking_directory", { p_search: search });
 export const publicHost = (handle: string) => call<PublicHost | null>("booking_public_host", { p_handle: handle });
+/** Asks for as many days as allowed: booking_slots caps it at Business Rule booking.slot_lookup_days (max, 62 today). */
 export const freeSlots = (handle: string, type: string, token?: string) =>
-  call<string[]>("booking_slots", { p_handle: handle, p_type: type, p_from: new Date().toISOString().slice(0, 10), p_days: 62, p_token: token ?? null });
+  call<string[]>("booking_slots", { p_handle: handle, p_type: type, p_from: new Date().toISOString().slice(0, 10), p_days: 365, p_token: token ?? null });
 export const createBooking = (handle: string, type: string, start: string, who: { name: string; email: string; phone: string; note: string }) =>
   call<BookingRow>("booking_create", { p_handle: handle, p_type: type, p_start: start, p_name: who.name, p_email: who.email, p_phone: who.phone, p_note: who.note, p_timezone: viewerTimezone() });
 export const manageBooking = (token: string) => call<BookingRow>("booking_manage", { p_token: token }, "This booking link is not valid.");
@@ -49,7 +51,7 @@ export const cancelBooking = (by: { token?: string; id?: string }, reason: strin
 export const rescheduleBooking = (by: { token?: string; id?: string }, start: string) => call<BookingRow>("booking_reschedule", { p_start: start, p_token: by.token ?? null, p_id: by.id ?? null });
 
 export function viewerTimezone(): string {
-  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "Australia/Melbourne"; } catch { return "Australia/Melbourne"; }
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || institutionTimeZone(); } catch { return institutionTimeZone(); }
 }
 export function timezones(): string[] {
   const intl = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };

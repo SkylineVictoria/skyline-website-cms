@@ -4,11 +4,12 @@ import { useListPane } from "@/pages/admin/lib/listPane";
 import { supabase } from "@/pages/admin/lib/supabase";
 import AttendanceSummary from "./AttendanceSummary";
 import { bestIntake, rto, rtoFlow, type RtoCourse, type RtoIntake, type BatchPageData } from "@/pages/admin/lib/rto";
+import { institutionToday } from "@/lib/timeZone";
 
 type Mark = "present" | "absent" | "late" | "excused";
 type History = { date: string; unitId: string; state: string };
 const statuses: Mark[] = ["present", "absent", "late", "excused"];
-const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
+const today = () => institutionToday();
 const itemClass = (active: boolean) => `block w-full truncate rounded-lg px-3 py-2 text-left text-sm transition-colors ${active ? "bg-primary-50 font-semibold text-foreground-950 ring-1 ring-primary-300" : "text-foreground-700 hover:bg-background-100"}`;
 const heading = "text-xs font-semibold uppercase tracking-wide text-foreground-500";
 const searchClass = "w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm";

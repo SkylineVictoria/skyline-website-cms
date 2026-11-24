@@ -1,5 +1,6 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { resolveTenantSite } from "@/lib/tenantSite";
+import { ruleNumber } from "@/lib/businessRules";
 import { isTemplateAsset } from "../../supabase/functions/_shared/rich-html";
 import { expandLetterBlocks, letterKeys, letterResolver, withChargeValues, withCourseValues, type LetterValue, type LetterVariable, type ManualFill } from "../../supabase/functions/_shared/letter-variables";
 
@@ -10,7 +11,6 @@ import { expandLetterBlocks, letterKeys, letterResolver, withChargeValues, withC
 
 export const LETTER_CATEGORY = "student_offer_letter";
 export const TEMPLATE_ASSETS_BUCKET = "template-assets";
-const MAX_ASSET_BYTES = 2 * 1024 * 1024;
 
 async function rpc<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
   const { data, error } = await supabase.rpc(name, args);
@@ -114,7 +114,8 @@ async function asPngOrJpeg(blob: Blob): Promise<Blob> {
 /** Uploads a picture to template-assets (default/ or the tenant's folder) and returns its public URL. Pictures are never replaced. */
 export async function uploadTemplateAsset(blob: Blob): Promise<string> {
   const picture = await asPngOrJpeg(blob);
-  if (picture.size > MAX_ASSET_BYTES) throw new Error("The picture is larger than 2 MB. Use a smaller one (a logo about 600 pixels wide is plenty).");
+  const maxMb = ruleNumber("cms.letter_picture_limit_mib", 2);
+  if (picture.size > maxMb * 1024 * 1024) throw new Error(`The picture is larger than ${maxMb} MB. Use a smaller one (a logo about 600 pixels wide is plenty).`);
   const tenant = await resolveTenantSite().catch(() => null);
   const path = `${tenant?.tenantId ?? "default"}/${crypto.randomUUID()}.${picture.type === "image/png" ? "png" : "jpg"}`;
   const { error } = await supabase.storage.from(TEMPLATE_ASSETS_BUCKET).upload(path, picture, { upsert: false, contentType: picture.type, cacheControl: "31536000" });

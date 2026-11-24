@@ -14,7 +14,7 @@ const AUTO_TITLE = "Filled automatically when you sign";
 import { initialsOf } from "../../supabase/functions/_shared/signing";
 import { isTokenFieldLabel, tokenFieldName } from "../../supabase/functions/_shared/template-variables";
 import { checkApplicationAnswers, F04_TITLES } from "../../supabase/functions/_shared/validation/abr";
-import { ruleText } from "@/lib/businessRules";
+import { ruleNumber, ruleText } from "@/lib/businessRules";
 
 /*
  * The signing page a link holder opens (/sign#t=token): the offer letter a student signs, or any other document sent for signature.
@@ -133,13 +133,14 @@ function LinkProblem({ token, message }: { token: string; message: string }) {
   </div>;
 }
 
-/** Offer letters: a 6-digit code emailed to the student confirms it is them; signing needs the session it gives. */
+/** Offer letters: a one-time code (signing.code_digits, 6 today) emailed to the student confirms it is them; signing needs the session it gives. */
 function CodeCheck({ token, to, onVerified }: { token: string; to: string | null | undefined; onVerified: (session: string) => void }) {
   const [sent, setSent] = useState(false); const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false); const [note, setNote] = useState(""); const [problem, setProblem] = useState("");
+  const digits = Math.max(4, Math.min(8, Math.round(ruleNumber("signing.code_digits", 6)))); // Business Rules signing.code_digits (the database makes and checks the same)
   const send = async () => {
     setBusy(true); setProblem(""); setNote("");
-    try { const r = await signingAction<{ to: string; minutes: number }>({ action: "code_send", token }); setSent(true); setNote(`We emailed a 6-digit code to ${r.to}. It works for ${r.minutes} minutes.`); }
+    try { const r = await signingAction<{ to: string; minutes: number }>({ action: "code_send", token }); setSent(true); setNote(`We emailed a ${digits}-digit code to ${r.to}. It works for ${r.minutes} minutes.`); }
     catch (e) { setProblem(e instanceof Error ? e.message : "The code could not be sent."); } finally { setBusy(false); }
   };
   const verify = async () => {
@@ -158,9 +159,9 @@ function CodeCheck({ token, to, onVerified }: { token: string; to: string | null
     <p className="text-sm text-foreground-600">Before you sign, we email a one-time code to {to || "your email address"}.</p>
     {!sent ? <Button type="button" variant="outline" disabled={busy} onClick={() => void send()} data-testid="send-code">{busy ? "Sending…" : "Email me a code"}</Button>
       : <div className="flex flex-wrap items-end gap-2">
-        <Field label="6-digit code"><TextInput value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+        <Field label={`${digits}-digit code`}><TextInput value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, digits))} inputMode="numeric" autoComplete="one-time-code" maxLength={digits}
           className="!w-36 !text-base tracking-widest" data-testid="code-input" /></Field>
-        <Button type="button" disabled={busy || code.length !== 6} onClick={() => void verify()} data-testid="verify-code">{busy ? "Checking…" : "Confirm"}</Button>
+        <Button type="button" disabled={busy || code.length !== digits} onClick={() => void verify()} data-testid="verify-code">{busy ? "Checking…" : "Confirm"}</Button>
         <button type="button" className="mb-2 text-sm underline" disabled={busy} onClick={() => void send()}>Send a new code</button>
       </div>}
     {note && <p role="status" className="text-sm text-foreground-700">{note}</p>}

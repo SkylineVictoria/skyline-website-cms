@@ -5,6 +5,7 @@ import { isAnswerable, isAssessorOnly, MARKING_LABEL } from "@/lib/assessment/re
 import type { Attempt, Definition, EvidenceFile, Outcome, Question, QuestionKey, Responses, UnitMapping } from "@/lib/assessment/types";
 import { OUTCOME_LABEL } from "@/lib/assessment/api";
 import { typeUi } from "./registry";
+import { ruleNumber } from "@/lib/businessRules";
 
 export interface MarkInput { questionId: string; criterionId?: string | null; outcome: Outcome | null; score?: number | null; rubricLevelId?: string | null; feedback?: string }
 export interface TaskMarkInput { taskId: string; outcome: Outcome | null; feedback: string }
@@ -42,7 +43,7 @@ function OutcomePick({ value, onChange, disabled, name }: { value: Outcome | nul
   );
 }
 
-export default function MarkingView({ definition, attempt, keys, mappings = [], readOnly, busy, openEvidence, onSave, onReturn, onUploadAssessorEvidence, maxAttempts = 3, reassessmentDays = 5 }: MarkingViewProps) {
+export default function MarkingView({ definition, attempt, keys, mappings = [], readOnly, busy, openEvidence, onSave, onReturn, onUploadAssessorEvidence, maxAttempts = ruleNumber("assessment.attempts_default", 3), reassessmentDays = ruleNumber("assessment.reassessment_window_default", 5) }: MarkingViewProps) {
   const keyBy = useMemo(() => new Map(keys.map((k) => [k.questionId, k])), [keys]);
   const [results, setResults] = useState<Map<string, MarkInput>>(() => new Map(attempt.results.map((r) => [rkey(r.questionId, r.criterionId), { questionId: r.questionId, criterionId: r.criterionId, outcome: r.outcome, score: r.score, rubricLevelId: r.rubricLevelId, feedback: r.feedback }])));
   const [tasks, setTasks] = useState<Map<string, TaskMarkInput>>(() => new Map(attempt.taskResults.map((t) => [t.taskId, { taskId: t.taskId, outcome: t.outcome, feedback: t.feedback }])));

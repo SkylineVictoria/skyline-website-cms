@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ruleNumber, ruleText } from "@/lib/businessRules";
 import { Button, Field, Modal, Select, TextArea, TextInput } from "../ui";
 import PdfPages from "@/components/signing/PdfPages";
 import { describePayment, paymentSet, pdfBytes, samePayment, signingAction, signingAdmin, templatePayment, type PaymentInput, type SigningRequest, type SigningSubject, type SigningTemplate } from "@/lib/signingApi";
@@ -49,7 +50,9 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
   const [query, setQuery] = useState(""); const [matches, setMatches] = useState<Array<{ id: string; name: string; email: string }>>([]);
   const [subject, setSubject] = useState<SigningSubject | null>(null);
   const [people, setPeople] = useState<Person[]>([person(1)]);
-  const [mode, setMode] = useState<"sequential" | "parallel">("sequential"); const [expiry, setExpiry] = useState(14); const [reminder, setReminder] = useState(3);
+  // Business Rules signing.default_signer_order / signing.request_expiry_default / signing.request_reminder_default (the database defaults read the same).
+  const [mode, setMode] = useState<"sequential" | "parallel">(() => (ruleText("signing.default_signer_order", "Sequential").toLowerCase().startsWith("parallel") ? "parallel" : "sequential"));
+  const [expiry, setExpiry] = useState(() => ruleNumber("signing.request_expiry_default", 14)); const [reminder, setReminder] = useState(() => ruleNumber("signing.request_reminder_default", 3));
   const [message, setMessage] = useState(""); const [typed, setTyped] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [preview, setPreview] = useState<Uint8Array | null>(null);
   /** The text of THIS copy when the administrator edits it (text templates only; the template is untouched); `copyIsHtml` for a rich template. */
@@ -195,7 +198,7 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
           <TextInput value={valueOf(key)} maxLength={2000} onChange={(e) => setTyped({ ...typed, [key]: e.target.value })} data-testid={`bracket-value-${key}`} /></Field>)}</div></section>}
         {signerTokens.length > 0 && <p className="rounded-md border border-background-300 bg-background-50 p-3 text-sm" data-testid="compose-signer-fields">The first signer fills in {signerTokens.map((n) => `[${n}]`).join(", ")} on the signing screen before signing; their initials go wherever [Student Initial] is.</p>}
       </> : <div className="grid gap-4 md:grid-cols-2">
-        <Field label="PDF document" required hint="Up to 7 MB. This request will not create or change any saved template."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} data-testid="compose-file" /></Field>
+        <Field label="PDF document" required hint={`Up to ${ruleNumber("signing.pdf_upload_max_mib", 7)} MB. This request will not create or change any saved template.`}><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} data-testid="compose-file" /></Field>
         <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value)}>{Object.entries(SIGN_CATEGORIES).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}</Select></Field>
       </div>}
@@ -213,7 +216,7 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
       </section>
       <div className="grid gap-4 md:grid-cols-3">
         <Field label="Signing order"><Select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)} data-testid="compose-mode"><option value="sequential">One after another</option><option value="parallel">Everyone at once</option></Select></Field>
-        <Field label="Expires after (days)"><TextInput type="number" min={1} max={365} value={expiry} onChange={(e) => setExpiry(Math.min(365, Math.max(1, Number(e.target.value) || 14)))} /></Field>
+        <Field label="Expires after (days)"><TextInput type="number" min={1} max={365} value={expiry} onChange={(e) => setExpiry(Math.min(365, Math.max(1, Number(e.target.value) || ruleNumber("signing.request_expiry_default", 14))))} /></Field>
         <Field label="Remind every (days)" hint="0 = no reminders"><TextInput type="number" min={0} max={60} value={reminder} onChange={(e) => setReminder(Math.min(60, Math.max(0, Number(e.target.value) || 0)))} /></Field>
       </div>
       <Field label="Message to the recipients" hint="Optional. Included in the invitation email."><TextArea rows={2} maxLength={2000} value={message} onChange={(e) => setMessage(e.target.value)} /></Field>

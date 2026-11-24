@@ -1,10 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
-import { authorizeWorker, dispatchBatch, selectEmailProvider, type ClaimedDelivery, type DeliveryPort } from "../_shared/notification/delivery.ts";
+import { authorizeWorker, dispatchBatch, selectEmailProvider, setDeliveryRules, type ClaimedDelivery, type DeliveryPort } from "../_shared/notification/delivery.ts";
 import { MAX_SMS_BODY_CHARS, SMS_MAX_AGE_MS, dispatchSmsBatch, selectSmsProvider, type SmsDeliveryPort } from "../_shared/notification/sms.ts";
 import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
+import { setInstitutionTimeZoneFrom, TIME_ZONE_RULE } from "../_shared/time-zone.ts";
 import { setDocumentExpiryRules } from "../_shared/validation/document-expiry.ts";
+import { loadEmailBranding } from "../_shared/email-html.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -29,7 +31,12 @@ async function worker() {
   const smsMaxAgeMs = Math.max(1, ruleNumber(smsRules, "comms.sms_unsent_expiry_hours", SMS_MAX_AGE_MS / 3_600_000)) * 3_600_000;
   const smsProvider = smsSelection.provider ? selectSmsProvider(providerConfig, { maxChars: smsMaxChars }).provider : null;
   // Business Rules for the expiry notes in the submitted-application PDF (6 months / 2 years when they cannot be read).
-  const expiryRules = selection.provider ? await loadRules(admin, ["admissions.document_expiry_warning_months", "admissions.english_result_valid_years"]) : {};
+  const expiryRules = selection.provider ? await loadRules(admin, ["admissions.document_expiry_warning_months", "admissions.english_result_valid_years",
+    "comms.document_link_days", "comms.submission_pdf_attach_mib", TIME_ZONE_RULE]) : {};
+  // comms.document_link_days (7) and comms.submission_pdf_attach_mib (2): the submitted-application PDF's document links and attachment size.
+  setInstitutionTimeZoneFrom(expiryRules);
+  if (selection.provider) await loadEmailBranding(admin); // the branded email layout (logo, colour, footer; cached per isolate)
+  setDeliveryRules({ linkDays: ruleNumber(expiryRules, "comms.document_link_days", 7), attachMib: ruleNumber(expiryRules, "comms.submission_pdf_attach_mib", 2) });
   setDocumentExpiryRules({ warningMonths: ruleNumber(expiryRules, "admissions.document_expiry_warning_months", 6), englishValidYears: ruleNumber(expiryRules, "admissions.english_result_valid_years", 2) });
   const smsPort: SmsDeliveryPort = {
     claim: async () => {

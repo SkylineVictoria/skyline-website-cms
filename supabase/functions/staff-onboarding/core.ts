@@ -7,7 +7,7 @@ import type { CheckDocumentOwnership } from "../_shared/document-ownership.ts";
 // anything is stored, and the database says whether this link may upload that document type BEFORE the file is written.
 import { STAFF_READER_CATEGORY } from "./reader.ts";
 import { OFFER_CONSENT, type Signature } from "../_shared/offer-rules.ts";
-import { DOCUMENT_MAX_BYTES, DOCUMENT_MIME, bankDigits, bankProblems, documentFileProblem, sniffDocumentKind } from "../_shared/validation/person.ts";
+import { DOCUMENT_LIMITS, DOCUMENT_MAX_BYTES, DOCUMENT_MIME, bankDigits, bankProblems, documentFileProblem, sniffDocumentKind, type DocumentLimits } from "../_shared/validation/person.ts";
 import { EMPTY_STAFF_DETAILS, STAFF_FIELDS, normalizeStaffField, staffProblems, type StaffDetails, type StaffField, type StaffTextField } from "../_shared/validation/staff-onboarding.ts";
 //
 // Onboarding wizard (2026-11-10): `save` and `bank_save` check what was typed with the SAME rules the page uses
@@ -39,6 +39,11 @@ export function setPasswordMin(n: unknown) { if (typeof n === "number" && Number
 export const PASSWORD_MAX = 72;
 export const MAX_DOCUMENT_BYTES = DOCUMENT_MAX_BYTES;
 export const MAX_REQUEST_BYTES = MAX_DOCUMENT_BYTES + 64 * 1024;
+/** The staff document size: Business Rule hrms.employee_document_max_bytes (index.ts sets it; 10 MB until then, the bucket's limit). */
+let documentRules: DocumentLimits = DOCUMENT_LIMITS;
+export function setDocumentMaxBytes(n: unknown) {
+  documentRules = typeof n === "number" && Number.isFinite(n) && n > 0 && n !== DOCUMENT_MAX_BYTES ? { ...DOCUMENT_LIMITS, maxBytes: Math.round(n) } : DOCUMENT_LIMITS;
+}
 /** Invalid-link answers allowed per caller IP in BAD_LINK_WINDOW seconds before that IP is refused for every action. */
 export const BAD_LINK_LIMIT = 20;
 export const BAD_LINK_WINDOW = 600;
@@ -318,10 +323,10 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
       const file = req.file;
       if (!file) return bad("Choose a file to upload.", "file");
       // The shared document rule: size, then name and declared type, then content (the same three messages as the page).
-      const early = documentFileProblem(file);
+      const early = documentFileProblem(file, undefined, documentRules);
       if (early) return bad(early, "file");
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const problem = documentFileProblem(file, bytes.subarray(0, 8));
+      const problem = documentFileProblem(file, bytes.subarray(0, 8), documentRules);
       const kind = problem ? null : sniffDocument(file.name, bytes);
       if (problem || !kind) return bad(problem || "Only PDF, JPG, and PNG documents are supported.", "file");
       // The database decides first whether this link may upload this type now; nothing is stored when it may not.

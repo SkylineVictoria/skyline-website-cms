@@ -1,4 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import { hrNumber } from "@/lib/hrRules";
 import type { StaffDocCategory, StaffDocReview, StaffRole, StaffStatus } from "@/lib/staffStatus";
 
 export type { StaffDocCategory } from "@/lib/staffStatus";
@@ -334,9 +335,10 @@ export async function adminStaffSigning(id: string): Promise<StaffSigning> {
   return data as StaffSigning;
 }
 
-/** Uploads a copy signed on paper (PDF, image or Word, 15 MB at most) and records it against the person. */
+/** Uploads a copy signed on paper (PDF, image or Word, up to Business Rule hrms.signed_copy_upload_max_mib) and records it against the person. */
 export async function adminUploadStaffSigned(id: string, title: string, file: File): Promise<void> {
-  if (file.size > 15 * 1024 * 1024) throw new Error("The file is larger than 15 MB.");
+  const maxMb = hrNumber("hrms.signed_copy_upload_max_mib", 15);
+  if (file.size > maxMb * 1024 * 1024) throw new Error(`The file is larger than ${maxMb} MB.`);
   const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "document";
   const path = `${id}/${crypto.randomUUID()}-${safe}`;
   const up = await supabase.storage.from(SIGNED_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });

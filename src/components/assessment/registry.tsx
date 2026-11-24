@@ -10,6 +10,7 @@ import { useState, type ReactNode } from "react";
 import { Button, Select, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
 import type { ChecklistItem, GridColumn, GridRow, Option } from "@/lib/assessment/registry";
 import { newId } from "@/lib/assessment/registry";
+import { ruleObject } from "@/lib/businessRules";
 import type { EvidenceFile, Question, Responses } from "@/lib/assessment/types";
 
 export interface InputProps {
@@ -29,6 +30,11 @@ export interface KeyProps { q: Question; value: unknown; onChange: (key: unknown
 export interface TypeUi { Input: (p: InputProps) => ReactNode; View: (p: ViewProps) => ReactNode; Config: (p: ConfigProps) => ReactNode; Key?: (p: KeyProps) => ReactNode }
 
 const cfg = <T,>(q: Question, key: string, fallback: T): T => ((q.config ?? {})[key] as T | undefined) ?? fallback;
+/** An evidence question without its own limits uses Business Rule assessment.evidence_question_defaults (1 to 5 files, 25 MB today). */
+const evidenceDefault = (key: "minFiles" | "maxFiles" | "maxMiB", fallback: number) => {
+  const v = Number(ruleObject("assessment.evidence_question_defaults", { minFiles: 1, maxFiles: 5, maxMiB: 25 } as Record<string, unknown>)[key]);
+  return Number.isFinite(v) && v >= 0 ? v : fallback;
+};
 const str = (v: unknown) => (typeof v === "string" ? v : v === null || v === undefined ? "" : String(v));
 const words = (s: string) => (s.trim() ? s.trim().split(/\s+/).length : 0);
 const EMPTY = <span className="text-sm text-foreground-500">No answer</span>;
@@ -243,19 +249,19 @@ const file_upload: TypeUi = {
   Input: ({ q, value, onChange, disabled, evidence = [], onUpload, onRemoveEvidence, openEvidence }) => {
     const [busy, setBusy] = useState(false);
     const mine = evidence.filter((f) => f.questionId === q.id && !f.byAssessor);
-    const max = cfg(q, "maxFiles", 5); const accept = cfg<string[]>(q, "accept", []);
+    const max = cfg(q, "maxFiles", evidenceDefault("maxFiles", 5)); const accept = cfg<string[]>(q, "accept", []);
     // The response is the list of registered file ids, kept in step with the evidence rows.
     const ids = mine.map((f) => f.id); if (JSON.stringify(ids) !== JSON.stringify(Array.isArray(value) ? value : [])) queueMicrotask(() => onChange(ids));
     return (
       <div>
         {!disabled && onUpload ? <label className={`inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-background-300 px-3 py-2 text-sm text-foreground-700 hover:bg-background-100 ${busy || mine.length >= max ? "pointer-events-none opacity-60" : ""}`}><i className="ri-upload-cloud-2-line" aria-hidden="true" />{busy ? "Uploading…" : `Upload file${max > 1 ? "s" : ""}`}<input type="file" className="hidden" multiple={max > 1} accept={accept.join(",") || undefined} onChange={async (e) => { if (!e.target.files?.length) return; setBusy(true); try { await onUpload(q, e.target.files); } finally { setBusy(false); e.target.value = ""; } }} /></label> : null}
-        <Hint>{accept.length ? `Allowed: ${accept.map((a) => a.split("/")[1] ?? a).join(", ")}. ` : ""}Up to {max} file{max > 1 ? "s" : ""}, {cfg(q, "maxMb", 25)} MB each.</Hint>
+        <Hint>{accept.length ? `Allowed: ${accept.map((a) => a.split("/")[1] ?? a).join(", ")}. ` : ""}Up to {max} file{max > 1 ? "s" : ""}, {cfg(q, "maxMb", evidenceDefault("maxMiB", 25))} MB each.</Hint>
         <EvidenceList q={q} evidence={evidence} disabled={disabled} onRemoveEvidence={onRemoveEvidence} openEvidence={openEvidence} />
       </div>
     );
   },
   View: ({ q, evidence = [], openEvidence }) => { const mine = evidence.filter((f) => f.questionId === q.id && !f.byAssessor); return mine.length ? <EvidenceList q={q} evidence={evidence} disabled openEvidence={openEvidence} /> : EMPTY; },
-  Config: ({ q, onChange }) => <div className="space-y-3"><div className="grid grid-cols-3 gap-3"><NumberInput label="Minimum files" value={cfg(q, "minFiles", 1)} onChange={(v) => onChange({ config: { ...q.config, minFiles: v } })} min={0} /><NumberInput label="Maximum files" value={cfg(q, "maxFiles", 5)} onChange={(v) => onChange({ config: { ...q.config, maxFiles: v } })} min={1} /><NumberInput label="Max MB each" value={cfg(q, "maxMb", 25)} onChange={(v) => onChange({ config: { ...q.config, maxMb: v } })} min={1} /></div><label className="block"><span className="mb-1 block text-xs text-foreground-600">Allowed types (MIME, one per line; empty = the institution's list)</span><TextArea rows={3} value={cfg<string[]>(q, "accept", []).join("\n")} onChange={(e) => onChange({ config: { ...q.config, accept: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) } })} /></label></div>,
+  Config: ({ q, onChange }) => <div className="space-y-3"><div className="grid grid-cols-3 gap-3"><NumberInput label="Minimum files" value={cfg(q, "minFiles", evidenceDefault("minFiles", 1))} onChange={(v) => onChange({ config: { ...q.config, minFiles: v } })} min={0} /><NumberInput label="Maximum files" value={cfg(q, "maxFiles", evidenceDefault("maxFiles", 5))} onChange={(v) => onChange({ config: { ...q.config, maxFiles: v } })} min={1} /><NumberInput label="Max MB each" value={cfg(q, "maxMb", evidenceDefault("maxMiB", 25))} onChange={(v) => onChange({ config: { ...q.config, maxMb: v } })} min={1} /></div><label className="block"><span className="mb-1 block text-xs text-foreground-600">Allowed types (MIME, one per line; empty = the institution's list)</span><TextArea rows={3} value={cfg<string[]>(q, "accept", []).join("\n")} onChange={(e) => onChange({ config: { ...q.config, accept: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean) } })} /></label></div>,
 };
 const url: TypeUi = {
   Input: ({ value, onChange, disabled }) => <TextInput type="url" placeholder="https://…" disabled={disabled} value={str(value)} onChange={(e) => onChange(e.target.value)} />,

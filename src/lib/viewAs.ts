@@ -11,7 +11,7 @@ export const VIEW_LABELS: Record<ViewKind, string> = { student: "Student", agent
 const VIEW_HOME: Record<ViewKind, string> = { student: "/agency/dashboard", agent: "/agency/dashboard", staff: "/staff" };
 const KEY = "skyline.viewAs";
 /** How long the kept admin session lasts: Business Rule admin.view_as_hours (12 until the values load). */
-const maxAgeMs = () => Math.min(24, Math.max(1, ruleNumber("admin.view_as_hours", 12))) * 60 * 60 * 1000;
+const maxAgeMs = () => Math.max(1, ruleNumber("admin.view_as_hours", 12)) * 60 * 60 * 1000;
 
 export interface ViewAsState { kind: ViewKind; adminEmail: string; testUserId: string | null; at: number; access: string; refresh: string; personName?: string }
 /** Someone an admin can sign in as. */

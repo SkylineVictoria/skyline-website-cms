@@ -5,6 +5,7 @@ import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestH
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import UnitHoursEditor from "./UnitHoursEditor";
 import { supabase } from "@/pages/admin/lib/supabase";
+import { ruleObject } from "@/lib/businessRules";
 import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
 
@@ -13,7 +14,10 @@ type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
 const readOnlyClass = "w-full cursor-not-allowed rounded-lg border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-600";
 /** Hours SLIT enters by hand: white, outlined, bold, so they stand out from the greyed fields. */
 const hoursInputClass = "w-full rounded-lg border-2 border-primary-300 bg-background-50 px-3 py-2 text-base font-semibold text-foreground-950 focus:border-primary-600 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:border-background-200 disabled:bg-background-100";
-const HOUR_PARTS = [["theoryHours", "Theory hrs", "40%"], ["practicalHours", "Practical hrs", "40%"], ["assessmentHours", "Assessment hrs", "20%"]] as const;
+const HOUR_PARTS = [["theoryHours", "Theory hrs", "theoryPercent"], ["practicalHours", "Practical hrs", "practicalPercent"], ["assessmentHours", "Assessment hrs", "assessmentPercent"]] as const;
+/** The suggested split (Business Rule lms.unit_hours_split, 40 / 40 / 20 today). */
+const hoursSplit = () => ruleObject("lms.unit_hours_split", { theoryPercent: 40, practicalPercent: 40, assessmentPercent: 20 });
+const splitText = (sep: string) => { const s = hoursSplit(); return [s.theoryPercent, s.practicalPercent, s.assessmentPercent].join(sep); };
 /** Units of each course. On the Courses page (embeddedCourseId) it shows only that course's units, without the course list. */
 export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: string } = {}) {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
@@ -105,7 +109,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const hoursSum = hoursDraft ? hoursDraft.theoryHours + hoursDraft.practicalHours + hoursDraft.assessmentHours : 0;
   const hoursValid = !!hoursDraft && [hoursDraft.slitHours, hoursDraft.theoryHours, hoursDraft.practicalHours, hoursDraft.assessmentHours]
     .every(n => Number.isInteger(n) && n >= 0) && hoursSum === hoursDraft.slitHours;
-  /** Accepts the suggested 40/40/20 split for every active unit of the course that has nominal hours and is not reviewed yet. */
+  /** Accepts the suggested split (lms.unit_hours_split) for every active unit of the course that has nominal hours and is not reviewed yet. */
   const acceptAllSuggested = async (pending: RtoUnit[]) => {
     if (!canEdit || hoursBusy || !pending.length) return;
     setHoursBusy(true); setHoursError("");
@@ -116,7 +120,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         setHours(old => ({ ...old, [saved.unitId]: saved }));
         weeks.set(saved.unitId, weeksForHours(saved.slitHours ?? 0));
       }
-      // Durations follow the accepted SLIT hours (20 hours a week).
+      // Durations follow the accepted SLIT hours (HOURS_PER_WEEK, lms.unit_duration_weekly_hours).
       const courseDetail = details.find(d => d.course.id === courseId);
       if (courseDetail) {
         await rto("units_save", { courseId, units: courseDetail.units.map(u => u.id && weeks.has(u.id) ? { ...u, defaultWeeks: weeks.get(u.id) } : u) });
@@ -279,13 +283,13 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
                   onChange={e => { const v = e.target.value; setHoursDraft(v === "" ? null : suggestHours(Number(v))); }} /></label>
               <div className="block text-xs font-medium text-foreground-500">Nominal hours (Training.gov.au)
                 <div className="mt-1 flex gap-2"><input readOnly tabIndex={-1} className={readOnlyClass} value={draft.nominalHours ?? "—"} />
-                  {canEdit && draft.nominalHours !== null ? <button type="button" title="Set SLIT hours to the nominal hours and split them 40 / 40 / 20"
+                  {canEdit && draft.nominalHours !== null ? <button type="button" title={`Set SLIT hours to the nominal hours and split them ${splitText(" / ")}`}
                     onClick={() => setHoursDraft(suggestHours(draft.nominalHours as number))}
                     className="shrink-0 rounded-lg border border-background-300 px-2 text-xs font-semibold text-foreground-800 hover:bg-background-100">Use</button> : null}</div></div>
               <label className="block text-xs font-medium text-foreground-500">Duration ({HOURS_PER_WEEK} hrs a week)
                 <input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"}
                   value={hoursDraft ? `${weeksForHours(hoursDraft.slitHours)} week${weeksForHours(hoursDraft.slitHours) === 1 ? "" : "s"}` : `${draft.defaultWeeks} weeks`} /></label>
-              {HOUR_PARTS.map(([key, label, pct]) => <label key={key} className="block text-sm font-medium text-foreground-800">{label} <span className="text-xs font-normal text-foreground-500">({pct})</span>
+              {HOUR_PARTS.map(([key, label, pct]) => <label key={key} className="block text-sm font-medium text-foreground-800">{label} <span className="text-xs font-normal text-foreground-500">({String(hoursSplit()[pct])}%)</span>
                 <input disabled={!canEdit || !hoursDraft} type="number" min="0" step="1" className={hoursInputClass + " mt-1"} value={hoursDraft?.[key] ?? ""}
                   onChange={e => { const v = e.target.value === "" ? 0 : Number(e.target.value); setHoursDraft(h => h ? { ...h, [key]: v } : h); }} /></label>)}
             </div>

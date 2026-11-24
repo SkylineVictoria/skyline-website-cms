@@ -339,11 +339,12 @@ export function printDate(iso: string): string {
 /** "12 345 678 901": an ABN in its printed groups. */
 export const printAbn = (abn: string) => { const d = abn.replace(/\D/g, ""); return d.length === 11 ? `${d.slice(0, 2)} ${d.slice(2, 5)} ${d.slice(5, 8)} ${d.slice(8)}` : abn; };
 export const printPercent = (value: string) => { const n = Number(String(value).replace(/[^0-9.]/g, "")); return Number.isFinite(n) && String(value).trim() ? `${n}%` : ""; };
-/** Commencement plus the term, the day before the anniversary (two years from 17/11/2026 ends 16/11/2028). */
-export function expiryDate(commencement: string): string {
+/** Commencement plus the term, the day before the anniversary (two years from 17/11/2026 ends 16/11/2028); `years`: agents.agreement_term_years. */
+export function expiryDate(commencement: string, years: number = AGREEMENT_TERM_YEARS): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(commencement);
   if (!m) return "";
-  const end = new Date(Date.UTC(Number(m[1]) + AGREEMENT_TERM_YEARS, Number(m[2]) - 1, Number(m[3])));
+  const term = Number.isFinite(years) && years >= 1 ? Math.round(years) : AGREEMENT_TERM_YEARS;
+  const end = new Date(Date.UTC(Number(m[1]) + term, Number(m[2]) - 1, Number(m[3])));
   end.setUTCDate(end.getUTCDate() - 1);
   return end.toISOString().slice(0, 10);
 }

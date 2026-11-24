@@ -46,9 +46,12 @@ export const DEFAULT_FEE_CENTS: Partial<Record<FeeType, number>> = {
 };
 /** The pre-paid limit the offer letter states; a larger deposit needs the student's election to pay more. */
 export const depositLimitCents = () => Math.round(ruleNumber("finance.course_fee_deposit_cap", 1500) * 100);
-/** GST: exclusive adds 10% to the line; inclusive already contains 1/11; GST-free adds nothing (same rule as the database). */
-export const lineTotal = (item: FeeItem) => (item.gstTreatment === "exclusive" ? item.amountCents + Math.round(item.amountCents / 10) : item.amountCents);
-export const lineGst = (item: FeeItem) => (item.gstTreatment === "exclusive" ? Math.round(item.amountCents / 10) : item.gstTreatment === "inclusive" ? Math.round(item.amountCents / 11) : 0);
+/** GST (Business Rules finance.gst_rate_percent, 10 today): exclusive adds the rate to the line; inclusive already contains rate / (100 + rate);
+ *  GST-free adds nothing (same rule as the database, course_fee_item_gst_cents). */
+const gstRate = () => { const r = ruleNumber("finance.gst_rate_percent", 10); return Number.isFinite(r) && r >= 0 ? r : 10; };
+export const lineGst = (item: FeeItem) => (item.gstTreatment === "exclusive" ? Math.round(item.amountCents * gstRate() / 100)
+  : item.gstTreatment === "inclusive" ? Math.round(item.amountCents * gstRate() / (100 + gstRate())) : 0);
+export const lineTotal = (item: FeeItem) => (item.gstTreatment === "exclusive" ? item.amountCents + lineGst(item) : item.amountCents);
 export const isIncluded = (item: FeeItem) => item.includedInTotal ?? includedByDefault(item.type);
 export interface RtoCourse {
   id: string; slug: string; code: string; name: string; variantLabel: string | null; label: string; depositCents: number | null; cricos: string; category: string; trainingPackage: string; duration: string; mode: string;
@@ -215,8 +218,20 @@ export const SLOTS: { id: Slot; label: string; start: string; end: string }[] = 
   { id: "afternoon", label: "Afternoon", start: "13:00", end: "17:00" },
   { id: "evening", label: "Evening", start: "17:00", end: "21:00" },
 ];
+/** Business Rules lms.day_part_times ("HH:MM-HH:MM" per part) and lms.day_part_cutoffs (afternoonFrom / eveningFrom). */
+let AFTERNOON_FROM = "12:00", EVENING_FROM = "16:00";
+onRules(() => {
+  const hhmm = (v: unknown) => (typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v) ? v : null);
+  const parts = ruleObject("lms.day_part_times", { morning: "09:00-13:00", afternoon: "13:00-17:00", evening: "17:00-21:00" } as Record<string, unknown>);
+  for (const slot of SLOTS) {
+    const [from, to] = String(parts[slot.id] ?? "").split("-").map((x) => x.trim());
+    if (hhmm(from) && hhmm(to)) { slot.start = from; slot.end = to; }
+  }
+  const cut = ruleObject("lms.day_part_cutoffs", { afternoonFrom: "12:00", eveningFrom: "16:00" } as Record<string, unknown>);
+  AFTERNOON_FROM = hhmm(cut.afternoonFrom) ?? "12:00"; EVENING_FROM = hhmm(cut.eveningFrom) ?? "16:00";
+});
 /** Morning / afternoon / evening from the start time (the same rule as public.rto_slot). */
-export const slotOf = (start: string): Slot => (start < "12:00" ? "morning" : start < "16:00" ? "afternoon" : "evening");
+export const slotOf = (start: string): Slot => (start < AFTERNOON_FROM ? "morning" : start < EVENING_FROM ? "afternoon" : "evening");
 export const SESSION_TYPES: { id: SessionType; label: string }[] = [
   { id: "theory", label: "Theory" }, { id: "practical", label: "Practical" }, { id: "assessment", label: "Assessment" },
 ];
@@ -309,7 +324,7 @@ export function suggestHours(slitHours: number): HoursSplit {
 /** A unit's duration from its SLIT hours: 20 hours is one week, rounded up to the half week (0.5 to 104 weeks, as stored). */
 export let HOURS_PER_WEEK = 20;
 onRules(() => { HOURS_PER_WEEK = ruleNumber("lms.unit_duration_weekly_hours", 20); });
-const roundWeeks = (w: number) => { const step = ruleNumber("lms.unit_duration_rounding_weeks", 0.5) || 0.5; return Math.ceil(w / step - 1e-9) * step; };
+export const roundWeeks = (w: number) => { const step = ruleNumber("lms.unit_duration_rounding_weeks", 0.5) || 0.5; return Math.ceil(w / step - 1e-9) * step; };
 export const weeksForHours = (hours: number) => Math.min(ruleNumber("lms.unit_duration_ceiling", 104), Math.max(ruleNumber("lms.unit_duration_rounding_weeks", 0.5), roundWeeks(hours / HOURS_PER_WEEK)));
 /** A course's duration from its units' total SLIT hours: 20 hours a week, rounded up to the half week ("13.5 weeks"). */
 export const courseWeeksLabel = (hours: number) => {

@@ -1,5 +1,6 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { STAGE_LABEL, type OnboardingStage } from "../../../../supabase/functions/_shared/agent-onboarding";
+import { institutionToday } from "@/lib/timeZone";
 
 /*
  * Agent onboarding documents (2026-11-17), in stages: the Agent Application Form (F04) to the business's agent; when signed, an Agent
@@ -164,7 +165,7 @@ export const PROFILE_LABELS: Array<[string, string]> = [
 export const REFEREE_LABELS: Array<[string, string]> = [
   ["referee_organisation", "Organisation"], ["referee_address", "Address"], ["referee_contact_person_1", "Contact person"], ["referee_contact_person_2", "Second contact"], ["referee_phone", "Phone"], ["referee_fax", "Fax"],
 ];
-export const todayIso = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+export const todayIso = () => institutionToday();
 export const formatAuDate = (iso: string | null | undefined) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : iso ?? ""; };
 /** The stage in plain words, with the referee count while waiting for them. */
 export function stageWords(stage: OnboardingStage, received: number, total: number, kind: "business" | "agent" = "business"): string {

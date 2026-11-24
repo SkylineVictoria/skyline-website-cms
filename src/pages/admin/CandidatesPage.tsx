@@ -7,7 +7,7 @@ import RecruitmentTree from "@/pages/admin/components/RecruitmentTree";
 import { HrFields, HrHistory, HrLink, HrNotice, HrPager, HrValue } from "@/pages/admin/components/Recruitment";
 import { adminListJobs, type AdminJob } from "@/lib/jobsApi";
 import { JOB_APPLICATION_STATUS_LABEL, JOB_FILE_ACCEPT, JOB_FILE_MAX_BYTES, jobFileProblem } from "@/lib/jobs";
-import { megabytes } from "@/lib/hrRules";
+import { hrNumber, megabytes } from "@/lib/hrRules";
 import {
   HR_PAGE_SIZE, hrName, hrDate, emptyPerson, getCandidate, hireCandidate, listCandidates, listCandidatesByJob, progressCandidate, saveCandidate, stages, uploadCandidateFile,
   type Candidate, type CandidateAction, type CandidateRow, type Page,
@@ -318,7 +318,7 @@ function CandidateDecision({ row, action, onClose, onDone }: { row: Candidate; a
     <form className="space-y-3" id="candidate-action" onSubmit={(e) => void submit(e)} data-testid="candidate-dialog">
       <HrNotice error>{error}</HrNotice>
       <p className="text-sm">{hrName(row)} · {row.jobTitle}</p>
-      {action === "hired" ? <p className="text-sm text-foreground-700">Marks this application hired, creates the employment record from the job (department, title, type, location) and emails them a private link (valid 14 days) to add their details and documents. Their onboarding then continues on Staff &gt; Employees; the joining date is set at activation.</p> : null}
+      {action === "hired" ? <p className="text-sm text-foreground-700">Marks this application hired, creates the employment record from the job (department, title, type, location) and emails them a private link (valid {hrNumber("hrms.staff_document_link_days", 14)} days) to add their details and documents. Their onboarding then continues on Staff &gt; Employees; the joining date is set at activation.</p> : null}
       {closing ? <p className="text-sm text-foreground-700">{row.staffStatus === "applied" ? "This is their only open application, so their staff application closes too (they can apply again later)." : "Only this job application closes; their staff record is not changed."}</p> : null}
       {action === "interview" ? <Field label="Interview date and time" required>
         <TextInput required type="datetime-local" value={interview} onChange={(e) => setInterview(e.target.value)} data-testid="candidate-interview-at" />

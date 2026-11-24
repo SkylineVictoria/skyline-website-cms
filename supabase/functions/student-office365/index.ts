@@ -22,6 +22,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
 import { checkAddress, KINDS, LICENCE_RULE_IDS, link, listGroups, lookup, MESSAGES, provision, resend, type PersonKind, type Ports } from '../_shared/office365-provision.ts';
 import { loadRules } from '../_shared/business-rules.ts';
+import { loadEmailBranding } from '../_shared/email-html.ts';
 import { directoryList, licenceAssign, licenceRemove, signinSet } from '../_shared/office365-directory.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
@@ -87,6 +88,7 @@ Deno.serve(async(req:Request)=>{
    const p=prep.data as {account:null|{email:string;status:string;lastError:string|null;welcomeSentAt:string|null;hasMicrosoftUser:boolean}};
    return json({configured:configured(),account:p.account?{...p.account,message:p.account.lastError?MESSAGES[p.account.lastError]??null:null}:null});
   }
+  if(action!=='lookup'&&action!=='link'&&body.dryRun!==true)await loadEmailBranding(caller); // the branded login email (logo, colour, footer)
   const r=action==='lookup'?await lookup(ports,kind,personId)
    :action==='resend'?await resend(ports,kind,personId,{dryRun:body.dryRun===true})
    :action==='link'?await link(ports,kind,personId,String(body.msUserId??''))

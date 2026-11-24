@@ -1,5 +1,6 @@
 import { escapeHtml } from "./hr-template.ts";
 import { simpleEmailHtml } from "./email-html.ts";
+import { institutionTimeZone } from "./time-zone.ts";
 
 
 /** The agreement a signer accepts. The database compares the exact text (public.signing_service), so the two change together. */
@@ -49,8 +50,8 @@ export const SUBJECT_VARIABLES: Record<"student" | "employee" | "agent" | "agenc
     "employee.employment_type", "employee.start_date", "employee.work_location", "current_date"],
   agent: ["agent.name", "agent.email", "agent.phone", "agent.marn", "agency.name", "agency.abn", "agency.email", "agency.phone", "current_date"],
 };
-/** "12 November 2026" in Melbourne, the value of {{current_date}} when no record supplies it. */
-export const signingToday = (now = new Date()) => new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", day: "numeric", month: "long", year: "numeric" }).format(now);
+/** "12 November 2026" in the institution time zone (general.time_zone), the value of {{current_date}} when no record supplies it. */
+export const signingToday = (now = new Date()) => new Intl.DateTimeFormat("en-AU", { timeZone: institutionTimeZone(), day: "numeric", month: "long", year: "numeric" }).format(now);
 /** Every variable of a template: its title, its text and the values its sender-filled fields print. */
 export function templateVariables(template: { title?: string | null; body?: string | null; fields?: Array<{ role?: string; value?: string }> | null }): string[] {
   const parts = [template.title ?? "", template.body ?? "", ...(template.fields ?? []).filter((f) => f.role === "sender").map((f) => f.value ?? "")];

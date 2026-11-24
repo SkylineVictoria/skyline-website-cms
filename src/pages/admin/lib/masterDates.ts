@@ -1,16 +1,24 @@
 // Pure date rules of the master timetable plan (no database): CoE weeks, cycles, Calendar till, and the layout run backwards.
+// The limits come from Business Rules (kept in step by onRules; the fixed values are the fallbacks until they load).
+import { onHrRules as onRules, hrNumber as ruleNumber } from "../../../lib/hrRules"; // lazy: masterDates also runs in the offline tests
 export interface CyclePlan {
   courseId: string; saved: boolean; cyclesPlanned: number; currentCycle: number; planEnd: string | null; locked: boolean; canEdit: boolean;
   cycles: { cycle: number; startDate: string; endDate: string }[];
 }
 
-/** CoE class hours a week: the master timetable is CoE only (owner, 2026-11-20). */
-export const COE_HOURS = 20;
-/** A unit's fixed weeks: its SLIT hours ÷ 20, rounded up to the half week (0.5 to 104); without hours, the weeks it has. */
+/** CoE class hours a week: the master timetable is CoE only (owner, 2026-11-20). Business Rule lms.coe_weekly_study_hours. */
+export let COE_HOURS = 20;
+/** Weeks are rounded up to this step (lms.unit_duration_rounding_weeks) and kept at most this many (lms.unit_duration_ceiling). */
+export let WEEK_STEP = 0.5;
+export let MAX_WEEKS = 104;
+/** A unit's fixed weeks: its SLIT hours ÷ COE_HOURS, rounded up to WEEK_STEP (WEEK_STEP to MAX_WEEKS); without hours, the weeks it has. */
 export const fixedWeeks = (hours: number | null | undefined, current: number) =>
-  (hours && hours > 0 ? Math.min(104, Math.max(0.5, Math.ceil((hours / COE_HOURS) * 2) / 2)) : current);
-/** The calendar is planned at most 10 years ahead (owner, 2026-11-20: "remove the 5 limit, 10 years is allowed"). */
-export const MAX_YEARS = 10;
+  (hours && hours > 0 ? Math.min(MAX_WEEKS, Math.max(WEEK_STEP, Math.ceil(hours / COE_HOURS / WEEK_STEP - 1e-9) * WEEK_STEP)) : current);
+/** The calendar is planned at most this many years ahead (lms.master_plan_max_years; owner, 2026-11-20: 10 years). */
+export let MAX_YEARS = 10;
+/** Weekly alert from this many months before the plan ends (lms.master_plan_alert_months); locked from LOCK_MONTHS before (lms.master_plan_lock_months). */
+export let ALERT_MONTHS = 12;
+export let LOCK_MONTHS = 3;
 const DAY = 86400000;
 /** The most cycles that fit in MAX_YEARS from `start`, each `cycleDays` long (at least 1). */
 export const maxCyclesFor = (cycleDays: number) => (cycleDays > 0 ? Math.max(1, Math.floor((MAX_YEARS * 365.25) / cycleDays)) : 1);
@@ -56,8 +64,19 @@ export function courseStartForEnd(unitEnd: string, index: number, weeks: number[
 // Anything above 40 hours a week is blocked either way. Units keep the CoE calendar's order, start date and term breaks; a unit
 // starts on the first teaching day with room for it, once every prerequisite on the course has ended. Hours are used day by day
 // (a week's hours spread over its 7 days, as the CoE calendar counts whole 7-day weeks); term-break days are skipped.
-export const VOE_MAX_HOURS = 40;
-export const VOE_MAX_UNITS = 2;
+/** VoE hours a week (lms.voe_weekly_study_hours) and units at the same time (lms.voe_max_units_together). */
+export let VOE_MAX_HOURS = 40;
+export let VOE_MAX_UNITS = 2;
+onRules(() => {
+  COE_HOURS = ruleNumber("lms.coe_weekly_study_hours", 20);
+  WEEK_STEP = ruleNumber("lms.unit_duration_rounding_weeks", 0.5);
+  MAX_WEEKS = ruleNumber("lms.unit_duration_ceiling", 104);
+  MAX_YEARS = ruleNumber("lms.master_plan_max_years", 10);
+  ALERT_MONTHS = ruleNumber("lms.master_plan_alert_months", 12);
+  LOCK_MONTHS = ruleNumber("lms.master_plan_lock_months", 3);
+  VOE_MAX_HOURS = ruleNumber("lms.voe_weekly_study_hours", 40);
+  VOE_MAX_UNITS = ruleNumber("lms.voe_max_units_together", 2);
+});
 export type VoeMethod = "automatic" | "manual";
 export interface VoeUnit { unitId: string; code: string; hours: number; rate: number; prerequisites: string[] }
 export interface VoeRow { unitId: string; code: string; hours: number; prerequisites: string[]; startDate: string; endDate: string; days: number; rates: number[]; alongside: string[] }
@@ -105,7 +124,7 @@ export function voeLayout(units: VoeUnit[], start: string, isBreak: IsBreak, met
   return { rows, log };
 }
 
-/** Week by week (7 days from the start): the units running and the busiest teaching day's hours; allowed when ≤ 2 units and ≤ 40 h. */
+/** Week by week (7 days from the start): the units running and the busiest teaching day's hours; allowed when ≤ VOE_MAX_UNITS units and ≤ VOE_MAX_HOURS h. */
 export function voeWeeks(plan: VoePlan, start: string, isBreak: IsBreak): VoeWeek[] {
   const last = plan.rows.reduce((m, r) => (r.endDate > m ? r.endDate : m), start);
   const out: VoeWeek[] = [];

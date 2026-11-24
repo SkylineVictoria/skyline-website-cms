@@ -9,6 +9,8 @@
 // business, at most one every two minutes and ten a day (portal_invitation_self_resend); the answer is the same whatever happened.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { activationSite, sendActivationEmail } from "../_shared/activation-mail.ts";
+import { loadEmailBranding } from "../_shared/email-html.ts";
+import { loadInstitutionTimeZone } from "../_shared/time-zone.ts";
 import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
@@ -39,6 +41,8 @@ Deno.serve(async (req) => {
       const token = base64Url(crypto.getRandomValues(new Uint8Array(32)));
       const { data } = await admin.rpc("portal_invitation_self_resend", { p_email: email, p_token_hash: await sha256Hex(token) });
       if (data?.sent === true && site) {
+        await loadInstitutionTimeZone(admin); // the "works until" date in the institution time zone (general.time_zone)
+        await loadEmailBranding(admin); // the branded email layout (logo, colour, footer)
         await sendActivationEmail(env, { to: email, name: String(data.name ?? ""), link: `${site}/agency/accept-invite#t=${token}`, role: String(data.role ?? ""), agencyName: data.agencyName ?? null, expiresAt: data.expiresAt ?? undefined });
       }
       return json({ ok: true });

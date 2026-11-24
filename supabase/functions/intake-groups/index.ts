@@ -13,6 +13,7 @@
 // and the welcome sender's licences, each with Microsoft's exact status and error. Nothing in Microsoft 365 is created or changed.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { isServiceCaller } from '../_shared/service-role.ts';
+import { loadRules, ruleText, type RuleValues } from '../_shared/business-rules.ts';
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
@@ -49,7 +50,15 @@ async function graphError(r: Response, what: string) {
   return `${problem(r.status)} [${what}: HTTP ${r.status}${code ? ` ${code}` : ''}${message ? `: ${message.slice(0, 300)}` : ''}]`;
 }
 
-async function ensureGroup(token: string, w: Work): Promise<{ id: string; address: string }> {
+// Business Rules office365.intake_group_visibility (Private / Public) and office365.intake_group_description ({name} = the group name),
+// used when a group is created.
+function groupSettings(rules: RuleValues, name: string) {
+  const visibility = ruleText(rules, 'office365.intake_group_visibility', 'Private').trim().toLowerCase() === 'public' ? 'Public' : 'Private';
+  const description = ruleText(rules, 'office365.intake_group_description', 'SLIT class group: {name}').replaceAll('{name}', name).slice(0, 1024);
+  return { visibility, description };
+}
+
+async function ensureGroup(token: string, w: Work, rules: RuleValues): Promise<{ id: string; address: string }> {
   const address = `${w.mailNickname}@${domain()}`;
   if (w.groupId) return { id: w.groupId, address };
   // An earlier run may have created it before recording: look it up by its address first.
@@ -57,7 +66,7 @@ async function ensureGroup(token: string, w: Work): Promise<{ id: string; addres
   if (!f.ok) throw Error(await graphError(f, 'GET /groups'));
   const found = (await f.json()).value?.[0];
   if (found?.id) return { id: found.id, address: found.mail ?? address };
-  const c = await graph(token, 'POST', '/groups', { displayName: w.displayName, description: `SLIT class group: ${w.displayName}`, mailEnabled: true, mailNickname: w.mailNickname, securityEnabled: false, groupTypes: ['Unified'], visibility: 'Private' });
+  const c = await graph(token, 'POST', '/groups', { displayName: w.displayName, description: groupSettings(rules, w.displayName).description, mailEnabled: true, mailNickname: w.mailNickname, securityEnabled: false, groupTypes: ['Unified'], visibility: groupSettings(rules, w.displayName).visibility });
   if (!c.ok) throw Error(await graphError(c, 'POST /groups'));
   const g = await c.json();
   return { id: g.id, address: g.mail ?? address };
@@ -77,8 +86,8 @@ async function userIdOf(token: string, m: Member): Promise<string | null> {
   return (await inv.json()).invitedUser?.id ?? null;
 }
 
-async function syncGroup(token: string, w: Work) {
-  const g = await ensureGroup(token, w);
+async function syncGroup(token: string, w: Work, rules: RuleValues) {
+  const g = await ensureGroup(token, w, rules);
   const results: Result[] = [];
   for (const m of w.members) {
     try {
@@ -174,10 +183,11 @@ Deno.serve(async (req) => {
     for (const w of groups) await db.rpc('intake_group_m365_record', { p_data: { intakeId: w.intakeId, groupStatus: 'failed', error: msg } });
     return json({ error: msg }, 502);
   }
+  const rules = await loadRules(db, ['office365.intake_group_visibility', 'office365.intake_group_description']);
   let synced = 0, failed = 0;
   for (const w of groups.slice(0, 20)) {
     try {
-      const r = await syncGroup(token, w);
+      const r = await syncGroup(token, w, rules);
       await db.rpc('intake_group_m365_record', { p_data: { intakeId: w.intakeId, groupId: r.groupId, address: r.address, groupStatus: 'ready', error: '', members: r.results } });
       synced++;
     } catch (e) {

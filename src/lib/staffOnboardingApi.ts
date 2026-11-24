@@ -3,7 +3,7 @@ import { reportFunctionFailure, supabase } from "@/pages/admin/lib/supabase";
 import { hrNumber, onHrRules } from "@/lib/hrRules";
 import type { StaffDocCategory, StaffStatus } from "@/lib/staffStatus";
 import type { StaffDocSummary, StaffDocument } from "@/lib/staffApi";
-import { documentFileProblem } from "../../supabase/functions/_shared/validation/person";
+import { DOCUMENT_LIMITS, DOCUMENT_MAX_BYTES, documentFileProblem } from "../../supabase/functions/_shared/validation/person";
 import type { AddressLookup, AddressPick } from "@/components/shared/wizard/AddressSearch";
 
 /**
@@ -135,7 +135,9 @@ export const onboarding = {
   saveBank: async (t: string, bank: { accountName: string; bsb: string; accountNumber: string; bankName: string }) => viewOf(await invoke({ action: "bank_save", t, bank })),
   upload: async (t: string, category: StaffDocCategory, file: File, expiryDate: string | null, replaces?: string, onProgress?: (fraction: number) => void) => {
     // The shared document rule (size, declared type, content), before anything leaves the device; the function checks again.
-    const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()));
+    const maxBytes = hrNumber("hrms.employee_document_max_bytes", DOCUMENT_MAX_BYTES);
+    const limits = maxBytes > 0 && maxBytes !== DOCUMENT_MAX_BYTES ? { ...DOCUMENT_LIMITS, maxBytes } : DOCUMENT_LIMITS;
+    const problem = documentFileProblem(file, new Uint8Array(await file.slice(0, 8).arrayBuffer()), limits);
     if (problem) throw new RejectedDocumentError(problem);
     const body = new FormData();
     body.set("action", "upload");

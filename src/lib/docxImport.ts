@@ -4,8 +4,10 @@
 // borders are not read from Word: tables come out bordered (the template default) and staff adjust the rest in the editor.
 // Relative imports only: the offline tests load this file outside Vite.
 import { joinSplitTokens, MAX_IMAGE_CHARS, sanitizeRichHtml } from "../../supabase/functions/_shared/rich-html";
+import { hrNumber, megabytes } from "./hrRules";
 
-export const MAX_DOCX_BYTES = 10 * 1024 * 1024;
+/** Business Rule cms.word_import_limit_mib (10 MB until the values load, and in the offline tests). */
+export const maxDocxBytes = () => hrNumber("cms.word_import_limit_mib", 10) * 1024 * 1024;
 const STYLE_MAP = [
   "p[style-name='Title'] => h1:fresh",
   "p[style-name='Subtitle'] => h2:fresh",
@@ -17,7 +19,7 @@ export interface DocxImport { html: string; warnings: string[]; droppedImages: n
 
 /** Converts the bytes of a .docx file; throws a readable error for a file that is not one. */
 export async function docxToTemplateHtml(bytes: ArrayBuffer | Uint8Array): Promise<DocxImport> {
-  if (bytes.byteLength > MAX_DOCX_BYTES) throw new Error("Choose a Word document of 10 MB or smaller.");
+  if (bytes.byteLength > maxDocxBytes()) throw new Error(`Choose a Word document of ${megabytes(maxDocxBytes())} or smaller.`);
   const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (data[0] !== 0x50 || data[1] !== 0x4b) throw new Error("This file is not a Word .docx document.");
   const mammoth = (await import("mammoth")).default ?? (await import("mammoth"));

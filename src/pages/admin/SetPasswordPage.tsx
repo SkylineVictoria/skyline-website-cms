@@ -3,8 +3,8 @@ import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import { AdminLoading, Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { hadSession, loginUrl } from "@/lib/loginRouting";
+import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
 
-const MIN_LENGTH = 10;
 
 /**
  * Forced password rotation only (e.g. an account flagged after its credentials
@@ -34,8 +34,8 @@ export default function AdminSetPasswordPage() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
-    if (password.length < MIN_LENGTH) {
-      setError(`Please choose a password of at least ${MIN_LENGTH} characters.`);
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Please choose a password of at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
     if (password !== confirm) {
@@ -92,7 +92,7 @@ export default function AdminSetPasswordPage() {
           </p>
 
           <form onSubmit={submit} className="mt-7 space-y-4">
-            <Field label="New password" required hint={`At least ${MIN_LENGTH} characters.`}>
+            <Field label="New password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters.`}>
               <TextInput
                 type="password"
                 name="new-password"

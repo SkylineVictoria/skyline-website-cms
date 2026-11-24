@@ -54,10 +54,12 @@ export async function deleteDraft(port: DeletePort, applicationId: string): Prom
   }
 }
 
-export async function deleteDrafts(port: DeletePort, ids: unknown): Promise<DeleteOutcome[] | { error: string }> {
+/** `maxBulk`: Business Rules admissions.draft_bulk_delete_max (50 before the rule). */
+export async function deleteDrafts(port: DeletePort, ids: unknown, maxBulk: number = MAX_BULK_DELETE): Promise<DeleteOutcome[] | { error: string }> {
+  const most = Number.isFinite(maxBulk) && maxBulk >= 1 ? Math.round(maxBulk) : MAX_BULK_DELETE;
   if (!Array.isArray(ids) || !ids.length || ids.some((id) => typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id))) return { error: "Choose the drafts to delete." };
   const unique = Array.from(new Set(ids as string[]));
-  if (unique.length > MAX_BULK_DELETE) return { error: `Choose at most ${MAX_BULK_DELETE} drafts at a time.` };
+  if (unique.length > most) return { error: `Choose at most ${most} drafts at a time.` };
   const outcomes: DeleteOutcome[] = [];
   for (const id of unique) outcomes.push(await deleteDraft(port, id));
   return outcomes;

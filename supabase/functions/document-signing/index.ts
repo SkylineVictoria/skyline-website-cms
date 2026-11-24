@@ -3,6 +3,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { loadLetterhead } from "../_shared/letterhead.ts";
 import { readHrMailConfig, selectHrMailProvider } from "../_shared/hr-mail.ts";
+import { loadEmailBranding } from "../_shared/email-html.ts";
 import { HR_MAIL_ENV } from "../_shared/hr-mail-drain.ts";
 import { handleSigning, readSigningRequest, SigningError, type SigningPorts } from "./core.ts";
 import { GEOSCAPE_URL, searchAddresses } from "../_shared/validation/address.ts";
@@ -30,6 +31,8 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
   const service = createClient(env.SUPABASE_URL, serviceKey, { auth: { persistSession: false } });
+  // The branded email layout (logo, colour, footer from Website settings; cached for five minutes per isolate).
+  await loadEmailBranding(service);
   const authorization = req.headers.get("authorization") ?? "";
   const caller = createClient(env.SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY") ?? "", { global: { headers: { Authorization: authorization } }, auth: { persistSession: false } });
   const bucket = service.storage.from("signing-documents");

@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 import { listHolidays, type Holiday } from "@/lib/hrmsApi";
 import { addDays, fmtDate } from "@/lib/hrTime";
+import { hrNumber } from "@/lib/hrRules";
 
-/** My HR > Holidays: the next 12 months of Victorian public holidays (confirmed ones are paid days). */
+/** My HR > Holidays: the coming public holidays (Business Rule hrms.holidays_list_days_ahead; confirmed ones are paid days). */
 export default function HolidaysList() {
   const [rows, setRows] = useState<Holiday[] | null>(null);
   const [error, setError] = useState("");
+  const ahead = hrNumber("hrms.holidays_list_days_ahead", 365);
+  const period = ahead === 365 ? "12 months" : `${ahead} days`;
   useEffect(() => {
     const today = new Date().toISOString().slice(0, 10);
-    listHolidays(today, addDays(today, 365)).then(setRows, (e: unknown) => setError(e instanceof Error ? e.message : "The holidays could not be loaded."));
-  }, []);
+    listHolidays(today, addDays(today, ahead)).then(setRows, (e: unknown) => setError(e instanceof Error ? e.message : "The holidays could not be loaded."));
+  }, [ahead]);
   return (
     <div data-testid="my-hr-holidays">
       {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
@@ -22,7 +25,7 @@ export default function HolidaysList() {
             </li>
           ))}
         </ul>
-      ) : <p className="text-sm text-foreground-600">No public holidays listed for the next 12 months.</p>}
+      ) : <p className="text-sm text-foreground-600">No public holidays listed for the next {period}.</p>}
     </div>
   );
 }

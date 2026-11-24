@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
-import { deleteDrafts, DeleteStepError, type DeletePort } from "../_shared/draft-delete.ts";
+import { deleteDrafts, DeleteStepError, MAX_BULK_DELETE, type DeletePort } from "../_shared/draft-delete.ts";
+import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ?? "";
@@ -46,7 +47,7 @@ Deno.serve(async (request) => {
       return data;
     },
   };
-  const outcomes = await deleteDrafts(port, body.applicationIds);
+  const outcomes = await deleteDrafts(port, body.applicationIds, ruleNumber(await loadRules(admin, ["admissions.draft_bulk_delete_max"]), "admissions.draft_bulk_delete_max", MAX_BULK_DELETE));
   if (!Array.isArray(outcomes)) return reply({ ok: false, error: outcomes.error }, 400);
   for (const outcome of outcomes) if (!outcome.ok) console.error(JSON.stringify({ event: "draft_delete_failed" }));
   return reply({ ok: true, results: outcomes });

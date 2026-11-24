@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { ruleNumber } from "@/lib/businessRules";
 import { Button, Field, Modal, PageHeader, Select, TextInput } from "../ui";
 import { signingAction, signingAdmin, type LegacySigningContext as SigningContext, type SigningPreview, type LegacySigningRequest as SigningRequest, type LegacySigningTemplate as SigningTemplate } from "@/lib/signingApi";
 import { adminListStaff, type StaffListRow } from "@/lib/staffApi";
@@ -202,7 +203,7 @@ export default function LegacySigningPage() {
           <div className="grid gap-4 md:grid-cols-2"><Field label="Recipient full name" required><TextInput value={name} onChange={(e) => setName(e.target.value)} maxLength={150} data-testid="signing-name" /></Field>
             <Field label="Recipient email" required><TextInput type="email" value={email} onChange={(e) => setEmail(e.target.value)} data-testid="signing-email" /></Field></div>
           <Field label="Template"><Select value={templateId} onChange={(e) => { setTemplateId(e.target.value); setValues({}); setPreview(null); setEdited(null); }} disabled={!!file} data-testid="signing-template"><option value="">Choose a template</option>{context.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</Select></Field>
-          <Field label="Or upload a ready-made PDF" hint="Up to 7 MB. Variables are filled in templates; an uploaded PDF is sent as supplied."><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} /></Field>
+          <Field label="Or upload a ready-made PDF" hint={`Up to ${ruleNumber("signing.pdf_upload_max_mib", 7)} MB. Variables are filled in templates; an uploaded PDF is sent as supplied.`}><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} /></Field>
           {file ? <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field> : selected ? <>
             {variables.length ? <div className="rounded-md border border-background-200 p-3">
               <p className="mb-2 text-label font-semibold text-foreground-900">Variables in “{selected.name}”</p>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ruleNumber } from "@/lib/businessRules";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { useToast } from "@/pages/admin/components/toastContext";
 import SenderSettings from "@/pages/admin/components/SenderSettings";
@@ -86,7 +87,7 @@ export default function DeliveriesPanel({ tenantId }: { tenantId: string }) {
       <EventRecipients tenantId={tenantId} />
 
       <Card className="p-5">
-        <h3 className="mb-3 text-sm font-semibold">Last 30 days</h3>
+        <h3 className="mb-3 text-sm font-semibold">Last {ruleNumber("comms.notification_overview_days", 30)} days</h3>
         {Object.keys(data.counts).length === 0 ? <EmptyState title="No deliveries yet" /> : (
           <div className="flex flex-wrap gap-2">{Object.entries(data.counts).map(([state, n]) => <Badge key={state} tone={STATE_TONE[state] ?? "muted"}>{state}: {n}</Badge>)}</div>
         )}

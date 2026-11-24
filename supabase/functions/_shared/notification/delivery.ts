@@ -8,6 +8,7 @@ import { MAX_ATTACHMENT_BYTES, attachmentFileName, toBase64 } from "./attachment
 import { loadLogo } from "./pdf-logo.ts";
 import type { PdfDocumentLink } from "./submission-pdf.ts";
 import type { ImageData } from "./pdf-layout.ts";
+import { textEmailHtml } from "../email-html.ts";
 
 export const POSTMARK_API = "https://api.postmarkapp.com";
 export const MAX_DELIVERY_ATTEMPTS = 3;
@@ -43,12 +44,20 @@ export function formatFrom(name: string, email: string): string {
   return `"${clean}" <${email}>`;
 }
 
-export function createPostmarkProvider(options: { serverToken: string; fetch?: typeof fetch; timeoutMs?: number }): EmailProvider {
+/**
+ * brandedHtml (2026-11-24): a message sent with only a plain-text body also gets the branded HTML version of that text
+ * (_shared/email-html.ts textEmailHtml; same words, the text stays the plain-text part). selectEmailProvider turns it on.
+ */
+export function createPostmarkProvider(options: { serverToken: string; fetch?: typeof fetch; timeoutMs?: number; brandedHtml?: boolean }): EmailProvider {
   const call = options.fetch ?? fetch;
   const timeoutMs = options.timeoutMs ?? 15_000;
   return {
     id: "postmark",
-    async send(message) {
+    async send(original) {
+      let message = original;
+      if (options.brandedHtml && !message.htmlBody && message.textBody) {
+        try { message = { ...message, htmlBody: textEmailHtml(message.subject, message.textBody) }; } catch { message = original; }
+      }
       let response: Response;
       try {
         response = await call(`${POSTMARK_API}/email`, {
@@ -99,7 +108,7 @@ export function selectEmailProvider(config: Record<string, string | undefined>, 
   if ((config.EF_NOTIFICATION_EMAIL_ENABLED ?? "").trim() !== "true") variables.push("EF_NOTIFICATION_EMAIL_ENABLED");
   if (!(config.EF_POSTMARK_SERVER_TOKEN ?? "").trim()) variables.push("EF_POSTMARK_SERVER_TOKEN");
   if (variables.length) return { provider: null, unavailable: { code: "configuration_unavailable", variables } };
-  return { provider: createPostmarkProvider({ serverToken: config.EF_POSTMARK_SERVER_TOKEN!.trim(), fetch: options.fetch }), unavailable: null };
+  return { provider: createPostmarkProvider({ serverToken: config.EF_POSTMARK_SERVER_TOKEN!.trim(), fetch: options.fetch, brandedHtml: true }), unavailable: null };
 }
 
 // ---- worker authentication ----------------------------------------------------------------------
@@ -204,6 +213,16 @@ export interface SubmissionInfo {
   documents?: { category: string; filename: string; bucket: string; path: string }[];
 }
 export const PDF_LINK_SECONDS = 7 * 24 * 60 * 60;
+/**
+ * Business Rules the worker sets once per run (notification-delivery): comms.document_link_days (how long the document links in the
+ * submitted-application PDF work) and comms.submission_pdf_attach_mib (the largest PDF attached; larger ones are sent as a link).
+ */
+let linkSeconds = PDF_LINK_SECONDS;
+let attachMaxBytes = MAX_ATTACHMENT_BYTES;
+export function setDeliveryRules(rules: { linkDays?: number; attachMib?: number }) {
+  linkSeconds = rules.linkDays && rules.linkDays >= 1 ? Math.round(rules.linkDays) * 24 * 60 * 60 : PDF_LINK_SECONDS;
+  attachMaxBytes = rules.attachMib && rules.attachMib > 0 ? rules.attachMib * 1024 * 1024 : MAX_ATTACHMENT_BYTES;
+}
 export interface DeliveryPort {
   claim(): Promise<ClaimedDelivery | null>;
   /** Optional: submission details for application_submitted deliveries (lease-checked in the database). */
@@ -261,7 +280,7 @@ export async function composeBody(port: DeliveryPort, delivery: ClaimedDelivery)
     const documents: PdfDocumentLink[] = [];
     for (const d of info.documents ?? []) {
       let url: string | null = null;
-      try { url = port.signDocument && info.recipientKind !== "student" && d.bucket && d.path ? await port.signDocument(d.bucket, d.path, PDF_LINK_SECONDS) : null; } catch { url = null; }
+      try { url = port.signDocument && info.recipientKind !== "student" && d.bucket && d.path ? await port.signDocument(d.bucket, d.path, linkSeconds) : null; } catch { url = null; }
       documents.push({ category: d.category, fileName: d.filename, url });
     }
     const pdf = await buildSubmissionPdf({
@@ -269,10 +288,10 @@ export async function composeBody(port: DeliveryPort, delivery: ClaimedDelivery)
       branding: { primary: info.branding?.primaryColor, timezone, logo },
       documents,
       portalLink: info.link || undefined,
-      linksExpireOn: documents.some((d) => d.url) ? formatDateTime(new Date(now.getTime() + PDF_LINK_SECONDS * 1000), timezone).slice(0, 10) : undefined,
+      linksExpireOn: documents.some((d) => d.url) ? formatDateTime(new Date(now.getTime() + linkSeconds * 1000), timezone).slice(0, 10) : undefined,
       now,
     });
-    if (pdf.length > MAX_ATTACHMENT_BYTES) return withLink();
+    if (pdf.length > attachMaxBytes) return withLink();
     return { textBody: `${delivery.body}\n\nThe submitted application is attached as a PDF.`, attachments: [{ name: attachmentFileName(info.reference), contentType: "application/pdf", contentBase64: toBase64(pdf) }] };
   } catch {
     return withLink();

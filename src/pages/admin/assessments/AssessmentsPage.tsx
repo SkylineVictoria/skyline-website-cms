@@ -266,7 +266,7 @@ function SettingsTab() {
   useEffect(() => { void asmAdmin<Settings>("settings_get").then(setS).catch((e) => setError(fail(e))); }, []);
   if (error) return <ErrorNote text={error} />;
   if (!s) return <SkeletonLines lines={5} />;
-  const save = async () => { try { setS(await asmAdmin<Settings>("settings_save", { requireTrainerRole: s.require_trainer_role, declarationText: s.declaration_text, instructions: s.instructions, evidenceMaxMb: s.evidence_max_mb, evidenceAllowedTypes: s.evidence_allowed_types })); push("Settings saved."); } catch (e) { setError(fail(e)); } };
+  const save = async () => { try { setS(await asmAdmin<Settings>("settings_save", { instructions: s.instructions })); push("Settings saved."); } catch (e) { setError(fail(e)); } };
   return (
     <div className="max-w-3xl space-y-4">
       <p className="text-sm text-foreground-700">Institution-wide rules; an assessment may override attempts, the reassessment window and the late rule. Attempt counts and windows are configuration, not a compliance ruling: confirm them against the Standards for RTOs.</p>
@@ -276,14 +276,14 @@ function SettingsTab() {
         <Field label="Due-soon reminder (days before)"><TextInput type="number" readOnly disabled value={s.due_soon_days} /></Field>
         <Field label="Late submissions"><Select value={s.late_submission} disabled onChange={() => undefined}><option value="allow">Allow (flagged as late)</option><option value="block">Block after the late date</option></Select></Field>
         <Field label="Task rollup suggestion"><Select value={s.rollup_rule} disabled onChange={() => undefined}><option value="all_satisfactory">All questions S → task S (suggestion only)</option><option value="assessor_only">No suggestion; the assessor decides</option></Select></Field>
-        <Field label="Who may mark and sign off"><Select value={s.require_trainer_role ? "role" : "any"} onChange={(e) => setS({ ...s, require_trainer_role: e.target.value === "role" })}><option value="role">Intake trainers with the Trainer role, named assessors, admins</option><option value="any">Any active intake trainer, named assessors, admins</option></Select></Field>
+        <Field label="Who may mark and sign off"><Select value={s.require_trainer_role ? "role" : "any"} disabled onChange={() => undefined}><option value="role">Intake trainers with the Trainer role, named assessors, admins</option><option value="any">Any active intake trainer, named assessors, admins</option></Select></Field>
         <Field label="Evidence file limit (MB)"><TextInput type="number" readOnly disabled value={s.evidence_max_mb} /></Field>
       </div>
-      <p className="text-xs text-foreground-600"><i className="ri-lock-line mr-1" aria-hidden="true" />Maximum attempts, reassessment window, due-soon reminder, late submissions, task rollup and evidence file limit: set in <Link className="underline" to="/admin/business-rules">Administration › Business Rules</Link>.</p>
-      <Field label="Student declaration (shown and signed at submission; its hash is kept with every submission)"><TextArea rows={4} value={s.declaration_text} onChange={(e) => setS({ ...s, declaration_text: e.target.value })} /></Field>
+      <p className="text-xs text-foreground-600"><i className="ri-lock-line mr-1" aria-hidden="true" />Maximum attempts, reassessment window, due-soon reminder, late submissions, task rollup, who may mark, the student declaration, the evidence file limit and the allowed evidence types: set in <Link className="underline" to="/admin/business-rules">Administration › Business Rules</Link>.</p>
+      <Field label="Student declaration (shown and signed at submission; its hash is kept with every submission)"><TextArea rows={4} readOnly disabled value={s.declaration_text} /></Field>
       <Field label="Instructions shown on every assessment"><TextArea rows={3} value={s.instructions} onChange={(e) => setS({ ...s, instructions: e.target.value })} /></Field>
-      <Field label="Allowed evidence types (MIME, one per line)"><TextArea rows={4} value={s.evidence_allowed_types.join("\n")} onChange={(e) => setS({ ...s, evidence_allowed_types: e.target.value.split("\n").map((x) => x.trim()).filter(Boolean) })} /></Field>
-      <Button icon="ri-save-line" onClick={() => void save()}>Save settings</Button>
+      <Field label="Allowed evidence types (MIME, one per line)"><TextArea rows={4} readOnly disabled value={s.evidence_allowed_types.join("\n")} /></Field>
+      <Button icon="ri-save-line" onClick={() => void save()}>Save instructions</Button>
     </div>
   );
 }

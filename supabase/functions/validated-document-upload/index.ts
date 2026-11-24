@@ -63,6 +63,10 @@ Deno.serve(async (request) => {
   } else if (target === "employee") {
     const { data, error } = await caller.rpc("hr_admin_emp_get", { p_id: ownerId });
     if (error || !["active", "inactive"].includes(data?.status)) return fail("You cannot upload to this employee.", 403);
+    // Business Rules: the employee document size SLIT allows (hrms.employee_document_max_bytes; the rule's maximum is the limit).
+    const rules = await loadRules(caller, ["hrms.employee_document_max_bytes"]);
+    const maxBytes = ruleNumber(rules, "hrms.employee_document_max_bytes", DOCUMENT_MAX_BYTES);
+    if (file.size > maxBytes) return fail(`The file must be ${Math.round((maxBytes / (1024 * 1024)) * 10) / 10} MB or smaller.`, 413);
     bucketName = "staff-documents";
     folder = `employees/${ownerId}`;
   } else {
@@ -70,8 +74,10 @@ Deno.serve(async (request) => {
   }
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
+  // Business Rules admissions.document_uploads_per_hour: checked uploads one signed-in person may make in an hour (60 before the rule).
+  const perHour = Math.max(1, Math.round(ruleNumber(await loadRules(admin, ["admissions.document_uploads_per_hour"]), "admissions.document_uploads_per_hour", 60)));
   const limit = await admin.rpc("public_assistant_take_rate_limit", {
-    p_bucket: `validated-document-upload:${auth.user.id}`, p_limit: 60, p_window_seconds: 3600,
+    p_bucket: `validated-document-upload:${auth.user.id}`, p_limit: perHour, p_window_seconds: 3600,
   });
   if (limit.error) return fail("Document checking is temporarily unavailable.", 503);
   if (limit.data !== true) return fail("Upload limit reached. Please try again later.", 429);

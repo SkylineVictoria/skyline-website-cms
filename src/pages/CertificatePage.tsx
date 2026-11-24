@@ -7,7 +7,8 @@ export type Completion = { id: string; enrolmentId: string; studentId: string; k
   issuedByName: string; revokedAt: string | null; revokeReason: string | null };
 
 const INSTITUTE = "Skyline Institute of Technology";
-const RTO = "RTO Code 45989 · CRICOS 04114B";
+/** The RTO and CRICOS codes printed on the document: Website Settings (cms_settings rto / cricos), these until they load. */
+const RTO_FALLBACK = { rto: "45989", cricos: "04114B" };
 const LOGO = "https://slit.edu.au/wp-content/uploads/2023/06/logo-2.png";
 const longDate = (d: string) => new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" });
 
@@ -16,6 +17,13 @@ export default function CertificatePage() {
   const { id = "" } = useParams();
   const [c, setC] = useState<Completion | null | undefined>(undefined);
   const [error, setError] = useState("");
+  const [codes, setCodes] = useState(RTO_FALLBACK);
+  useEffect(() => {
+    supabase.from("cms_settings").select("rto, cricos").is("tenant_id", null).order("id", { ascending: true }).limit(1).then(({ data }) => {
+      const row = (data?.[0] ?? null) as { rto?: string | null; cricos?: string | null } | null;
+      if (row?.rto?.trim() && row?.cricos?.trim()) setCodes({ rto: row.rto.trim(), cricos: row.cricos.trim() });
+    }, () => undefined);
+  }, []);
   useEffect(() => {
     supabase.rpc("course_completion_get", { p_id: id }).then(({ data, error: e }) => {
       if (e) { setError(/Not allowed|42501/.test(e.message) ? "You cannot open this document." : e.message); setC(null); } else setC((data as Completion | null) ?? null);
@@ -35,7 +43,7 @@ export default function CertificatePage() {
       ))}</tbody>
     </table>
   );
-  const footer = <p className="mt-auto pt-10 text-xs text-gray-600">{INSTITUTE} · {RTO} · {cert ? "Certificate" : "Statement"} No. {c.certificateNo} · Issued {longDate(c.issuedAt)}</p>;
+  const footer = <p className="mt-auto pt-10 text-xs text-gray-600">{INSTITUTE} · RTO Code {codes.rto} · CRICOS {codes.cricos} · {cert ? "Certificate" : "Statement"} No. {c.certificateNo} · Issued {longDate(c.issuedAt)}</p>;
 
   return (
     <div className="min-h-screen bg-gray-100 px-4 py-4 print:bg-white print:p-0">

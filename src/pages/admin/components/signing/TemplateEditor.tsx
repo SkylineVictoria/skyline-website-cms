@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
+import { ruleNumber, ruleText } from "@/lib/businessRules";
 import { Button, Field, Modal, Select, TextInput, Toggle } from "../ui";
 import FieldEditor, { type EditorField } from "@/components/signing/FieldEditor";
 import PdfPages from "@/components/signing/PdfPages";
@@ -32,7 +33,9 @@ const SENDER = "sender";
 const EMAIL_TYPES = TEMPLATE_TYPES.filter((t) => t.kind === "email");
 const blank = (kind: Kind = "text", category = "offer_letter"): Draft => ({
   id: null, name: "", title: "", body_html: "<p></p>", header_html: "", footer_html: "", subject: "", kind, audience: kind === "email" || category === "offer_letter" ? "employee" : "any", category,
-  signing_mode: "sequential", expiry_days: 14, reminder_days: 3, roles: [{ key: "signer1", label: "Signer", order: 1, required: true }], fields: [], source_pages: null, version: 0, ...NO_PAYMENT,
+  // Business Rules signing.default_signer_order / signing.request_expiry_default / signing.request_reminder_default.
+  signing_mode: ruleText("signing.default_signer_order", "Sequential").toLowerCase().startsWith("parallel") ? "parallel" : "sequential",
+  expiry_days: ruleNumber("signing.request_expiry_default", 14), reminder_days: ruleNumber("signing.request_reminder_default", 3), roles: [{ key: "signer1", label: "Signer", order: 1, required: true }], fields: [], source_pages: null, version: 0, ...NO_PAYMENT,
 });
 const roleKey = (label: string, taken: string[]) => {
   const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^[^a-z]+|_+$/g, "").slice(0, 30) || "signer";
@@ -365,7 +368,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
           {draft.kind === "text" && !sections && <label className="flex items-center gap-2">Import a Word document (.docx): <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" data-testid="docx-input"
             onChange={(e) => { const chosen = e.target.files?.[0]; if (chosen) void run(async () => { set({ body_html: textToHtml(await docxText(chosen)) }); }); }} /></label>}
         </div>
-      </div> : <Field label={draft.id ? `PDF (${draft.source_pages ?? "?"} pages). Choose a file only to replace it` : "PDF document"} required={!draft.id} hint="Up to 7 MB, not password-protected. Variables are printed with Sender fields placed on the pages.">
+      </div> : <Field label={draft.id ? `PDF (${draft.source_pages ?? "?"} pages). Choose a file only to replace it` : "PDF document"} required={!draft.id} hint={`Up to ${ruleNumber("signing.pdf_upload_max_mib", 7)} MB, not password-protected. Variables are printed with Sender fields placed on the pages.`}>
         <input type="file" accept="application/pdf" data-testid="template-pdf" onChange={(e) => { setFile(e.target.files?.[0] ?? null); if (e.target.files?.[0]) set({ fields: draft.id ? draft.fields : [] }); }} /></Field>}
 
       {signed && <>

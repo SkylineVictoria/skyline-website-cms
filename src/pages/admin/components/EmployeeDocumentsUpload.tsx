@@ -1,8 +1,9 @@
 import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { useRef, useState, type DragEvent } from "react";
 import { Button, Select } from "@/pages/admin/components/ui";
+import { megabytes } from "@/lib/hrRules";
 import {
-  EMPLOYEE_DOC_ACCEPT, EMPLOYEE_DOC_CATEGORIES, duplicateCategories, employeeFileProblem, guessDocCategory, uploadEmployeeDocument,
+  EMPLOYEE_DOC_ACCEPT, EMPLOYEE_DOC_CATEGORIES, EMPLOYEE_DOC_MAX_BYTES, duplicateCategories, employeeFileProblem, guessDocCategory, uploadEmployeeDocument,
   type EmployeeDocCategory,
 } from "@/lib/employeesApi";
 
@@ -75,7 +76,7 @@ export default function EmployeeDocumentsUpload({ employeeId, onUploaded }: { em
         <i className="ri-upload-cloud-2-line text-2xl text-foreground-500" aria-hidden="true" />
         <p className="text-foreground-700">Drop files here, or</p>
         <Button variant="outline" size="sm" disabled={busy} onClick={() => input.current?.click()} icon="ri-folder-open-line">Choose files</Button>
-        <p className="text-xs text-foreground-500">Pick several at once. PDF, JPG, PNG or Word, up to 10 MB each.</p>
+        <p className="text-xs text-foreground-500">Pick several at once. PDF, JPG, PNG or Word, up to {megabytes(EMPLOYEE_DOC_MAX_BYTES)} each.</p>
         <input ref={input} type="file" multiple accept={EMPLOYEE_DOC_ACCEPT} className="sr-only" tabIndex={-1} aria-label="Choose files"
           onChange={(e) => { if (e.target.files?.length) add(e.target.files); }} data-testid="employee-files" />
       </div>

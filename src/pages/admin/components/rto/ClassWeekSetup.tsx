@@ -24,7 +24,8 @@ type Window = { days: number[]; from: string; to: string };
 type Pick = { key: string; id: string; theory: boolean; practical: boolean; /** Sized by the system, not changed by hand yet. */ fresh?: boolean; /** A trainer booking: the room booking it was made from. */ room?: string } & Window;
 let pickSeq = 0;
 const newKey = (id: string) => `${id}:${++pickSeq}`;
-const WINDOW: Window = { days: [1, 2, 3, 4, 5, 6, 7], from: "09:00", to: "22:00" };
+/** A new room or trainer booking: the days and times of Business Rule lms.class_setup_availability_fallback (Mon–Sun 9 am – 10 pm today). */
+let WINDOW: Window = { days: [1, 2, 3, 4, 5, 6, 7], from: "09:00", to: "22:00" };
 type Hours = { avail: AvailabilityRow[]; uses: RoomUse[] };
 
 const TYPES: SessionType[] = ["theory", "practical", "assessment"];
@@ -45,6 +46,7 @@ onRules(() => {
   const f = ruleObject("lms.class_setup_availability_fallback", { days: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as unknown, start: "09:00", end: "22:00" });
   const days = (Array.isArray(f.days) ? f.days : []).map((d) => weekdayIndex(String(d))).filter((d) => d >= 0);
   TRAINER_DEFAULT = days.map((weekday) => ({ weekday, start: String(f.start), end: String(f.end) }));
+  WINDOW = { days: [...new Set(days.map((d) => (d === 0 ? 7 : d)))].sort((a, b) => a - b), from: String(f.start), to: String(f.end) };
 });
 
 const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); };
@@ -69,9 +71,10 @@ const cutHour = (list: Block[], weekday: number, h: number) => list.flatMap((b) 
   if (b.weekday !== weekday || b.end <= s || b.start >= e) return [b];
   return [...(b.start < s ? [{ ...b, end: s }] : []), ...(b.end > e ? [{ ...b, start: e }] : [])];
 });
-/** Hours a week of each type, split like the units' hours (40 / 40 / 20 when the units have none). */
+/** Hours a week of each type, split like the units' hours (Business Rule lms.unit_hours_split, 40 / 40 / 20 today, when the units have none). */
 function splitHours(total: number, need: CourseNeed | null): Record<SessionType, number> {
-  const base = need && need.total > 0 ? need : { theory: 40, practical: 40, assessment: 20, total: 100 };
+  const split = ruleObject("lms.unit_hours_split", { theoryPercent: 40, practicalPercent: 40, assessmentPercent: 20 });
+  const base = need && need.total > 0 ? need : { theory: Number(split.theoryPercent), practical: Number(split.practicalPercent), assessment: Number(split.assessmentPercent), total: 100 };
   const theory = Math.round((total * base.theory) / base.total), practical = Math.min(total - theory, Math.round((total * base.practical) / base.total));
   return { theory, practical, assessment: Math.max(0, total - theory - practical) };
 }

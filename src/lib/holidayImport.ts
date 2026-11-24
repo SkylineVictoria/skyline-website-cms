@@ -4,6 +4,7 @@
  *   Date (required) · Holiday / Name (required) · Optional (yes/no) · State (e.g. VIC; blank = the HR setting) · Note
  * Dates may be real Excel dates, YYYY-MM-DD, or Australian D/M/YYYY (also with "-" or "."). Two-digit years are refused.
  */
+import { hrNumber } from "./hrRules";
 
 export interface HolidayImportRow { date: string; name: string; isOptional: boolean; state?: string; note?: string }
 export interface HolidayImportResult { rows: HolidayImportRow[]; problems: string[] }
@@ -115,7 +116,8 @@ export function parseCsv(text: string): string[][] {
 /** Reads an .xlsx (first sheet) or .csv file into holidays. The Excel reader is loaded only when needed. */
 export async function readHolidayFile(file: File): Promise<HolidayImportResult> {
   const name = file.name.toLowerCase();
-  if (file.size > 2 * 1024 * 1024) return { rows: [], problems: ["The file must be 2 MB or smaller."] };
+  const maxMb = hrNumber("hrms.holiday_import_max_mib", 2);
+  if (file.size > maxMb * 1024 * 1024) return { rows: [], problems: [`The file must be ${maxMb} MB or smaller.`] };
   if (name.endsWith(".csv")) return parseHolidaySheet(parseCsv(await file.text()));
   if (name.endsWith(".xlsx")) {
     try {

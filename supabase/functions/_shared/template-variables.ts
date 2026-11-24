@@ -23,7 +23,7 @@ export interface TemplateVariable {
 export const TEMPLATE_VARIABLES: readonly TemplateVariable[] = [
   { name: "Page Number", group: "Document", description: "The number of the page it is printed on", render: "page", sample: "1" },
   { name: "Total Pages", group: "Document", description: "How many pages the document has", render: "total", sample: "3" },
-  { name: "Date", group: "Document", description: "Today's date (Melbourne) when the document is made", keys: ["current_date"], sample: "11 November 2026" },
+  { name: "Date", group: "Document", description: "Today's date (institution time zone) when the document is made", keys: ["current_date"], sample: "11 November 2026" },
   { name: "Student Name", group: "Student", description: "Full name", keys: ["student.full_name"], sample: "Asha Patel" },
   { name: "Student First Name", group: "Student", description: "First name", keys: ["student.first_name"], sample: "Asha" },
   { name: "Student Last Name", group: "Student", description: "Last name", keys: ["student.last_name"], sample: "Patel" },

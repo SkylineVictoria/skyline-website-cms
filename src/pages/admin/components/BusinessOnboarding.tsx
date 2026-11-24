@@ -4,6 +4,7 @@ import SubjectSigningPanel from "@/pages/admin/components/signing/SubjectSigning
 import AgentOnboardingPanel from "@/pages/admin/components/AgentOnboardingPanel";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { businessDocumentLimitMb, listBusinessDocuments, openBusinessDocument, removeBusinessDocument, uploadBusinessDocument, type BusinessDetail, type BusinessDocument } from "@/pages/admin/lib/businessData";
+import { ruleNumber } from "@/lib/businessRules";
 
 const ACCEPT = ".pdf,.png,.jpg,.jpeg,.doc,.docx";
 
@@ -86,7 +87,7 @@ export default function BusinessOnboarding({ business, onChanged, onActivate, ac
           </div>
           <div className="flex items-center gap-2">
             {ready ? <Badge tone="success">Signed</Badge> : <Badge tone="warn">Not signed yet</Badge>}
-            <Button size="sm" variant="outline" icon="ri-upload-2-line" disabled={busy || reason.trim().length < 5} title={reason.trim().length < 5 ? "Type the reason first" : undefined} onClick={() => file.current?.click()} data-testid="upload-agreement">{busy ? "Uploading…" : "Upload signed agreement"}</Button>
+            <Button size="sm" variant="outline" icon="ri-upload-2-line" disabled={busy || reason.trim().length < Math.max(1, ruleNumber("agents.onboarding_reason_min_chars", 5))} title={reason.trim().length < Math.max(1, ruleNumber("agents.onboarding_reason_min_chars", 5)) ? "Type the reason first" : undefined} onClick={() => file.current?.click()} data-testid="upload-agreement">{busy ? "Uploading…" : "Upload signed agreement"}</Button>
             <input ref={file} type="file" accept={ACCEPT} className="hidden" aria-label="Signed agent agreement file" onChange={(e) => void upload(e.target.files?.[0])} />
           </div>
         </div>

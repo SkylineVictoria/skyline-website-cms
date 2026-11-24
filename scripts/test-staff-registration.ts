@@ -5041,3 +5041,16 @@ test("Offer before documents fix (2026-11-24): the letter is made from Applied /
   assert.ok(sql.includes("if p.status not in ('applied', 'invited', 'documents_submitted') then raise exception 'Prepare an offer"));
   assert.ok(read("supabase/functions/staff-admin/core.ts").includes('if (!["applied", "invited", "documents_submitted"].includes(String((before.data'));
 });
+
+test("Offer signed last (2026-11-24): Accept and continue opens the wizard; its last screen signs the offer and submits", () => {
+  const sql = read("supabase/migrations/20261125001517_offer_sign_after_documents.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("else v_status in ('invited', 'offer_sent', 'offer_signed') end"));
+  assert.ok(sql.includes("raise exception 'Add your details and documents first; you sign the offer on the last screen.'"));
+  assert.ok(sql.includes("elsif p.status = 'offer_sent' then return jsonb_build_object('purpose', 'sign');"));
+  assert.ok(read("supabase/functions/staff-onboarding/core.ts").includes('?.purpose === "sign") return { status: 200, body: { purpose: "sign" } };'));
+  const panel = read("src/pages/staff/components/OfferPanel.tsx");
+  assert.ok(panel.includes('data-testid="offer-accept-continue"') && panel.includes("window.location.assign(`/staff/onboard#t=${link.token}`)"));
+  const wizard = read("src/pages/staff/StaffOnboardingPage.tsx");
+  assert.ok(wizard.includes('const signsOffer = view.status === "offer_sent";') && wizard.includes("await myOfferApi.sign(signName.trim())") && wizard.includes('"Sign the offer and submit"'));
+  assert.ok(read("src/pages/staff/StaffHomePage.tsx").includes("acceptViaWizard"));
+});

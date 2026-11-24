@@ -179,9 +179,9 @@ export const myOfferApi: OfferApi = {
   decline: async (reason) => { await invoke({ action: "offer_decline", reason, confirm: true }); },
 };
 /** STAFF-OFFER-FULL-PART-TIME: after signing the offer, a private link to the document wizard for the signed-in person (nothing emailed). */
-export async function myDocumentsLink(): Promise<{ token: string; purpose: "documents" | "reupload" }> {
+export async function myDocumentsLink(): Promise<{ token: string; purpose: "documents" | "reupload" | "sign" }> {
   const r = await invoke({ action: "documents_link" });
-  return { token: String(r.token ?? ""), purpose: r.purpose === "reupload" ? "reupload" : "documents" };
+  return { token: String(r.token ?? ""), purpose: r.purpose === "reupload" ? "reupload" : r.purpose === "sign" ? "sign" : "documents" };
 }
 /** A 5-minute link to one of the signed-in person's own onboarding documents. */
 export const myDocumentUrl = async (id: string) => String((await invoke({ action: "my_document_url", id })).url ?? "");

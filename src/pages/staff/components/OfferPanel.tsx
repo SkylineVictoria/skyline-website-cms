@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { formatSignedAt } from "@/lib/signedTime";
-import { LinkInvalidError, NoOfferError, type OfferApi, type OfferView } from "@/lib/staffOnboardingApi";
+import { LinkInvalidError, NoOfferError, myDocumentsLink, type OfferApi, type OfferView } from "@/lib/staffOnboardingApi";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 
@@ -10,7 +10,11 @@ const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text
  * sign. Afterwards it shows the signed copy. Used by /staff/offer (a private link, `api` carries the token) and by the signed-in
  * person's page before they are Active (`api` uses their session). The staff-onboarding function re-checks every call.
  */
-export default function OfferPanel({ api, onInvalid, onSigned, heading = true }: { api: OfferApi; onInvalid: () => void; onSigned?: (view: OfferView) => void; heading?: boolean }) {
+export default function OfferPanel({ api, onInvalid, onSigned, heading = true, acceptViaWizard = false }: {
+  api: OfferApi; onInvalid: () => void; onSigned?: (view: OfferView) => void; heading?: boolean;
+  /** OFFER-SIGN-LAST: the signed-in person accepts here, adds their details and documents in the wizard, and signs on its last screen. */
+  acceptViaWizard?: boolean;
+}) {
   const [view, setView] = useState<OfferView | null>(null);
   const [consentText, setConsentText] = useState("");
   const [error, setError] = useState("");
@@ -23,6 +27,7 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
   const [declining, setDeclining] = useState(false);
   const [reason, setReason] = useState("");
   const [declined, setDeclined] = useState(false);
+  const [showSign, setShowSign] = useState(false);
 
   const handle = useCallback((e: unknown) => {
     if (e instanceof LinkInvalidError || e instanceof NoOfferError) { onInvalid(); return; }
@@ -64,6 +69,17 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
     catch (e) { handle(e); } finally { setBusy(false); }
   };
 
+  // Accept and continue: open the document wizard (its last screen signs the offer). When the documents are already in, sign here.
+  const accept = async () => {
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const link = await myDocumentsLink();
+      if (link.purpose === "sign" || !link.token) { setShowSign(true); setBusy(false); return; }
+      window.location.assign(`/staff/onboard#t=${link.token}`);
+    } catch (e) { handle(e); setBusy(false); }
+  };
+
   if (declined || view?.offer.declinedAt) {
     return (
       <section className="rounded-card border border-background-200 bg-background-50 p-6" data-testid="offer-declined">
@@ -76,6 +92,18 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
   if (!view) return error ? <p role="alert" className={ALERT}>{error}</p> : <p className="text-sm text-foreground-600" role="status">Opening your offer…</p>;
 
   const signed = Boolean(view.offer.signedAt);
+  const declineForm = (
+    <div className="mt-4 max-w-xl rounded-md border border-background-300 p-4" data-testid="offer-decline-form">
+      <Field label="Reason (optional)" hint="Shared with the HR team only.">
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} rows={3}
+          className="w-full rounded-md border border-background-300 px-3 py-2 text-sm" data-testid="offer-decline-reason" />
+      </Field>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button type="button" variant="danger" disabled={busy} onClick={() => void decline()} data-testid="offer-decline-confirm">{busy ? "Sending…" : "Decline the offer"}</Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(false)}>Cancel</Button>
+      </div>
+    </div>
+  );
   return (
     <>
       {heading ? <>
@@ -112,7 +140,17 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
         <button type="button" onClick={() => loadPdf(view)} className="mt-2 cursor-pointer text-xs text-foreground-600 hover:text-foreground-900">Letter not showing? Load it again</button>
       </section>
 
-      {signed || view.readOnly ? null : (
+      {signed || view.readOnly ? null : acceptViaWizard && !showSign ? (
+        <section className="mt-6 rounded-card border border-background-200 bg-background-50 p-6" data-testid="offer-accept-block">
+          <h2 className="font-heading text-lg font-bold text-foreground-950">Accept or decline</h2>
+          <p className="mt-1 text-sm text-foreground-700">To accept, continue to add your details and documents (passport and the others we need). You sign the offer on the last screen, together with your documents.</p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button type="button" disabled={busy} onClick={() => void accept()} data-testid="offer-accept-continue">{busy ? "Opening…" : "Accept and continue"}</Button>
+            {!declining ? <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(true)} data-testid="offer-decline-open">Decline the offer</Button> : null}
+          </div>
+          {declining ? declineForm : null}
+        </section>
+      ) : (
         <form onSubmit={(e) => void sign(e)} className="mt-6 rounded-card border border-background-200 bg-background-50 p-6" data-testid="offer-sign-form" noValidate>
           <h2 className="font-heading text-lg font-bold text-foreground-950">Sign the offer</h2>
           <div className="mt-4 max-w-md">
@@ -130,18 +168,7 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
             <Button type="submit" disabled={busy} data-testid="offer-accept">{busy ? "Signing…" : "Accept and sign the offer"}</Button>
             {!declining ? <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(true)} data-testid="offer-decline-open">Decline the offer</Button> : null}
           </div>
-          {declining ? (
-            <div className="mt-4 max-w-xl rounded-md border border-background-300 p-4" data-testid="offer-decline-form">
-              <Field label="Reason (optional)" hint="Shared with the HR team only.">
-                <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} rows={3}
-                  className="w-full rounded-md border border-background-300 px-3 py-2 text-sm" data-testid="offer-decline-reason" />
-              </Field>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button type="button" variant="danger" disabled={busy} onClick={() => void decline()} data-testid="offer-decline-confirm">{busy ? "Sending…" : "Decline the offer"}</Button>
-                <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(false)}>Cancel</Button>
-              </div>
-            </div>
-          ) : null}
+          {declining ? declineForm : null}
         </form>
       )}
     </>

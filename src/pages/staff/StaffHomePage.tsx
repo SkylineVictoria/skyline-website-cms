@@ -126,11 +126,11 @@ export default function StaffHomePage() {
             <p className="mt-2 text-sm text-foreground-700" data-testid="staff-home-status">
               {me.status === "offer_signed"
                 ? "Thank you for signing your offer. Next, add your details and documents below; we will let you know when your staff account is active."
-                : `Your offer${onboarding?.position ? ` for ${onboarding.position}` : ""} is ready. Read it and sign it below.`}
+                : `Your offer${onboarding?.position ? ` for ${onboarding.position}` : ""} is ready. Read it, then accept and add your details and documents; you sign on the last screen.`}
             </p>
             <Section title="Your offer letter" testId="staff-preactive-offer">
               {noOffer ? <p className="text-sm text-foreground-700" data-testid="staff-no-offer">There is no offer letter for your account right now. Please contact us if you were expecting one.</p>
-                : <OfferPanel api={myOfferApi} heading={false} onInvalid={() => setNoOffer(true)}
+                : <OfferPanel api={myOfferApi} heading={false} acceptViaWizard onInvalid={() => setNoOffer(true)}
                     onSigned={() => { setMe((current) => (current ? { ...current, status: "offer_signed" } : current)); }} />}
             </Section>
             {me.status === "offer_signed" ? <DocumentsWizardButton /> : null}

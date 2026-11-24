@@ -8,6 +8,7 @@ import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import BankDetailsCard from "@/pages/admin/components/hrms/BankDetailsCard";
+import EmployeeMessages from "@/pages/admin/components/hrms/EmployeeMessages";
 import StaffOnboardingDetail from "@/pages/admin/StaffOnboardingDetail";
 import EmployeeDocumentsUpload from "@/pages/admin/components/EmployeeDocumentsUpload";
 import EmploymentDialog from "@/pages/admin/components/hrms/EmploymentDialog";
@@ -81,7 +82,7 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
   const active = employee.status === "active";
   // EMPLOYEE-PAGE-LAYOUT (2026-11-24, owner: "look like the business page"): back link, header with status and actions, a summary
   // strip, then tabs (Details, Documents, Pay and bank, Signing) in the business page's style.
-  const tab = (["details", "documents", "pay", "signing"] as const).find((t) => t === params.get("tab")) ?? "details";
+  const tab = (["details", "documents", "pay", "signing", "messages"] as const).find((t) => t === params.get("tab")) ?? "details";
   const goTab = (next: string) => setParams(next === "details" ? {} : { tab: next });
   const signIn = employee.hasLogin && employee.passwordSet ? "Can sign in" : employee.hasLogin ? "Link sent" : "No login yet";
   const tabs: Array<{ id: string; label: string; count?: number }> = [
@@ -89,6 +90,7 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
     { id: "documents", label: "Documents", count: employee.documentList.length },
     { id: "pay", label: "Pay and bank" },
     { id: "signing", label: "Signing" },
+    { id: "messages", label: "Messages" },
   ];
   const row = (label: string, value: React.ReactNode) => (
     <div><dt className="text-xs text-foreground-500">{label}</dt><dd className="mt-1 break-words text-sm text-foreground-900">{value || "—"}</dd></div>
@@ -193,6 +195,7 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
       ) : null}
 
       {tab === "signing" ? <SubjectSigningPanel type="employee" id={employee.id} name={fullName(employee)} /> : null}
+      {tab === "messages" ? <EmployeeMessages profileId={employee.id} /> : null}
 
       {editingEmployment ? <EmploymentDialog profileId={employee.id} employment={(employee.employment ?? null) as StaffEmployment | null} onClose={() => setEditingEmployment(false)}
         onSaved={() => { setEditingEmployment(false); setNotice("The employment details were saved."); void load(); }} /> : null}

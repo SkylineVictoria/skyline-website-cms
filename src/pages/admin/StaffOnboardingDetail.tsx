@@ -6,6 +6,9 @@ import {
   StaffAdminError, adminStaffSigning, adminDeactivateStaff, adminListStaff, adminOnboarding, adminOnboardingCheck, adminOnboardingExtras, adminReactivateStaff, adminReopenStaff, adminReviewStaffDocument, adminStaffDetail, staffAdminActions, staffDocumentUrl,
   type OnboardingCheck, type OnboardingExtras, type OnboardingSection, type StaffAdminResult, type StaffDetail, type StaffDocument, type StaffEmail, type StaffEmployment, type StaffOnboarding, type StaffSigning,
 } from "@/lib/staffApi";
+import SubjectSigningPanel from "@/pages/admin/components/signing/SubjectSigningPanel";
+import EmployeeMessages from "@/pages/admin/components/hrms/EmployeeMessages";
+import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import OnboardingStepper from "@/pages/admin/components/hrms/OnboardingStepper";
 import PayDetailsDialog from "@/pages/admin/components/hrms/PayDetailsDialog";
 import EmploymentDialog from "@/pages/admin/components/hrms/EmploymentDialog";
@@ -289,7 +292,7 @@ export default function StaffOnboardingDetail() {
   const target = action ? EMPLOYEE_ACTION_TARGET[action] : null;
 
   // EMPLOYEE-PAGE-LAYOUT (2026-11-24, owner): same layout as the business page: back link, header, summary strip, tabs (?tab=).
-  const tab = (["details", "documents", "offer", "emails"] as const).find((t) => t === params.get("tab")) ?? "details";
+  const tab = (["details", "documents", "offer", "signing", "messages", "emails"] as const).find((t) => t === params.get("tab")) ?? "details";
   const goTab = (next: string) => {
     const nextParams = new URLSearchParams(params);
     if (next === "details") nextParams.delete("tab"); else nextParams.set("tab", next);
@@ -299,6 +302,8 @@ export default function StaffOnboardingDetail() {
     { id: "details", label: "Details" },
     { id: "documents", label: "Documents", count: detail.documents.length },
     { id: "offer", label: "Offer and pay" },
+    { id: "signing", label: "Signing" },
+    { id: "messages", label: "Messages" },
     { id: "emails", label: "Emails and history", count: detail.emails.length },
   ];
   const cell = "bg-background-50 px-4 py-3";
@@ -313,6 +318,7 @@ export default function StaffOnboardingDetail() {
         description={`${activeRole ? `Role: ${ROLE_LABEL[activeRole]} · ` : ""}${employment?.jobTitle ? `${employment.jobTitle} · ` : ""}Documents approved ${summary.approved}/${summary.required}${joining ? ` · Joining ${new Date(`${joining}T00:00:00`).toLocaleDateString()}` : ""}`}
         actions={<>
           <span data-testid="staff-detail-status"><Badge tone={STAFF_STATUS_TONE[profile.status]}>{STAFF_STATUS_LABEL[profile.status]}</Badge></span>
+          <MessagePersonButton kind="staff" refId={profile.id} name={name} />
           {actions.map((a, i) => (
             <Button key={a} variant={EMPLOYEE_ACTION[a].danger ? "outline" : i === 0 ? "primary" : "outline"} onClick={() => openAction(a)} data-testid={`staff-action-${a}`}>{EMPLOYEE_ACTION[a].label}</Button>
           ))}
@@ -533,6 +539,9 @@ export default function StaffOnboardingDetail() {
           {flow?.offerLetter ? <p className="mt-2 text-xs text-foreground-600" data-testid="staff-offer-template">Letter “{flow.offerLetter.title}” made from the “{flow.offerLetter.templateName}” template on {when(flow.offerLetter.createdAt)}. Later template edits do not change it.</p> : null}
         </div></Card>
       </>) : null}
+
+      {tab === "signing" ? <SubjectSigningPanel type="employee" id={profile.id} name={name} /> : null}
+      {tab === "messages" ? <EmployeeMessages profileId={profile.id} /> : null}
 
       {tab === "emails" ? (<>
         <Card className="p-5"><div data-testid="staff-emails">

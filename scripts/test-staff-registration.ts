@@ -4897,3 +4897,33 @@ test("OMARA: Brave / Tavily request shapes, hits filtered to the register, one G
   assert.ok(read("src/pages/admin/components/OmaraAgentsPanel.tsx").includes("not for marketing"));
   assert.ok(read("supabase/config.toml").includes("[functions.omara-discovery]\n# OMARA-DISCOVERY") && /\[functions\.omara-discovery\][\s\S]*?verify_jwt = true/.test(read("supabase/config.toml")));
 });
+
+test("Business Documents tab (2026-11-24): upload / view / resend / change email checked and logged in the database, never a certificate", () => {
+  const sql = read("supabase/migrations/20261124191517_business_document_actions.sql").replace(/\r\n/g, "\n");
+  // Every new staff function starts with the SLIT administrator check (server-side, not hidden buttons).
+  for (const fn of ["admin_business_document_add", "admin_business_document_status", "admin_business_resend_prepare", "admin_business_signed_copy_logged", "admin_business_contact_email_change"]) {
+    const body = sql.slice(sql.indexOf(`function public.${fn}(`));
+    assert.match(body.slice(0, 1500), /perform public\.admin_business_require\(\);/, `${fn} checks the administrator`);
+  }
+  assert.match(sql, /check \(kind in \('agent_agreement', 'id', 'insurance', 'other'\)\)/);
+  for (const event of ["document_uploaded", "application_resent", "signed_copy_sent", "email_changed"]) assert.ok(sql.includes(`'${event}'`), `event ${event} logged`);
+  // Resend: same request (no new one), expired link rotated, cooldown from a Business Rule; the signed copy never includes a certificate.
+  assert.ok(!/insert into hr\.sign_requests/.test(sql) && sql.includes("delete from hr.sign_tokens where recipient_id = c.id"));
+  assert.ok(sql.includes("'agents.document_resend_cooldown_minutes'") && sql.includes("Sent a moment ago."));
+  const edge = read("supabase/functions/document-signing/onboarding.ts");
+  const resend = edge.slice(edge.indexOf("export async function resendBusinessApplication"), edge.indexOf("export async function changeBusinessContactEmail"));
+  assert.ok(resend.includes('"form"') && resend.includes('"agreement"') && !/certificate"|certificate_content/.test(resend));
+  // Change email: unique among agents only; the login moves first and back again if the database refuses.
+  assert.match(sql, /'This email is already in use'/);
+  assert.ok(!/from public\.(students|enrollment_students|cms_users) [a-z]+ where lower/.test(sql.slice(sql.indexOf("admin_business_contact_email_change"))));
+  const change = edge.slice(edge.indexOf("export async function changeBusinessContactEmail"));
+  assert.ok(change.indexOf("p_apply: false") < change.indexOf("changeEmail(check.authUserId, check.new)") && change.includes("changeEmail(check.authUserId!, check.old)"));
+  assert.ok(read("supabase/functions/document-signing/index.ts").includes("updateUserById(authUserId, { email, email_confirm: true })"));
+  // Screens: 60-second links, View only for PDF / pictures, the bucket's types and size checked first, every certificate kind still refused by the RPC.
+  const data = read("src/pages/admin/lib/businessData.ts");
+  assert.ok(data.includes("createSignedUrl(path, 60,") && data.includes('["pdf", "png", "jpg", "jpeg"].includes(extensionOf(name))'));
+  for (const ext of ["pdf", "png", "jpg", "jpeg", "doc", "docx"]) assert.ok(data.includes(`${ext}: "`), ext);
+  const ui = read("src/pages/admin/components/BusinessDocumentActions.tsx");
+  assert.ok(ui.includes("Resend application") && ui.includes("Email signed copy") && ui.includes("Last sent") && ui.includes("Other documents") && ui.includes('aria-label="Change email"'));
+  assert.ok(read("src/pages/admin/lib/agentOnboarding.ts").includes("export async function viewOnboardingFile"));
+});

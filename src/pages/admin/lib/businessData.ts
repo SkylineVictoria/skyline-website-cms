@@ -106,7 +106,8 @@ export interface BusinessDetail {
   profile?: Record<string, string>;
 }
 
-export interface BusinessDocument { id: string; kind: "agent_agreement" | "other"; fileName: string; path: string; size: number; createdAt: string; uploadedBy: string; reason?: string | null }
+export type BusinessDocumentKind = "agent_agreement" | "id" | "insurance" | "other";
+export interface BusinessDocument { id: string; kind: BusinessDocumentKind; fileName: string; path: string; size: number; createdAt: string; uploadedBy: string; reason?: string | null }
 
 export interface ApplicationRow {
   id: string;
@@ -240,24 +241,100 @@ const DOCUMENT_BUCKET = "business-documents";
 /** Business Rules agents.signed_copy_upload_max_mb (15 before the rule; 15 MB is also the bucket's ceiling). The database checks it too. */
 export const businessDocumentLimitMb = () => Math.min(15, Math.max(1, Math.round(ruleNumber("agents.signed_copy_upload_max_mb", 15))));
 
-/** Uploads a signed agreement (or other document) to the private bucket and records it against the business. */
-export async function uploadBusinessDocument(businessId: string, file: File, kind: BusinessDocument["kind"] = "agent_agreement", reason = "") {
-  if (file.size > businessDocumentLimitMb() * 1024 * 1024) throw new Error(`The file is larger than ${businessDocumentLimitMb()} MB.`);
+/** The Documents tab's upload kinds (2026-11-24); "Agreement" stands in for the online agreement, so it needs a reason (the database checks it). */
+export const BUSINESS_DOCUMENT_KINDS: Array<{ value: BusinessDocumentKind; label: string }> = [
+  { value: "agent_agreement", label: "Agreement" }, { value: "id", label: "ID" }, { value: "insurance", label: "Insurance" }, { value: "other", label: "Other" },
+];
+export const businessDocumentKindLabel = (kind: string) => BUSINESS_DOCUMENT_KINDS.find((k) => k.value === kind)?.label ?? "Other";
+/** What the business-documents bucket accepts (its allowed MIME types): checked before uploading so staff get a plain message. */
+export const BUSINESS_DOCUMENT_TYPES: Record<string, string> = {
+  pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+  doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+};
+const extensionOf = (name: string) => (name.split(".").pop() ?? "").toLowerCase();
+/** The file's problem for the bucket (type or size), or null. */
+export function businessDocumentProblem(file: { name: string; size: number; type?: string }): string | null {
+  const ext = extensionOf(file.name);
+  if (!BUSINESS_DOCUMENT_TYPES[ext]) return "Choose a PDF, PNG, JPG, DOC or DOCX file.";
+  if (file.size <= 0) return "The file is empty.";
+  if (file.size > businessDocumentLimitMb() * 1024 * 1024) return `The file is larger than ${businessDocumentLimitMb()} MB.`;
+  return null;
+}
+/** PDFs and pictures open in the browser; Word files only download. */
+export const opensInBrowser = (name: string) => ["pdf", "png", "jpg", "jpeg"].includes(extensionOf(name));
+
+/** Uploads a document to the private bucket and records it against the business (the database checks the administrator and logs it). */
+export async function uploadBusinessDocument(businessId: string, file: File, kind: BusinessDocumentKind = "agent_agreement", reason = "") {
+  const problem = businessDocumentProblem(file);
+  if (problem) throw new Error(problem);
   // A signed copy instead of the online agreement needs a reason (kept on the record and in the onboarding history); the server checks it too.
-  if (kind === "agent_agreement" && reason.trim().length < 5) throw new Error("Give the reason for recording a signed copy instead of the online agreement.");
+  if (kind === "agent_agreement" && reason.trim().length < Math.max(1, ruleNumber("agents.onboarding_reason_min_chars", 5))) throw new Error("Give the reason for recording a signed copy instead of the online agreement.");
   const safe = file.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80) || "document";
   const path = `${businessId}/${crypto.randomUUID()}-${safe}`;
-  const { error } = await supabase.storage.from(DOCUMENT_BUCKET).upload(path, file, { contentType: file.type || undefined, upsert: false });
+  const { error } = await supabase.storage.from(DOCUMENT_BUCKET).upload(path, file, { contentType: BUSINESS_DOCUMENT_TYPES[extensionOf(file.name)] || file.type || undefined, upsert: false });
   if (error) throw new Error(error.message || "We could not upload this file.");
   await call<{ id: string }>("admin_business_document_add", { p_business: businessId, p_kind: kind, p_path: path, p_name: file.name, p_size: file.size, p_reason: reason.trim() || null }, "We could not save this document.");
 }
 
 export const removeBusinessDocument = (id: string) => call<{ ok: boolean }>("admin_business_document_remove", { p_id: id }, "We could not remove this document.");
 
-export async function openBusinessDocument(path: string) {
-  const { data, error } = await supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(path, 120);
+/** A 60-second link to an uploaded document (the bucket lets SLIT administrators only make one): inline, or as a download. */
+async function businessDocumentUrl(path: string, downloadName?: string): Promise<string> {
+  const { data, error } = await supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(path, 60, downloadName ? { download: downloadName } : undefined);
   if (error || !data?.signedUrl) throw new Error("We could not open this document.");
-  window.open(data.signedUrl, "_blank", "noopener");
+  return data.signedUrl;
+}
+/**
+ * Opens a tab at once (inside the tap, so phones do not block it) and points it at the document when its address is ready; when the
+ * browser refused the tab, the current page goes there instead.
+ */
+export async function openInNewTab(address: () => Promise<string>): Promise<void> {
+  const tab = window.open("", "_blank");
+  try {
+    const url = await address();
+    if (tab) { tab.opener = null; tab.location.href = url; } else window.location.assign(url);
+  } catch (e) { tab?.close(); throw e; }
+}
+export const viewBusinessDocument = (path: string) => openInNewTab(() => businessDocumentUrl(path));
+export async function downloadBusinessDocument(path: string, name: string) { window.location.assign(await businessDocumentUrl(path, name)); }
+/** Kept for older callers: opens the document (inline when the browser can show it). */
+export const openBusinessDocument = (path: string) => viewBusinessDocument(path);
+
+/** The Documents tab's state: the agency admin (point of contact), whether the application is signed, the last resend and the wait. */
+export interface BusinessDocumentStatus {
+  onboardingId: string | null; applicationSent: boolean; applicationSigned: boolean; hasAgreement: boolean;
+  contact: { agentId: string; name: string; email: string; hasLogin: boolean } | null;
+  lastSentAt: string | null; waitSeconds: number;
+}
+export const businessDocumentStatus = (id: string) => call<BusinessDocumentStatus>("admin_business_document_status", { p_business: id }, "We could not load this business’s document status.");
+
+/** Resend application (unsigned: the same signing link again, rotated when expired) or email the signed copies (document-signing). */
+export async function resendBusinessApplication(id: string): Promise<{ mode: "resent" | "signed"; to: string; linkRotated?: boolean; files?: string[]; mail?: { sent: number; failed: number; requeued: number } }> {
+  const { signingAction } = await import("@/lib/signingApi");
+  return await signingAction({ action: "agent_onboarding_business_resend", agencyId: id });
+}
+
+/**
+ * Change the agency admin's email (document-signing agent_onboarding_contact_email: records, waiting signing links, login). A sign-in
+ * invitation that was waiting at the old address is withdrawn by the database; a new one goes to the new address from here.
+ */
+export async function changeBusinessContactEmail(businessId: string, email: string, reason: string): Promise<{ message: string; warning?: string }> {
+  const { signingAction } = await import("@/lib/signingApi");
+  const result = await signingAction<{ old: string; new: string; signingLinks: number; loginChanged: boolean; reinvite: Array<{ role: "agency_admin" | "agent"; name: string }> }>(
+    { action: "agent_onboarding_contact_email", agencyId: businessId, email, reason });
+  const parts = [`Email changed to ${result.new}.`];
+  if (result.signingLinks) parts.push(`New signing link${result.signingLinks === 1 ? "" : "s"} sent; the old link${result.signingLinks === 1 ? " no longer works" : "s no longer work"}.`);
+  if (result.loginChanged) parts.push("They now sign in with the new email.");
+  let warning: string | undefined;
+  for (const invite of result.reinvite ?? []) {
+    try {
+      await invokePortalUsers({ action: "invite", email: result.new, name: invite.name, role: invite.role, agencyId: businessId, redirectTo: portalPasswordResetUrl() });
+      parts.push("Sign-in invitation sent to the new email.");
+    } catch (e) {
+      warning = `The old sign-in invitation was withdrawn, but a new one could not be sent: ${e instanceof Error ? e.message : "try Resend invitation on the Agents tab"}.`;
+    }
+  }
+  return { message: parts.join(" "), warning };
 }
 
 export const listBusinessAgents = (id: string) => call<DirectoryAgent[]>("admin_business_agents", { p_business: id }, "We could not load this business’s agents.");

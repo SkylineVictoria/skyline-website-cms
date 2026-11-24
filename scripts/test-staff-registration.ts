@@ -2969,7 +2969,7 @@ async function pdfFonts(bytes: Uint8Array): Promise<string[][]> {
   });
 }
 
-test("businesses (2026-11-20): an Active business offers only Active / Inactive and never goes back to Onboarding; Delete business only for SLIT admins at Application sent, removes everything silently, the link says no longer available", async () => {
+test("businesses (2026-11-20): an Active business offers only Active / Inactive and never goes back to Onboarding; Delete business only for SLIT admins once Inactive or at Application sent, removes everything silently, the link says no longer available", async () => {
   const del = await load.import<typeof import("../src/pages/admin/lib/businessDelete.ts")>("../src/pages/admin/lib/businessDelete.ts");
   // 1. The dropdown: Active and Inactive only (the status catalog also has Onboarding).
   const catalog = [{ value: "Active", label: "Active" }, { value: "Inactive", label: "Inactive" }, { value: "Onboarding", label: "Onboarding" }];
@@ -2985,17 +2985,20 @@ test("businesses (2026-11-20): an Active business offers only Active / Inactive 
   assert.equal(del.canOfferBusinessDelete(row(), true), true);
   assert.equal(del.canOfferBusinessDelete(row(), false), false, "other staff: hidden");
   for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), false, `${label}: hidden`);
-  for (const status of ["Active", "Inactive"]) assert.equal(del.canOfferBusinessDelete(row({ status }), true), false, `${status}: hidden`);
+  assert.equal(del.canOfferBusinessDelete(row({ status: "Active" }), true), false, "Active: hidden");
+  assert.equal(del.canOfferBusinessDelete(row({ status: "Inactive", onboardingLabel: "Ready for review" }), true), true, "Inactive: offered (owner 2026-11-24)");
   for (const code of ["SLIT-DIRECT", "TEST-VIEW", "slit-direct"]) assert.equal(del.canOfferBusinessDelete(row({ agencyCode: code }), true), false, `${code}: never`);
   // 2026-11-20 follow-up: the admin role is read whatever its case; every other row gets a reason (the greyed-out icon's tooltip).
   assert.deepEqual(["Admin", "admin", " ADMIN ", "Editor", "", null].map((r) => del.isSlitAdmin(r as string)), [true, true, true, false, false, false]);
   assert.equal(del.deleteBlockReason(row(), true), null);
   assert.match(del.deleteBlockReason(row(), false)!, /Only a SLIT administrator/);
   assert.match(del.deleteBlockReason(row({ agencyCode: "SLIT-DIRECT", status: "Active" }), true)!, /never be deleted/);
-  assert.match(del.deleteBlockReason(row({ status: "Active", onboardingLabel: null }), true)!, /Already onboarded: make it Inactive/);
-  assert.match(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: null }), true)!, /stays Inactive/);
-  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Not sent yet" }), true)!, /Not sent yet/);
-  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Awaiting referees" }), true)!, /^Awaiting referees: the application is signed/);
+  assert.match(del.deleteBlockReason(row({ status: "Active", onboardingLabel: null }), true)!, /Make it Inactive first/);
+  assert.equal(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: null }), true), null);
+  assert.equal(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: "Awaiting referees" }), true), null);
+  assert.match(del.deleteBlockReason(row({ status: "Inactive", students: 1 }), true)!, /stays Inactive/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Not sent yet" }), true)!, /Make it Inactive first/);
+  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Awaiting referees" }), true)!, /Make it Inactive first/);
   assert.match(del.deleteBlockReason(row({ students: 2 }), true)!, /students or applications/);
   const listPage = read("src/pages/admin/BusinessesPage.tsx");
   assert.ok(listPage.includes("const isAdmin = isSlitAdmin(user?.role);") && listPage.includes("title={reason}") && listPage.includes("border-red-300"), "red Delete where possible, a tooltip elsewhere");

@@ -15,16 +15,14 @@ type DeleteRow = { status: string; onboardingLabel?: string | null; agencyCode?:
 export function deleteBlockReason(row: DeleteRow, isAdmin: boolean): string | null {
   if (!isAdmin) return "Only a SLIT administrator can delete a business.";
   if ((SYSTEM_BUSINESS_CODES as readonly string[]).includes(String(row.agencyCode ?? "").toUpperCase())) return "SLIT's own business: it can never be deleted.";
-  if (Number(row.students ?? 0) > 0 || Number(row.applications ?? 0) > 0) return "Has students or applications: make it Inactive instead.";
-  if (row.status === "Active") return "Already onboarded: make it Inactive instead.";
-  if (row.status === "Inactive") return "Only a business at Application sent can be deleted; this one stays Inactive.";
+  if (Number(row.students ?? 0) > 0 || Number(row.applications ?? 0) > 0) return "Has students or applications: their records are kept, so it stays Inactive.";
+  if (row.status === "Inactive") return null;
+  if (row.status === "Active") return "Make it Inactive first, then delete it.";
   if (row.status === "Onboarding" && row.onboardingLabel === "Application sent") return null;
-  if (row.status === "Onboarding" && (!row.onboardingLabel || row.onboardingLabel === "Not sent yet")) return "Not sent yet: only a business at Application sent can be deleted.";
-  if (row.status === "Onboarding") return `${row.onboardingLabel}: the application is signed, so it cannot be deleted. Make it Inactive instead.`;
-  return "Only a business at Application sent can be deleted.";
+  return "Make it Inactive first, then delete it.";
 }
 
-/** Delete business is offered for this row: a SLIT administrator, the application at "Application sent", not a system business. */
+/** Delete business is offered for this row: a SLIT administrator, the business Inactive (or its application still at "Application sent"), not a system business, no students or applications. */
 export const canOfferBusinessDelete = (row: DeleteRow, isAdmin: boolean) => deleteBlockReason(row, isAdmin) === null;
 
 /** The typed confirmation: the business name (case and spaces ignored) or its ABN (digits only). */

@@ -39,9 +39,11 @@ const num = "w-20";
 
 function Limits({ s, set }: { s: Step; set: (s: Step) => void }) {
   const lab = "flex items-center gap-1.5 text-xs text-foreground-700";
+  // A saved step without a limit shows the Business Rules value the server uses for it.
+  const d = newStep(s.type);
   const times = <>
-    <label className={lab}>From<TextInput type="time" className="w-28" value={s.earliest ?? "08:00"} onChange={(e) => set({ ...s, earliest: e.target.value })} /></label>
-    <label className={lab}>to<TextInput type="time" className="w-28" value={s.latest ?? "21:00"} onChange={(e) => set({ ...s, latest: e.target.value })} /></label>
+    <label className={lab}>From<TextInput type="time" className="w-28" value={s.earliest ?? d.earliest} onChange={(e) => set({ ...s, earliest: e.target.value })} /></label>
+    <label className={lab}>to<TextInput type="time" className="w-28" value={s.latest ?? d.latest} onChange={(e) => set({ ...s, latest: e.target.value })} /></label>
   </>;
   switch (s.type) {
     case "other_trainer": return <label className={lab}><input type="checkbox" checked={s.onlyCourseTrainers ?? true} onChange={(e) => set({ ...s, onlyCourseTrainers: e.target.checked })} />Only trainers on this course or unit</label>;
@@ -51,15 +53,15 @@ function Limits({ s, set }: { s: Step; set: (s: Step) => void }) {
       <span className="flex flex-wrap gap-1">{DAY.map((d, i) => { const on = (s.days ?? []).includes(i); return <button key={d} type="button" aria-pressed={on}
         onClick={() => set({ ...s, days: on ? (s.days ?? []).filter((x) => x !== i) : [...(s.days ?? []), i].sort() })}
         className={`rounded-md border px-2 py-0.5 text-xs font-semibold ${on ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-500"}`}>{d}</button>; })}</span>
-      <label className={lab}>Within<TextInput type="number" min={1} max={90} className={num} value={s.withinDays ?? 14} onChange={(e) => set({ ...s, withinDays: Number(e.target.value) })} />days</label>
+      <label className={lab}>Within<TextInput type="number" min={1} max={90} className={num} value={s.withinDays ?? d.withinDays} onChange={(e) => set({ ...s, withinDays: Number(e.target.value) })} />days</label>
       {times}
       <span className="text-xs text-foreground-500">Always before the unit ends.</span>
     </>;
-    case "join_other_intake": return <label className={lab}>Group of up to<TextInput type="number" min={1} className={num} value={s.maxExtraSeats ?? 6} onChange={(e) => set({ ...s, maxExtraSeats: Number(e.target.value) })} />students</label>;
+    case "join_other_intake": return <label className={lab}>Group of up to<TextInput type="number" min={1} className={num} value={s.maxExtraSeats ?? d.maxExtraSeats} onChange={(e) => set({ ...s, maxExtraSeats: Number(e.target.value) })} />students</label>;
     case "spread": return <>
-      <label className={lab}>Up to<TextInput type="number" min={15} step={15} className={num} value={s.maxExtraMinutes ?? 60} onChange={(e) => set({ ...s, maxExtraMinutes: Number(e.target.value) })} />extra minutes a class</label>
-      <label className={lab}>over the next<TextInput type="number" min={1} max={20} className={num} value={s.maxClasses ?? 4} onChange={(e) => set({ ...s, maxClasses: Number(e.target.value) })} />classes</label>
-      <label className={lab}>Add time<Select value={s.addAt ?? "end"} onChange={(e) => set({ ...s, addAt: e.target.value as "end" | "start" })}><option value="end">at the end</option><option value="start">at the start</option></Select></label>
+      <label className={lab}>Up to<TextInput type="number" min={ruleNumber("lms.reschedule_spread_step_minutes", 15)} step={ruleNumber("lms.reschedule_spread_step_minutes", 15)} className={num} value={s.maxExtraMinutes ?? d.maxExtraMinutes} onChange={(e) => set({ ...s, maxExtraMinutes: Number(e.target.value) })} />extra minutes a class</label>
+      <label className={lab}>over the next<TextInput type="number" min={1} max={20} className={num} value={s.maxClasses ?? d.maxClasses} onChange={(e) => set({ ...s, maxClasses: Number(e.target.value) })} />classes</label>
+      <label className={lab}>Add time<Select value={s.addAt ?? d.addAt} onChange={(e) => set({ ...s, addAt: e.target.value as "end" | "start" })}><option value="end">at the end</option><option value="start">at the start</option></Select></label>
     </>;
     case "online": return <label className={lab}><input type="checkbox" checked={s.international ?? false} onChange={(e) => set({ ...s, international: e.target.checked })} />Allowed when the group has international students</label>;
   }

@@ -65,7 +65,8 @@ export async function removeCmsObject(bucketName?: string, storagePath?: string)
 
 export async function uploadCmsImage(file: File): Promise<string> {
   const allowed = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
-  if (!allowed.has(file.type) || file.size === 0 || file.size > 5 * 1024 * 1024) throw new Error("Choose a PNG, JPEG, WebP or GIF image up to 5 MB.");
+  const maxMb = ruleNumber("cms.image_upload_limit_mib", 5);
+  if (!allowed.has(file.type) || file.size === 0 || file.size > maxMb * 1024 * 1024) throw new Error(`Choose a PNG, JPEG, WebP or GIF image up to ${maxMb} MB.`);
   await resolveTenantSite();
   const tenant = currentTenantSite();
   const bucket = tenant ? TENANT_PUBLIC_MEDIA_BUCKET : CMS_MEDIA_BUCKET;

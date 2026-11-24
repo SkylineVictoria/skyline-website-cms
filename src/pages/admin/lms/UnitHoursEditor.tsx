@@ -3,7 +3,7 @@
 // Used from Courses > Units ("Edit all hours") and as step 3 of the new course wizard.
 import { useEffect, useMemo, useState } from "react";
 import { Button, Modal } from "@/pages/admin/components/ui";
-import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestHours, weeksForHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
+import { HOURS_PER_WEEK, loadUnitHours, roundWeeks, rto, saveUnitHours, shownHours, suggestHours, weeksForHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
 
 type Row = HoursSplit & { unit: RtoUnit; accepted: boolean; touched: boolean };
 const PARTS = [["theoryHours", "Theory"], ["practicalHours", "Practical"], ["assessmentHours", "Assessment"]] as const;
@@ -48,7 +48,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
   const bad = rows.filter(r => r.slitHours <= 0 || sumOf(r) !== r.slitHours);
   const total = rows.reduce((t, r) => t + r.slitHours, 0);
   const toAccept = rows.filter(r => !r.accepted || r.touched).length;
-  const weeks = useMemo(() => Math.ceil((total / HOURS_PER_WEEK) * 2) / 2, [total]);
+  const weeks = useMemo(() => roundWeeks(total / HOURS_PER_WEEK), [total]);
 
   const fillFromNominal = () => setRows(list => list.map(r => (r.accepted || r.unit.nominalHours === null ? r
     : { ...r, ...suggestHours(r.unit.nominalHours), touched: true })));
@@ -64,7 +64,7 @@ export default function UnitHoursEditor({ course, onClose, onSaved, stepLabel, n
         const done = await Promise.all(todo.slice(i, i + 6).map(async r => ({ r, out: await saveUnitHours(r.unit.id as string, { slitHours: r.slitHours, theoryHours: r.theoryHours, practicalHours: r.practicalHours, assessmentHours: r.assessmentHours }) })));
         for (const { r, out } of done) durations.set(out.unitId, weeksForHours(out.slitHours ?? r.slitHours));
       }
-      // Each unit's duration follows its SLIT hours (20 hours a week).
+      // Each unit's duration follows its SLIT hours (HOURS_PER_WEEK, lms.unit_duration_weekly_hours).
       if (durations.size) await rto("units_save", { courseId: course.id, units: detail.units.map(u => (u.id && durations.has(u.id) ? { ...u, defaultWeeks: durations.get(u.id) } : u)) });
       setRows(list => list.map(r => ({ ...r, accepted: true, touched: false })));
       setSaved(true); onSaved();

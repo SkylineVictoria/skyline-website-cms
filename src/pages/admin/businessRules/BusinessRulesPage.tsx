@@ -10,9 +10,10 @@ import SimpleSettings from "./SimpleSettings";
 import StudentWizardRules from "./StudentWizardRules";
 import EmployeeWizardRules from "./EmployeeWizardRules";
 import { appliesTo, awaitingIntegration, definitionSummary, locationLabel, newDefinition, reschedulingEditor, reschedulingRulesRoute, ruleLocations, timetableRulesRoute, timetableRulesScope, valueSummary, type Definition, type Rule, type Snapshot, isSystemRule } from "./model";
+import { institutionTimeZone, institutionToday } from "@/lib/timeZone";
 
-const dayInVictoria = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: "Australia/Melbourne" });
+const dayInVictoria = () => institutionToday();
+const dateTime = (date: string) => new Date(date).toLocaleString("en-AU", { timeZone: institutionTimeZone() });
 const empty: Snapshot = { rules: [], categories: [], fields: [], history: [] };
 // rule-policy: technical table-labels Displays labels for persisted rule metadata.
 const AREAS: Record<string, string> = {

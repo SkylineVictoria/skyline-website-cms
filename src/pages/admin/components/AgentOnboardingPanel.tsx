@@ -14,6 +14,8 @@ import type { BusinessDetail } from "@/pages/admin/lib/businessData";
 import { AGENT_ONBOARDING_FIELDS, commissionText, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
 import { abrFactLines, type AbrFacts } from "../../../../supabase/functions/_shared/validation/abr";
 import { commissionProblem, commissionSuggested } from "@/pages/agency/lib/admissionsRules";
+/** Business Rules agents.onboarding_reason_min_chars: the shortest reason for an override, a decline or a signed copy (the database checks the same). */
+const reasonMin = () => Math.max(1, Math.round(ruleNumber("agents.onboarding_reason_min_chars", 5)));
 
 /**
  * Businesses > {name}: agent onboarding in stages. The application form (F04) goes to the agent; when signed, a referee check (F05) goes
@@ -148,7 +150,7 @@ const COMBINED_STEPS: Array<{ label: string; stages: OnboardingStage[] }> = [
 const STAGE_LABEL_SHORT: Partial<Record<OnboardingStage, string>> = { declined: "Declined", cancelled: "Closed", expired: "Expired", agreement_signed: "Agreement signed", legacy: "Sent as one document" };
 /** The status line of the business page: where it is up to and what happens next. */
 function statusWords(row: OnboardingRow): string {
-  const received = row.referees.filter((r) => r.status === "received").length, total = row.referees.length || 2;
+  const received = row.referees.filter((r) => r.status === "received").length, total = row.referees.length || ruleNumber("agents.activation_reference_minimum", 2);
   const open = row.corrections?.find((c) => c.status === "open");
   switch (row.stage) {
     case "application_sent": return `Application sent to ${row.agent.name} (${row.agent.email})${row.application?.sentAt ? ` on ${new Date(row.application.sentAt).toLocaleDateString()}` : ""}: waiting for them to sign.`;
@@ -230,7 +232,7 @@ function StagedOnboarding({ row, busy, compact = false, onOpen, onRemind, onDown
     </div>
     <div className="space-y-2 rounded-lg border border-background-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm font-medium text-foreground-900">2. Referee checks (F05) · {received} of {row.referees.length || 2} received</p>
+        <p className="text-sm font-medium text-foreground-900">2. Referee checks (F05) · {received} of {row.referees.length || ruleNumber("agents.activation_reference_minimum", 2)} received</p>
         <span className="flex flex-wrap gap-1.5">
           {!compact && pendingSend ? <Button size="sm" variant="outline" disabled={busy === "referees"} onClick={onSendReferees} data-testid="send-referees">Send referee checks</Button> : null}
         </span>
@@ -318,7 +320,7 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
   const approving = approve || combined;
   // Approve and activate agency (2026-11-18) sends the agreement in the same step; a plain send is only the retry after Approve.
   const override = !approve && !combined && row.stage !== "references_approved";
-  const received = row.referees.filter((r) => r.status === "received").length, total = row.referees.length || 2;
+  const received = row.referees.filter((r) => r.status === "received").length, total = row.referees.length || ruleNumber("agents.activation_reference_minimum", 2);
   // Business Rules: whether approval waits for every referee (agents.business_approval_waits_for_referees), whether a SLIT witness is
   // required (agents.slit_witness_on_agreement) and how long the agreement runs (agents.agreement_term_years). The server checks the first two.
   const waitReferees = ruleText("agents.business_approval_waits_for_referees", "Approve without waiting") === "Wait for every referee";
@@ -339,7 +341,7 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
   // 2026-11-21: SLIT signed the agreement when the application was sent: Approve issues it without asking for the signatory again.
   const presigned = combined && !!row.slitSignatory;
   const ready = !!prepared && termsReady && (presigned || (adminName.trim().length >= 2 && adminPosition.trim().length > 0 && (method === "typed" || (method === "drawn" ? !!png : !!prepared?.admin.signaturePng))))
-    && (!override || reason.trim().length >= 5) && witnessReady && !(approving && waitReferees && received < total);
+    && (!override || reason.trim().length >= reasonMin()) && witnessReady && !(approving && waitReferees && received < total);
   const send = async () => {
     if (!ready || busy) return;
     setBusy(combined ? "Issuing the agreement…" : "Preparing the agreement…"); setError("");
@@ -418,14 +420,14 @@ function SendAgreementDialog({ row, agencyId, agencyName, approve = false, onClo
 function DeclineDialog({ row, onClose, onDeclined }: { row: OnboardingRow; onClose: () => void; onDeclined: (message: string) => Promise<void> }) {
   const [reason, setReason] = useState(""); const [working, setWorking] = useState(false); const [error, setError] = useState("");
   const decline = async () => {
-    if (working || reason.trim().length < 5) return;
+    if (working || reason.trim().length < reasonMin()) return;
     setWorking(true); setError("");
     try { const r = await rejectOnboarding({ onboardingId: row.id, reason: reason.trim() }); await onDeclined(`Application declined. ${r.emailed ? `${r.agent.name} was told politely (without the reason).` : "The agency admin could not be emailed; tell them yourself."}`); }
     catch (e) { setError(e instanceof Error ? e.message : "The application could not be declined."); setWorking(false); }
   };
   return <Modal open title={`Decline application: ${row.agent.name}`} onClose={() => { if (!working) onClose(); }} width="max-w-xl"
     footer={<div className="flex justify-end gap-2"><Button variant="outline" disabled={working} onClick={onClose}>Cancel</Button>
-      <Button variant="outline" icon="ri-close-circle-line" disabled={working || reason.trim().length < 5} onClick={() => void decline()} data-testid="reject-confirm">{working ? "Declining…" : "Decline this application"}</Button></div>}>
+      <Button variant="outline" icon="ri-close-circle-line" disabled={working || reason.trim().length < reasonMin()} onClick={() => void decline()} data-testid="reject-confirm">{working ? "Declining…" : "Decline this application"}</Button></div>}>
     <div className="space-y-3" data-testid="decline-dialog">
       <p className="text-sm text-foreground-700">Declining closes this onboarding: its open requests are voided, the agency admin gets a polite email without your reason, and nobody from the business can sign in. You can start the onboarding again later (Resend link).</p>
       {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2 text-sm text-red-700">{error}</p> : null}

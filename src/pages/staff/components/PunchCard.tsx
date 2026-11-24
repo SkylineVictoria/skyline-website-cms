@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/pages/admin/components/ui";
 import { getTimeStatus, punch, type PunchKind, type TimeStatus } from "@/lib/hrmsApi";
 import { FLAG_LABEL, PUNCH_LABEL, STATE_LABEL, elapsedLabel, fmtDate, fmtTime, minutesToHm, tzAbbrev } from "@/lib/hrTime";
+import { institutionTimeZone } from "@/lib/timeZone";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const isMobile = () => typeof window !== "undefined" && window.matchMedia("(max-width: 640px)").matches;
@@ -31,7 +32,7 @@ export default function PunchCard({ onChange }: { onChange?: () => void } = {}) 
   };
 
   const now = tick + offset;
-  const tz = status?.timezone ?? "Australia/Melbourne";
+  const tz = status?.timezone ?? institutionTimeZone();
   const working = status?.state === "punch_in" || status?.state === "break_end";
   const onBreak = status?.state === "break_start";
   return (

@@ -4,7 +4,7 @@ import { formatSignedAt } from "@/lib/signedTime";
 
 /**
  * The page after signing (owner 2026-11-20), shared by every signing link: the F04 application, the referee check, the agent agreement,
- * offer letters and HR documents. A tick, one line of thanks, the signed time in Melbourne time, "What happens next" (stacked on a phone,
+ * offer letters and HR documents. A tick, one line of thanks, the signed time in the institution time zone, "What happens next" (stacked on a phone,
  * in a row from a tablet up) and the Download button in the same section. The button asks the server for a new link on every click, so
  * nothing on the page goes stale; only the signed document is ever offered.
  */

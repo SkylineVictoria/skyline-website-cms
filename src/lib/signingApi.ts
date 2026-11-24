@@ -1,4 +1,5 @@
 import { supabase } from "@/pages/admin/lib/supabase";
+import { ruleNumber } from "@/lib/businessRules";
 import type { AbrConfirmed, AbrDetails } from "../../supabase/functions/_shared/validation/abr";
 import { docxXmlToText } from "../../supabase/functions/_shared/signing";
 
@@ -348,7 +349,8 @@ export const deleteTemplatePart = (id: string) => signingAdmin<{ id: string }>("
 export const pdfBytes = (base64: string) => Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
 /** The text of a .docx file, for a text template (formatting is not kept). */
 export async function docxText(file: File): Promise<string> {
-  if (file.size > 5 * 1024 * 1024) throw new Error("Choose a Word document of 5 MB or smaller.");
+  const maxMib = ruleNumber("signing.word_template_max_mib", 5); // Business Rules signing.word_template_max_mib
+  if (file.size > maxMib * 1024 * 1024) throw new Error(`Choose a Word document of ${maxMib} MB or smaller.`);
   const { unzipSync, strFromU8 } = await import("fflate");
   let xml: Uint8Array | undefined;
   try { xml = unzipSync(new Uint8Array(await file.arrayBuffer()), { filter: (entry) => entry.name === "word/document.xml" && entry.originalSize <= 8 * 1024 * 1024 })["word/document.xml"]; }

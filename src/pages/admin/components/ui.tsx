@@ -14,6 +14,7 @@ import {
 import { createPortal } from "react-dom";
 import SearchableSelect, { type SearchableSelectProps } from "@/components/ui/SearchableSelect";
 import { uploadCmsImage } from "@/pages/admin/lib/storage";
+import { ruleNumber } from "@/lib/businessRules";
 
 /* ------------------------------------------------------------------ Button */
 
@@ -195,8 +196,8 @@ export function MediaUrlInput({
       setError("Please choose an image file.");
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      setError("Images must be 5 MB or smaller.");
+    if (file.size > ruleNumber("cms.image_upload_limit_mib", 5) * 1024 * 1024) {
+      setError(`Images must be ${ruleNumber("cms.image_upload_limit_mib", 5)} MB or smaller.`);
       return;
     }
     setUploading(true);

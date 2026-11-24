@@ -327,7 +327,7 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
               </tr>)}</tbody>
           </table>
         </div>}
-        <p className="mt-1 text-xs text-foreground-500">Weeks are fixed (SLIT hours ÷ 20). Change any unit's start or end date and the whole timetable moves with it; move a unit with the arrows. A unit cannot come before a unit it needs.</p>
+        <p className="mt-1 text-xs text-foreground-500">Weeks are fixed (SLIT hours ÷ {COE_HOURS}). Change any unit's start or end date and the whole timetable moves with it; move a unit with the arrows. A unit cannot come before a unit it needs.</p>
       </section>
     </div> : null}
   </Modal>;

@@ -1,11 +1,11 @@
 // Qualification cycles (owner, 2026-11-20): how far ahead the course is scheduled, chosen EITHER as a number of cycles OR as a
-// "Calendar till" date; the other one is worked out (a date is rounded up to whole cycles). At most 10 years. RTO Managers are
-// alerted weekly from 12 months before the end; from 3 months before it the course is locked until more is scheduled.
+// "Calendar till" date; the other one is worked out (a date is rounded up to whole cycles). At most MAX_YEARS (Business Rules). RTO Managers are
+// alerted weekly from ALERT_MONTHS before the end; from LOCK_MONTHS before it the course is locked until more is scheduled.
 // FillSchoolBreaksButton adds the Victorian school holidays as term breaks for the years the plan covers.
 import { useState } from "react";
 import { shortDate } from "@/pages/admin/lib/rto";
 import { VIC_DATES_SOURCE } from "@/pages/admin/lib/schoolTerms";
-import { MAX_YEARS, cyclesUntil, fillSchoolBreaks, maxCyclesFor, planTill, type CyclePlan } from "@/pages/admin/lib/masterCycles";
+import { ALERT_MONTHS, LOCK_MONTHS, MAX_YEARS, cyclesUntil, fillSchoolBreaks, maxCyclesFor, planTill, type CyclePlan } from "@/pages/admin/lib/masterCycles";
 
 const DAY = 86400000;
 const addDays = (iso: string, days: number) => new Date(Date.parse(iso + "T00:00:00Z") + days * DAY).toISOString().slice(0, 10);
@@ -46,7 +46,7 @@ export default function MasterCyclesPanel({ cycles, onCycles, start, cycleEnd, p
         {till && !exact ? <span className="text-foreground-500"> (about)</span> : null}
       </span>
     </div>
-    {till ? <p className="mt-1.5 text-xs text-foreground-600">Up to {MAX_YEARS} years ({maxCycles} cycles). Weekly reminder from {shortDate(monthsBefore(till, 12))} · course locked from {shortDate(monthsBefore(till, 3))} until more is planned.</p> : null}
+    {till ? <p className="mt-1.5 text-xs text-foreground-600">Up to {MAX_YEARS} years ({maxCycles} cycles). Weekly reminder from {shortDate(monthsBefore(till, ALERT_MONTHS))} · course locked from {shortDate(monthsBefore(till, LOCK_MONTHS))} until more is planned.</p> : null}
     {plan?.locked ? <p role="alert" className="mt-1 text-sm font-semibold text-red-700"><i className="ri-lock-line mr-1" aria-hidden="true" />Locked: plan more cycles and save to unlock the course.</p> : null}
   </div>;
 }

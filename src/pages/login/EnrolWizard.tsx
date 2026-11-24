@@ -16,6 +16,8 @@ import {
 } from "@/lib/enrolForm";
 import { claimStudentAccount, enrolAgent, enrolStudent, lookupAbn, type AbnDetails, type EnrolResult } from "@/lib/selfEnrol";
 import { applyAsStaff } from "@/lib/staffApi";
+import { JOB_FILE_MAX_BYTES } from "@/lib/jobs";
+import { megabytes } from "@/lib/hrRules";
 import { applicantAgeRange } from "@/pages/agency/lib/admissionsRules";
 import StaffCaptcha, { captchaConfigured } from "@/components/feature/StaffCaptcha";
 import { toE164 } from "@/lib/staffPhone";
@@ -430,10 +432,9 @@ function DoneStep({ result, onSignIn }: { result: EnrolResult; onSignIn: () => v
 /* ----------------------------------------------------------------- step 2: staff */
 
 const RESUME_ACCEPT = ".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-const MAX_RESUME_MB = 5;
 
 /**
- * Staff apply with name, email, mobile and a resume (PDF or Word .docx, up to 5 MB) behind a CAPTCHA. No login is created:
+ * Staff apply with name, email, mobile and a resume (PDF or Word .docx, up to hrms.job_attachment_limit_mib) behind a CAPTCHA. No login is created:
  * staff-register stores the application ("Applied") and an administrator either rejects it or emails a link for the personal
  * details and documents. The thank-you answer is the same whether or not an application already exists for these details.
  */
@@ -464,7 +465,7 @@ function StaffStep({ onBack }: { onBack: () => void }) {
     if (!toE164(mobile)) next.phone = "Enter your mobile number with its country code.";
     if (!resume) next.resume = "Attach your resume (PDF or Word .docx).";
     else if (!/\.(pdf|docx)$/i.test(resume.name)) next.resume = "Attach your resume as a PDF or Word (.docx) file.";
-    else if (resume.size > MAX_RESUME_MB * 1024 * 1024) next.resume = `The resume must be ${MAX_RESUME_MB} MB or smaller.`;
+    else if (resume.size > JOB_FILE_MAX_BYTES) next.resume = `The resume must be ${megabytes(JOB_FILE_MAX_BYTES)} or smaller.`;
     if (!agreed) next.agreed = "Please agree to the terms and privacy policy.";
     if (!captchaToken) next.captcha = "Complete the security check.";
     setErrors(next);
@@ -516,7 +517,7 @@ function StaffStep({ onBack }: { onBack: () => void }) {
           <input id="staff-resume" type="file" accept={RESUME_ACCEPT} data-testid="staff-apply-resume"
             onChange={(e) => setResume(e.target.files?.[0] ?? null)}
             className="block w-full text-sm text-foreground-700 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-background-200 file:px-3 file:py-2 file:text-sm file:font-semibold" />
-          <p className="mt-1 text-xs text-foreground-500">PDF or Word (.docx), up to {MAX_RESUME_MB} MB. Kept private; only administrators can open it.</p>
+          <p className="mt-1 text-xs text-foreground-500">PDF or Word (.docx), up to {megabytes(JOB_FILE_MAX_BYTES)}. Kept private; only administrators can open it.</p>
           <Problem text={errors.resume} />
         </div>
         <div className="hidden" aria-hidden="true"><label>Website<input tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} /></label></div>

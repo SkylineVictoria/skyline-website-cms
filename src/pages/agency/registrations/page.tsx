@@ -10,7 +10,7 @@ import {
   type ExceptionRow, type RegistrationDetail, type WorkbenchRow,
 } from "@/pages/agency/lib/portalRegistrations";
 import {
-  availableActions, EXCEPTION_TEXT, exportCsv, normaliseCoeNumber, registrationChecklist, validateCorrection, verifyBlockers, VERIFY_PREREQUISITES, type RegistrationAction,
+  availableActions, EXCEPTION_TEXT, exportCsv, normaliseCoeNumber, OFFER_ACCEPTED_OR_LATER, registrationChecklist, statusKey, validateCorrection, verifyBlockers, VERIFY_PREREQUISITES, type RegistrationAction,
 } from "@/pages/agency/lib/registrationWorkbench";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
@@ -83,11 +83,14 @@ export default function RegistrationWorkbenchPage() {
   };
 
   const reg = open?.registration && open.registration.state !== "cancelled" ? open.registration : null;
-  const checklist = open ? registrationChecklist({ applicationStatus: open.status, state: reg?.state, evidenceCount: detail?.evidence.length ?? reg?.evidenceCount ?? 0, coeNumber: reg?.coeNumber }) : [];
+  // Business Rules admissions.offer_accepted_or_later_states (the database checks the same statuses).
+  const acceptedStates = ruleList("admissions.offer_accepted_or_later_states", ["Offer accepted", "CoE issued", "Enrolled"]).map(statusKey);
+  const accepted = acceptedStates.length ? acceptedStates : [...OFFER_ACCEPTED_OR_LATER];
+  const checklist = open ? registrationChecklist({ applicationStatus: open.status, state: reg?.state, evidenceCount: detail?.evidence.length ?? reg?.evidenceCount ?? 0, coeNumber: reg?.coeNumber, acceptedStates: accepted }) : [];
   // Business Rules admissions.registration_verification_prerequisites: without "Registration lodged" a draft can be verified directly.
   const verifyNeeds = ruleList("admissions.registration_verification_prerequisites", [...VERIFY_PREREQUISITES]);
   const actions: RegistrationAction[] = [...availableActions(reg?.state), ...(reg?.state === "draft" && !verifyNeeds.includes("Registration lodged") ? ["verify" as const] : [])];
-  const blockers = open && reg ? verifyBlockers({ applicationStatus: open.status, state: reg.state, evidenceCount: detail?.evidence.length ?? reg.evidenceCount, coeNumber: reg.coeNumber, coeInput: coe }, verifyNeeds) : [];
+  const blockers = open && reg ? verifyBlockers({ applicationStatus: open.status, state: reg.state, evidenceCount: detail?.evidence.length ?? reg.evidenceCount, coeNumber: reg.coeNumber, coeInput: coe, acceptedStates: accepted }, verifyNeeds) : [];
   const staleDays = ruleNumber("admissions.registration_stale_lodgement_days", 14);
   const coeCheck = coe ? normaliseCoeNumber(coe) : null;
 

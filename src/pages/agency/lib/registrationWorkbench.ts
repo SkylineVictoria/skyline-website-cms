@@ -29,13 +29,16 @@ export function availableActions(state: RegistrationState | null | undefined): R
   }
 }
 
-export interface ChecklistInput { applicationStatus: string; state: RegistrationState | null | undefined; evidenceCount: number; coeNumber: string | null | undefined }
+/** Business Rules admissions.offer_accepted_or_later_states as status keys (the page passes them; these are today's). */
+export const OFFER_ACCEPTED_OR_LATER = ["offer_accepted", "coe_issued", "enrolled"] as const;
+export const statusKey = (label: string) => label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+export interface ChecklistInput { applicationStatus: string; state: RegistrationState | null | undefined; evidenceCount: number; coeNumber: string | null | undefined; acceptedStates?: readonly string[] }
 export interface ChecklistItem { key: string; label: string; done: boolean }
 
 export function registrationChecklist(input: ChecklistInput): ChecklistItem[] {
   const progressed = input.state === "lodged" || input.state === "verified";
   return [
-    { key: "status", label: "The offer is accepted or later (the application status; this is not a registration)", done: ["offer_accepted", "coe_issued", "enrolled"].includes(input.applicationStatus) },
+    { key: "status", label: "The offer is accepted or later (the application status; this is not a registration)", done: (input.acceptedStates ?? OFFER_ACCEPTED_OR_LATER).includes(input.applicationStatus) },
     { key: "lodged", label: "Registered in the external system by hand and marked as lodged", done: progressed },
     { key: "evidence", label: "Evidence recorded (confirmation page, CoE document or correspondence)", done: input.evidenceCount > 0 },
     { key: "coe", label: "CoE number entered", done: Boolean(input.coeNumber) },
@@ -51,7 +54,7 @@ export function verifyBlockers(input: ChecklistInput & { coeInput: string }, req
   const blockers: string[] = [];
   const needs = (item: string) => required.includes(item);
   if (input.state !== "lodged" && !(input.state === "draft" && !needs("Registration lodged"))) blockers.push("Mark the registration as lodged first.");
-  if (needs("Offer accepted or later") && !["offer_accepted", "coe_issued", "enrolled"].includes(input.applicationStatus)) blockers.push("The offer must be accepted before registration can be verified.");
+  if (needs("Offer accepted or later") && !(input.acceptedStates ?? OFFER_ACCEPTED_OR_LATER).includes(input.applicationStatus)) blockers.push("The offer must be accepted before registration can be verified.");
   if (needs("At least one evidence item") && input.evidenceCount < 1) blockers.push("Record at least one piece of evidence.");
   const coe = normaliseCoeNumber(input.coeInput);
   if (!coe.ok && coe.error) blockers.push(coe.error);

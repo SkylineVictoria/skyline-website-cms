@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/pages/admin/components/ui";
 import { asmCalendar, type CalendarEvent } from "@/lib/assessment/api";
+import { institutionTimeZone } from "@/lib/timeZone";
 
-const TZ = "Australia/Melbourne";
-const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
-const timeOf = (iso: string) => new Intl.DateTimeFormat("en-AU", { timeZone: TZ, hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: institutionTimeZone(), year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+const timeOf = (iso: string) => new Intl.DateTimeFormat("en-AU", { timeZone: institutionTimeZone(), hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
 const KIND: Record<string, { label: string; cls: string }> = {
   assessment_due: { label: "Due", cls: "bg-primary-100 text-primary-800 border-primary-200" },
   assessment_practical: { label: "Practical", cls: "bg-accent-100 text-accent-900 border-accent-200" },

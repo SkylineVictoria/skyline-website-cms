@@ -72,7 +72,7 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
   const emailTemplate = emails.find((t) => t.id === emailId) ?? null;
   const letter = useMemo(() => (letterTemplate ? renderMessage(letterTemplate, values) : null), [letterTemplate, values]);
   // The email is previewed with an example link; the real one-time link is made when it is sent.
-  const mail = useMemo(() => (emailTemplate ? renderMessage(emailTemplate, { ...values, signing_link: "https://your-site/staff/welcome (personal link)", login_url: "https://your-site/login", link_expiry: "in 7 days" }) : null), [emailTemplate, values]);
+  const mail = useMemo(() => (emailTemplate ? renderMessage(emailTemplate, { ...values, signing_link: "https://your-site/staff/welcome (personal link)", login_url: "https://your-site/login", link_expiry: `in ${hrNumber("hrms.staff_account_link_days", 7)} days` }) : null), [emailTemplate, values]);
   const letterGaps = letter ? [...letter.missing, ...letter.unknown] : [];
   const mailGaps = mail ? [...mail.missing, ...mail.unknown] : [];
   const blocked = resend ? null : context?.problem ?? null;

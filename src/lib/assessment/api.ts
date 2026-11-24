@@ -3,6 +3,7 @@
  * in the database (DECISIONS.md D-04); a thrown error carries the database's message.
  */
 import { supabase } from "@/pages/admin/lib/supabase";
+import { institutionTimeZone } from "@/lib/timeZone";
 import type { AttemptHistory } from "./resultsSheet";
 
 async function call<T>(fn: "asm_admin" | "asm_trainer" | "asm_student", action: string, data: Record<string, unknown>): Promise<T> {
@@ -61,14 +62,14 @@ export async function removeEvidenceObject(path: string): Promise<void> {
 }
 
 export const fmtDateTime = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Australia/Melbourne" }) : "";
+  iso ? new Date(iso).toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: institutionTimeZone() }) : "";
 export const fmtDate = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: "Australia/Melbourne" }) : "";
+  iso ? new Date(iso).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: institutionTimeZone() }) : "";
 /** A datetime-local value (Melbourne wall time) from an ISO instant, and back. */
 export function toLocalInput(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
-  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(d);
+  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: institutionTimeZone(), year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(d);
   const g = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
   return `${g("year")}-${g("month")}-${g("day")}T${g("hour") === "24" ? "00" : g("hour")}:${g("minute")}`;
 }
@@ -76,7 +77,7 @@ export function fromLocalInput(local: string): string | null {
   if (!local) return null;
   // Melbourne offset for that wall time (AEST +10 / AEDT +11), found by probing.
   const guess = new Date(`${local}:00+10:00`);
-  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Melbourne", timeZoneName: "shortOffset" }).formatToParts(guess);
+  const parts = new Intl.DateTimeFormat("en-AU", { timeZone: institutionTimeZone(), timeZoneName: "shortOffset" }).formatToParts(guess);
   const off = parts.find((p) => p.type === "timeZoneName")?.value ?? "GMT+10";
   const m = off.match(/([+-]\d+)/); const hours = m ? Number(m[1]) : 10;
   return new Date(`${local}:00${hours >= 0 ? "+" : "-"}${String(Math.abs(hours)).padStart(2, "0")}:00`).toISOString();

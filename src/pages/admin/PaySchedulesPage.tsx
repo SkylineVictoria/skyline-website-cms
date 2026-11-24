@@ -3,9 +3,10 @@ import { Link } from "react-router-dom";
 import { AdminError, AdminLoading, Badge, Button, Card, Field, Modal, PageHeader, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
 
 import { STAFF_TIMESHEETS_PATH } from "@/pages/admin/lib/staffRoutes";
-import { getHrSettings, listSchedules, saveHrSettings, saveSchedule, setPeriodStatus, type HrSettings, type PaySchedule } from "@/lib/hrmsApi";
+import { getHrSettings, listSchedules, saveSchedule, setPeriodStatus, type HrSettings, type PaySchedule } from "@/lib/hrmsApi";
 import { PERIOD_STATUS_LABEL, WEEKDAY_SHORT, fmtDate, fmtRange } from "@/lib/hrTime";
 import { hrList, hrObject } from "@/lib/hrRules";
+import { institutionTimeZone } from "@/lib/timeZone";
 
 /** Business Rules hrms.pay_frequencies and hrms.pay_date_window (the database checks the same on save). */
 const FREQUENCIES = ["fortnightly", "monthly"] as const;
@@ -99,7 +100,7 @@ export default function PaySchedulesPage() {
           );
         })}
         {!schedules.length ? <p className="text-sm text-foreground-600">No pay schedule yet.</p> : null}
-        <SettingsCard settings={settings} onSaved={(s) => { setSettings(s); setNotice("The HR settings were saved."); }} />
+        <SettingsCard settings={settings} />
       </div>
       <Modal open={editing !== null} title={editing?.id ? "Edit pay schedule" : "New pay schedule"} onClose={() => setEditing(null)}
         footer={<><Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button><Button disabled={busy === "schedule"} onClick={() => void save()} data-testid="schedule-save">Save</Button></>}>
@@ -121,34 +122,25 @@ export default function PaySchedulesPage() {
   );
 }
 
-function SettingsCard({ settings, onSaved }: { settings: HrSettings; onSaved: (s: HrSettings) => void }) {
-  // Ordinary hours, open-shift flag, paid breaks and usual work days are set in Administration › Business Rules (hrms.*,
-  // written to hr.settings by hr.settings_rules_sync, migration 20261121002517); only the timezone is saved here.
-  const [timezone, setTimezone] = useState(settings.timezone);
-  const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  const save = async () => {
-    setBusy(true); setError("");
-    try { onSaved(await saveHrSettings({ timezone })); }
-    catch (e) { setError(e instanceof Error ? e.message : "The HR settings could not be saved."); }
-    finally { setBusy(false); }
-  };
-  const fixed = (label: string, value: string) => (
-    <div><span className="mb-1.5 block text-label font-medium text-foreground-800">{label}</span><p className="text-sm text-foreground-950">{value}</p></div>
+function SettingsCard({ settings }: { settings: HrSettings }) {
+  // Every value here is set in Administration › Business Rules: the time zone is general.time_zone (the institution time zone
+  // used everywhere); ordinary hours, open-shift flag, paid breaks and usual work days are hrms.* (written to hr.settings by
+  // hr.settings_rules_sync, migration 20261121002517).
+  const fixed = (label: string, value: string, testId?: string) => (
+    <div><span className="mb-1.5 block text-label font-medium text-foreground-800">{label}</span><p className="text-sm text-foreground-950" data-testid={testId}>{value}</p></div>
   );
   return (
     <Card className="p-5"><div data-testid="hr-settings">
       <h2 className="mb-1 font-heading text-base font-bold text-foreground-950">HR settings</h2>
-      <p className="mb-3 text-xs text-foreground-600">Every time is stored as an instant and shown in this timezone (daylight saving follows the IANA zone, never a fixed offset).</p>
+      <p className="mb-3 text-xs text-foreground-600">Every time is stored as an instant and shown in this time zone (daylight saving follows the IANA zone, never a fixed offset).</p>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Field label="Timezone"><TextInput value={timezone} onChange={(e) => setTimezone(e.target.value)} data-testid="settings-timezone" /></Field>
+        {fixed("Time zone", institutionTimeZone().replace(/_/g, " "), "settings-timezone")}
         {fixed("Full-time ordinary hours per week", String(settings.ordinaryHoursWeek))}
         {fixed("Flag an open shift after (hours)", String(settings.openShiftFlagHours))}
         {fixed("Breaks are paid", settings.breaksPaid ? "Yes" : "No")}
       </div>
       <div className="mt-3">{fixed("Usual work days", [...settings.usualWorkDays].sort().map((d) => WEEKDAY_SHORT[d]).join(", "))}</div>
-      <p className="mt-2 text-xs text-foreground-600">Hours, open-shift flag, paid breaks and work days: set in <Link to="/admin/business-rules" className="underline">Administration › Business Rules</Link>.</p>
-      {error ? <p role="alert" className={`mt-3 ${ALERT}`}>{error}</p> : null}
-      <div className="mt-3"><Button size="sm" disabled={busy} onClick={() => void save()} data-testid="settings-save">{busy ? "Saving…" : "Save settings"}</Button></div>
+      <p className="mt-2 text-xs text-foreground-600">Time zone, hours, open-shift flag, paid breaks and work days: set in <Link to="/admin/business-rules" className="underline">Administration › Business Rules</Link>.</p>
     </div></Card>
   );
 }

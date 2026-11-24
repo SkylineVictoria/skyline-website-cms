@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Select } from "@/pages/admin/components/ui";
 import { myTimesheet, type MyTimesheet as MyTimesheetData } from "@/lib/hrmsApi";
 import { FLAG_LABEL, fmtDate, fmtRange, fmtTime, hoursLabel, minutesToHm, tzAbbrev } from "@/lib/hrTime";
+import { institutionTimeZone } from "@/lib/timeZone";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const STATUS: Record<string, string> = { open: "Open", locked: "Locked", exported: "Sent to payroll" };
@@ -16,7 +17,7 @@ export default function MyTimesheet({ refreshKey = 0 }: { refreshKey?: number } 
     try { setError(""); setData(await myTimesheet(periodId)); } catch (e) { setError(e instanceof Error ? e.message : "Your timesheet could not be loaded."); }
   }, [periodId]);
   useEffect(() => { void load(); }, [load, refreshKey]);
-  const tz = data?.timezone ?? "Australia/Melbourne";
+  const tz = data?.timezone ?? institutionTimeZone();
   const s = data?.summary;
   return (
     <div data-testid="my-hr-timesheet">

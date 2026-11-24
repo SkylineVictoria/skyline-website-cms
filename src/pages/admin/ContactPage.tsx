@@ -7,6 +7,7 @@ import DraftStatus from "@/pages/admin/components/DraftStatus";
 import { useDraft } from "@/pages/admin/lib/useDraft";
 import CalendlyCard from "@/pages/admin/components/CalendlyCard";
 import { calendlyUrlProblem } from "@/lib/calendly";
+import { ruleNumber } from "@/lib/businessRules";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export default function ContactPage() {
@@ -91,8 +92,9 @@ export default function ContactPage() {
           <Field label="Website">
             <TextInput value={draft.website ?? ""} placeholder="https://" onChange={(e) => set("website", e.target.value)} data-testid="settings-website" />
           </Field>
-          <Field label="Offer valid for (days)" hint="Offer valid until = the day the letter is issued + this many days">
-            <TextInput type="number" min={1} max={365} value={draft.offerValidityDays ?? 30} onChange={(e) => set("offerValidityDays", Math.min(365, Math.max(1, Number(e.target.value) || 30)))} />
+          {/* Business Rules admissions.offer_validity_days: set on Administration › Business Rules; shown here read-only. */}
+          <Field label="Offer valid for (days)" hint="Offer valid until = the day the letter is issued + this many days. Change it on Administration › Business Rules.">
+            <TextInput type="number" value={ruleNumber("admissions.offer_validity_days", draft.offerValidityDays ?? 30)} readOnly disabled data-testid="settings-offer-validity" />
           </Field>
           <Field label="Date format in letters">
             <SearchableSelect value={draft.letterDateFormat ?? "DD/MM/YYYY"} onChange={(e) => set("letterDateFormat", e.target.value as AdminSettings["letterDateFormat"])}

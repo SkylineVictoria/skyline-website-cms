@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ruleNumber } from "@/lib/businessRules";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { useToast } from "@/pages/admin/components/toastContext";
 import NotificationGateBanner from "@/pages/admin/components/NotificationGateBanner";
@@ -131,7 +132,7 @@ export default function EventRecipients({ tenantId }: { tenantId: string | null 
         <legend className="px-1 text-sm font-semibold">Submitted application in the email</legend>
         <p className="text-xs text-background-600">What the "Application submitted" email carries. The PDF is made from the submitted version when the email is sent and is never stored with the delivery.</p>
         <label className="mt-2 flex items-start gap-2 text-sm"><input type="radio" name="submission-pdf" checked={pdfMode === "attach"} onChange={() => void savePdfMode("attach")} className="mt-1" />
-          <span>Attach the submitted application as a PDF (up to 2 MB; larger ones fall back to the link)</span></label>
+          <span>Attach the submitted application as a PDF (up to {ruleNumber("comms.submission_pdf_attach_mib", 2)} MB; larger ones fall back to the link)</span></label>
         <label className="mt-1 flex items-start gap-2 text-sm"><input type="radio" name="submission-pdf" checked={pdfMode === "link"} onChange={() => void savePdfMode("link")} className="mt-1" />
           <span>Send only a secure link to the application (recipients must sign in)</span></label>
         {pdfError ? <p role="alert" className="mt-2 text-xs font-medium text-primary-700">{pdfError}</p> : null}

@@ -4,12 +4,13 @@ import { useListPane } from "@/pages/admin/lib/listPane";
 import { supabase } from "@/pages/admin/lib/supabase";
 import AttendanceSummary from "./AttendanceSummary";
 import { bestIntake, rto, rtoFlow, type RtoCourse, type RtoIntake, type BatchPageData } from "@/pages/admin/lib/rto";
+import { institutionToday } from "@/lib/timeZone";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Mark = "present" | "absent" | "late" | "excused";
 type History = { date: string; unitId: string; state: string };
 const statuses: Mark[] = ["present", "absent", "late", "excused"];
-const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Melbourne" });
+const today = () => institutionToday();
 const itemClass = (active: boolean) => `block w-full truncate rounded-lg px-3 py-2 text-left text-sm transition-colors ${active ? "bg-primary-50 font-semibold text-foreground-950 ring-1 ring-primary-300" : "text-foreground-700 hover:bg-background-100"}`;
 const heading = "text-xs font-semibold uppercase tracking-wide text-foreground-500";
 const searchClass = "w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm";
@@ -45,8 +46,8 @@ export default function LmsAttendancePage() {
   // The intake is the class group: its id is what the attendance RPCs call batchId.
   const batchId=filteredIntakes.find(i=>i.id===intakeId)?.batchList?.[0]?.id??"";
   useEffect(()=>{setBatch(null);if(!batchId)return;let live=true;rtoFlow<BatchPageData>("batch_get",{batchId}).then(d=>{if(live)setBatch(d);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[batchId]);
-  const units=batch?.batch.schedule??[];
-  useEffect(()=>{setUnitId(old=>units.some(u=>u.intakeUnitId===old)?old:units[0]?.intakeUnitId??"");},[batch]);
+  const units=useMemo(()=>batch?.batch.schedule??[],[batch]);
+  useEffect(()=>{setUnitId(old=>units.some(u=>u.intakeUnitId===old)?old:units[0]?.intakeUnitId??"");},[units]);
   // A student who joined late or is carried over from an earlier intake is on the roll only for the units they take in this intake.
   const students=useMemo(()=>batch?.batch.students.filter(s=>(s.status==="active"||s.status==="deferred")&&(!s.path||!unitId||s.path.unitIds.includes(unitId)))??[],[batch,unitId]);
   useEffect(()=>{setMarks({});setState("new");setMessage("");if(!batchId||!unitId||!date)return;let live=true;

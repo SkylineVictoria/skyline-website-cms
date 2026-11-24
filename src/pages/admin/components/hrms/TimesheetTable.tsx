@@ -6,6 +6,7 @@ import {
   type EmployeePunches, type MyTeam, type PayPeriod, type PeriodTimesheets, type PunchKind, type Shift, type TimesheetRow,
 } from "@/lib/hrmsApi";
 import { FLAG_LABEL, PERIOD_STATUS_LABEL, PUNCH_LABEL, fmtDate, fmtDateTime, fmtTime, hoursLabel, instantToZoned, minutesToHm, money, tzAbbrev, zonedToInstant } from "@/lib/hrTime";
+import { institutionTimeZone } from "@/lib/timeZone";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 const NOTICE = "rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-sm text-secondary-900";
@@ -49,7 +50,7 @@ export default function TimesheetTable({ team, admin, initialPeriodId }: { team:
   const [note, setNote] = useState("");
   const [correction, setCorrection] = useState<{ profileId: string; supersedes: string | null; kind: PunchKind | "void"; at: string; reason: string } | null>(null);
   const [dialogError, setDialogError] = useState("");
-  const timezone = data?.timezone ?? "Australia/Melbourne";
+  const timezone = data?.timezone ?? institutionTimeZone();
 
   const load = useCallback(async () => {
     if (!periodId) { setData(null); return; }

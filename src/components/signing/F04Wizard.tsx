@@ -264,8 +264,18 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const signedAnswers = correction?.answers ?? null;
   const opening = useMemo(() => {
     const draft = (view.application?.draft ?? null) as Partial<F04Draft> | null;
-    return initialF04(mode === "correction" ? withSignedAnswers(fields, signedAnswers) : fields, facts, view.application?.prefill ?? null, draft && mode === "correction" ? correctionDraft(draft, flags) : draft,
+    const init = initialF04(mode === "correction" ? withSignedAnswers(fields, signedAnswers) : fields, facts, view.application?.prefill ?? null, draft && mode === "correction" ? correctionDraft(draft, flags) : draft,
       view.recipient.name, (mode === "agent" || mode === "admin-prefill") && ruleText("agents.agent_application_yes_no_fallback", "No") === "No");
+    // Business Rules (agents.contact_title_default / agents.contact_position_default): a blank Title / Position starts at the rule's
+    // choice ("Mr" / "Director" today) when staff prepare the form or the agency fills it; still editable, never over a saved answer.
+    if (mode === "agent" || mode === "admin-prefill") {
+      const preset: Record<string, string> = {};
+      const title = ruleText("agents.contact_title_default", "Mr"), position = ruleText("agents.contact_position_default", "Director");
+      if (!(init.answers.contact_title ?? "").trim() && title) preset.contact_title = title;
+      if (!(init.answers.contact_position ?? "").trim() && position) preset.contact_position = position;
+      if (Object.keys(preset).length) return { ...init, answers: { ...init.answers, ...preset } };
+    }
+    return init;
   }, [fields, facts, view.application?.prefill, view.application?.draft, view.recipient.name, mode, signedAnswers, flags]);
   // F04 + P06 signed once (2026-11-20): the agreement's terms and the witness (preset by staff, or typed + drawn here).
   const combined = view.onboarding?.combined === true && !staff;

@@ -3,6 +3,7 @@ import { expiryMessage, expiryTone, getDocumentExpiryStatus } from "@/pages/agen
 import "@/pages/agency/lib/admissionsRules"; // Business Rules: expiry warning months, English result validity
 import type { PendingUpload, WizardDoc, WizardStep } from "@/pages/agency/lib/wizardConfig";
 import { DOCUMENT_ACCEPT } from "../../../../supabase/functions/_shared/validation/person";
+import { ruleList, ruleNumber } from "@/lib/businessRules";
 import DocumentReadingState from "@/components/shared/application-form/DocumentReadingState";
 import { DocumentRow, Dropzone, ReadFailure } from "@/components/shared/application-form/DocumentUpload";
 import Toast from "@/components/shared/application-form/Toast";
@@ -164,7 +165,7 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
         <div>
           <Dropzone
             label={step.multiple ? "Upload files" : "Upload file"}
-            hint={`PDF, JPG or PNG · up to 10 MB${step.multiple ? " each" : ""} · stored privately`}
+            hint={`${ruleList("admissions.application_document_types", ["JPEG", "PNG", "PDF"]).map((t) => (t === "JPEG" ? "JPG" : t)).join(", ")} · up to ${Math.min(10, ruleNumber("admissions.application_document_limit_mib", 10))} MB${step.multiple ? " each" : ""} · stored privately`}
             multiple={step.multiple}
             disabled={uploading}
             accept={DOCUMENT_ACCEPT}

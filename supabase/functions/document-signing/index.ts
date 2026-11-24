@@ -56,6 +56,7 @@ Deno.serve(async (req) => {
     letterhead: () => loadLetterhead(service),
     mail,
     abr: { guid: Deno.env.get("EF_ABR_GUID") || Deno.env.get("ABR_GUID") || "" },
+    // Fallback only: the Google Maps key saved in Integrations > Connections (Vault) wins (core.ts placesKey).
     places: { key: Deno.env.get("EF_GOOGLE_MAPS_KEY") || "" },
     address: (query) => searchAddresses(query, ADDRESS_KEY, addressFetch),
     isServiceCaller: isServiceCaller(authorization, serviceKey, env.SUPABASE_URL),

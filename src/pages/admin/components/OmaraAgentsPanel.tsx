@@ -23,47 +23,51 @@ const day = (iso: string | null | undefined) => {
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
 };
 type AgentRecord = Extract<DiscoveredAgent, { marn: string }>;
+export type { AgentRecord };
 export interface OmaraSelection { marns: string[]; evidence: LinkEvidence }
 
 function AgentCard({ a, checked, onToggle, linked, actions }: {
   a: AgentRecord | LinkedAgent; checked?: boolean; onToggle?: (v: boolean) => void; linked?: boolean; actions?: ReactNode;
 }) {
-  const place = [a.suburb, a.state, a.postcode].filter(Boolean).join(" ");
+  // Compact (owner 2026-11-24: "shrink the view, no clutter"): one line each, the evidence and register dates behind More.
+  const [open, setOpen] = useState(false);
+  const place = [a.suburb, a.state].filter(Boolean).join(" ");
   const verification = "verification" in a ? a.verification : "linked";
   const likely = "likely" in a ? a.likely : true;
   return (
-    <li className={`rounded-md border p-3 text-sm ${likely ? "border-background-300 bg-background-50" : "border-background-200 bg-background-100"}`} data-testid="omara-agent">
-      <div className="flex items-start gap-3">
-        {onToggle ? <input type="checkbox" className="mt-1" checked={!!checked} onChange={(e) => onToggle(e.target.checked)} aria-label={`Select ${a.fullName}`} /> : null}
+    <li className={`px-3 py-2 text-sm ${likely ? "" : "opacity-80"}`} data-testid="omara-agent">
+      <div className="flex items-center gap-3">
+        {onToggle ? <input type="checkbox" checked={!!checked} onChange={(e) => onToggle(e.target.checked)} aria-label={`Select ${a.fullName}`} /> : null}
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-foreground-900">{a.fullName} <span className="font-normal text-foreground-600">· MARN {a.marn}</span>
-            {a.status ? <span className={`ml-2 rounded-full px-2 py-0.5 text-2xs font-medium ${/^registered$/i.test(a.status) ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}>{a.status}</span> : null}
+          <p className="truncate"><span className="font-semibold text-foreground-900">{a.fullName}</span>
+            <span className="text-foreground-500"> · MARN {a.marn}{place ? ` · ${place}` : ""}</span>
+            {a.status && !/^registered$/i.test(a.status) ? <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-2xs font-medium text-amber-800">{a.status}</span> : null}
             {linked ? <span className="ml-2 rounded-full bg-sky-50 px-2 py-0.5 text-2xs font-medium text-sky-800">Linked</span> : null}
+            <span className={`ml-2 rounded-full px-2 py-0.5 text-2xs font-medium ${a.confidence >= 60 ? "bg-emerald-50 text-emerald-800" : "bg-background-200 text-foreground-700"}`}>{a.confidence}%</span>
           </p>
-          <p className="text-foreground-800">{a.businessName || "—"}{place ? ` · ${place}` : ""}</p>
-          <p className="break-words text-xs text-foreground-600">
-            {[a.phone && `Phone ${a.phone}`, a.email && `Email ${a.email}`, a.website && `Website ${a.website}`].filter(Boolean).join(" · ") || "No contact details on the record"}
-          </p>
-          <div className="mt-1 flex flex-wrap gap-1">
-            <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${a.confidence >= 60 ? "bg-emerald-50 text-emerald-800" : "bg-background-200 text-foreground-700"}`}>Match {a.confidence}%</span>
-            {(a.evidence ?? []).map((e) => <span key={e} className="rounded-full bg-background-200 px-2 py-0.5 text-2xs text-foreground-700">{e}</span>)}
-          </div>
-          <p className="mt-1 text-2xs text-foreground-500">
-            {verification === "verified" ? `Verified on the register ${when(a.verifiedAt)}` : `Read from the register ${when(a.verifiedAt)}`}
-            {a.registrationCommencedAt ? ` · registration commenced ${day(a.registrationCommencedAt)}` : ""}
-            {a.registerUpdatedAt ? ` · register last updated ${day(a.registerUpdatedAt)}` : ""}
-            {a.disciplinary?.length ? " · disciplinary decision found (see the official record)" : ""}
-            {" · "}<a href={a.sourceUrl} target="_blank" rel="noreferrer" className="underline">Open official record</a>
-          </p>
+          <p className="truncate text-xs text-foreground-600">{[a.email, a.phone].filter(Boolean).join(" · ") || "No contact details on the record"}</p>
         </div>
-        {actions ? <div className="flex shrink-0 flex-col gap-1">{actions}</div> : null}
+        <button type="button" className="shrink-0 text-xs font-semibold text-primary-700 hover:underline" onClick={() => setOpen((v) => !v)} aria-expanded={open}>{open ? "Less" : "More"}</button>
+        {actions ? <div className="flex shrink-0 gap-1">{actions}</div> : null}
       </div>
+      {open ? <div className="mt-1 space-y-1 pl-7 text-2xs text-foreground-600">
+        <p>{a.businessName || "—"}{[a.suburb, a.state, a.postcode].filter(Boolean).length ? ` · ${[a.suburb, a.state, a.postcode].filter(Boolean).join(" ")}` : ""}{a.website ? ` · ${a.website}` : ""}</p>
+        {(a.evidence ?? []).length ? <div className="flex flex-wrap gap-1">{(a.evidence ?? []).map((e) => <span key={e} className="rounded-full bg-background-200 px-2 py-0.5">{e}</span>)}</div> : null}
+        <p>
+          {verification === "verified" ? `Verified on the register ${when(a.verifiedAt)}` : `Read from the register ${when(a.verifiedAt)}`}
+          {a.registrationCommencedAt ? ` · registration commenced ${day(a.registrationCommencedAt)}` : ""}
+          {a.registerUpdatedAt ? ` · register last updated ${day(a.registerUpdatedAt)}` : ""}
+          {a.disciplinary?.length ? " · disciplinary decision found (see the official record)" : ""}
+          {" · "}<a href={a.sourceUrl} target="_blank" rel="noreferrer" className="underline">Open official record</a>
+        </p>
+      </div> : null}
     </li>
   );
 }
 
 export default function OmaraAgentsPanel(props:
-  | { mode: "select"; facts: OmaraFacts; disabled?: boolean; onSelection: (s: OmaraSelection) => void }
+  | { mode: "select"; facts: OmaraFacts; disabled?: boolean; onSelection: (s: OmaraSelection) => void;
+      /** Every registered agent found (Add business offers them as the business admin agent). */ onFound?: (agents: AgentRecord[]) => void }
   | { mode: "linked"; agencyId: string }) {
   const facts: OmaraFacts = props.mode === "select" ? props.facts : { agencyId: props.agencyId, names: [] };
   const [status, setStatus] = useState<OmaraStatus | null>(null);
@@ -99,6 +103,8 @@ export default function OmaraAgentsPanel(props:
   }, [props]);
 
   useEffect(() => { void omaraStatus().then(setStatus).catch(() => setStatus(null)); void loadLinked(); }, [loadLinked]);
+  const onFound = props.mode === "select" ? props.onFound : undefined;
+  useEffect(() => { onFound?.(found.filter(isRecord).sort((x, y) => y.confidence - x.confidence)); }, [found, onFound]);
 
   const discover = async () => {
     setBusy("discover"); setError(""); setMessage("");
@@ -166,7 +172,9 @@ export default function OmaraAgentsPanel(props:
     finally { setBusy(""); }
   };
 
-  const records = found.filter(isRecord).filter((a) => !linked.some((l) => l.marn === a.marn));
+  const byMatch = <T extends { confidence: number; fullName: string }>(x: T, y: T) => y.confidence - x.confidence || x.fullName.localeCompare(y.fullName);
+  const records = found.filter(isRecord).filter((a) => !linked.some((l) => l.marn === a.marn)).sort(byMatch);
+  const linkedSorted = [...linked].sort(byMatch);
   const searchOnly = found.filter((a) => !isRecord(a));
   const disabled = props.mode === "select" && !!props.disabled;
   const canSearch = status?.enabled && status.configured;
@@ -203,7 +211,7 @@ export default function OmaraAgentsPanel(props:
       {props.mode === "linked" ? (
         <div className="mt-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Linked to this business ({linked.length})</p>
-          {linked.length ? <ul className="mt-2 space-y-2">{linked.map((a) => (
+          {linked.length ? <ul className="mt-2 divide-y divide-background-200 rounded-md border border-background-200 bg-white">{linkedSorted.map((a) => (
             <AgentCard key={a.marn} a={a} linked actions={<>
               <Button type="button" size="sm" variant="outline" disabled={!!busy} onClick={() => void reverify(a.marn)}>{busy === `verify:${a.marn}` ? "Reading…" : "Re-verify"}</Button>
               <Button type="button" size="sm" variant="ghost" disabled={!!busy} onClick={() => void unlink(a.marn)}>{busy === `unlink:${a.marn}` ? "Unlinking…" : "Unlink"}</Button>
@@ -223,7 +231,7 @@ export default function OmaraAgentsPanel(props:
               ? <Button type="button" size="sm" disabled={!!busy || ![...checked].some((m) => records.some((a) => a.marn === m))} onClick={() => void linkSelected()} data-testid="omara-link">{busy === "link" ? "Linking…" : `Link selected (${[...checked].filter((m) => records.some((a) => a.marn === m)).length})`}</Button>
               : <p className="text-xs text-foreground-600">{checked.size} selected: linked when you create the business. Check each official record first.</p>}
           </div>
-          <ul className="mt-2 space-y-2">{records.map((a) => <AgentCard key={a.marn} a={a} checked={checked.has(a.marn)}
+          <ul className="mt-2 max-h-80 divide-y divide-background-200 overflow-y-auto rounded-md border border-background-200 bg-white">{records.map((a) => <AgentCard key={a.marn} a={a} checked={checked.has(a.marn)}
             onToggle={disabled ? undefined : (v) => { const next = new Set(checked); if (v) next.add(a.marn); else next.delete(a.marn); setSelection(next); }} />)}</ul>
         </div>
       ) : ran && !searchOnly.length && !error ? <p className="mt-2 text-xs text-foreground-500">Nothing to link from this search.</p> : null}

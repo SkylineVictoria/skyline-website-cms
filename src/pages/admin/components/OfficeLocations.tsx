@@ -96,23 +96,30 @@ export function BranchList({ branches, onChange, disabled, searchHint = "", head
   head?: OfficeLocation | null;
 }) {
   const [adding, setAdding] = useState(false);
+  // Compact (owner 2026-11-24: "no clutter"): each branch is one line; Edit opens its fields.
+  const [openRows, setOpenRows] = useState<Set<number>>(new Set());
+  const toggle = (i: number) => setOpenRows(prev => { const next = new Set(prev); if (next.has(i)) next.delete(i); else next.add(i); return next; });
   const update = (i: number, o: OfficeLocation) => onChange(branches.map((b, j) => (j === i ? o : b)));
+  const remove = (i: number) => { onChange(branches.filter((_, j) => j !== i)); setOpenRows(new Set([...openRows].filter(j => j !== i).map(j => (j > i ? j - 1 : j)))); };
   const full = branches.length >= 30;
   const asBranch = (p: PlaceDetails) => officeFromPlace(p, p.suburb ? `${p.suburb} branch` : "");
   return (
-    <div className="space-y-3" data-testid="branches">
-      {branches.map((b, i) => (
-        <div key={i} className="rounded-lg border border-background-200 bg-background-50 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-sm font-semibold text-foreground-900"><i className="ri-store-2-line mr-1 text-sky-700" aria-hidden="true" />{b.label || b.name || `Branch ${i + 1}`}</p>
-            <span className="flex items-center gap-3">
-              {b.mapsUri ? <a href={b.mapsUri} target="_blank" rel="noreferrer" className="text-xs text-sky-700 underline">Open in Google Maps</a> : null}
-              <button type="button" disabled={disabled} className="text-xs font-semibold text-red-700 hover:underline disabled:opacity-50" onClick={() => onChange(branches.filter((_, j) => j !== i))}>Remove</button>
-            </span>
-          </div>
-          <OfficeFields office={b} onChange={o => update(i, o)} disabled={disabled} withLabel />
-        </div>
-      ))}
+    <div className="space-y-2" data-testid="branches">
+      {branches.length ? <ul className="divide-y divide-background-200 rounded-lg border border-background-200 bg-white">
+        {branches.map((b, i) => (
+          <li key={i} className="px-3 py-2 text-sm">
+            <div className="flex items-center gap-3">
+              <i className="ri-store-2-line text-sky-700" aria-hidden="true" />
+              <p className="min-w-0 flex-1 truncate"><span className="font-semibold text-foreground-900">{b.label || b.name || `Branch ${i + 1}`}</span>
+                <span className="text-foreground-600"> · {officeLine(b) || "No address yet"}{b.phone ? ` · ${b.phone}` : ""}</span></p>
+              {b.mapsUri ? <a href={b.mapsUri} target="_blank" rel="noreferrer" className="shrink-0 text-xs text-sky-700 hover:underline" title="Open in Google Maps"><i className="ri-map-pin-line" aria-hidden="true" /><span className="sr-only">Open in Google Maps</span></a> : null}
+              <button type="button" disabled={disabled} className="shrink-0 text-xs font-semibold text-primary-700 hover:underline disabled:opacity-50" onClick={() => toggle(i)} aria-expanded={openRows.has(i)}>{openRows.has(i) ? "Close" : "Edit"}</button>
+              <button type="button" disabled={disabled} className="shrink-0 text-xs font-semibold text-red-700 hover:underline disabled:opacity-50" onClick={() => remove(i)}>Remove</button>
+            </div>
+            {openRows.has(i) ? <div className="mt-2"><OfficeFields office={b} onChange={o => update(i, o)} disabled={disabled} withLabel /></div> : null}
+          </li>
+        ))}
+      </ul> : null}
       {/* The search stays open after Use this, so several branches can be added from one list; picked places leave the list. */}
       {adding ? <MapsSearchBox id="branch-search" initialQuery={searchHint} disabled={disabled || full} cancelLabel={branches.length ? "Done" : "Cancel"}
         used={[...(head ? [head] : []), ...branches]} onCancel={() => setAdding(false)}
@@ -120,7 +127,7 @@ export function BranchList({ branches, onChange, disabled, searchHint = "", head
         onPickAll={ps => { onChange([...branches, ...ps.map(asBranch)].slice(0, 30)); setAdding(false); }} /> : null}
       {adding || full ? null : <div className="flex flex-wrap gap-2">
         <Button type="button" variant="secondary" icon="ri-map-pin-add-line" disabled={disabled} onClick={() => setAdding(true)} data-testid="branch-add-maps">Add branch from Google Maps</Button>
-        <Button type="button" variant="secondary" icon="ri-add-line" disabled={disabled} onClick={() => onChange([...branches, { ...EMPTY_OFFICE }])}>Add branch by hand</Button>
+        <Button type="button" variant="secondary" icon="ri-add-line" disabled={disabled} onClick={() => { setOpenRows(new Set([...openRows, branches.length])); onChange([...branches, { ...EMPTY_OFFICE }]); }}>Add branch by hand</Button>
       </div>}
       {full ? <p className="text-xs text-foreground-500">A business can have up to 30 branches.</p> : null}
     </div>

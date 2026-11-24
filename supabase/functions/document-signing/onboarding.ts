@@ -612,7 +612,9 @@ export async function presendOpen(ctx: OnboardingContext): Promise<Json> {
   });
   const record = prepared.values ?? {};
   return { onboardingId: saved.onboardingId, agency: prepared.agency, contact: prepared.agent, fields, facts,
-    acn: saved.presend?.acn ?? acnDigits(String(answers.agent_acn ?? "")), marn: saved.presend?.marn ?? "", message: saved.presend?.message ?? "",
+    acn: saved.presend?.acn ?? acnDigits(String(answers.agent_acn ?? "")),
+    // The admin's MARN picked on Add business (agencies.profile.admin_marn, 2026-11-24) until staff save another.
+    marn: saved.presend?.marn ?? String((prepared.agency as { profile?: Record<string, unknown> }).profile?.admin_marn ?? "").replace(/\D/g, ""), message: saved.presend?.message ?? "",
     terms: { commencementDate: saved.terms?.commencementDate ?? "", territory: saved.terms?.territory || String(record.agent_territory ?? ""),
       commissionPercent: saved.terms?.commissionPercent != null ? String(saved.terms.commissionPercent) : String(record.agent_commission_percent ?? ""),
       // Never guessed: empty until SLIT staff choose (2026-11-21).

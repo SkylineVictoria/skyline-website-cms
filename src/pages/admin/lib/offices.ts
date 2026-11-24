@@ -21,3 +21,9 @@ export const saveOffices = async (agencyId: string, head: OfficeLocation | null,
   if (error) throw new Error(error.message);
   return data as { head: OfficeLocation; branches: OfficeLocation[] };
 };
+
+/** The business admin agent's MARN (picked from the register on Add business), printed on the application form (agency_admin_marn_set). */
+export const saveAdminMarn = async (agencyId: string, marn: string) => {
+  const { error } = await supabase.rpc("agency_admin_marn_set", { p_agency: agencyId, p_marn: marn });
+  if (error) throw new Error(error.message);
+};

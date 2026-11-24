@@ -1310,7 +1310,7 @@ test("Google Maps autofill (2026-11-24): Places (New) Text Search with the field
   // The source: the key only from the function's environment, never in the browser code; staff confirm on Add business; Add business keeps it.
   assert.match(read("supabase/functions/document-signing/index.ts"), /Deno\.env\.get\("EF_GOOGLE_MAPS_KEY"\)/);
   assert.ok(!/EF_GOOGLE_MAPS_KEY|X-Goog-Api-Key|places\.googleapis/.test(read("src/pages/admin/components/AddBusinessForm.tsx") + read("src/lib/signingApi.ts")), "the key never reaches the browser");
-  assert.ok(read("src/pages/admin/components/AddBusinessForm.tsx").includes("Found on Google Maps") && read("supabase/functions/document-signing/onboarding.ts").includes(`ctx.rpc("agency_places_attach"`));
+  assert.ok(read("src/pages/admin/components/AddBusinessForm.tsx").includes("Head office") && read("supabase/functions/document-signing/onboarding.ts").includes(`ctx.rpc("agency_places_attach"`));
   assert.ok(read("supabase/functions/.env.example").includes("EF_GOOGLE_MAPS_KEY="));
 });
 

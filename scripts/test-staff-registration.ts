@@ -5001,7 +5001,7 @@ test("Students (2026-11-24): the finish-application link asks for a password; ag
 
 test("Employees list (2026-11-24): a Sign-in column; Can sign in only once a password is chosen; active staff without one get Send / Resend sign-in link", () => {
   const page = read("src/pages/admin/StaffPage.tsx");
-  assert.ok(page.includes('"Status", "Sign-in"]') && page.includes("<EmployeeSignIn row={r}"));
+  assert.ok(page.includes('"Status", "Sign-in", "Actions"]') && page.includes("<EmployeeSignIn row={r}"));
   assert.ok(page.includes('if (r.hasLogin && r.passwordSet) return { label: "Can sign in"') && page.includes('return { label: "Not invited", tone: "muted" }'));
   assert.ok(page.includes('row.status === "active" && !(row.hasLogin && row.passwordSet)') && page.includes("staffAdminActions.inviteLogin(row.id)"));
 });
@@ -5053,4 +5053,10 @@ test("Offer signed last (2026-11-24): Accept and continue opens the wizard; its 
   const wizard = read("src/pages/staff/StaffOnboardingPage.tsx");
   assert.ok(wizard.includes('const signsOffer = view.status === "offer_sent";') && wizard.includes("await myOfferApi.sign(signName.trim())") && wizard.includes('"Sign the offer and submit"'));
   assert.ok(read("src/pages/staff/StaffHomePage.tsx").includes("acceptViaWizard"));
+});
+
+test("Employees Active / Inactive (2026-11-24): Delete with the same confirmation as the other tabs", () => {
+  const page = read("src/pages/admin/StaffPage.tsx");
+  assert.ok(page.includes('"Status", "Sign-in", "Actions"]') && page.includes("data-testid={`employee-delete-${r.id}`}"));
+  assert.ok(page.includes("setDeleting({ id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(\" \"), email: r.email })"));
 });

@@ -30,7 +30,7 @@ export default function StaffPage() {
   const [notice, setNotice] = useState("");
   const [reload, setReload] = useState(0);
   const [editing, setEditing] = useState<StaffListRow | null>(null);
-  const [deleting, setDeleting] = useState<StaffListRow | null>(null);
+  const [deleting, setDeleting] = useState<Pick<StaffListRow, "id" | "name" | "email"> | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
@@ -105,7 +105,7 @@ export default function StaffPage() {
         <Card className="data-table-frame">
           <table className="data-table w-full text-left text-sm" data-testid="employees-table">
             <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
-              {["Name", "Email", "Mobile", "Documents", "Status", "Sign-in"].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
+              {["Name", "Email", "Mobile", "Documents", "Status", "Sign-in", "Actions"].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
             </tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.id} className="border-b border-background-100 last:border-0" data-testid={`employee-row-${r.id}`}>
@@ -115,6 +115,11 @@ export default function StaffPage() {
                 <td data-label="Documents" className="px-4 py-3">{r.documents}</td>
                 <td data-label="Status" className="px-4 py-3"><Badge tone={r.status === "active" ? "success" : "muted"}>{EMPLOYEE_STATUS_LABEL[r.status]}</Badge></td>
                 <td data-label="Sign-in" className="px-4 py-3"><EmployeeSignIn row={r} onDone={(m) => { setNotice(m); setReload((n) => n + 1); }} onError={setError} /></td>
+                {/* Owner 2026-11-24: Active / Inactive employees can be deleted too (same confirmation and rules; never your own record). */}
+                <td data-label="Actions" className="px-4 py-3">
+                  <Button size="sm" variant="danger" icon="ri-delete-bin-line" data-testid={`employee-delete-${r.id}`}
+                    onClick={() => { setDeleteError(""); setDeleting({ id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(" "), email: r.email }); }}>Delete</Button>
+                </td>
               </tr>
             ))}</tbody>
           </table>

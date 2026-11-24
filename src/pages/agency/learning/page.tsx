@@ -6,6 +6,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import StudyProgress, { type ProgressCourse } from "@/pages/admin/components/StudyProgress";
 import StudentPracticePage from "@/pages/agency/practice/page";
+import AiTutor from "./AiTutor";
 import { RateBadge } from "@/pages/admin/lms/AttendanceSummary";
 import type { AttendanceCounts } from "@/pages/admin/lms/attendanceRate";
 
@@ -135,6 +136,7 @@ export default function StudentLearningPage() {
                       </button>
                       {isOpen ? (
                         <div className="space-y-3 px-4 pb-4">
+                          <AiTutor unitId={u.unitId} unitName={`${u.code ?? ""} ${u.name}`.trim()} topic={wantUnit === u.unitId ? wantTopic : null} />
                           {wantUnit === u.unitId && wantTopic ? <p className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-foreground-800">
                             <i className="ri-lightbulb-line mr-1 text-primary-700" aria-hidden="true" />Revising <b>{wantTopic}</b>: read the materials below, then go back to practise.</p> : null}
                           <Link className="inline-flex items-center gap-1 rounded-md border border-primary-200 px-3 py-1.5 text-sm font-semibold text-primary-800 dark:text-primary-300"

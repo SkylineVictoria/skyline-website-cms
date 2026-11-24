@@ -1,5 +1,6 @@
 // Google Places (New) lookup for a business's public details (owner 2026-11-24: "fill all info whatever you can find online for this
-// business so no manual work"). Server side only: the key is the Edge Function secret EF_GOOGLE_MAPS_KEY and never reaches the browser.
+// business so no manual work"). Server side only: the key is the Google Maps connection in Integrations > Connections (Vault; the secret
+// EF_GOOGLE_MAPS_KEY is only the fallback) and never reaches the browser.
 // One Text Search call (https://places.googleapis.com/v1/places:searchText) with a field mask of exactly the fields used; the best match
 // is the place whose name is closest to the register's names, in the same state (and, as a bonus, the same postcode). No key, an error,
 // a timeout or no good match: nothing is filled and everything works as before. Runtime-neutral (the function and the offline tests).
@@ -163,6 +164,39 @@ export async function searchPlace(input: PlaceSearchInput, key: string | null | 
     }
   }
   return answered ? { ok: false, reason: "not_found", message: MESSAGES.not_found, query: lastQuery } : { ok: false, reason: "unavailable", message: MESSAGES.unavailable, query: lastQuery };
+}
+
+/** "Check connection" (Integrations > Connections > Google Maps): one tiny Text Search, field mask places.id only. */
+export const PLACES_CHECK_QUERY = "Melbourne VIC Australia";
+export type PlacesCheck = { ok: true } | { ok: false; reason: "not_configured" | "rejected" | "unavailable"; status?: number; code?: string; message: string };
+/**
+ * Makes ONE Text Search with the key and reports Google's answer: ok, or Google's own error text (API not enabled, key restricted,
+ * billing not enabled, key not valid). Never throws; the key is never part of the answer.
+ */
+export async function checkPlacesKey(key: string | null | undefined, request: typeof fetch = fetch, timeoutMs = PLACES_TIMEOUT_MS): Promise<PlacesCheck> {
+  const apiKey = String(key ?? "").trim();
+  if (!apiKey) return { ok: false, reason: "not_configured", message: "No Google Maps key is saved." };
+  let response: Response;
+  try {
+    response = await request(PLACES_SEARCH_URL, {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(timeoutMs),
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": "places.id" },
+      body: JSON.stringify({ textQuery: PLACES_CHECK_QUERY, regionCode: "AU", languageCode: "en", pageSize: 1 }),
+    });
+  } catch {
+    return { ok: false, reason: "unavailable", message: "Google Maps did not answer. Try again in a minute." };
+  }
+  if (response.ok) { await response.body?.cancel().catch(() => undefined); return { ok: true }; }
+  let message = "", code = "";
+  try {
+    const body = await response.json() as { error?: { message?: string; status?: string; details?: Array<{ reason?: string }> } };
+    message = str(body?.error?.message);
+    code = str(body?.error?.details?.find((d) => d?.reason)?.reason) || str(body?.error?.status);
+  } catch { /* no JSON body */ }
+  // Google's text never holds the key; strip it anyway in case an answer ever echoes it.
+  message = message.split(apiKey).join("…").slice(0, 400);
+  return { ok: false, reason: "rejected", status: response.status, code: code.slice(0, 60) || undefined,
+    message: message || `Google Maps refused the key (HTTP ${response.status}).` };
 }
 
 /** Where answers are kept by ABN (public.google_place_lookups, agents.abn_cache_days): a found place or "not found". Either call may fail. */

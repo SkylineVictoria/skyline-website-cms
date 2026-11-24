@@ -56,7 +56,11 @@ export interface SigningPorts {
   mail: { provider: EmailProvider | null; config: HrMailConfig };
   /** ABN Lookup (ABR JSON service): the registered party's GUID (secret EF_ABR_GUID; empty = not set up). Tests inject fetch. */
   abr?: { guid: string; fetch?: typeof fetch };
-  /** Google Places (New) Text Search (secret EF_GOOGLE_MAPS_KEY; empty = not set up): the business's office address, website and phone. Tests inject fetch. */
+  /**
+   * Google Places (New) Text Search: the business's office address, website and phone. The key is the Google Maps connection saved in
+   * Integrations > Connections (Vault, read by placesKey through the service RPC integration_google_maps_key); `key` here is only the
+   * fallback secret EF_GOOGLE_MAPS_KEY. Empty both = not set up. Tests inject fetch.
+   */
   places?: { key: string; fetch?: typeof fetch };
   /** Australian address suggestions (the address-search function's Geoscape lookup, same key, server side): the F04 wizard's address boxes. */
   address?(query: string): Promise<AddressSearchResult>;
@@ -118,6 +122,26 @@ export function placesCache(ports: Pick<SigningPorts, "serviceRpc">): PlacesCach
     get: async (abn) => (await ports.serviceRpc!("google_place_cache_get", { p_abn: abn })) ?? null,
     put: async (abn, query, place) => { await ports.serviceRpc!("google_place_cache_put", { p_abn: abn, p_query: query, p_place: place }); },
   };
+}
+
+/**
+ * The Google Maps key, once per ports object (= per request): the Integrations > Connections key (Vault, service RPC
+ * integration_google_maps_key) first, the secret EF_GOOGLE_MAPS_KEY (ports.places.key) as fallback. Never throws; "" = not set up.
+ */
+const placesKeyRead = new WeakMap<object, Promise<string>>();
+export function placesKey(ports: Pick<SigningPorts, "serviceRpc" | "places">): Promise<string> {
+  let read = placesKeyRead.get(ports);
+  if (!read) {
+    read = (async () => {
+      let saved = "";
+      if (ports.serviceRpc) {
+        try { const value = await ports.serviceRpc("integration_google_maps_key", {}); if (typeof value === "string") saved = value.trim(); } catch { saved = ""; }
+      }
+      return saved || String(ports.places?.key ?? "").trim();
+    })();
+    placesKeyRead.set(ports, read);
+  }
+  return read;
 }
 
 /** The Agent Application Form's template: sent by itself (Add business, corrections), never from "Send a document to sign". */

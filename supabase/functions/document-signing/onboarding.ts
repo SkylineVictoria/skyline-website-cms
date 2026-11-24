@@ -6,12 +6,12 @@
 import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
   WITNESS_SIGNATURE_KEY, F04_ATTACHMENT_MAX, yesNoDefaults, optionalAnswerGroups, relaxAnswerGroups, REQUIRED_GROUP_LABELS, commissionText, isCommissionGst, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { loadRules, ruleBool, ruleList, ruleNumber, ruleText } from "../_shared/business-rules.ts";
-import { DEFAULT_MATCH_PERCENT, PLACE_F04_KEYS, placeF04Values, searchPlaceCached, stateCode, type PlaceDetails } from "../_shared/google-places.ts";
+import { checkPlacesKey, DEFAULT_MATCH_PERCENT, PLACE_F04_KEYS, placeF04Values, searchPlaceCached, stateCode, type PlaceDetails } from "../_shared/google-places.ts";
 import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
-import { abrCache, placesCache, drainSigningMail, f04Prefill, isoToday, ONBOARDING_TEMPLATES_MISSING, sha256Hex, SigningError, type RpcError, type SigningPorts } from "./core.ts";
+import { abrCache, placesCache, placesKey, drainSigningMail, f04Prefill, isoToday, ONBOARDING_TEMPLATES_MISSING, sha256Hex, SigningError, type RpcError, type SigningPorts } from "./core.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const onboardingPdfModule = () => import("../_shared/agent-onboarding-pdf.ts");
@@ -230,8 +230,9 @@ async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Pr
  */
 export async function businessPlace(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<OnboardingContext, "rpc">>, abn: string, names: Array<string | null | undefined>,
   state?: string | null, postcode?: string | null): Promise<{ configured: boolean; ok: boolean; place?: PlaceDetails; reason?: string; message?: string; cached?: boolean } | null> {
-  const key = ctx.ports.places?.key ?? "";
-  if (!key.trim()) return { configured: false, ok: false, reason: "not_configured" };
+  // The Integrations > Connections key first, the EF_GOOGLE_MAPS_KEY secret as fallback (cached per request).
+  const key = await placesKey(ctx.ports);
+  if (!key) return { configured: false, ok: false, reason: "not_configured" };
   try {
     const rules = await onboardingRules(ctx);
     if (!rules.placesEnabled) return null;
@@ -288,7 +289,7 @@ export async function abnLookup(ctx: OnboardingContext): Promise<Json> {
   if (!outcome.ok) {
     const failed = { configured: outcome.reason !== "not_configured", ok: false, reason: outcome.reason, message: outcome.message };
     // No ABR GUID (2026-11-24): Google Maps still fills the office from the names on the public ABN Lookup page (cached by ABN).
-    if (outcome.reason === "not_configured" && ctx.ports.places?.key) {
+    if (outcome.reason === "not_configured" && await placesKey(ctx.ports)) {
       const page = await lookupAbrCached(String(ctx.body.abn ?? ""), "", abrCache(ctx.ports), ctx.ports.abr?.fetch ?? fetch).catch(() => null);
       if (page) {
         const places = await businessPlace(ctx, page.details.abn, [...page.details.businessNames, page.details.entityName], page.details.state, page.details.postcode);
@@ -1263,6 +1264,25 @@ export async function notifyResubmitted(ctx: Pick<OnboardingContext, "ports">, o
   return { notified: outcome.state === "sent" };
 }
 
+/**
+ * Integrations > Connections > Google Maps > Check connection (CMS administrators only): one Text Search with the key the auto-fill uses
+ * (the saved connection, else the EF_GOOGLE_MAPS_KEY fallback). Answers ok or Google's error message, and which key was checked; never the key.
+ */
+export async function googleMapsCheck(ctx: OnboardingContext): Promise<Json> {
+  if ((await ctx.rpc("cms_is_admin", {})) !== true) throw new SigningError("Only administrators can check this connection.", 403);
+  let saved = "";
+  if (ctx.ports.serviceRpc) {
+    try { const value = await ctx.ports.serviceRpc("integration_google_maps_key", {}); if (typeof value === "string") saved = value.trim(); } catch { saved = ""; }
+  }
+  const fallback = String(ctx.ports.places?.key ?? "").trim();
+  const source = saved ? "connection" : fallback ? "fallback_secret" : "none";
+  const outcome = await checkPlacesKey(saved || fallback, ctx.ports.places?.fetch ?? fetch);
+  if (ctx.ports.serviceRpc && source !== "none") {
+    await ctx.ports.serviceRpc("integration_google_maps_check_record", { p_ok: outcome.ok, p_code: outcome.ok ? null : (outcome.code ?? outcome.reason) }).catch(() => undefined);
+  }
+  return { ...outcome, source };
+}
+
 export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Promise<Json>> = {
   agent_onboarding_review_save: reviewSave,
   agent_onboarding_presend_open: presendOpen,
@@ -1284,6 +1304,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_business_delete: deleteBusiness,
   agent_onboarding_business_activate: activateBusinessByAdmin,
   agent_onboarding_abn_lookup: abnLookup,
+  integration_google_maps_check: googleMapsCheck,
   // Retired (2026-11-19): agents have no onboarding of their own.
   agent_onboarding_add_agent: retired,
   agent_onboarding_agent_activate: retired,

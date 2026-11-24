@@ -1292,6 +1292,83 @@ test("Google Maps autofill (2026-11-24): Places (New) Text Search with the field
   assert.ok(read("supabase/functions/.env.example").includes("EF_GOOGLE_MAPS_KEY="));
 });
 
+test("Google Maps connection (2026-11-24): the key saved in Integrations > Connections (Vault, service RPC) is used before EF_GOOGLE_MAPS_KEY, read once per request; Check connection makes one places.id search, admins only, reports Google's error; the key never reaches the browser or the summary", async () => {
+  const places = await load.import<typeof import("../supabase/functions/_shared/google-places.ts")>("../supabase/functions/_shared/google-places.ts");
+  const VAULT_KEY = "AIzaVaultKey_0123456789abcdefghijklmnopq", ENV_KEY = "AIzaEnvKey-0123456789abcdefghijklmnopqrs";
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const fetchPlaces = (answer: () => Response) => (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return answer(); }) as unknown as typeof fetch;
+  const keyOf = (i: number) => (calls[i].init.headers as Record<string, string>)["X-Goog-Api-Key"];
+  const service: Array<[string, Record<string, unknown>]> = [];
+  const BHP = "49004028077";
+  const abrAnswer = `c(${JSON.stringify({ Abn: BHP, AbnStatus: "Active", AbnStatusEffectiveFrom: "2000-11-01", Acn: "004028077", AddressPostcode: "3000", AddressState: "VIC", BusinessName: ["BHP"], EntityName: "BHP GROUP LIMITED", EntityTypeName: "Australian Public Company", Gst: "2000-07-01", Message: "" })}`;
+  const mkPorts = (opts: { env: string; vault: unknown; admin?: boolean; answer?: () => Response }) => ({ isServiceCaller: false, later: (w: Promise<unknown>) => w.then(() => undefined), letterhead: async () => null, uuid: () => "00000000-0000-4000-8000-00000000eeef",
+    abr: { guid: "guid-1", fetch: (async () => new Response(abrAnswer)) as unknown as typeof fetch },
+    places: { key: opts.env, fetch: fetchPlaces(opts.answer ?? (() => Response.json({ places: [] }))) },
+    admin: async (action: string) => { if (action === "subject_search") return []; throw new Error(`unexpected ${action}`); },
+    callerRpc: async (name: string) => { if (name === "abr_lookup_save") return "2026-11-24T00:00:00Z"; if (name === "cms_is_admin") return opts.admin ?? true; throw new Error(`unexpected rpc ${name}`); },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      service.push([name, args]);
+      if (name === "integration_google_maps_key") { if (opts.vault instanceof Error) throw opts.vault; return opts.vault; }
+      if (name === "business_rule_values") return {};
+      if (["google_place_cache_get", "google_place_cache_put", "integration_google_maps_check_record"].includes(name)) return null;
+      throw new Error(`unexpected service rpc ${name}`);
+    }, service: async () => false,
+    storage: { download: async () => null, upload: async () => true, remove: async () => undefined, signedUrl: async () => null },
+    mail: { provider: null, config: { from: null, siteUrl: "", adminTo: [] } } }) as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  const lookup = (ports: Parameters<typeof signingCore.handleSigning>[1]) => signingCore.handleSigning({ body: { action: "agent_onboarding_abn_lookup", abn: BHP }, upload: null, ip: null, userAgent: null }, ports) as Promise<{ places?: { configured: boolean } }>;
+
+  // Key source: the connection first, the secret as fallback, nothing when neither; the service RPC is read once per request.
+  calls.length = 0; service.length = 0;
+  const both = mkPorts({ env: ENV_KEY, vault: `  ${VAULT_KEY} ` });
+  assert.equal(await signingCore.placesKey(both), VAULT_KEY);
+  await lookup(both);
+  assert.ok(calls.length >= 1 && calls.every((_, i) => keyOf(i) === VAULT_KEY), "the saved connection's key is sent, not the secret");
+  assert.equal(service.filter(([n]) => n === "integration_google_maps_key").length, 1, "read once per request (ports)");
+  calls.length = 0;
+  await lookup(mkPorts({ env: ENV_KEY, vault: null }));
+  assert.ok(calls.length >= 1 && keyOf(0) === ENV_KEY, "no saved connection: EF_GOOGLE_MAPS_KEY");
+  assert.equal(await signingCore.placesKey(mkPorts({ env: ENV_KEY, vault: new Error("rpc down") })), ENV_KEY, "the RPC failing falls back too");
+  assert.equal(await signingCore.placesKey(mkPorts({ env: ENV_KEY, vault: { apiKey: VAULT_KEY } })), ENV_KEY, "only a text answer counts");
+  calls.length = 0;
+  const none = await lookup(mkPorts({ env: "", vault: null }));
+  assert.ok(none.places?.configured === false && calls.length === 0, "neither: not set up, no call");
+
+  // Check connection: one search, field mask places.id, the key in the header only; Google's error text reported; logged; admins only.
+  const check = (ports: Parameters<typeof signingCore.handleSigning>[1]) => signingCore.handleSigning({ body: { action: "integration_google_maps_check" }, upload: null, ip: null, userAgent: null }, ports) as Promise<Record<string, unknown>>;
+  calls.length = 0; service.length = 0;
+  const good = await check(mkPorts({ env: ENV_KEY, vault: VAULT_KEY, answer: () => Response.json({ places: [{ id: "p1" }] }) }));
+  assert.deepEqual(good, { ok: true, source: "connection" });
+  assert.equal(calls.length, 1); assert.equal(calls[0].url, places.PLACES_SEARCH_URL);
+  assert.equal((calls[0].init.headers as Record<string, string>)["X-Goog-FieldMask"], "places.id");
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { textQuery: "Melbourne VIC Australia", regionCode: "AU", languageCode: "en", pageSize: 1 });
+  assert.ok(service.some(([n, a]) => n === "integration_google_maps_check_record" && a.p_ok === true));
+  const googleError = { error: { code: 403, message: "Places API (New) has not been used in project 123 before or it is disabled.", status: "PERMISSION_DENIED", details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "SERVICE_DISABLED" }] } };
+  const bad = await check(mkPorts({ env: "", vault: VAULT_KEY, answer: () => Response.json(googleError, { status: 403 }) }));
+  assert.deepEqual([bad.ok, bad.reason, bad.status, bad.code, bad.source], [false, "rejected", 403, "SERVICE_DISABLED", "connection"]);
+  assert.match(String(bad.message), /has not been used in project 123/);
+  assert.ok(!JSON.stringify(bad).includes(VAULT_KEY) && !JSON.stringify(good).includes(VAULT_KEY), "the answer never holds the key");
+  const echoed = await places.checkPlacesKey(VAULT_KEY, (async () => Response.json({ error: { message: `bad key ${VAULT_KEY}` } }, { status: 400 })) as unknown as typeof fetch);
+  assert.ok(!echoed.ok && !JSON.stringify(echoed).includes(VAULT_KEY), "an echoed key is stripped");
+  const fallback = await check(mkPorts({ env: ENV_KEY, vault: null, answer: () => Response.json({}) }));
+  assert.deepEqual([fallback.ok, fallback.source], [true, "fallback_secret"]);
+  calls.length = 0;
+  const unset = await check(mkPorts({ env: "", vault: null }));
+  assert.deepEqual([unset.ok, unset.reason, unset.source, calls.length], [false, "not_configured", "none", 0]);
+  const down = await places.checkPlacesKey(VAULT_KEY, (async () => { throw new Error("timeout"); }) as unknown as typeof fetch);
+  assert.deepEqual([down.ok, (down as { reason: string }).reason], [false, "unavailable"]);
+  calls.length = 0;
+  await assert.rejects(check(mkPorts({ env: ENV_KEY, vault: VAULT_KEY, admin: false })), (e: Error & { status?: number }) => e.status === 403);
+  assert.equal(calls.length, 0, "not an admin: no Google call");
+
+  // The screen: Google Maps uses the Vault form (password input, Check connection through document-signing, never a key in the browser);
+  // the summary shown is the key's last four characters (keyEnd), never apiKey.
+  const form = read("src/pages/admin/integrations/CommConnectionForm.tsx");
+  assert.ok(form.includes("'google_maps'") && form.includes("integration_comm_credentials_save") && form.includes("checkGoogleMapsConnection") && form.includes("summary?.keyEnd"));
+  assert.ok(form.includes("https://console.cloud.google.com/apis/credentials") && form.includes("Enable Places API (New) and restrict the key to it"));
+  assert.ok(!/summary\??\.apiKey|X-Goog-Api-Key|places\.googleapis/.test(form + read("src/lib/signingApi.ts")), "no key read back or sent from the browser");
+  assert.ok(read("src/pages/admin/integrations/ConnectionsPage.tsx").includes("VAULT_FORM_CONNECTORS"));
+});
+
 test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs the GUID, reads a found / cancelled / missing ABN and survives the register being down; the F04 prefill maps the brief's fields, stays editable and is recorded; the title and the referees are checked", async () => {
   const abrLib = await load.import<typeof import("../supabase/functions/_shared/validation/abr.ts")>("../supabase/functions/_shared/validation/abr.ts");
   const BHP = "49004028077"; // BHP Group Limited, a large listed company (public ABN)

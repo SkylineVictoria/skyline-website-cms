@@ -8,17 +8,20 @@ import { currentTenantSite } from '@/lib/tenantSite';
 import { Frame } from './shared';
 import { useIntegrations, inputClass } from './state';
 import PendingCredentialsForm from './PendingCredentialsForm';
-import CommConnectionForm, { COMM_CONNECTORS } from './CommConnectionForm';
+import CommConnectionForm, { VAULT_FORM_CONNECTORS } from './CommConnectionForm';
 import Microsoft365Panel from '@/pages/admin/components/Microsoft365Panel';
 import { m365Label, useMicrosoft365 } from '@/pages/admin/lib/microsoft365';
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** Microsoft 365 (2026-11-20) is its own entry, first, with the one status Email Management shows (app-only Microsoft Graph checks). */
 const M365 = 'microsoft365';
+/** Connectors set up with CommConnectionForm (details in Vault): the Communication Hub's and Google Maps. */
+const isVaultFormConnector = (id: string | null | undefined) => !!id && (VAULT_FORM_CONNECTORS as readonly string[]).includes(id);
 /** What each entry is for, where the name alone is not enough. */
 const PURPOSE: Record<string, string> = {
   microsoft365: 'Email Management and student emails (Skyline\u2019s Entra app).',
   microsoft_teams: 'Posts Communication Hub messages to Teams channels (channel links). Separate from Microsoft 365 email.',
+  google_maps: 'Fills a business\u2019s office address, website and phone on Add business (Places API (New)).',
 };
 
 type OAuthSetup = {
@@ -196,8 +199,8 @@ export default function ConnectionsPage() {
   const disabled = connection?.status === 'disabled';
   // Apps whose connector is not built yet: their details can be stored, but there is nothing to test or disconnect.
   const pendingApp = definition?.availability === 'requires_approval' && Object.hasOwn(australianEducationApps, definition.id);
-  // Communication Hub accounts (ClickSend, WhatsApp Business, Microsoft Teams channels): saved here, used by the hub.
-  const commApp = !!definition && (COMM_CONNECTORS as readonly string[]).includes(definition.id);
+  // Communication Hub accounts (ClickSend, WhatsApp Business, Microsoft Teams channels) and Google Maps: saved here in Vault, used server side.
+  const commApp = isVaultFormConnector(definition?.id);
   const wrongDomain = setup && new URL(setup.callbackUrl).origin !== window.location.origin;
   const available = state.data?.definitions.filter(provider =>
     provider.availability !== 'requires_approval' &&
@@ -256,7 +259,7 @@ export default function ConnectionsPage() {
             setAdding(false);
             selectConnection(item.id === selected ? '' : item.id);
           }}>{item.id === selected ? 'Close setup' : 'Manage'}</Button>}
-          {!isAdmin && item.can_operate && !(COMM_CONNECTORS as readonly string[]).includes(item.connector_id) && <Button variant="outline" disabled={busy || item.status === 'disabled'} onClick={() => void perform(async () => {
+          {!isAdmin && item.can_operate && !isVaultFormConnector(item.connector_id) && <Button variant="outline" disabled={busy || item.status === 'disabled'} onClick={() => void perform(async () => {
             await integrationRequest('test', { connectionId: item.id });
             if (item.connector_id === M365) await m365.refresh();
             announce(`${nameOf(item.connector_id)} connection verified.`);

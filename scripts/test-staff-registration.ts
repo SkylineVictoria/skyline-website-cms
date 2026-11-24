@@ -1186,6 +1186,112 @@ test("onboarding per business (2026-11-19): Add business checks the blanks befor
   assert.ok(!decline.textBody.includes("Referee 2") && /unable to proceed/.test(decline.textBody), "the decline email is polite and never shows the reason");
 });
 
+test("Google Maps autofill (2026-11-24): Places (New) Text Search with the field mask, address parts, best match by name and state, cache, missing key skipped, rule off, Add business returns the office and the F04 takes it", async () => {
+  const places = await load.import<typeof import("../supabase/functions/_shared/google-places.ts")>("../supabase/functions/_shared/google-places.ts");
+  const components = [
+    { longText: "5", shortText: "5", types: ["subpremise"] }, { longText: "123", shortText: "123", types: ["street_number"] },
+    { longText: "Church Street", shortText: "Church St", types: ["route"] }, { longText: "Parramatta", shortText: "Parramatta", types: ["locality", "political"] },
+    { longText: "New South Wales", shortText: "NSW", types: ["administrative_area_level_1", "political"] }, { longText: "Australia", shortText: "AU", types: ["country", "political"] },
+    { longText: "2150", shortText: "2150", types: ["postal_code"] }];
+  assert.deepEqual(places.parseAddressComponents(components), { street: "5/123 Church Street", suburb: "Parramatta", state: "NSW", postcode: "2150", country: "Australia" });
+  assert.deepEqual(places.parseAddressComponents([{ longText: "Level 2", types: ["subpremise"] }, { longText: "Collins Street", types: ["route"] }, { longText: "Melbourne", types: ["locality"] }, { longText: "Victoria", shortText: "VIC", types: ["administrative_area_level_1"] }]),
+    { street: "Level 2 Collins Street", suburb: "Melbourne", state: "VIC", postcode: "", country: "" });
+  assert.deepEqual(places.parseAddressComponents(null), { street: "", suburb: "", state: "", postcode: "", country: "" });
+  assert.equal(places.placesQuery("ABC Education Pty Ltd", "new south wales"), "ABC Education Pty Ltd NSW Australia");
+  assert.ok(places.nameSimilarity("ABC EDUCATION PTY LTD", "ABC Education") === 1 && places.nameSimilarity("Global Education", "Global Education Consultants Sydney") >= 0.85);
+  assert.ok(places.nameSimilarity("Global", "Global Plumbing Services") < 0.6, "one shared word is not a match");
+  const raw = (id: string, name: string, comps = components, extra: Record<string, unknown> = {}) => ({ id, displayName: { text: name }, formattedAddress: "x", addressComponents: comps,
+    websiteUri: "https://abc.example", nationalPhoneNumber: "(02) 9999 0000", internationalPhoneNumber: "+61 2 9999 0000", googleMapsUri: "https://maps.google.com/?cid=1", businessStatus: "OPERATIONAL", ...extra });
+  const vic = components.map((c) => c.types.includes("administrative_area_level_1") ? { longText: "Victoria", shortText: "VIC", types: c.types } : c);
+  const candidates = [raw("p-other-state", "ABC Education", vic), raw("p-closed", "ABC Education", components, { businessStatus: "CLOSED_PERMANENTLY" }), raw("p-near", "ABC Migration"), raw("p-best", "ABC Education Group Parramatta")];
+  const best = places.pickBestPlace(candidates, { names: ["ABC Education Pty Ltd"], state: "NSW", postcode: "2150" });
+  assert.equal(best?.placeId, "p-best", "same state, open, closest name");
+  assert.ok(best!.matchPercent >= 85 && best!.website === "https://abc.example" && best!.phone === "(02) 9999 0000");
+  assert.equal(places.pickBestPlace([raw("p-near", "ABC Migration")], { names: ["ABC Education"], state: "NSW" }), null, "below the match needed");
+  assert.equal(places.pickBestPlace(candidates.slice(0, 2), { names: ["ABC Education"], state: "NSW" }), null, "another state / closed for good never match");
+  assert.equal(places.pickBestPlace([raw("p-near", "ABC Migration")], { names: ["ABC Education"], state: "NSW", postcode: "2150" }, 30)?.placeId, "p-near", "the rule's lower match accepts it");
+  assert.deepEqual(places.placeF04Values(best), { office_street_address: "5/123 Church Street", office_suburb: "Parramatta 2150", office_state: "NSW", office_country: "Australia", agent_website: "https://abc.example" });
+  assert.equal(places.placeAddressLine(best), "5/123 Church Street, Parramatta NSW 2150");
+
+  // The call: POST, key and field mask in headers, AU region; no key: nothing called; an error: unavailable; a miss on the first name tries the legal name.
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const fetchPlaces = (answer: (body: { textQuery: string }) => Response) => (async (url: string, init: RequestInit) => { calls.push({ url: String(url), init }); return answer(JSON.parse(String(init.body))); }) as unknown as typeof fetch;
+  const noKey = await places.searchPlace({ names: ["ABC Education"], state: "NSW" }, "", fetchPlaces(() => new Response("{}")));
+  assert.deepEqual([noKey.ok, (noKey as { reason: string }).reason, calls.length], [false, "not_configured", 0], "missing key: skipped, no call");
+  const ok = await places.searchPlace({ names: ["ABC Education", "ABC EDUCATION PTY LTD"], state: "NSW", postcode: "2150" }, "key-1", fetchPlaces(() => Response.json({ places: candidates })));
+  assert.ok(ok.ok && ok.place.placeId === "p-best");
+  const h = calls[0].init.headers as Record<string, string>;
+  assert.equal(calls[0].url, "https://places.googleapis.com/v1/places:searchText"); assert.equal(calls[0].init.method, "POST");
+  assert.equal(h["X-Goog-Api-Key"], "key-1");
+  assert.equal(h["X-Goog-FieldMask"], "places.id,places.displayName,places.formattedAddress,places.addressComponents,places.websiteUri,places.nationalPhoneNumber,places.internationalPhoneNumber,places.googleMapsUri,places.businessStatus");
+  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { textQuery: "ABC Education NSW Australia", regionCode: "AU", languageCode: "en", pageSize: 5 });
+  assert.equal(calls.length, 1, "the same name twice is searched once");
+  calls.length = 0;
+  const second = await places.searchPlace({ names: ["Sunrise Study", "ABC Education Pty Ltd"], state: "NSW" }, "key-1", fetchPlaces((b) => Response.json({ places: b.textQuery.startsWith("ABC") ? candidates : [] })));
+  assert.ok(second.ok && calls.length === 2, "the legal name when the trading name finds nothing");
+  const down = await places.searchPlace({ names: ["ABC Education"], state: "NSW" }, "key-1", fetchPlaces(() => new Response("denied", { status: 403 })));
+  assert.deepEqual([down.ok, (down as { reason: string }).reason], [false, "unavailable"]);
+  const thrown = await places.searchPlace({ names: ["ABC Education"], state: "NSW" }, "key-1", (async () => { throw new Error("timeout"); }) as unknown as typeof fetch);
+  assert.deepEqual([thrown.ok, (thrown as { reason: string }).reason], [false, "unavailable"], "a timeout never throws");
+  // The cache by ABN: a hit makes no call; "not found" is kept too; "unavailable" is not.
+  const store = new Map<string, { found: boolean; place: unknown }>();
+  const cache = { get: async (abn: string) => (store.get(abn) as never) ?? null, put: async (abn: string, _q: string, place: unknown) => { store.set(abn, { found: place !== null, place }); } };
+  calls.length = 0;
+  const first = await places.searchPlaceCached("12 345 678 901", { names: ["ABC Education"], state: "NSW" }, "key-1", cache, fetchPlaces(() => Response.json({ places: candidates })));
+  const again = await places.searchPlaceCached("12345678901", { names: ["ABC Education"], state: "NSW" }, "key-1", cache, fetchPlaces(() => Response.json({ places: [] })));
+  assert.ok(first.ok && !first.cached && again.ok && again.cached && calls.length === 1, "reused from the cache");
+  await places.searchPlaceCached("49004028077", { names: ["Nobody Here"], state: "VIC" }, "key-1", cache, fetchPlaces(() => Response.json({ places: [] })));
+  assert.deepEqual(store.get("49004028077"), { found: false, place: null });
+  await places.searchPlaceCached("53004085616", { names: ["ABC"], state: "VIC" }, "key-1", cache, fetchPlaces(() => new Response("", { status: 500 })));
+  assert.ok(!store.has("53004085616"));
+  const unset = await places.searchPlaceCached("12345678901", { names: ["ABC"] }, "", cache);
+  assert.equal((unset as { reason: string }).reason, "not_configured");
+
+  // The function: Add business's ABN lookup returns the office (cached by ABN, service role); the rule switches it off; no key: configured false.
+  const BHP = "49004028077";
+  const abrAnswer = `c(${JSON.stringify({ Abn: BHP, AbnStatus: "Active", AbnStatusEffectiveFrom: "2000-11-01", Acn: "004028077", AddressPostcode: "3000", AddressState: "VIC", BusinessName: ["BHP"], EntityName: "BHP GROUP LIMITED", EntityTypeName: "Australian Public Company", Gst: "2000-07-01", Message: "" })}`;
+  const bhpPlace = raw("p-bhp", "BHP", vic.map((c) => c.types.includes("locality") ? { ...c, longText: "Melbourne" } : c.types.includes("postal_code") ? { ...c, longText: "3000" } : c));
+  const service: Array<[string, Record<string, unknown>]> = [];
+  const mkPorts = (key: string, rules: Record<string, unknown> = {}) => ({ isServiceCaller: false, later: (w: Promise<unknown>) => w.then(() => undefined), letterhead: async () => null, uuid: () => "00000000-0000-4000-8000-00000000eeee",
+    abr: { guid: "guid-1", fetch: (async () => new Response(abrAnswer)) as unknown as typeof fetch },
+    places: { key, fetch: fetchPlaces(() => Response.json({ places: [bhpPlace] })) },
+    admin: async (action: string) => { if (action === "subject_search") return []; throw new Error(`unexpected ${action}`); },
+    callerRpc: async (name: string) => { if (name === "abr_lookup_save") return "2026-11-24T00:00:00Z"; throw new Error(`unexpected rpc ${name}`); },
+    serviceRpc: async (name: string, args: Record<string, unknown>) => {
+      service.push([name, args]);
+      if (name === "business_rule_values") return rules;
+      if (name === "google_place_cache_get") return null;
+      if (name === "google_place_cache_put") return null;
+      throw new Error(`unexpected service rpc ${name}`);
+    }, service: async () => false,
+    storage: { download: async () => null, upload: async () => true, remove: async () => undefined, signedUrl: async () => null },
+    mail: { provider: null, config: { from: null, siteUrl: "", adminTo: [] } } }) as unknown as Parameters<typeof signingCore.handleSigning>[1];
+  type Looked = { ok: boolean; places?: { configured: boolean; ok: boolean; place?: { street: string; suburb: string; state: string; postcode: string; website: string; phone: string; mapsUri: string } } };
+  const call = (ports: Parameters<typeof signingCore.handleSigning>[1]) => signingCore.handleSigning({ body: { action: "agent_onboarding_abn_lookup", abn: BHP }, upload: null, ip: null, userAgent: null }, ports) as Promise<Looked>;
+  calls.length = 0;
+  const looked = await call(mkPorts("key-1"));
+  assert.ok(looked.ok && looked.places?.ok, "the office comes back with the ABN lookup");
+  assert.deepEqual([looked.places!.place!.street, looked.places!.place!.suburb, looked.places!.place!.state, looked.places!.place!.postcode, looked.places!.place!.website], ["5/123 Church Street", "Melbourne", "VIC", "3000", "https://abc.example"]);
+  assert.equal(JSON.parse(String(calls[0].init.body)).textQuery, "BHP VIC Australia");
+  assert.ok(service.some(([n, a]) => n === "google_place_cache_put" && a.p_abn === BHP), "kept by ABN");
+  calls.length = 0;
+  const off = await call(mkPorts("key-1", { "agents.google_maps_autofill": false }));
+  assert.ok(off.ok && off.places === undefined && calls.length === 0, "rule off: no Google call");
+  const noKeyLookup = await call(mkPorts(""));
+  assert.ok(noKeyLookup.ok && noKeyLookup.places?.configured === false && calls.length === 0, "no key: nothing called, the lookup works as before");
+
+  // The F04: the office postcode kept on the business joins the suburb; the business record's office row and website are used.
+  const f04 = signingCore.f04Prefill({ details: null, confirmed: { legalEntity: "ABC", tradingName: "ABC", gstRegistered: true, state: "NSW", postcode: "2000" },
+    record: { office_street_address: "5/123 Church Street", office_suburb: "Parramatta", office_postcode: "2150", office_state: "NSW", agent_website: "https://abc.example" } });
+  assert.deepEqual([f04.office_street_address, f04.office_suburb, f04.office_state, f04.agent_website], ["5/123 Church Street", "Parramatta 2150", "NSW", "https://abc.example"]);
+
+  // The source: the key only from the function's environment, never in the browser code; staff confirm on Add business; Add business keeps it.
+  assert.match(read("supabase/functions/document-signing/index.ts"), /Deno\.env\.get\("EF_GOOGLE_MAPS_KEY"\)/);
+  assert.ok(!/EF_GOOGLE_MAPS_KEY|X-Goog-Api-Key|places\.googleapis/.test(read("src/pages/admin/components/AddBusinessForm.tsx") + read("src/lib/signingApi.ts")), "the key never reaches the browser");
+  assert.ok(read("src/pages/admin/components/AddBusinessForm.tsx").includes("Found on Google Maps") && read("supabase/functions/document-signing/onboarding.ts").includes(`ctx.rpc("agency_places_attach"`));
+  assert.ok(read("supabase/functions/.env.example").includes("EF_GOOGLE_MAPS_KEY="));
+});
+
 test("ABN prefill (2026-11-19): the ABR lookup checks the checksum first, needs the GUID, reads a found / cancelled / missing ABN and survives the register being down; the F04 prefill maps the brief's fields, stays editable and is recorded; the title and the referees are checked", async () => {
   const abrLib = await load.import<typeof import("../supabase/functions/_shared/validation/abr.ts")>("../supabase/functions/_shared/validation/abr.ts");
   const BHP = "49004028077"; // BHP Group Limited, a large listed company (public ABN)

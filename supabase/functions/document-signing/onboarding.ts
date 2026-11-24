@@ -5,12 +5,13 @@
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
 import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
   WITNESS_SIGNATURE_KEY, F04_ATTACHMENT_MAX, yesNoDefaults, optionalAnswerGroups, relaxAnswerGroups, REQUIRED_GROUP_LABELS, commissionText, isCommissionGst, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
-import { loadRules, ruleList, ruleNumber, ruleText } from "../_shared/business-rules.ts";
+import { loadRules, ruleBool, ruleList, ruleNumber, ruleText } from "../_shared/business-rules.ts";
+import { DEFAULT_MATCH_PERCENT, PLACE_F04_KEYS, placeF04Values, searchPlaceCached, stateCode, type PlaceDetails } from "../_shared/google-places.ts";
 import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
 import { outcomeState } from "../_shared/hr-mail.ts";
-import { abrCache, drainSigningMail, f04Prefill, isoToday, ONBOARDING_TEMPLATES_MISSING, sha256Hex, SigningError, type RpcError, type SigningPorts } from "./core.ts";
+import { abrCache, placesCache, drainSigningMail, f04Prefill, isoToday, ONBOARDING_TEMPLATES_MISSING, sha256Hex, SigningError, type RpcError, type SigningPorts } from "./core.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const onboardingPdfModule = () => import("../_shared/agent-onboarding-pdf.ts");
@@ -49,13 +50,16 @@ const serviceRpc = async (ports: SigningPorts, name: string, args: Record<string
  *   agents.agency_witness_on_agreement / agents.slit_witness_on_agreement: whether each witness on the agreement is required;
  *   agents.referee_emails_must_differ: the two referees need different email addresses;
  *   agents.business_approval_waits_for_referees: approve / send back only once every referee replied (the database refuses too);
- *   agents.review_email_recipients: who the staff emails about an application go to.
+ *   agents.review_email_recipients: who the staff emails about an application go to;
+ *   agents.google_maps_autofill / agents.google_maps_match_percent (2026-11-24): look the business up on Google Maps, and how close a match must be.
  */
 interface OnboardingRules {
   expiryDays: number; reminderDays: number; yesNoDefault: boolean; optionalGroups: Set<string>;
   agencyWitnessRequired: boolean; slitWitnessRequired: boolean; refereeEmailsDistinct: boolean; waitForReferees: boolean; reviewRecipients: Set<string>;
   /** agents.agreement_term_years; agents.agent_application_attachment_cap_mib (bytes) */
   termYears: number; attachmentMaxBytes: number;
+  /** agents.google_maps_autofill; agents.google_maps_match_percent */
+  placesEnabled: boolean; placesMinPercent: number;
 }
 /** The three sources of the staff emails (agents.review_email_recipients); all three before the rule existed. */
 export const REVIEW_RECIPIENTS = { starter: "Staff member who started it", admins: "Active CMS administrators", contacts: "Admissions and office contacts" } as const;
@@ -67,7 +71,7 @@ function onboardingRules(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<On
     read = loadRules({ rpc: async (fn, args) => { try { if (!call) throw new Error("no rpc"); return { data: await call(fn, args), error: null }; } catch (error) { return { data: null, error }; } } },
       ["agents.onboarding_document_expiry_default", "agents.onboarding_document_reminder_default", "agents.agent_application_yes_no_fallback", "agents.onboarding_required_answer_groups",
         "agents.agency_witness_on_agreement", "agents.slit_witness_on_agreement", "agents.referee_emails_must_differ", "agents.business_approval_waits_for_referees", "agents.review_email_recipients",
-        "agents.agreement_term_years", "agents.agent_application_attachment_cap_mib"])
+        "agents.agreement_term_years", "agents.agent_application_attachment_cap_mib", "agents.google_maps_autofill", "agents.google_maps_match_percent"])
       .then((values) => ({
         expiryDays: Math.max(1, Math.round(ruleNumber(values, "agents.onboarding_document_expiry_default", 30))),
         reminderDays: Math.max(0, Math.round(ruleNumber(values, "agents.onboarding_document_reminder_default", 3))),
@@ -80,6 +84,8 @@ function onboardingRules(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<On
         reviewRecipients: new Set(ruleList(values, "agents.review_email_recipients", Object.values(REVIEW_RECIPIENTS))),
         termYears: Math.max(1, Math.round(ruleNumber(values, "agents.agreement_term_years", 2))),
         attachmentMaxBytes: Math.max(1, ruleNumber(values, "agents.agent_application_attachment_cap_mib", F04_ATTACHMENT_MAX / 1048576)) * 1048576,
+        placesEnabled: ruleBool(values, "agents.google_maps_autofill", true),
+        placesMinPercent: Math.min(100, Math.max(1, Math.round(ruleNumber(values, "agents.google_maps_match_percent", DEFAULT_MATCH_PERCENT)))),
       }));
     rulesRead.set(ctx, read);
   }
@@ -211,7 +217,49 @@ async function applicationValues(ctx: OnboardingContext, prepared: Prepared): Pr
   const acn = await businessAcn(ctx, prepared.agency.id);
   const values = { ...found.values }, prefill = found.prefill ? { ...found.prefill } : null;
   if (acn) { values.agent_acn = printAcn(acn); if (prefill) prefill.agent_acn = printAcn(acn); }
+  // Google Maps (2026-11-24): the office row and the website, blank ones only, from what Add business kept on the business or (a business
+  // added before) a lookup by name (cached by ABN). Never overwrites a value; nothing happens without the key or with the rule off.
+  const office = await placeBlanks(ctx, prepared, values);
+  for (const [key, value] of Object.entries(office)) { values[key] = value; if (prefill) prefill[key] = value; }
   return { values, prefill, facts: found.facts };
+}
+
+/**
+ * Google Maps lookup by the business's names and state (cached by ABN, agents.abn_cache_days). Never throws; null when the key is not set,
+ * the rule is off or there is nothing to search with. configured false: no key (the CMS shows nothing).
+ */
+export async function businessPlace(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<OnboardingContext, "rpc">>, abn: string, names: Array<string | null | undefined>,
+  state?: string | null, postcode?: string | null): Promise<{ configured: boolean; ok: boolean; place?: PlaceDetails; reason?: string; message?: string; cached?: boolean } | null> {
+  const key = ctx.ports.places?.key ?? "";
+  if (!key.trim()) return { configured: false, ok: false, reason: "not_configured" };
+  try {
+    const rules = await onboardingRules(ctx);
+    if (!rules.placesEnabled) return null;
+    const list = names.map((n) => String(n ?? "").trim()).filter(Boolean);
+    if (!list.length) return null;
+    const outcome = await searchPlaceCached(abn, { names: list, state, postcode }, key, placesCache(ctx.ports), ctx.ports.places?.fetch ?? fetch, { minPercent: rules.placesMinPercent });
+    if (outcome.ok) return { configured: true, ok: true, place: outcome.place, cached: outcome.cached };
+    return { configured: outcome.reason !== "not_configured", ok: false, reason: outcome.reason, message: outcome.message, cached: outcome.cached };
+  } catch {
+    return null;
+  }
+}
+/** The F04 office row / website values Google Maps gives for the keys still blank in values (the business record's own values win). */
+async function placeBlanks(ctx: OnboardingContext, prepared: Prepared, values: Record<string, string>): Promise<Record<string, string>> {
+  const blank = PLACE_F04_KEYS.filter((k) => !String(values[k] ?? "").trim());
+  const out: Record<string, string> = {};
+  // The office postcode kept on the business joins a named suburb that has none.
+  const kept = String((prepared.values ?? {}).office_postcode ?? "").replace(/\D/g, "").slice(0, 4);
+  if (kept && values.office_suburb && !/\s\d{4}$/.test(values.office_suburb) && !/^\d{4}$/.test(values.office_suburb)) out.office_suburb = `${values.office_suburb.trim()} ${kept}`;
+  // Only when the street address is blank: a business whose office is known is never looked up again.
+  if (!blank.includes("office_street_address") || !prepared.agency.abn) return out;
+  const found = await businessPlace(ctx, prepared.agency.abn, [values.agent_trading_name, values.agent_legal_entity, values.agent_organisation_name, prepared.agency.name], values.office_state, null);
+  if (!found?.ok || !found.place) return out;
+  // A place in another state than the business's own is not this business's office.
+  if (values.office_state && stateCode(found.place.state) && stateCode(found.place.state) !== stateCode(values.office_state)) return out;
+  const fill = placeF04Values(found.place);
+  for (const key of blank) if (fill[key]) out[key] = fill[key];
+  return out;
 }
 async function applicationValuesFromRegister(ctx: OnboardingContext, prepared: Prepared): Promise<{ values: Record<string, string>; prefill: Record<string, string> | null; facts: AbrFacts | null }> {
   let abr: BusinessAbr | null = null;
@@ -237,10 +285,38 @@ async function applicationValuesFromRegister(ctx: OnboardingContext, prepared: P
 export async function abnLookup(ctx: OnboardingContext): Promise<Json> {
   await ctx.admin("subject_search", null, { type: "none" });
   const outcome = await lookupAbr(String(ctx.body.abn ?? ""), ctx.ports.abr?.guid, ctx.ports.abr?.fetch ?? fetch);
-  if (!outcome.ok) return { configured: outcome.reason !== "not_configured", ok: false, reason: outcome.reason, message: outcome.message };
+  if (!outcome.ok) {
+    const failed = { configured: outcome.reason !== "not_configured", ok: false, reason: outcome.reason, message: outcome.message };
+    // No ABR GUID (2026-11-24): Google Maps still fills the office from the names on the public ABN Lookup page (cached by ABN).
+    if (outcome.reason === "not_configured" && ctx.ports.places?.key) {
+      const page = await lookupAbrCached(String(ctx.body.abn ?? ""), "", abrCache(ctx.ports), ctx.ports.abr?.fetch ?? fetch).catch(() => null);
+      if (page) {
+        const places = await businessPlace(ctx, page.details.abn, [...page.details.businessNames, page.details.entityName], page.details.state, page.details.postcode);
+        if (places) return { ...failed, places };
+      }
+    }
+    return failed;
+  }
   let cached = true;
   try { await ctx.rpc("abr_lookup_save", { p_abn: outcome.details.abn, p_raw: outcome.raw, p_details: outcome.details }); } catch { cached = false; }
-  return { configured: true, ok: true, details: outcome.details, fetchedAt: outcome.fetchedAt, cached };
+  // Google Maps (2026-11-24): the office address, website and phone, by the register's names in the register's state; never fails the lookup.
+  const d = outcome.details;
+  const places = await businessPlace(ctx, d.abn, [...d.businessNames, d.entityName], d.state, d.postcode);
+  return { configured: true, ok: true, details: outcome.details, fetchedAt: outcome.fetchedAt, cached, ...(places ? { places } : {}) };
+}
+
+/** The office details staff confirmed on Add business (Google Maps, possibly edited, or typed): kept on the business profile, blank keys only. */
+function placesInput(raw: unknown): Record<string, string> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const out: Record<string, string> = {
+    street: text(r.street, 200), suburb: text(r.suburb, 100), state: stateCode(text(r.state, 40)), postcode: text(r.postcode, 4).replace(/\D/g, ""),
+    country: text(r.country, 80), website: /^https?:\/\//i.test(text(r.website, 300)) ? text(r.website, 300) : "", phone: text(r.phone, 40),
+    placeId: text(r.placeId, 300), mapsUri: /^https:\/\//i.test(text(r.mapsUri, 500)) ? text(r.mapsUri, 500) : "", name: text(r.name, 200),
+    source: r.source === "google" ? "google" : "staff",
+  };
+  const filled = Object.fromEntries(Object.entries(out).filter(([, v]) => v !== ""));
+  return Object.keys(filled).some((k) => ["street", "suburb", "website", "phone"].includes(k)) ? filled : null;
 }
 
 /** Stage 1: the application form (F04) to the business's agent. */
@@ -424,6 +500,12 @@ export async function createBusiness(ctx: OnboardingContext): Promise<Json> {
     try { await ctx.rpc("agency_abr_attach", { p_agency: created.agencyId, p_confirmed: abr }); }
     catch (error) { abrWarning = `The ABN details could not be kept on the business (${(error as Error).message}); the application form goes without the ABN prefill.`; }
   }
+  // Google Maps (2026-11-24): the office address, website and phone staff confirmed, on the business profile for the F04 (blank keys only).
+  const office = placesInput(ctx.body.places);
+  if (office) {
+    try { await ctx.rpc("agency_places_attach", { p_agency: created.agencyId, p_place: office }); }
+    catch (error) { abrWarning = [abrWarning, `The office address could not be kept on the business (${(error as Error).message}); type it when preparing the application.`].filter(Boolean).join(" "); }
+  }
   // The ACN (2026-11-20, owner): the ABN's register entry is looked up and cached (abr_businesses, the public ABN Lookup page when the ABR
   // service is not set up); the database keeps the business's ACN from it by the rule (register ACN, or derived for a company only).
   await businessAcn(ctx, created.agencyId, String(agency.registration_number ?? ""));
@@ -503,6 +585,8 @@ export async function presendOpen(ctx: OnboardingContext): Promise<Json> {
   const prepared = await prepare(ctx, agencyId, saved.contact?.id ?? ctx.body.agentId);
   const { values, facts } = await applicationValues(ctx, prepared);
   const answers: Record<string, string> = { ...values, ...(saved.presend?.answers ?? {}) };
+  // A draft saved with the office row / website blank still gets the business's details (Google Maps, 2026-11-24): blanks only.
+  for (const key of PLACE_F04_KEYS) if (!String(answers[key] ?? "").trim() && values[key]) answers[key] = values[key];
   for (const key of Object.keys(answers)) if (REFERENCE_KEY.test(key)) delete answers[key];
   const rules = await onboardingRules(ctx);
   if (rules.yesNoDefault) yesNoDefaults(form.fields, answers);

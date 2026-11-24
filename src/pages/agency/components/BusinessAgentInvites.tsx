@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { agentInviteState, invokePortalUsers, listMyBusinessAgents, type BusinessAgentRow } from "@/pages/agency/lib/portalData";
+import { agentInviteState, invokePortalUsers, listMyBusinessAgents, setBusinessAgentStatus, type BusinessAgentRow } from "@/pages/agency/lib/portalData";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { portalPasswordResetUrl } from "@/pages/agency/lib/portalAuthContext";
 
 const TONE: Record<ReturnType<typeof agentInviteState>["tone"], string> = {
@@ -17,6 +18,8 @@ export default function BusinessAgentInvites({ onSent }: { onSent?: (message: st
   const [agents, setAgents] = useState<BusinessAgentRow[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const { authUser } = usePortalAuth();
+  const myEmail = String(authUser?.email ?? "").toLowerCase();
   const load = useCallback(async () => {
     try { setAgents(await listMyBusinessAgents()); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "We could not load your agents."); }
   }, []);
@@ -33,6 +36,17 @@ export default function BusinessAgentInvites({ onSent }: { onSent?: (message: st
     } catch (e) {
       setError(e instanceof Error ? e.message : "The invitation could not be sent.");
     } finally { setBusy(""); }
+  };
+
+  // Deactivate switches off the sign-in, the agent record and any waiting invitation; Reactivate brings the agent back (invite again if needed).
+  const setStatus = async (a: BusinessAgentRow, status: "Active" | "Inactive") => {
+    if (status === "Inactive" && !window.confirm(`Deactivate ${a.name}? They can no longer sign in, and any invitation waiting for them stops working.`)) return;
+    setBusy(a.id); setError("");
+    try {
+      await setBusinessAgentStatus(a.id, status);
+      onSent?.(status === "Inactive" ? `${a.name} deactivated.` : `${a.name} reactivated.${a.hasLogin ? "" : " Send them an invitation so they can sign in."}`);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "We could not change this agent."); } finally { setBusy(""); }
   };
 
   const waiting = (agents ?? []).filter((a) => agentInviteState(a).action === "invite").length;
@@ -57,8 +71,14 @@ export default function BusinessAgentInvites({ onSent }: { onSent?: (message: st
                   <p className="break-all text-sm text-foreground-600">{a.email || "No email"}</p>
                   {a.invitation?.status === "pending" ? <p className="text-xs text-foreground-500">Last sent {new Date(a.invitation.lastSentAt).toLocaleString("en-AU", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}</p> : null}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${TONE[s.tone]}`}>{s.label}</span>
+                  {a.role === "agent" && a.email.toLowerCase() !== myEmail && (a.status === "Active" || a.status === "Inactive") ? (
+                    <button type="button" disabled={busy === a.id} onClick={() => void setStatus(a, a.status === "Active" ? "Inactive" : "Active")} data-testid={`agent-status-${a.id}`}
+                      className="inline-flex min-h-9 cursor-pointer items-center justify-center rounded-md border border-background-300 px-3 py-1.5 text-sm font-medium text-foreground-700 hover:bg-background-100 disabled:cursor-not-allowed disabled:opacity-60">
+                      {a.status === "Active" ? "Deactivate" : "Reactivate"}
+                    </button>
+                  ) : null}
                   {s.action ? (
                     <button type="button" disabled={busy === a.id} onClick={() => void send(a, s.action!)} data-testid={`invite-agent-${a.id}`}
                       className="inline-flex min-h-9 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-primary-500 px-3 py-1.5 text-sm font-semibold text-background-50 hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none">

@@ -492,3 +492,8 @@ export function agentInviteState(a: BusinessAgentRow, now = Date.now()): { label
   }
   return { label: "Not invited", tone: "warn", action: "invite" };
 }
+/** PORTAL-AGENT-DEACTIVATE (2026-11-24): the business admin agent switches an agent off (sign-in, record, waiting invitation) or back on. */
+export async function setBusinessAgentStatus(agentId: string, status: "Active" | "Inactive"): Promise<void> {
+  const { error } = await supabase.rpc("portal_agent_set_status", { p_agent: agentId, p_status: status });
+  if (error) throw new Error(error.message || "We could not change this agent.");
+}

@@ -4963,3 +4963,16 @@ test("Agent status (2026-11-24): Active only once the agent has created a passwo
   for (const f of ["src/pages/admin/BusinessDetailPage.tsx", "src/pages/admin/AgentsPage.tsx", "src/pages/admin/AgentDetailPage.tsx"]) assert.ok(read(f).includes("agentSignInStatus("), f);
   assert.ok(!read("src/pages/admin/BusinessDetailPage.tsx").includes('r.status === "Invited" && business.status === "Active" ? "Active"'), "Invited is no longer shown as Active");
 });
+
+test("Portal: the business admin agent deactivates / reactivates their agents; SLIT too; the agent record follows a portal sign-in switched off", () => {
+  const sql = read("supabase/migrations/20261124223517_portal_agent_deactivate.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("raise exception 'You can only manage agents of your own business.'") && sql.includes("raise exception 'You cannot change your own access.'")
+    && sql.includes("raise exception 'Only SLIT can change another business admin agent.'"));
+  // Inactive switches off the record, the sign-in and the waiting invitation (as the CMS Deactivate does).
+  assert.ok(sql.includes("update public.agency_invitations set status = 'revoked'") && sql.includes("update public.agency_memberships set status = p_status"));
+  assert.ok(sql.includes("where profile_id = p_profile and business_id = m.agency_id and status in ('Active', 'Inactive') and status <> v_status"));
+  const ui = read("src/pages/agency/components/BusinessAgentInvites.tsx");
+  assert.ok(ui.includes('a.role === "agent" && a.email.toLowerCase() !== myEmail') && ui.includes('"Deactivate" : "Reactivate"'));
+  // The invitation link opens the workspace's own page, where the agent creates their password.
+  assert.ok(read("supabase/functions/portal-admin-users/index.ts").includes("/agency/accept-invite#t=${token}"));
+});

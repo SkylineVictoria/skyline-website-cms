@@ -5,7 +5,6 @@ import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, t
 import { useToast } from "@/pages/admin/components/toastContext";
 import { omaraLinked } from "@/lib/omaraApi";
 import { ruleText } from "@/lib/businessRules";
-import { useAuth } from "@/pages/admin/lib/authContext";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { commissionProblem } from "@/pages/agency/lib/admissionsRules";
 
@@ -56,7 +55,6 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
     void Promise.allSettled([linked, offices, people]).then(() => { if (live) setExtrasReady(true); });
     return () => { live = false; };
   }, [agencyId]);
-  const { user: me } = useAuth();
   const [busy, setBusy] = useState<"" | "save" | "send">("");
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -69,7 +67,8 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
       const saved = readChoice(o.signatory.position, POSITIONS);
       // SLIT signatory and witness from Business Rules (owner 2026-11-24: Hardik Amin, CEO; witness Chanpreet Kaur) unless a draft chose someone else.
       const ruleName = ruleText("agents.slit_signatory_name", "").trim(), rulePosition = ruleText("agents.slit_signatory_position", "").trim();
-      const useRule = !!ruleName && (!o.savedAt || o.signatory.name.trim().toLowerCase() === (me?.name ?? "").trim().toLowerCase());
+      // SLIT's signing authority is set in Business Rules: it always starts there (staff can still change it for one send).
+      const useRule = !!ruleName;
       const position = useRule && rulePosition ? readChoice(rulePosition, POSITIONS) : saved;
       setSignatory({ ...o.signatory, name: useRule ? ruleName : o.signatory.name, position: position.picked ?? position.other ?? "",
         // Someone else's signature is never the sender's saved picture: it starts as their typed name.
@@ -79,7 +78,7 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
       setSavedNote(o.savedAt ? `Draft saved ${new Date(o.savedAt).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}${o.savedBy ? ` by ${o.savedBy}` : ""}` : null);
       setError("");
     } catch (e) { setError(e instanceof Error ? e.message : "The application could not be prepared."); }
-  }, [agencyId, me?.name]);
+  }, [agencyId]);
   useEffect(() => { void load(); }, [load]);
 
   const view = useMemo(() => {

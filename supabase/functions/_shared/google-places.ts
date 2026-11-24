@@ -166,6 +166,37 @@ export async function searchPlace(input: PlaceSearchInput, key: string | null | 
   return answered ? { ok: false, reason: "not_found", message: MESSAGES.not_found, query: lastQuery } : { ok: false, reason: "unavailable", message: MESSAGES.unavailable, query: lastQuery };
 }
 
+/**
+ * Manual search (owner 2026-11-24: "Google Maps button should be there to call other location too"): staff type any text (a name, a
+ * branch, a street) and pick one of up to five places. One Text Search, never cached, closed-for-good places left out. Never throws.
+ */
+export type PlacesListOutcome =
+  | { ok: true; places: PlaceDetails[]; query: string }
+  | { ok: false; reason: "not_configured" | "not_found" | "unavailable"; message: string; query?: string };
+export async function searchPlaces(text: string, key: string | null | undefined, request: typeof fetch = fetch,
+  options: { state?: string | null; timeoutMs?: number } = {}): Promise<PlacesListOutcome> {
+  const apiKey = String(key ?? "").trim();
+  if (!apiKey) return { ok: false, reason: "not_configured", message: MESSAGES.not_configured };
+  const typed = str(text).slice(0, 200);
+  if (typed.length < 3) return { ok: false, reason: "not_found", message: "Type at least 3 letters to search Google Maps." };
+  const query = /australia/i.test(typed) ? typed : placesQuery(typed, options.state);
+  try {
+    const response = await request(PLACES_SEARCH_URL, {
+      method: "POST", redirect: "error", signal: AbortSignal.timeout(options.timeoutMs ?? PLACES_TIMEOUT_MS),
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": PLACES_FIELD_MASK },
+      body: JSON.stringify({ textQuery: query, regionCode: "AU", languageCode: "en", pageSize: 5 }),
+    });
+    if (!response.ok) return { ok: false, reason: "unavailable", message: MESSAGES.unavailable, query };
+    const body = await response.json() as { places?: RawPlace[] };
+    const places = (Array.isArray(body?.places) ? body.places : []).map((raw) => toPlaceDetails(raw ?? {}))
+      .filter((p) => p.name && !/CLOSED_PERMANENTLY/i.test(p.businessStatus)).slice(0, 5);
+    return places.length ? { ok: true, places, query }
+      : { ok: false, reason: "not_found", message: "Nothing found on Google Maps for that. Try another name, suburb or street.", query };
+  } catch {
+    return { ok: false, reason: "unavailable", message: MESSAGES.unavailable, query };
+  }
+}
+
 /** "Check connection" (Integrations > Connections > Google Maps): one tiny Text Search, field mask places.id only. */
 export const PLACES_CHECK_QUERY = "Melbourne VIC Australia";
 export type PlacesCheck = { ok: true } | { ok: false; reason: "not_configured" | "rejected" | "unavailable"; status?: number; code?: string; message: string };

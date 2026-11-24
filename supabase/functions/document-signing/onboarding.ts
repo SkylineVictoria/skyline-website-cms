@@ -6,7 +6,7 @@
 import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
   WITNESS_SIGNATURE_KEY, F04_ATTACHMENT_MAX, yesNoDefaults, optionalAnswerGroups, relaxAnswerGroups, REQUIRED_GROUP_LABELS, commissionText, isCommissionGst, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { loadRules, ruleBool, ruleList, ruleNumber, ruleText } from "../_shared/business-rules.ts";
-import { checkPlacesKey, DEFAULT_MATCH_PERCENT, PLACE_F04_KEYS, placeF04Values, searchPlaceCached, stateCode, type PlaceDetails } from "../_shared/google-places.ts";
+import { checkPlacesKey, DEFAULT_MATCH_PERCENT, PLACE_F04_KEYS, placeF04Values, searchPlaceCached, searchPlaces, stateCode, type PlaceDetails } from "../_shared/google-places.ts";
 import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
@@ -304,6 +304,20 @@ export async function abnLookup(ctx: OnboardingContext): Promise<Json> {
   const d = outcome.details;
   const places = await businessPlace(ctx, d.abn, [...d.businessNames, d.entityName], d.state, d.postcode);
   return { configured: true, ok: true, details: outcome.details, fetchedAt: outcome.fetchedAt, cached, ...(places ? { places } : {}) };
+}
+
+/**
+ * Add business > Search Google Maps (owner 2026-11-24): staff search for another office by any text (name, branch, suburb, street) and
+ * pick one of up to five places. Same gate as the ABN lookup; one Text Search, nothing cached or saved until the business is saved.
+ */
+export async function placesSearch(ctx: OnboardingContext): Promise<Json> {
+  await ctx.admin("subject_search", null, { type: "none" });
+  const key = await placesKey(ctx.ports);
+  if (!key) return { configured: false, ok: false, reason: "not_configured", message: "Google Maps is not set up yet (Integrations > Connections)." };
+  const rules = await onboardingRules(ctx);
+  if (!rules.placesEnabled) return { configured: false, ok: false, reason: "not_configured", message: "Google Maps look-up is switched off in Business Rules." };
+  const outcome = await searchPlaces(String(ctx.body.query ?? ""), key, ctx.ports.places?.fetch ?? fetch, { state: typeof ctx.body.state === "string" ? ctx.body.state : null });
+  return { configured: true, ...outcome };
 }
 
 /** The office details staff confirmed on Add business (Google Maps, possibly edited, or typed): kept on the business profile, blank keys only. */
@@ -1304,6 +1318,7 @@ export const ONBOARDING_ACTIONS: Record<string, (ctx: OnboardingContext) => Prom
   agent_onboarding_business_delete: deleteBusiness,
   agent_onboarding_business_activate: activateBusinessByAdmin,
   agent_onboarding_abn_lookup: abnLookup,
+  agent_onboarding_places_search: placesSearch,
   integration_google_maps_check: googleMapsCheck,
   // Retired (2026-11-19): agents have no onboarding of their own.
   agent_onboarding_add_agent: retired,

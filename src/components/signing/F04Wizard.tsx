@@ -239,6 +239,8 @@ export interface F04PrefillControls {
   message: string; onMessage: (message: string) => void;
   busy: "" | "save" | "send"; contact: { name: string; email: string } | null; savedNote: string | null;
   onSaveDraft: (state: F04Draft) => void; onSend: (state: F04Draft) => void; onClose: () => void;
+  /** Registered migration agents linked to the business, highest match first (2026-11-24): the MARN starts with the first; any can be picked. */
+  linkedAgents?: { fullName: string; marn: string; confidence: number }[];
 }
 const PREFILL_WITNESS_HINT = "Optional. The SLIT witness types their name and draws their signature here (it cannot be typed); it is printed on the agreement's SLIT witness line when you send. Leave it empty and the approver can add the SLIT witness when approving. The agency admin gives their own witness on the form.";
 
@@ -255,6 +257,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const correction = view.application?.correction ?? null;
   const mode: F04Mode = modeProp === "admin-review" ? "admin-review" : modeProp === "admin-prefill" ? "admin-prefill" : correction ? "correction" : "agent";
   const admin = mode === "admin-review", correcting = mode === "correction", prefilling = mode === "admin-prefill";
+  const bestLinkedMarn = prefilling ? prefill?.linkedAgents?.[0]?.marn ?? "" : "";
   // Staff (review or pre-send) move freely between steps and search addresses with their own session.
   const staff = admin || prefilling;
   const reviewFlags = review?.flags, correctionFlags = correction?.flags;
@@ -289,6 +292,13 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const termYears = Math.max(1, Math.round(ruleNumber("agents.agreement_term_years", 2)));
   const [witnessPng, setWitnessPng] = useState<string | null>(null);
   const [state, setState] = useState<F04Draft>(opening);
+  // Prepare the application (2026-11-24): an empty MARN starts with the best-matching linked registered agent, once; staff can change or clear it.
+  const marnDefaulted = useRef(false);
+  useEffect(() => {
+    if (!bestLinkedMarn || marnDefaulted.current) return;
+    marnDefaulted.current = true;
+    setState((s) => (s.marn ? s : { ...s, marn: bestLinkedMarn }));
+  }, [bestLinkedMarn]);
   // What the review opened with: staff changes are the difference from it.
   const [reviewBase, setReviewBase] = useState<F04Draft>(opening);
   const firstStep = mode === "admin-review" ? REVIEW_STEP : order.includes(opening.step) ? opening.step : order[0];
@@ -611,6 +621,13 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
               onChange={(v) => setState((s) => ({ ...s, marn: v.replace(/\D/g, "") }))}>
               <a href={OMARA_REGISTER_URL} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-primary-700 underline underline-offset-2" data-testid="f04-omara-link">
                 <i className="ri-external-link-line" aria-hidden="true" />Search the OMARA register</a>
+              {prefilling && prefill?.linkedAgents?.length ? <div className="mt-2" data-testid="f04-linked-agents">
+                <p className="text-xs text-foreground-600">Registered agents linked to this business (highest match first). Click one to use its MARN:</p>
+                <div className="mt-1 flex flex-wrap gap-1.5">{prefill.linkedAgents.map((a) => (
+                  <button key={a.marn} type="button" onClick={() => setState((s) => ({ ...s, marn: a.marn }))} aria-pressed={state.marn === a.marn}
+                    className={`rounded-full border px-2.5 py-1 text-xs font-medium ${state.marn === a.marn ? "border-primary-500 bg-primary-50 text-primary-800" : "border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100"}`}>
+                    {a.fullName} · {a.marn} · {a.confidence}%</button>))}</div>
+              </div> : null}
             </WizardTextField>, "the MARN")}
           </div>
         </div>

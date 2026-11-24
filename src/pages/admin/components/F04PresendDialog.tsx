@@ -3,6 +3,7 @@ import F04Wizard, { type F04PrefillControls } from "@/components/signing/F04Wiza
 import { answersOf, choiceUnnamed, readChoice, POSITIONS, type F04Draft } from "@/components/signing/f04WizardLogic";
 import { openPresend, savePresend, sendPresend, warmPresend, type PresendData, type PresendOpen, type SigningView, type SlitSignatureInput } from "@/lib/signingApi";
 import { useToast } from "@/pages/admin/components/toastContext";
+import { omaraLinked } from "@/lib/omaraApi";
 import { commissionProblem } from "@/pages/agency/lib/admissionsRules";
 
 /*
@@ -28,6 +29,15 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   // SLIT's signatory (2026-11-21): the sending admin by default, their saved signature when they have one (else typed), dated when sent.
   const [signatory, setSignatory] = useState<F04PrefillControls["signatory"]>({ organisation: "", name: "", position: "", savedSignature: null, signedOn: "", method: "typed", png: null, save: true });
   const [message, setMessage] = useState("");
+  // The registered agents linked to the business, highest match first: the MARN starts with the first (owner 2026-11-24).
+  const [linkedAgents, setLinkedAgents] = useState<{ fullName: string; marn: string; confidence: number }[]>([]);
+  useEffect(() => {
+    let live = true;
+    void omaraLinked(agencyId).then((rows) => {
+      if (live) setLinkedAgents(rows.map((a) => ({ fullName: a.fullName, marn: a.marn, confidence: a.confidence })).sort((x, y) => y.confidence - x.confidence));
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [agencyId]);
   const [busy, setBusy] = useState<"" | "save" | "send">("");
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -101,5 +111,5 @@ export default function F04PresendDialog({ agencyId, agencyName, onClose, onSent
   if (!opened || !view) return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground-950/55" role="status"><span className="rounded-md bg-background-50 px-4 py-2 text-sm">Preparing the application…</span></div>;
   return <F04Wizard token="" view={view} mode="admin-prefill" codeCheck={{ needed: false, session: null, render: () => null }} onSigned={() => undefined}
     prefill={{ terms, onTerms: setTerms, witness, onWitness: setWitness, signatory, onSignatory: setSignatory, message, onMessage: setMessage, busy, contact: opened.contact, savedNote,
-      onSaveDraft: (s) => void saveDraft(s), onSend: (s) => void send(s), onClose }} />;
+      onSaveDraft: (s) => void saveDraft(s), onSend: (s) => void send(s), onClose, linkedAgents }} />;
 }

@@ -204,7 +204,17 @@ export default function OmaraAgentsPanel(props:
         </div>
       ) : null}
       <div aria-live="polite">
-        {message ? <p className="mt-2 text-xs text-foreground-700" role="status">{message}</p> : null}
+        {/* Loading (owner 2026-11-24): a clear line while the register is searched, with the business's name. */}
+        {busy === "discover" || busy === "import" ? <div className="mt-3 flex items-center gap-3 rounded-md border border-violet-200 bg-white px-3 py-2.5" role="status" data-testid="omara-loading">
+          <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-violet-300 border-t-violet-700" aria-hidden="true" />
+          <div className="min-w-0 text-sm">
+            <p className="font-semibold text-foreground-900">{busy === "discover"
+              ? <>AI is finding OMARA agents working for {facts.names[0] ? <strong>{facts.names[0]}</strong> : "this business"}…</>
+              : "Reading the OMARA links from the register…"}</p>
+            <p className="text-xs text-foreground-600">{busy === "discover" ? "Searching the web, then reading each official register page. This can take up to a minute." : "One register page at a time."}</p>
+          </div>
+        </div> : null}
+        {message && !busy ? <p className="mt-2 text-xs text-foreground-700" role="status">{message}</p> : null}
         {error ? <p className="mt-2 text-xs font-medium text-red-700" role="alert">{error}</p> : null}
       </div>
 

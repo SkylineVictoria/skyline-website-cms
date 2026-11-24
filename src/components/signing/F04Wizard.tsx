@@ -34,6 +34,22 @@ type Attachments = Partial<Record<F04AttachmentKind, { name: string; size: numbe
 /** Autosave: after this pause in typing, and at most once in this many milliseconds (the link allows 60 calls in 10 minutes). */
 const AUTOSAVE_PAUSE = 4000, AUTOSAVE_GAP = 30000;
 const SCRIPT_FONT = "font-['Dancing_Script',cursive]";
+/**
+ * The SLIT witness's typed name as a signature picture (owner 2026-11-24: "just type his name and we will use it"), only after staff
+ * confirm the witness agreed to it. Drawn in the same script font as typed signatures, dark blue on transparent, like a drawn one.
+ */
+async function typedSignaturePng(name: string): Promise<string> {
+  try { await document.fonts.load("64px 'Dancing Script'"); } catch { /* the cursive fallback is used */ }
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = "64px 'Dancing Script', cursive";
+  const width = Math.ceil(ctx.measureText(name).width) + 40;
+  canvas.width = Math.max(200, width); canvas.height = 110;
+  const draw = canvas.getContext("2d")!;
+  draw.font = "64px 'Dancing Script', cursive"; draw.fillStyle = "#0d1a4d"; draw.textBaseline = "middle";
+  draw.fillText(name, 20, 58);
+  return canvas.toDataURL("image/png");
+}
 
 function YesNo({ id, label, value, error, onChange, required, children }: { id: string; label: string; value: string; error?: string; onChange: (v: "YES" | "NO") => void; required: boolean; children?: ReactNode }) {
   return (
@@ -242,7 +258,7 @@ export interface F04PrefillControls {
   /** Registered migration agents linked to the business, highest match first (2026-11-24): the MARN starts with the first; any can be picked. */
   linkedAgents?: { fullName: string; marn: string; confidence: number }[];
 }
-const PREFILL_WITNESS_HINT = "Optional. The SLIT witness types their name and draws their signature here (it cannot be typed); it is printed on the agreement's SLIT witness line when you send. Leave it empty and the approver can add the SLIT witness when approving. The agency admin gives their own witness on the form.";
+const PREFILL_WITNESS_HINT = "Optional. The SLIT witness's name and signature (drawn, or their typed name once you confirm they agreed) are printed on the agreement's SLIT witness line when you send. Leave it empty and the approver can add the SLIT witness when approving. The agency admin gives their own witness on the form.";
 
 export default function F04Wizard({ token, view, codeCheck, onSigned, mode: modeProp = "agent", review, prefill }: {
   token: string; view: SigningView;
@@ -258,6 +274,7 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const mode: F04Mode = modeProp === "admin-review" ? "admin-review" : modeProp === "admin-prefill" ? "admin-prefill" : correction ? "correction" : "agent";
   const admin = mode === "admin-review", correcting = mode === "correction", prefilling = mode === "admin-prefill";
   const bestLinkedMarn = prefilling ? prefill?.linkedAgents?.[0]?.marn ?? "" : "";
+  const [witnessAgreed, setWitnessAgreed] = useState(false);
   // Staff (review or pre-send) move freely between steps and search addresses with their own session.
   const staff = admin || prefilling;
   const reviewFlags = review?.flags, correctionFlags = correction?.flags;
@@ -817,7 +834,17 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
               <WizardTextField id="f04-prefill-witness-name" name="witnessName" label="SLIT witness full name" required={false} value={prefill.witness.name} maxLength={150} onChange={(v) => prefill.onWitness({ ...prefill.witness, name: v })} testId="f04-prefill-witness-name" />
             </div>
             <div>
-              <p className="mb-2 text-label font-medium text-foreground-800">SLIT witness signature (drawn)</p>
+              <p className="mb-2 text-label font-medium text-foreground-800">SLIT witness signature</p>
+              {!prefill.witness.png && prefill.witness.name.trim().length >= 2 ? <div className="mb-3 rounded-md border border-background-200 bg-background-100 p-3" data-testid="f04-prefill-witness-typed">
+                <p className={`text-3xl text-[#0d1a4d] ${SCRIPT_FONT}`}>{prefill.witness.name.trim()}</p>
+                <label className="mt-2 flex items-start gap-2 text-xs text-foreground-700">
+                  <input type="checkbox" className="mt-0.5" checked={witnessAgreed} onChange={(e) => setWitnessAgreed(e.target.checked)} data-testid="f04-prefill-witness-agreed" />
+                  <span>{prefill.witness.name.trim()} has agreed to be the SLIT witness on this agreement and to their typed name being used as their signature.</span>
+                </label>
+                <button type="button" disabled={!witnessAgreed} className="mt-2 cursor-pointer rounded-md bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={() => void typedSignaturePng(prefill.witness.name.trim()).then((png) => prefill.onWitness({ ...prefill.witness, png }))} data-testid="f04-prefill-witness-use-typed">Use the typed name as the signature</button>
+                <p className="mt-2 text-2xs text-foreground-500">Or draw the signature below.</p>
+              </div> : null}
               {prefill.witness.png ? <div className="flex flex-wrap items-center gap-3">
                 <img src={prefill.witness.png} alt="The SLIT witness's drawn signature" className="max-h-20 rounded border border-background-300 bg-white p-1" data-testid="f04-prefill-witness-image" />
                 <button type="button" className="cursor-pointer text-xs font-semibold text-primary-700 underline-offset-2 hover:underline" onClick={() => prefill.onWitness({ ...prefill.witness, png: null })} data-testid="f04-prefill-witness-redraw">Draw again</button>

@@ -467,7 +467,7 @@ export function DangerDialog({ open, title, intro, items, confirmLabel = "Delete
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-foreground-950/50 p-4" role="alertdialog" aria-modal="true" aria-labelledby="danger-title">
-      <div className="w-full max-w-md overflow-hidden rounded-2xl bg-background-50 shadow-2xl">
+      <div className="max-h-[95vh] w-full max-w-md overflow-y-auto rounded-2xl bg-background-50 shadow-2xl">
         <div className="flex items-start gap-3 p-5">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600"><i className="ri-error-warning-line text-2xl" aria-hidden="true" /></span>
           <div className="min-w-0">
@@ -475,7 +475,7 @@ export function DangerDialog({ open, title, intro, items, confirmLabel = "Delete
             {intro ? <p className="mt-1 text-sm text-foreground-600">{intro}</p> : null}
           </div>
         </div>
-        <ul className="mx-5 space-y-1.5 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
+        <ul className="mx-5 max-h-[40vh] space-y-1.5 overflow-y-auto rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900">
           {items.map((line) => <li key={line} className="flex gap-2"><i className="ri-close-circle-line mt-0.5 text-red-500" aria-hidden="true" /><span>{line}</span></li>)}
         </ul>
         <p className="mx-5 mt-3 text-xs font-semibold text-red-700">This cannot be undone.</p>

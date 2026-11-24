@@ -81,15 +81,17 @@ const PURGE_LABELS: Record<string, string> = {
   "course_fee_items": "fee line", "course_fee_setups": "fee setup", "course_master_units": "master timetable row", "enrollment_application_courses": "application course choice",
   "rto_enrolment_units": "student unit", "lms_intake_students": "intake allocation", "course_term_breaks": "term break", "intake_groups": "intake group",
 };
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 || /s$/.test(word) ? "" : "s"}`;
+/** Our own labels are singular ("class" -> "classes"); labels made from a table name are already plural and stay as they are. */
+const plural = (n: number, word: string, known: boolean) => !known || n === 1 ? `${n} ${word}`
+  : `${n} ${/(s|x|ch|sh)$/.test(word) ? `${word}es` : /[^aeiou]y$/.test(word) ? `${word.slice(0, -1)}ies` : `${word}s`}`;
 function describePurge(tables: PurgeCounts): string[] {
   const rows = Object.entries(tables).map(([table, c]) => {
     const short = table.replace(/^public\./, "").replace(/^"|"$/g, "");
     const label = PURGE_LABELS[short] ?? short.replace(/^hr\./, "").replace(/_/g, " ");
-    return { short, label, deleted: c.deleted ?? 0, cleared: c.cleared ?? 0 };
+    return { short, label, known: short in PURGE_LABELS, deleted: c.deleted ?? 0, cleared: c.cleared ?? 0 };
   }).filter(r => r.short !== "cms_courses");
   rows.sort((x, y) => y.deleted - x.deleted);
-  const lines = rows.filter(r => r.deleted).map(r => `${plural(r.deleted, r.label)} deleted`);
+  const lines = rows.filter(r => r.deleted).map(r => `${plural(r.deleted, r.label, r.known)} deleted`);
   const cleared = rows.filter(r => r.cleared && !r.deleted);
   if (cleared.length) lines.push(`Links cleared (rows kept): ${cleared.map(r => `${r.cleared} ${r.label}`).join(", ")}`);
   return lines;

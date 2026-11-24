@@ -53,7 +53,12 @@ export async function unsupportedText(texts: string[]): Promise<string | null> {
   return texts.find((t) => writer.clean(t) !== t || writer.clean(t, true) !== t) ?? null;
 }
 
-export async function buildLetterPdf(input: { title: string; html: string; footer?: string; letterhead?: Letterhead | null; date?: string | null; kind?: string }): Promise<{ bytes: Uint8Array; pages: number }> {
+/** "Yours sincerely," and the like: the signatory's signature goes on the line after it (OFFER-SIGNATURES, owner 2026-11-24). */
+const CLOSING = /^(yours sincerely|yours faithfully|yours truly|kind regards|warm regards|best regards|regards|sincerely)[,.]?$/i;
+
+export async function buildLetterPdf(input: { title: string; html: string; footer?: string; letterhead?: Letterhead | null; date?: string | null; kind?: string;
+  /** The signatory's saved signature (PNG), drawn under the closing line with the date the letter was issued. */
+  signature?: Uint8Array | null }): Promise<{ bytes: Uint8Array; pages: number }> {
   const blocks = templateBlocks(input.html);
   if (!blocks.some((b) => b.runs.length > 0)) throw new Error("The letter is empty.");
   const institution = input.letterhead?.institution?.trim() || input.footer?.trim() || DEFAULT_INSTITUTION;
@@ -62,6 +67,8 @@ export async function buildLetterPdf(input: { title: string; html: string; foote
   if (logo) { try { await writer.prepareImage(logo); } catch { logo = null; } }
   const date = formatDateOnly(input.date ?? new Date().toISOString().slice(0, 10));
   writer.header({ institution, logo, title: input.title, meta: [input.kind ?? "Offer letter", date] });
+  let signature: { bytes: Uint8Array; type: "png" } | null = input.signature?.length ? { bytes: input.signature, type: "png" } : null;
+  if (signature) { try { await writer.prepareImage(signature); } catch { signature = null; } }
 
   // Blocks flow in runs between horizontal rules, so a rule is drawn where the letter puts it.
   let run: Para[] = [];
@@ -73,6 +80,11 @@ export async function buildLetterPdf(input: { title: string; html: string; foote
     run.push(para);
     // The gap after a block is part of its paragraph: flow() takes one gap for all, so add it as a trailing empty line instead.
     run.push({ spans: [{ text: "" }], size: GAP[block.type] / 1.42 });
+    if (signature && CLOSING.test(block.runs.map((r) => r.text).join("").trim())) {
+      run.push({ spans: [], image: signature }, { spans: [{ text: `Date: ${date}` }], size: SIZE.p });
+      run.push({ spans: [{ text: "" }], size: GAP.p / 1.42 });
+      signature = null;
+    }
   }
   flush();
   if (writer.pageCount > MAX_LETTER_PAGES || writer.truncated) throw new Error(`The letter is longer than ${MAX_LETTER_PAGES} pages.`);

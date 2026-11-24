@@ -62,7 +62,7 @@ export interface AdminDeps {
   /** Auth (service role): removes a login this request created. */
   deleteLogin?(userId: string): Promise<void>;
   /** The filled-in letter as a PDF (pdf-lib). */
-  letterPdf?(input: { title: string; html: string; footer: string }): Promise<{ bytes: Uint8Array; pages: number }>;
+  letterPdf?(input: { title: string; html: string; footer: string; signatory?: string | null }): Promise<{ bytes: Uint8Array; pages: number }>;
   /** The first text the PDF font cannot set as typed (folded or printed as "?"), or null: the letter is refused instead of altered. */
   unsupportedText?(texts: string[]): Promise<string | null>;
   linkUrl(purpose: LinkPurpose, token: string): string;
@@ -265,7 +265,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const prepared = await prepareLetter(typeof body.templateId === "string" && UUID.test(body.templateId) ? body.templateId : null, body.html);
       if (!prepared.ok) return prepared.result;
       let pdf: { bytes: Uint8Array; pages: number };
-      try { pdf = await deps.letterPdf({ title: prepared.title, html: prepared.html, footer: prepared.values.company_name }); }
+      try { pdf = await deps.letterPdf({ title: prepared.title, html: prepared.html, footer: prepared.values.company_name, signatory: prepared.values.signatory_name }); }
       catch (e) { return { status: 400, body: { error: e instanceof Error && /^The letter/.test(e.message) ? e.message : "The letter could not be made into a PDF. Simplify the text and try again." } }; }
       return { status: 200, body: { pdfBase64: toBase64(pdf.bytes), pages: pdf.pages, title: prepared.title, html: prepared.html, edited: prepared.edited, templateName: prepared.template.name } };
     }
@@ -322,7 +322,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const { template, values } = prepared;
       const letter = { subject: prepared.title, html: prepared.html };
       let pdf: { bytes: Uint8Array; pages: number };
-      try { pdf = await deps.letterPdf({ title: letter.subject, html: letter.html, footer: values.company_name }); }
+      try { pdf = await deps.letterPdf({ title: letter.subject, html: letter.html, footer: values.company_name, signatory: values.signatory_name }); }
       catch (e) { return { status: 400, body: { error: e instanceof Error && /^The letter/.test(e.message) ? e.message : "The letter could not be made into a PDF. Simplify the template and try again." } }; }
       // The same checks as an uploaded offer, so signing it later cannot fail on the file.
       const checked = await deps.inspectOffer(pdf.bytes);

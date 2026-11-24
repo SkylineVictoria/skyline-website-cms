@@ -13,7 +13,7 @@ import { handleAdmin } from "./core.ts";
 import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
 import { authorizeWorker } from "../_shared/notification/delivery.ts";
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
-import { loadLetterhead } from "../_shared/letterhead.ts";
+import { loadLetterhead, signatorySignature } from "../_shared/letterhead.ts";
 import { loadRules, ruleNumber, ruleText } from "../_shared/business-rules.ts";
 import { setInstitutionTimeZoneFrom, TIME_ZONE_RULE } from "../_shared/time-zone.ts";
 // The PDF code (pdf-lib, the embedded fonts) is loaded only by the requests that make or check a PDF, so the worker boots light.
@@ -106,7 +106,9 @@ Deno.serve(async (req) => {
     },
     deleteLogin: async (userId) => { await service.auth.admin.deleteUser(userId); },
     // The letter carries the Website Settings letterhead (name, logo, colour): the same styling as every Skyline PDF.
-    letterPdf: async (input) => (await letterPdfModule()).buildLetterPdf({ ...input, letterhead: await loadLetterhead(service) }),
+    // OFFER-SIGNATURES (owner 2026-11-24): the signatory's saved CMS signature (Hardik Amin, CEO) is drawn under "Yours sincerely".
+    letterPdf: async ({ signatory, ...input }) => (await letterPdfModule()).buildLetterPdf({ ...input, letterhead: await loadLetterhead(service),
+      signature: await signatorySignature(service, signatory) }),
     unsupportedText: async (texts) => (await letterPdfModule()).unsupportedText(texts),
     linkUrl: (purpose, token) => linkUrl(config.siteUrl!, purpose, token),
     drain: () => drainHrOutbox(service, env),

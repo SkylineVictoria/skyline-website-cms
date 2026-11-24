@@ -24,3 +24,30 @@ export async function loadLetterhead(client: SettingsClient, fetcher: typeof fet
     return fallback;
   }
 }
+
+// deno-lint-ignore no-explicit-any
+type AnyClient = { from(table: string): any };
+
+/**
+ * OFFER-SIGNATURES (owner 2026-11-24): the saved CMS signature (cms_users.signature_png, set in the agency onboarding Send step) of the
+ * person printed as the offer letter's signatory ({{signatory_name}}, Business Rule hrms.offer_signatory_name), matched by name, or null
+ * (then the letter prints the name only). Never throws.
+ */
+export async function signatorySignature(client: AnyClient, name: string | null | undefined): Promise<Uint8Array | null> {
+  const wanted = String(name ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (!wanted) return null;
+  try {
+    const { data, error } = await client.from("cms_users").select("name, signature_png").not("signature_png", "is", null).limit(500);
+    if (error || !Array.isArray(data)) return null;
+    const row = (data as { name?: string | null; signature_png?: string | null }[])
+      .find((u) => String(u.name ?? "").replace(/\s+/g, " ").trim().toLowerCase() === wanted && u.signature_png);
+    if (!row?.signature_png || !/^[A-Za-z0-9+/]+=*$/.test(row.signature_png)) return null;
+    const binary = atob(row.signature_png);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    // PNG only (the format the signature pad saves).
+    return bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 ? bytes : null;
+  } catch {
+    return null;
+  }
+}

@@ -58,10 +58,15 @@ export async function stampSignedOffer(original: Uint8Array, sig: Signature, let
   let logo = letterhead?.logo ?? null;
   if (logo) { try { await writer.prepareImage(logo); } catch { logo = null; } }
   const signed = formatDateTime(sig.signedAt) || sig.signedAt;
+  let drawn: { bytes: Uint8Array; type: "png" } | null = sig.image?.length ? { bytes: sig.image, type: "png" } : null;
+  if (drawn) { try { await writer.prepareImage(drawn); } catch { drawn = null; } }
   writer.header({ institution, logo, title: "Electronic signature", meta: ["Signature page", `Signed ${signed}`] });
   writer.block([{ spans: [{ text: `This page was added when the offer letter above was signed through a personal link sent by ${institution}.`, tone: "muted" }] }], 10);
   const rows: Row[] = [
+    // OFFER-SIGNATURES (owner 2026-11-24): the employee's own signature and the date, as on a signed paper letter.
+    ...(drawn ? [{ label: "Employee signature", paras: [{ spans: [], image: drawn }] }] : []),
     { label: "Signed by (typed name)", paras: [{ spans: [{ text: sig.signerName }], bold: true }] },
+    { label: "Date signed", paras: [{ spans: [{ text: (formatDateTime(sig.signedAt) || sig.signedAt).split(" ")[0] }] }] },
     { label: "Signed at", paras: [{ spans: [{ text: `${signed} (${institutionTimeZone()})` }] }, { spans: [{ text: `${sig.signedAt} UTC`, tone: "muted" }] }] },
     // No IP address, browser or file hash on the signed copy (owner 2026-11-20): they are kept in the database (hr_svc_offer_sign) as evidence.
     { label: "Offer letter", paras: [{ spans: [{ text: sig.offerFilename }] }] },

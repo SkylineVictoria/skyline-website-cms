@@ -5042,6 +5042,19 @@ test("Offer before documents fix (2026-11-24): the letter is made from Applied /
   assert.ok(read("supabase/functions/staff-admin/core.ts").includes('if (!["applied", "invited", "documents_submitted"].includes(String((before.data'));
 });
 
+test("Offer signatures (2026-11-24): CEO signature and date under the closing line, the employee's drawn signature on the signed copy", () => {
+  const letter = read("supabase/functions/_shared/offer-letter-pdf.ts");
+  assert.ok(letter.includes("CLOSING.test(") && letter.includes("image: signature }, { spans: [{ text: `Date: ${date}` }]"));
+  assert.ok(read("supabase/functions/staff-admin/index.ts").includes("signature: await signatorySignature(service, signatory)"));
+  assert.ok(read("supabase/functions/_shared/letterhead.ts").includes("export async function signatorySignature("));
+  const onboarding = read("supabase/functions/staff-onboarding/core.ts");
+  assert.ok(onboarding.includes("const image = drawnSignature(req.fields.signature);") && onboarding.includes("offerSha256: file.sha256, image });"));
+  assert.ok(read("supabase/functions/_shared/offer-pdf.ts").includes('label: "Employee signature"'));
+  assert.ok(read("src/pages/staff/StaffOnboardingPage.tsx").includes("<SignaturePad onChange={setSignImage} />"));
+  assert.ok(read("src/pages/staff/components/OfferPanel.tsx").includes("api.sign(name.trim(), signature)"));
+  assert.ok(read("supabase/migrations/20261125003517_offer_signatory_ceo.sql").includes("('hrms.offer_signatory_name', 'Hardik Amin')"));
+});
+
 test("Offer signed last (2026-11-24): Accept and continue opens the wizard; its last screen signs the offer and submits", () => {
   const sql = read("supabase/migrations/20261125001517_offer_sign_after_documents.sql").replace(/\r\n/g, "\n");
   assert.ok(sql.includes("else v_status in ('invited', 'offer_sent', 'offer_signed') end"));
@@ -5051,7 +5064,7 @@ test("Offer signed last (2026-11-24): Accept and continue opens the wizard; its 
   const panel = read("src/pages/staff/components/OfferPanel.tsx");
   assert.ok(panel.includes('data-testid="offer-accept-continue"') && panel.includes("window.location.assign(`/staff/onboard#t=${link.token}`)"));
   const wizard = read("src/pages/staff/StaffOnboardingPage.tsx");
-  assert.ok(wizard.includes('const signsOffer = view.status === "offer_sent";') && wizard.includes("await myOfferApi.sign(signName.trim())") && wizard.includes('"Sign the offer and submit"'));
+  assert.ok(wizard.includes('const signsOffer = view.status === "offer_sent";') && wizard.includes("await myOfferApi.sign(signName.trim(), signImage)") && wizard.includes('"Sign the offer and submit"'));
   assert.ok(read("src/pages/staff/StaffHomePage.tsx").includes("acceptViaWizard"));
 });
 

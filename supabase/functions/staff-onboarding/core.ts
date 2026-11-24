@@ -387,11 +387,25 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
 
 type Call = (name: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
 
+/** A drawn signature: null when none was sent, false when it is not a PNG of a sensible size, else its bytes. */
+function drawnSignature(value: unknown): Uint8Array | null | false {
+  if (value === undefined || value === null || value === "") return null;
+  const text = typeof value === "string" ? value.replace(/^data:image\/png;base64,/, "") : "";
+  if (!/^[A-Za-z0-9+/]+=*$/.test(text) || text.length < 100 || text.length > 400_000) return false;
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 ? bytes : false;
+}
+
 async function signOffer(req: OnboardingRequest, deps: OnboardingDeps, call: Call): Promise<OnboardingResult> {
   const name = String(req.fields.name ?? "").replace(/\s+/g, " ").trim();
   // eslint-disable-next-line no-control-regex -- a signature name never carries control characters
   if (!name || name.length > 200 || /[\u0000-\u001f\u007f<>]/.test(name)) return bad("Type your full name to sign.", "name");
   if (req.fields.consent !== true) return bad("Tick the box to agree.", "consent");
+  // OFFER-SIGNATURES (owner 2026-11-24): the signature the employee drew (PNG, base64, as the signature pad saves it); optional.
+  const image = drawnSignature(req.fields.signature);
+  if (image === false) return bad("Your signature could not be used. Clear it and draw it again.", "signature");
   const offer = await call("hr_svc_offer_file");
   if (offer.error) return fromDb(offer.error);
   const file = offer.data as { profileId: string; offerId: string; path: string; sha256: string; filename: string };
@@ -402,7 +416,7 @@ async function signOffer(req: OnboardingRequest, deps: OnboardingDeps, call: Cal
   let signed: Uint8Array;
   try {
     signed = await deps.stampOffer(original, { signerName: name, signedAt, ip: req.ip, userAgent: (req.userAgent ?? "").slice(0, 500) || null, consent: OFFER_CONSENT,
-      offerFilename: file.filename, offerSha256: file.sha256 });
+      offerFilename: file.filename, offerSha256: file.sha256, image });
   } catch {
     return { status: 500, body: { error: "The offer could not be signed. Please contact us." } };
   }

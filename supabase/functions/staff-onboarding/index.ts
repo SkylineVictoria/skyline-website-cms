@@ -147,6 +147,6 @@ Deno.serve(async (req) => {
   });
   // Submit queues "X has uploaded documents" for the admins: send it after the response.
   // Signing queues the signed copy for the applicant and HR (with the PDF attached).
-  if ((action === "submit" || action === "offer_sign") && result.status === 200) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
+  if ((action === "submit" || action === "offer_sign" || action === "offer_decline") && result.status === 200) EdgeRuntime.waitUntil(drainHrOutbox(admin, mailEnv).catch(() => undefined));
   return json(result.body, result.status, result.headers ?? {});
 });

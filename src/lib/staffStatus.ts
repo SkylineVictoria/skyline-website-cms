@@ -144,7 +144,7 @@ onHrRules(() => {
 export const EMAIL_KIND_LABEL: Record<string, string> = {
   application_received: "Application received", already_applied: "Already applied", admin_new_application: "New application (to HR)",
   document_invite: "Document link", reupload_invite: "Re-upload link", admin_documents_submitted: "Documents uploaded (to HR)",
-  offer: "Offer and sign-in link", login_link: "Sign-in link", signed_offer: "Signed offer copy", admin_offer_signed: "Offer signed (to HR)", rejected: "Rejection", access_ready: "Staff access ready",
+  offer: "Offer and sign-in link", login_link: "Sign-in link", signed_offer: "Signed offer copy", admin_offer_signed: "Offer signed (to HR)", admin_offer_declined: "Offer declined (to HR)", rejected: "Rejection", access_ready: "Staff access ready",
 };
 
 export const isStaffStatus = (value: unknown): value is StaffStatus => typeof value === "string" && (STAFF_STATUSES as readonly string[]).includes(value);

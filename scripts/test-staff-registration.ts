@@ -2336,7 +2336,7 @@ test("Employees actions follow the status and what exists; each one is a legal m
     }
   }
   for (const action of ["reject", "withdraw_offer", "reopen"] as const) assert.equal(staffStatusLib.EMPLOYEE_ACTION[action].note, "required", `${action} needs a note`);
-  for (const kind of ["application_received", "already_applied", "admin_new_application", "document_invite", "reupload_invite", "admin_documents_submitted", "offer", "signed_offer", "admin_offer_signed", "rejected", "access_ready"]) {
+  for (const kind of ["application_received", "already_applied", "admin_new_application", "document_invite", "reupload_invite", "admin_documents_submitted", "offer", "signed_offer", "admin_offer_signed", "admin_offer_declined", "rejected", "access_ready"]) {
     assert.ok(staffStatusLib.EMAIL_KIND_LABEL[kind], `email kind ${kind} has a label for the admin`);
   }
   // Staff > Employees is the simple Active / Inactive page since 20261110170000 (see "simple employees" below).
@@ -5021,4 +5021,15 @@ test("Staff offer first (2026-11-24): Full time / Part time letters, offer befor
   assert.ok(read("src/pages/staff/components/OfferPanel.tsx").includes("api.decline(reason.trim())"));
   assert.ok(read("src/pages/staff/StaffHomePage.tsx").includes("{me.status === \"offer_signed\" ? <DocumentsWizardButton /> : null}"));
   assert.ok(read("src/pages/admin/components/EmployeeFormDialog.tsx").includes("offerFirst: true"));
+});
+
+test("Offer declined (2026-11-24): HR is emailed with the person's reason", () => {
+  const sql = read("supabase/migrations/20261124235917_offer_declined_email.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("'admin_offer_declined']::text[]") && sql.includes("perform hr.queue_email(p.id, 'admin_offer_declined', 'admin'"));
+  assert.ok(hrMail.DRAINABLE_KINDS.includes("admin_offer_declined"));
+  const mail = hrMail.renderHrEmail("admin_offer_declined", { name: "Ann Lee", email: "ann@example.test", reason: "Took another role" }, { siteUrl: "https://site.example", profileId: "p-1" } as never)!;
+  assert.equal(mail.subject, "Ann Lee declined the offer");
+  assert.ok(mail.text.includes("Reason: Took another role") && mail.text.includes("https://site.example/admin/staff/employees/p-1"));
+  assert.ok(hrMail.renderHrEmail("admin_offer_declined", { name: "Ann", email: "a@x.test" }, {} as never)!.text.includes("Reason: none given"));
+  assert.ok(read("supabase/functions/staff-onboarding/index.ts").includes('action === "offer_decline") && result.status === 200'));
 });

@@ -4,6 +4,7 @@ import { EXPIRY_FIELDS, getDocumentExpiryStatus, type ExpiryDocument } from "../
 import { PdfWriter, MAX_PDF_PAGES, type ImageData, type Para, type Row } from "./pdf-layout.ts";
 import { conditionMet, NON_ANSWER_TYPES, type PdfField, type PdfSection } from "./pdf-form.ts";
 import { PDF_FORM_SECTIONS } from "./pdf-form-layout.ts";
+import { FALLBACK_TIME_ZONE, institutionTimeZone } from "../time-zone.ts";
 // Runtime-neutral (Deno Edge Function and browser) branded PDF of a submitted application. ONE builder serves the email attachment and the
 // admin "Download PDF" / "Preview", so the two can never differ. The PDF exists only in memory: nothing here logs, stores or returns it elsewhere.
 
@@ -11,7 +12,8 @@ export { MAX_ATTACHMENT_BYTES, adminPdfFileName, attachmentFileName, toBase64 } 
 export { MAX_PDF_PAGES };
 
 export const DEFAULT_PRIMARY_HEX = "#ea6619"; // the Skyline orange, used when a tenant colour is missing or invalid
-export const DEFAULT_TIMEZONE = "Australia/Sydney";
+/** Fallback when the institution time zone (Business Rule general.time_zone) is unusable. */
+export const DEFAULT_TIMEZONE = FALLBACK_TIME_ZONE;
 
 /* ----------------------------------------------------------------- Branding */
 
@@ -43,8 +45,8 @@ export function resolvePrimary(raw: unknown): ResolvedPrimary {
   return { hex: toHex(rgb), rgb, tint, fellBack: !parsed, darkened };
 }
 
-/** DD/MM/YYYY HH:mm in the tenant's timezone (an unknown timezone falls back to Australia/Sydney). */
-export function formatDateTime(value: string | Date | null | undefined, timezone: string = DEFAULT_TIMEZONE): string {
+/** DD/MM/YYYY HH:mm in the given timezone, by default the institution time zone (an unknown timezone falls back to Melbourne). */
+export function formatDateTime(value: string | Date | null | undefined, timezone: string = institutionTimeZone()): string {
   if (!value) return "";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -257,7 +259,7 @@ export async function renderSubmission(input: SubmissionPdfInput): Promise<PdfWr
   for (const section of model.sections) for (const row of section.rows) for (const para of row.paras) {
     if (para.image) { try { await writer.prepareImage(para.image); } catch { para.image = undefined; para.spans = [text("Signature recorded", "muted")]; } }
   }
-  writer.header({ institution, logo, reference, submitted: formatDateTime(input.submittedAt, input.branding?.timezone || DEFAULT_TIMEZONE) || "Not recorded", version: input.version, title: "Student application" });
+  writer.header({ institution, logo, reference, submitted: formatDateTime(input.submittedAt, input.branding?.timezone || institutionTimeZone()) || "Not recorded", version: input.version, title: "Student application" });
   for (const section of model.sections) writer.section(section.title, section.rows);
   const closing: Para[] = [];
   if (input.linksExpireOn) closing.push({ spans: [text(`Links expire on ${input.linksExpireOn}. Sign in to the portal to access documents later.`, "muted")] });

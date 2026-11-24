@@ -148,6 +148,16 @@ async function depositReminder(admin: any, d: Record<string, unknown>): Promise<
   } catch { return "retry"; }
 }
 
+/**
+ * The attachment sentence ("The CoE is attached as a PDF.") added to the branded HTML: at the <!--email-note--> mark of the layout
+ * (public.email_html_wrap since 2026-11-24), else before the footer row of the earlier layout (rows queued before it).
+ */
+function withNote(html: string, note: string): string {
+  const safe = note.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  if (html.includes("<!--email-note-->")) return html.replace("<!--email-note-->", `<p class="em-text" style="margin:12px 0 0;font-size:15px;line-height:1.6;color:#1f2937">${safe}</p><!--email-note-->`);
+  return html.replace("</td></tr><tr><td style=\"padding:16px 24px;background:#f9fafb", `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#111827;">${safe}</p></td></tr><tr><td style="padding:16px 24px;background:#f9fafb`);
+}
+
 type Outcome = { outcome: "accepted"; messageId: string } | { outcome: "failed" | "unknown"; code: string; retry: boolean };
 
 async function send(d: Record<string, unknown>, extra: { attachments: Attachment[]; note: string }): Promise<Outcome> {
@@ -162,7 +172,7 @@ async function send(d: Record<string, unknown>, extra: { attachments: Attachment
         From: formatFrom(sender.name, sender.email), ...(sender.replyTo ? { ReplyTo: sender.replyTo } : {}),
         To: String(d.recipient_email), Subject: String(d.subject), TextBody: extra.note ? `${String(d.body)}\n\n${extra.note}` : String(d.body),
         ...(typeof d.html_body === "string" && d.html_body
-          ? { HtmlBody: extra.note ? String(d.html_body).replace("</td></tr><tr><td style=\"padding:16px 24px;background:#f9fafb", `<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#111827;">${extra.note}</p></td></tr><tr><td style="padding:16px 24px;background:#f9fafb`) : d.html_body }
+          ? { HtmlBody: extra.note ? withNote(String(d.html_body), extra.note) : d.html_body }
           : {}),
         ...(extra.attachments.length ? { Attachments: extra.attachments } : {}),
         MessageStream: "outbound", Metadata: { deliveryId: String(d.id) }, TrackOpens: false, TrackLinks: "None",

@@ -21,6 +21,7 @@
  */
 
 import { ruleText, type RuleValues } from "./business-rules.ts";
+import { textEmailHtml } from "./email-html.ts";
 
 export type PersonKind = "student" | "employee" | "trainer" | "agent";
 export const KINDS: readonly PersonKind[] = ["student", "employee", "trainer", "agent"];
@@ -30,8 +31,8 @@ export const GRAPH = "https://graph.microsoft.com/v1.0";
 
 export interface Plan { kind: PersonKind; staff: boolean; domain: string; sku: string; licenceName: string }
 /**
- * Business Rules office365.staff_license_fallback / office365.student_license_fallback name the licence used when EF_MICROSOFT365_STAFF_SKU /
- * EF_MICROSOFT365_STUDENT_SKU is not set. Only plans with a mailbox are offered (never OFFICESUBSCRIPTION_*); the first of each list is
+ * Business Rules office365.staff_license_fallback / office365.student_license_fallback name the licence; EF_MICROSOFT365_STAFF_SKU /
+ * EF_MICROSOFT365_STUDENT_SKU is used only when the rule is missing. Only plans with a mailbox are offered (never OFFICESUBSCRIPTION_*); the first of each list is
  * the plan used before. Seats are still checked in the tenant before any user is created (licence_not_found / no_licences_available).
  */
 export const STAFF_LICENCES: Readonly<Record<string, string>> = {
@@ -45,7 +46,17 @@ export const STUDENT_LICENCES: Readonly<Record<string, string>> = {
   "Microsoft 365 A3 for students": "M365EDU_A3_STUDENT", "Microsoft 365 A5 for students": "M365EDU_A5_STUDENT",
 };
 export const LICENCE_NAMES: Record<string, string> = Object.fromEntries(Object.entries({ ...STAFF_LICENCES, ...STUDENT_LICENCES }).map(([name, sku]) => [sku, name]));
-export const LICENCE_RULE_IDS = ["office365.staff_license_fallback", "office365.student_license_fallback", "office365.email_address_format", "office365.agent_mailbox"];
+export const LICENCE_RULE_IDS = ["office365.staff_license_fallback", "office365.student_license_fallback", "office365.email_address_format", "office365.agent_mailbox", "office365.sign_in_url"];
+/** Business Rule office365.sign_in_url: where the login email tells the person to sign in. */
+export const signInUrl = (rules: RuleValues = {}) => {
+  const u = ruleText(rules, "office365.sign_in_url", "https://www.office.com").trim();
+  return /^https:\/\/[^\s]+$/.test(u) ? u : "https://www.office.com";
+};
+/** The licence a published rule names (null when the rule is missing or names no known plan). */
+const ruleSku = (rules: RuleValues, id: string, table: Readonly<Record<string, string>>) => {
+  const v = rules[id];
+  return typeof v === "string" ? table[v.trim()] ?? null : null;
+};
 /** Business Rule office365.email_address_format: how the address is made from the name (a clash adds a number). */
 export const ADDRESS_FORMATS = ["first.last", "firstlast", "f.last", "first_last", "last.first"] as const;
 export type AddressFormat = (typeof ADDRESS_FORMATS)[number];
@@ -62,13 +73,13 @@ const read = (env: Env, n: string) => (env(n) ?? "").trim();
 /** The domain and licence for a person type. Throws when the staff domain would be the student domain. `rules`: the live licence fallbacks. */
 export function planFor(kind: PersonKind, env: Env, rules: RuleValues = {}): Plan {
   const studentDomain = read(env, "EF_MICROSOFT365_STUDENT_DOMAIN").toLowerCase();
-  const studentSku = read(env, "EF_MICROSOFT365_STUDENT_SKU") || STUDENT_LICENCES[ruleText(rules, "office365.student_license_fallback", "Office 365 A1 for students")] || "STANDARDWOFFPACK_STUDENT";
+  const studentSku = ruleSku(rules, "office365.student_license_fallback", STUDENT_LICENCES) || read(env, "EF_MICROSOFT365_STUDENT_SKU") || "STANDARDWOFFPACK_STUDENT";
   if (kind === "student") {
     const sku = studentSku;
     return { kind, staff: false, domain: studentDomain, sku, licenceName: LICENCE_NAMES[sku] ?? sku };
   }
   const domain = (read(env, "EF_MICROSOFT365_STAFF_DOMAIN") || "slit.edu.au").toLowerCase();
-  const sku = read(env, "EF_MICROSOFT365_STAFF_SKU") || STAFF_LICENCES[ruleText(rules, "office365.staff_license_fallback", "Office 365 A1 for faculty")] || "STANDARDWOFFPACK_FACULTY";
+  const sku = ruleSku(rules, "office365.staff_license_fallback", STAFF_LICENCES) || read(env, "EF_MICROSOFT365_STAFF_SKU") || "STANDARDWOFFPACK_FACULTY";
   if (domain === studentDomain || sku === studentSku) throw new Error("staff_plan_invalid");
   return { kind, staff: true, domain, sku, licenceName: LICENCE_NAMES[sku] ?? sku };
 }
@@ -416,8 +427,8 @@ export async function provision(ports: Ports, kind: PersonKind, personId: string
       await ports.rpc("o365_step", { p_kind: recordKind(kind), p_person: personId, p_step: "licence", p_ok: true, p_detail: plan.sku });
       await addGroups(ports, graph, kind, personId, plan, msUser!);
       const what = plan.staff ? "SLIT staff email account" : "student email account";
-      const content = `Hello ${nm.given || "there"},\n\nYour ${what} has been created.\n\nEmail: ${upn}\nTemporary password: ${password}\n\nSign in at https://www.office.com. You will be asked to choose a new password the first time you sign in.\n\nIf you did not expect this email, please contact us.`;
-      const m = await graph("POST", `/users/${encodeURIComponent(sender)}/sendMail`, { message: { subject: `Your ${what}`, body: { contentType: "Text", content }, toRecipients: [{ emailAddress: { address: personal } }] }, saveToSentItems: false });
+      const content = `Hello ${nm.given || "there"},\n\nYour ${what} has been created.\n\nEmail: ${upn}\nTemporary password: ${password}\n\nSign in at ${signInUrl(ports.rules)}. You will be asked to choose a new password the first time you sign in.\n\nIf you did not expect this email, please contact us.`;
+      const m = await graph("POST", `/users/${encodeURIComponent(sender)}/sendMail`, { message: { subject: `Your ${what}`, body: { contentType: "HTML", content: textEmailHtml(`Your ${what}`, content) }, toRecipients: [{ emailAddress: { address: personal } }] }, saveToSentItems: false });
       if (m.status !== 202) { welcomeError = await graphCode(m); logWelcomeFailure("create", kind, welcomeError); throw new Error("welcome_email_failed"); }
       await m.body?.cancel();
       welcome = true;
@@ -508,8 +519,8 @@ export async function resend(ports: Ports, kind: PersonKind, personId: string, o
     await p.body?.cancel(); if (!p.ok) throw new Error(graphError(p.status, "microsoft_rejected_user"));
     const upn = String(u.userPrincipalName).toLowerCase();
     const what = plan.staff ? "SLIT staff email account" : "student email account";
-    const content = `Hello ${nm.given || "there"},\n\nHere are the login details for your ${what}.\n\nEmail: ${upn}\nTemporary password: ${password}\n\nSign in at https://www.office.com. You will be asked to choose a new password the first time you sign in.\n\nIf you did not expect this email, please contact us.`;
-    const m = await graph("POST", `/users/${encodeURIComponent(sender)}/sendMail`, { message: { subject: `Your ${what}`, body: { contentType: "Text", content }, toRecipients: [{ emailAddress: { address: personal } }] }, saveToSentItems: false });
+    const content = `Hello ${nm.given || "there"},\n\nHere are the login details for your ${what}.\n\nEmail: ${upn}\nTemporary password: ${password}\n\nSign in at ${signInUrl(ports.rules)}. You will be asked to choose a new password the first time you sign in.\n\nIf you did not expect this email, please contact us.`;
+    const m = await graph("POST", `/users/${encodeURIComponent(sender)}/sendMail`, { message: { subject: `Your ${what}`, body: { contentType: "HTML", content: textEmailHtml(`Your ${what}`, content) }, toRecipients: [{ emailAddress: { address: personal } }] }, saveToSentItems: false });
     if (m.status !== 202) {
       const code = await graphCode(m);
       logWelcomeFailure("resend", kind, code);

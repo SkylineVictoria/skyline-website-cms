@@ -72,10 +72,14 @@ export interface AdminDeps {
   inviteLogin(email: string, name: string, redirectTo: string): Promise<{ userId: string | null; error: string | null }>;
   /** Retention (purge): true only for a verified service_role token of this project (the scheduled job), never a person. */
   isWorker?: boolean;
-  /** EF_HR_RETENTION_MONTHS (1-120) when set, else Business Rules hrms.onboarding_file_retention_fallback (default 6). */
+  /** Business Rules hrms.onboarding_file_retention_fallback; EF_HR_RETENTION_MONTHS only when the rule is missing (default 6). */
   retentionMonths?: number;
-  /** Business Rules hrms.job_attachment_limit_mib in bytes (never above MAX_RESUME_BYTES). */
+  /** Business Rules hrms.retention_purge_batch: rejected applications whose files one purge run deletes (default 50). */
+  purgeBatch?: number;
+  /** Business Rules hrms.job_attachment_limit_mib in bytes (the rule's own maximum is the limit). */
   jobFileBytes?: number;
+  /** Business Rules hrms.staff_account_link_days / hrms.staff_offer_link_days: the email's fallback expiry when the database gives none. */
+  linkDays?: { account?: number; offer?: number };
   /** Deletes storage objects; resolves with an error text when the storage call failed (then nothing is marked). */
   purgeFiles?(paths: string[]): Promise<{ error: string | null }>;
   /** The uploaded file (multipart offer_upload / candidate_file), or null. */
@@ -295,7 +299,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const made = linked.data as { needsPassword: boolean; expiresAt: string | null; invite: { id: string } | null };
       const url = link ? deps.accountUrl(link.token) : `${deps.config.siteUrl}/login?next=%2Fstaff`;
       const composed = await loginEmail("login_link", null, { signing_link: url, login_url: `${deps.config.siteUrl}/login`,
-        link_expiry: longDate(made.expiresAt ?? new Date(Date.now() + 7 * 86400_000).toISOString()) });
+        link_expiry: longDate(made.expiresAt ?? new Date(Date.now() + (deps.linkDays?.account ?? 7) * 86400_000).toISOString()) });
       const sent = composed.ok ? await deps.sendTemplate({ to: email, message: composed.message, deliveryId: `hr-login-${made.invite?.id ?? deps.newId()}` })
         : { state: "failed" as const, error: String(composed.result.body.error ?? "the email template could not be filled"), messageId: undefined };
       await deps.serviceRpc("hr_svc_email_log", { p_profile: profileId, p_kind: "login_link", p_state: sent.state, p_message_id: sent.messageId ?? null, p_error: sent.error ?? null,
@@ -365,7 +369,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const made = sentOffer.data as { firstSend: boolean; needsPassword: boolean; expiresAt: string | null; invite: { id: string } | null; offer: { id: string } };
       const signingLink = link ? deps.accountUrl(link.token) : `${deps.config.siteUrl}/login?next=%2Fstaff`;
       const composed = await loginEmail("offer", templateId, { signing_link: signingLink, login_url: `${deps.config.siteUrl}/login`,
-        link_expiry: longDate(made.expiresAt ?? new Date(Date.now() + 30 * 86400_000).toISOString()) });
+        link_expiry: longDate(made.expiresAt ?? new Date(Date.now() + (deps.linkDays?.offer ?? 30) * 86400_000).toISOString()) });
       const sent = composed.ok ? await deps.sendTemplate({ to: email, message: composed.message, deliveryId: `hr-offer-${made.offer.id}-${deps.newId().slice(0, 8)}` })
         : { state: "failed" as const, error: String(composed.result.body.error ?? "the email template could not be filled"), messageId: undefined };
       // The log never holds the token or the link.
@@ -513,7 +517,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       if (!candidate?.profileId || !UUID.test(candidate.profileId) || candidate.source !== "manual" || candidate.status !== "applied") {
         return { status: 400, body: { error: "Files can be added to an open manual candidate only; a Careers applicant's files stay as submitted." } };
       }
-      const maxBytes = Math.min(MAX_RESUME_BYTES, Math.max(1, deps.jobFileBytes ?? MAX_RESUME_BYTES));
+      const maxBytes = Math.max(1, deps.jobFileBytes ?? MAX_RESUME_BYTES);
       if (file.bytes.length > maxBytes) return { status: 400, body: { error: `The file must be ${Math.round((maxBytes / (1024 * 1024)) * 10) / 10} MB or smaller.`, field: "file" } };
       const kind = detectResume(file.name, file.bytes);
       if (!kind) return { status: 400, body: { error: "Attach a PDF or Word (.docx) file.", field: "file" } };
@@ -533,7 +537,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       // failure leaves that application unmarked, so the next run tries again; a file already gone counts as deleted.
       if (!deps.isWorker || !deps.purgeFiles) return { status: 403, body: { error: "Only the scheduled retention job can do this." } };
       const months = deps.retentionMonths ?? 6;
-      const due = await deps.serviceRpc("hr_svc_retention_due", { p_months: months, p_limit: 50 });
+      const due = await deps.serviceRpc("hr_svc_retention_due", { p_months: months, p_limit: deps.purgeBatch ?? 50 });
       if (due.error) return { status: 500, body: { error: "The retention list could not be read." } };
       const totals = { months, applications: 0, files: 0, failed: 0 };
       for (const item of (due.data as Array<{ profileId: string; paths: string[] }>) ?? []) {

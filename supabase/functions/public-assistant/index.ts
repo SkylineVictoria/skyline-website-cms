@@ -219,7 +219,8 @@ Deno.serve(async (request) => {
   );
   const { data: allowed } = await admin.rpc(
     "tenant_assistant_rate_limit",
-    { p_tenant: tenant, p_bucket: `request:${clientKey}`, p_limit: 20, p_window_seconds: 60 },
+    // Business Rule website.assistant_requests_per_minute (20 when unreadable).
+    { p_tenant: tenant, p_bucket: `request:${clientKey}`, p_limit: Math.max(1, Math.round(ruleNumber(await loadRules(admin, ["website.assistant_requests_per_minute"]), "website.assistant_requests_per_minute", 20))), p_window_seconds: 60 },
   );
   if (!allowed) {
     await admin.from("public_assistant_usage_events").insert({

@@ -17,6 +17,8 @@ import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { backendConfiguration } from "../_shared/config.ts";
 import { emailConflictBody } from "../_shared/identity-email.ts";
 import { activationSite, sendAccountEmail, sendActivationEmail } from "../_shared/activation-mail.ts";
+import { loadEmailBranding } from "../_shared/email-html.ts";
+import { loadInstitutionTimeZone } from "../_shared/time-zone.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -89,6 +91,7 @@ async function deliverInvite(admin: any, anon: any, email: string, name: string,
   if (existing.user) {
     if (existing.user.email_confirmed_at) {
       if (!activation) return { error: "The activation link could not be prepared." };
+      await loadInstitutionTimeZone(admin); // the "works until" date in the institution time zone (general.time_zone)
       const sent = await sendActivationEmail(Deno.env.toObject(), { to: email, name, ...activation });
       return "error" in sent ? { error: sent.error } : { emailSent: true, existingIdentity: true, inviteLink: null as string | null };
     }
@@ -123,6 +126,7 @@ Deno.serve(async (req) => {
     const admin = createClient(SUPABASE_URL, SERVICE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
+    await loadEmailBranding(admin); // the branded email layout of the account emails (logo, colour, footer; cached per isolate)
 
     const caller = callerData.user;
     if (req.headers.has("x-tenant-domain")) return json({ error: "Use tenant membership administration for a scoped request." }, 403);

@@ -6,7 +6,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
-import { loadRules, ruleNumber } from "../_shared/business-rules.ts";
+import { loadRules, ruleNumber, ruleObject } from "../_shared/business-rules.ts";
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { lookupAgencyAbn, normalizeAbn, validateAbn, type AgencyAbnDetails } from "../_shared/validation/abn.ts";
 import { deliverInvite, findAuthUserByEmail } from "../_shared/invite-delivery.ts";
@@ -84,7 +84,11 @@ Deno.serve(async (req) => {
 
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   const callerKey = await hash(req.headers.get("cf-connecting-ip") ?? req.headers.get("x-forwarded-for") ?? "anonymous");
-  if (!(await withinLimit(admin, `self-register:caller:${callerKey}`, action === "lookup_abn" || action === "check_abn" ? 20 : 8, 600))) {
+  // Business Rules admissions.self_register_rate_limits: sign-ups and ABN checks per address every 10 minutes, sign-ups per email an hour.
+  const rateRule = ruleObject(await loadRules(admin, ["admissions.self_register_rate_limits"]), "admissions.self_register_rate_limits",
+    { signupsPer10Min: 8, abnChecksPer10Min: 20, perEmailPerHour: 3 });
+  const rate = (key: string, fallback: number) => { const v = (rateRule as Record<string, unknown>)[key]; return typeof v === "number" && v >= 1 ? Math.round(v) : fallback; };
+  if (!(await withinLimit(admin, `self-register:caller:${callerKey}`, action === "lookup_abn" || action === "check_abn" ? rate("abnChecksPer10Min", 20) : rate("signupsPer10Min", 8), 600))) {
     return json({ error: "Please wait a few minutes before trying again." }, 429, { "Retry-After": "600" });
   }
   // A filled honeypot field is a bot: answer as if it worked and record nothing.
@@ -118,7 +122,7 @@ Deno.serve(async (req) => {
     const email = cleanEmail(parsed.email);
     if (!email.ok) return json({ error: email.error }, 400);
     if (parsed.agreed !== true) return json({ error: "Please agree to the terms and privacy policy." }, 400);
-    if (!(await withinLimit(admin, `self-register:email:${await hash(email.value)}`, 3, 3600))) {
+    if (!(await withinLimit(admin, `self-register:email:${await hash(email.value)}`, rate("perEmailPerHour", 3), 3600))) {
       return json({ error: "We have already received an enrolment for this email. Check your inbox, or try again in an hour." }, 429, { "Retry-After": "3600" });
     }
 

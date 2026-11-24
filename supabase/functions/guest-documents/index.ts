@@ -9,7 +9,7 @@ import {
   REQUIRED_CATEGORIES, ruleCategories, ruleLabels, tokenHashHex, visaApplies,
 } from "../_shared/guest-link.ts";
 import { runGuestUpload, type UploadPort } from "../_shared/guest-upload.ts";
-import { loadRules, ruleList, ruleNumber } from "../_shared/business-rules.ts";
+import { loadRules, ruleList, ruleNumber, ruleObject } from "../_shared/business-rules.ts";
 import { documentLimitProblem, documentLimits } from "../_shared/validation/person.ts";
 
 // Supabase's background-task API is supplied by the Edge runtime, not Deno CLI.
@@ -52,7 +52,11 @@ Deno.serve(async (request) => {
     const { data, error } = await admin.rpc("guest_rate_hit", { p_bucket: bucket, p_limit: limit, p_window_seconds: seconds });
     return !error && data === true;
   };
-  if (!(await hit(ipBucket, 300, 600))) return failed("Too many requests. Please wait a few minutes.", 429);
+  // Business Rules admissions.guest_link_rate_limits (today's numbers when the rule is missing).
+  const rateRule = ruleObject(await loadRules(admin, ["admissions.guest_link_rate_limits"]), "admissions.guest_link_rate_limits",
+    { perAddressPer10Min: 300, badLinksPer10Min: 20, perLinkPer10Min: 200, uploadsPerHour: 60 });
+  const rate = (key: string, fallback: number) => { const v = (rateRule as Record<string, unknown>)[key]; return typeof v === "number" && v >= 1 ? Math.round(v) : fallback; };
+  if (!(await hit(ipBucket, rate("perAddressPer10Min", 300), 600))) return failed("Too many requests. Please wait a few minutes.", 429);
 
   const contentType = request.headers.get("content-type") ?? "";
   const body: Record<string, unknown> = {};
@@ -67,12 +71,12 @@ Deno.serve(async (request) => {
   const action = String(body.action ?? "");
   const tokenHash = await tokenHashHex(String(body.token ?? ""));
   // Guessing tokens is throttled harder than normal use.
-  if (!tokenHash) { await hit(`${ipBucket}:bad`, 20, 600); return invalid(); }
+  if (!tokenHash) { await hit(`${ipBucket}:bad`, rate("badLinksPer10Min", 20), 600); return invalid(); }
   const { data: resolved } = await admin.rpc("guest_link_resolve", { p_hash: tokenHash });
   const link = Array.isArray(resolved) ? resolved[0] : resolved;
-  if (!link) { if (!(await hit(`${ipBucket}:bad`, 20, 600))) return failed("Too many requests. Please wait a few minutes.", 429); return invalid(); }
+  if (!link) { if (!(await hit(`${ipBucket}:bad`, rate("badLinksPer10Min", 20), 600))) return failed("Too many requests. Please wait a few minutes.", 429); return invalid(); }
   const linkId = String(link.link_id), applicationId = String(link.application_id);
-  if (!(await hit(`link:${linkId}`, 200, 600))) return failed("Too many requests. Please wait a few minutes.", 429);
+  if (!(await hit(`link:${linkId}`, rate("perLinkPer10Min", 200), 600))) return failed("Too many requests. Please wait a few minutes.", 429);
   const finished = link.completed === true;
 
   const documentRows = async () => {
@@ -152,7 +156,7 @@ Deno.serve(async (request) => {
     if (action === "status") return reply({ ok: true, ...(await status()) });
 
     if (action === "upload") {
-      if (!(await hit(`upload:${linkId}`, 60, 3600))) return failed("Upload limit reached. Please contact your agent.", 429);
+      if (!(await hit(`upload:${linkId}`, rate("uploadsPerHour", 60), 3600))) return failed("Upload limit reached. Please contact your agent.", 429);
       if (!isGuestCategory(body.category)) return failed("Request not understood.");
       if (!file) return failed("Please choose a file.");
       const bytes = new Uint8Array(await file.arrayBuffer());

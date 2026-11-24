@@ -2,14 +2,20 @@
 // that queued the mail (run after the response with EdgeRuntime.waitUntil), and by staff-admin. Best effort: anything not sent
 // stays queued (sending off) or is retried / marked failed by the outbox rules, and the admin sees failures.
 import { toBase64 } from "./notification/attachment.ts";
-import { drainHrEmails, readHrMailConfig, selectHrMailProvider, type HrEmailRow } from "./hr-mail.ts";
+import { drainHrEmails, readHrMailConfig, selectHrMailProvider, setMailInstitution, type HrEmailRow } from "./hr-mail.ts";
+import { loadRules, ruleText } from "./business-rules.ts";
+import { loadEmailBranding } from "./email-html.ts";
 import { renderMessage, templateValues, type TemplatePerson, type TemplateSource } from "./hr-template.ts";
 
 export const HR_MAIL_ENV = ["EF_NOTIFICATION_EMAIL_ENABLED", "EF_POSTMARK_SERVER_TOKEN", "EF_POSTMARK_API_URL", "EF_HR_EMAIL_FROM", "EF_HR_ADMIN_NOTIFY_TO", "EF_HR_PUBLIC_SITE_URL"] as const;
 
 // deno-lint-ignore no-explicit-any
-export function drainHrOutbox(service: any, env: Record<string, string | undefined>, limit = 20) {
+export async function drainHrOutbox(service: any, env: Record<string, string | undefined>, limit = 20) {
   const config = readHrMailConfig(env);
+  // Business Rule comms.email_institution_name: the institution named in the sign-off.
+  setMailInstitution(ruleText(await loadRules(service, ["comms.email_institution_name"]), "comms.email_institution_name", "Skyline Institute of Technology"));
+  // The branded email layout: logo, colour and footer from Website settings (cached per isolate).
+  await loadEmailBranding(service);
   return drainHrEmails({
     claim: async (kinds, n) => {
       const { data, error } = await service.rpc("hr_svc_email_claim", { p_limit: n, p_lease_seconds: 120, p_kinds: kinds });

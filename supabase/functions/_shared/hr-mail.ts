@@ -14,6 +14,7 @@
 import { POSTMARK_API, selectEmailProvider, type EmailProvider, type SendOutcome } from "./notification/delivery.ts";
 import { isLocalSupabaseUrl } from "./captcha.ts";
 import { emailHtmlDocument, type RenderedMessage, type TemplateType } from "./hr-template.ts";
+import { setEmailBranding } from "./email-html.ts";
 
 export type HrEmailKind = "application_received" | "already_applied" | "admin_new_application" | "document_invite" | "reupload_invite"
   | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "rejected" | "access_ready" | "login_link";
@@ -63,7 +64,10 @@ export function linkUrl(siteUrl: string, purpose: "documents" | "reupload" | "of
 
 // eslint-disable-next-line no-control-regex -- a header value never carries control characters
 const oneLine = (value: unknown, max = 120) => String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
-const SIGN_OFF = "\n\nSkyline Institute of Technology\nThis is an automated message.";
+/** The institution named in the sign-off: Business Rule comms.email_institution_name (callers set it with setMailInstitution; this until then). */
+let mailInstitution = "Skyline Institute of Technology";
+export function setMailInstitution(name: unknown) { const n = typeof name === "string" ? oneLine(name, 120) : ""; if (n) { mailInstitution = n; setEmailBranding({ name: n }); } }
+const signOff = () => `\n\n${mailInstitution}\nThis is an automated message.`;
 
 export const DOCUMENT_INVITE_SUBJECT = "Welcome to Skyline Institute of Technology: your documents";
 const esc = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -75,9 +79,8 @@ export function documentInviteHtml(name: string, link: string, until: string): s
   const step = (n: number, title: string, text: string) =>
     `<tr><td style="padding:6px 12px 6px 0;vertical-align:top"><span style="display:inline-block;width:26px;height:26px;border-radius:13px;background:#fdebdc;color:#c2510f;font-weight:700;text-align:center;line-height:26px">${n}</span></td>` +
     `<td style="padding:6px 0"><strong style="color:#1f2933">${title}</strong><br><span style="color:#52606d">${text}</span></td></tr>`;
-  return `<div style="background:#ea6619;margin:-28px -28px 24px;padding:22px 28px;border-radius:0">` +
-    `<p style="margin:0;color:#ffffff;font-size:18px;font-weight:700">Skyline Institute of Technology</p></div>` +
-    `<p style="margin:0 0 6px;font-size:22px;font-weight:700;color:#1f2933">Welcome aboard, ${first}! &#127881;</p>` +
+  // The branded layout (htmlEmailDocument) draws the logo header; this body starts with the greeting.
+  return `<p style="margin:0 0 6px;font-size:22px;font-weight:700;color:#1f2933">Welcome aboard, ${first}! &#127881;</p>` +
     `<p style="margin:0 0 18px;color:#52606d">We are delighted to have you joining our team. To get you started, we just need a few documents from you.</p>` +
     `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 22px">` +
     step(1, "Open your private link", "No account or password needed.") +
@@ -103,11 +106,11 @@ export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown
     case "application_received": {
       const job = oneLine(payload.jobTitle, 150);
       return { subject: job ? oneLine(`We received your application: ${job}`) : "We received your staff application",
-        text: `Hello ${name},\n\nThank you for applying to work with us${job ? ` as ${job}` : ""}. We have received your application and resume, and an administrator will review it.\n\nIf we would like to continue, we will email you a private link to add your personal details and documents. You do not need to create an account.${SIGN_OFF}` };
+        text: `Hello ${name},\n\nThank you for applying to work with us${job ? ` as ${job}` : ""}. We have received your application and resume, and an administrator will review it.\n\nIf we would like to continue, we will email you a private link to add your personal details and documents. You do not need to create an account.${signOff()}` };
     }
     case "already_applied":
       return { subject: "We already have your staff application",
-        text: `Hello,\n\nSomeone, probably you, tried to apply for a staff position again with this email address. We already have your application, so nothing was changed and you do not need to apply again.\n\nIf this was not you, you can ignore this email.${SIGN_OFF}` };
+        text: `Hello,\n\nSomeone, probably you, tried to apply for a staff position again with this email address. We already have your application, so nothing was changed and you do not need to apply again.\n\nIf this was not you, you can ignore this email.${signOff()}` };
     case "admin_new_application":
       return { subject: oneLine(payload.jobTitle ? `New job application (${oneLine(payload.jobTitle, 150)}): ${name}` : `New staff application: ${name}`),
         text: `A new ${payload.jobTitle ? "job" : "staff"} application was received.\n\nName: ${name}\nEmail: ${oneLine(payload.email, 254)}${payload.jobTitle ? `\nJob: ${oneLine(payload.jobTitle, 150)}` : ""}${adminLink}` };
@@ -116,33 +119,33 @@ export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown
         text: `${name} (${oneLine(payload.email, 254)}) has ${payload.reupload ? "uploaded the documents you asked for again" : "sent their personal details and documents"}. They are ready for review.${adminLink}` };
     case "rejected":
       return { subject: "Your staff application",
-        text: `Hello ${name},\n\nThank you for your interest in working with us. After reviewing your application we will not be continuing with it at this time.\n\nWe wish you all the best.${SIGN_OFF}` };
+        text: `Hello ${name},\n\nThank you for your interest in working with us. After reviewing your application we will not be continuing with it at this time.\n\nWe wish you all the best.${signOff()}` };
     case "access_ready": {
       const role = payload.role === "admin" ? "an Admin" : payload.role === "trainer" ? "a Trainer" : "a staff member";
       return { subject: "Your Skyline staff access is ready",
-        text: `Hello ${name},\n\nYour staff access is ready. You have been set up as ${role}.\n\nSign in on the Skyline website with the email address and password you already use (${oneLine(payload.email, 254)}). You do not need a new account. Your staff details, documents and signed offer are under My HR.${SIGN_OFF}` };
+        text: `Hello ${name},\n\nYour staff access is ready. You have been set up as ${role}.\n\nSign in on the Skyline website with the email address and password you already use (${oneLine(payload.email, 254)}). You do not need a new account. Your staff details, documents and signed offer are under My HR.${signOff()}` };
     }
     case "signed_offer":
       return { subject: "Your signed offer letter",
-        text: `Hello ${name},\n\nThank you for signing your offer letter. A copy of the signed letter is attached for your records.\n\nWe will be in touch about your start and your staff account.${SIGN_OFF}` };
+        text: `Hello ${name},\n\nThank you for signing your offer letter. A copy of the signed letter is attached for your records.\n\nWe will be in touch about your start and your staff account.${signOff()}` };
     case "admin_offer_signed":
       return { subject: oneLine(`${name} signed the offer`),
         text: `${name} (${oneLine(payload.email, 254)}) has signed the offer letter. The signed copy is attached.${adminLink}` };
     case "offer":
       if (!ctx.link) return null;
       return { subject: "Your offer letter from Skyline",
-        text: `Hello ${name},\n\nWe are pleased to offer you a position. Please read your offer letter and, if you accept it, sign it on the page using this private link:\n\n${ctx.link}\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${SIGN_OFF}` };
+        text: `Hello ${name},\n\nWe are pleased to offer you a position. Please read your offer letter and, if you accept it, sign it on the page using this private link:\n\n${ctx.link}\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${signOff()}` };
     case "document_invite":
       if (!ctx.link) return null;
       return { subject: DOCUMENT_INVITE_SUBJECT,
         // rule-policy: technical email-wording Welcome email text; the link expiry comes from the existing invite.
-        text: `Hello ${name},\n\nWelcome to Skyline Institute of Technology! We are delighted to have you joining our team.\n\nTo get you started, please upload your documents (passport or ID, visa if you have one, and your qualifications) using this private link:\n\n${ctx.link}\n\nIt takes about 10 minutes. We read your documents and fill in most of your details for you.\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${SIGN_OFF}`,
+        text: `Hello ${name},\n\nWelcome to Skyline Institute of Technology! We are delighted to have you joining our team.\n\nTo get you started, please upload your documents (passport or ID, visa if you have one, and your qualifications) using this private link:\n\n${ctx.link}\n\nIt takes about 10 minutes. We read your documents and fill in most of your details for you.\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${signOff()}`,
         html: documentInviteHtml(name, ctx.link, until) };
     case "reupload_invite": {
       if (!ctx.link) return null;
       const items = (ctx.rejected ?? []).map((r) => `- ${oneLine(r.category, 40)}: ${oneLine(r.note, 300)}`).join("\n");
       return { subject: "Please upload a document again",
-        text: `Hello ${name},\n\nWe need a new copy of ${(ctx.rejected ?? []).length === 1 ? "one document" : "some documents"}:\n\n${items}\n\nUpload them with this private link:\n\n${ctx.link}\n\nThe link works until ${until}. It is personal: please do not forward it.${SIGN_OFF}` };
+        text: `Hello ${name},\n\nWe need a new copy of ${(ctx.rejected ?? []).length === 1 ? "one document" : "some documents"}:\n\n${items}\n\nUpload them with this private link:\n\n${ctx.link}\n\nThe link works until ${until}. It is personal: please do not forward it.${signOff()}` };
     }
     default:
       return null;
@@ -179,7 +182,7 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
     const builtIn = renderHrEmail(row.kind, row.payload ?? {}, { siteUrl: config.siteUrl, profileId: row.profileId });
     const type = TEMPLATE_FOR_KIND[row.kind];
     const custom = !missing && type && port.template ? await port.template(row, type).catch(() => null) : null;
-    const message = custom ? { subject: custom.subject, text: custom.text, html: emailHtmlDocument(custom.html) as string | undefined } : builtIn ? { ...builtIn, html: undefined as string | undefined } : null;
+    const message = custom ? { subject: custom.subject, text: custom.text, html: emailHtmlDocument(custom.html, custom.subject) as string | undefined } : builtIn ? { ...builtIn, html: undefined as string | undefined } : null;
     if (missing || !message) { await port.result(row.id, "failed", undefined, missing ?? "no template"); totals.failed++; continue; }
     let attachments: HrAttachment[] | undefined;
     if (ATTACHMENT_KINDS.includes(row.kind)) {
@@ -203,7 +206,7 @@ export async function sendLinkEmail(provider: EmailProvider | null, config: HrMa
   if (!config.from) return { state: "failed", error: "EF_HR_EMAIL_FROM is not set" };
   // An HRMS template filled for this person (HRMS > Templates), or the built-in text when there is none.
   const builtIn = mail.rendered ? null : renderHrEmail(mail.kind, { name: mail.name }, { siteUrl: config.siteUrl, link: mail.link, expiresAt: mail.expiresAt, rejected: mail.rejected });
-  const message = mail.rendered ? { subject: mail.rendered.subject, text: mail.rendered.text, html: emailHtmlDocument(mail.rendered.html) as string | undefined }
+  const message = mail.rendered ? { subject: mail.rendered.subject, text: mail.rendered.text, html: emailHtmlDocument(mail.rendered.html, mail.rendered.subject) as string | undefined }
     : builtIn ? { ...builtIn, html: builtIn.html ? emailHtmlDocument(builtIn.html) : undefined } : null;
   if (!message) return { state: "failed", error: "no template" };
   const mapped = outcomeState(await provider.send({ deliveryId: mail.deliveryId, from: config.from, to: mail.to, subject: message.subject, textBody: message.text, ...(message.html ? { htmlBody: message.html } : {}) }));
@@ -217,14 +220,14 @@ export async function sendTemplateEmail(provider: EmailProvider | null, config: 
   if (!provider) return { state: "skipped", error: "email sending is switched off" };
   if (!config.from) return { state: "failed", error: "EF_HR_EMAIL_FROM is not set" };
   const mapped = outcomeState(await provider.send({ deliveryId: mail.deliveryId, from: config.from, to: mail.to, subject: mail.message.subject, textBody: mail.message.text,
-    ...(mail.message.html ? { htmlBody: emailHtmlDocument(mail.message.html) } : {}) }));
+    ...(mail.message.html ? { htmlBody: emailHtmlDocument(mail.message.html, mail.message.subject) } : {}) }));
   return mapped.state === "sent" ? { state: "sent", messageId: mapped.messageId } : { state: "failed", error: mapped.error };
 }
 
 /** The built-in text of the two sign-in emails, used when no HRMS template of that kind exists. */
 export function builtInLoginEmail(kind: "offer" | "login_link", values: Record<string, string>): { subject: string; text: string } {
   const hello = `Hello ${values.first_name || "there"},`;
-  const tail = `\n\n${values.signing_link}\n\n${values.link_expiry ? `The link works until ${values.link_expiry}. ` : ""}It is personal: please do not forward it.${SIGN_OFF}`;
+  const tail = `\n\n${values.signing_link}\n\n${values.link_expiry ? `The link works until ${values.link_expiry}. ` : ""}It is personal: please do not forward it.${signOff()}`;
   return kind === "offer"
     ? { subject: "Your offer letter from Skyline", text: `${hello}\n\nWe are pleased to offer you a position. Your offer letter is ready to read and sign. Use your personal link to sign in (the first time it asks you to choose a password):${tail}` }
     : { subject: "Your Skyline staff sign-in", text: `${hello}\n\nHere is a new personal link to sign in to your staff account. It asks you to choose your own password and can be used once:${tail}` };

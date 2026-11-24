@@ -19,7 +19,7 @@ export interface XeroExportLine {
   profileId: string;
   xeroEmployeeId: string;
   employeeName: string;
-  /** Local (Australia/Melbourne) calendar date, YYYY-MM-DD. */
+  /** Calendar date in the institution time zone (Business Rule general.time_zone), YYYY-MM-DD. */
   date: string;
   /** Ordinary | Overtime | Public Holiday | <leave type name> */
   payItem: string;

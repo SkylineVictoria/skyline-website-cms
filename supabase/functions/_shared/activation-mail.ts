@@ -2,6 +2,7 @@
 // sends through Postmark with the same switches as the other mail (EF_NOTIFICATION_EMAIL_ENABLED = "true", EF_POSTMARK_SERVER_TOKEN,
 // EF_HR_EMAIL_FROM, EF_HR_PUBLIC_SITE_URL) without importing the notification module (which pulls the PDF libraries).
 import { simpleEmailHtml } from "./email-html.ts";
+import { institutionTimeZone } from "./time-zone.ts";
 
 const EMAIL = /^[^@\s<>",]+@[^@\s<>",]+\.[^@\s<>",]+$/;
 type Env = Record<string, string | undefined>;
@@ -58,7 +59,7 @@ export async function sendActivationEmail(env: Env, mail: { to: string; name: st
   if (!from) return { error: "EF_HR_EMAIL_FROM is not set" };
   const role = mail.role === "agency_admin" ? "the business admin agent" : mail.role === "student" ? "a student" : "an agent";
   const where = mail.agencyName ? ` for ${mail.agencyName}` : "";
-  const expires = mail.expiresAt ? new Date(mail.expiresAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric", timeZone: "Australia/Melbourne" }) : "";
+  const expires = mail.expiresAt ? new Date(mail.expiresAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric", timeZone: institutionTimeZone() }) : "";
   const intro = `Hello ${mail.name || "there"},`;
   const body = `You have been invited to the Skyline portal as ${role}${where}. Open the link below to activate your access and create your password. Until you do, the portal stays locked for this invitation.`;
   const note = `${expires ? `This link works until ${expires}. ` : ""}If you did not expect this email, you can ignore it; nothing changes unless you open the link.`;

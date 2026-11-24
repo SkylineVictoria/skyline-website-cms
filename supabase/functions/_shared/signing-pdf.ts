@@ -9,6 +9,7 @@ import { formatDateTime } from "./notification/submission-pdf.ts";
 import { paletteOf } from "./offer-letter-pdf.ts";
 import { DEFAULT_INSTITUTION, type Letterhead } from "./letterhead.ts";
 import { initialsOf } from "./signing.ts";
+import { institutionTimeZone } from "./time-zone.ts";
 
 export interface StampField { id?: string; recipient_id: string | null; type: string; page: number; x: number; y: number; w: number; h: number; value: string | null; done: boolean; label?: string | null;
   /** Words of the page itself reprinted (2026-11-21, P06 Item 4): see InlineText. */
@@ -195,7 +196,7 @@ export async function stampDocument(original: Uint8Array | readonly Uint8Array[]
       const rows: Row[] = [
         { label: "Signature", paras: image ? [{ spans: [{ text: "" }], image }] : [{ spans: [{ text: signer.signer_name ?? signer.name }], bold: true, size: 14 }] },
         { label: "Signed by", paras: [{ spans: [{ text: signer.signer_name ?? signer.name }] }, { spans: [{ text: signer.email, tone: "muted" }] }] },
-        { label: "Signed at", paras: [{ spans: [{ text: `${formatDateTime(signer.signed_at) || signer.signed_at} (Australia/Sydney)` }] }, { spans: [{ text: `${signer.signed_at} UTC`, tone: "muted" }] }] },
+        { label: "Signed at", paras: [{ spans: [{ text: `${formatDateTime(signer.signed_at) || signer.signed_at} (${institutionTimeZone()})` }] }, { spans: [{ text: `${signer.signed_at} UTC`, tone: "muted" }] }] },
       ];
       writer.section(signer.role, rows);
     }
@@ -323,7 +324,7 @@ export async function buildCertificate(input: CertificateInput, letterhead?: Let
   const writer = await PdfWriter.create(`Completion certificate ${input.reference}`, paletteOf(letterhead?.primary), { text: textOf([input, letterhead?.institution, institution, EVENT_LABEL]) });
   let logo = letterhead?.logo ?? null;
   if (logo) { try { await writer.prepareImage(logo); } catch { logo = null; } }
-  const when = (value?: string | null) => value ? `${formatDateTime(value) || value} (Australia/Sydney) / ${new Date(value).toISOString()} UTC` : "not recorded";
+  const when = (value?: string | null) => value ? `${formatDateTime(value) || value} (${institutionTimeZone()}) / ${new Date(value).toISOString()} UTC` : "not recorded";
   writer.header({ institution, logo, title: "Completion certificate", meta: [input.reference, `Completed ${formatDateTime(input.completedAt) || input.completedAt}`] });
   writer.block([{ spans: [{ text: `This certificate records how "${input.title}" was signed through personal links sent by ${institution}. It records access to those links and the actions taken with them; it is not a government identity check or a legal certification.`, tone: "muted" }] }], 10);
   writer.section("Document", [

@@ -4,7 +4,9 @@
 // credential is the token of an emailed link. No file is ever reachable by a public URL: links are signed for a few minutes after the
 // stored bytes were re-hashed against the recorded sha256.
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
+import { loadRules, ruleNumber, ruleObject, type RuleValues } from "../_shared/business-rules.ts";
 import type { Letterhead } from "../_shared/letterhead.ts";
+import { institutionTimeZone, setInstitutionTimeZoneFrom, TIME_ZONE_RULE } from "../_shared/time-zone.ts";
 import { checkRecipients, fillHtmlVariables, fillSigningTemplate, renderSigningCodeEmail, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, signingVariables, templateVariables, SIGNING_CONSENT,
   type SigningMailJob } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
@@ -13,7 +15,7 @@ import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
 import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, factsToDetails, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
-import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, correctionDraftProblem, correctionEditable, F04_ATTACHMENT_MAX, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
+import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, correctionDraftProblem, correctionEditable, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
 import { afterCompletion, ONBOARDING_ACTIONS, onboardingSignRules, stepTimer, takePdfWorkMs, type OnboardingContext } from "./onboarding.ts";
 
@@ -70,6 +72,27 @@ const LINK_INVALID = "This signing link is invalid or expired.";
 /** A link whose request was deleted (2026-11-20): neutral; no "request a new link". */
 export const LINK_GONE = "This link is no longer available.";
 const TOO_MANY = "Too many requests. Please wait a few minutes and try again.";
+/**
+ * Business Rules the signing page reads (BUSINESS-RULES-LIVE batch 5), once per ports object: signing.link_rate_limits (per address / per
+ * link every 10 minutes, address searches a minute, F04 file uploads every 10 minutes) and signing.pdf_upload_max_mib (a PDF sent for signing),
+ * and general.time_zone (the institution time zone of every date printed or compared, set at the start of handleSigning).
+ */
+const LINK_RATE_DEFAULTS = { perAddressPer10Min: 120, perLinkPer10Min: 60, addressSearchesPerMinute: 40, attachmentUploadsPer10Min: 20 };
+const signingRulesRead = new WeakMap<object, Promise<RuleValues>>();
+function signingRules(ports: Pick<SigningPorts, "serviceRpc">): Promise<RuleValues> {
+  let read = signingRulesRead.get(ports);
+  if (!read) {
+    read = loadRules({ rpc: async (fn, args) => { try { if (!ports.serviceRpc) throw new Error("no rpc"); return { data: await ports.serviceRpc(fn, args), error: null }; } catch (error) { return { data: null, error }; } } },
+      ["signing.link_rate_limits", "signing.pdf_upload_max_mib", TIME_ZONE_RULE]);
+    signingRulesRead.set(ports, read);
+  }
+  return read;
+}
+async function linkRateLimits(ports: Pick<SigningPorts, "serviceRpc">): Promise<typeof LINK_RATE_DEFAULTS> {
+  const v = ruleObject(await signingRules(ports), "signing.link_rate_limits", LINK_RATE_DEFAULTS);
+  const pick = (k: keyof typeof LINK_RATE_DEFAULTS) => (typeof v[k] === "number" && (v[k] as number) >= 1 ? Math.round(v[k] as number) : LINK_RATE_DEFAULTS[k]);
+  return { perAddressPer10Min: pick("perAddressPer10Min"), perLinkPer10Min: pick("perLinkPer10Min"), addressSearchesPerMinute: pick("addressSearchesPerMinute"), attachmentUploadsPer10Min: pick("attachmentUploadsPer10Min") };
+}
 /** What a link holder (no account) may do: open, sign, decline, the emailed code (offer letters) and "Request a new link". */
 const LINK_ACTIONS = ["open", "download", "sign", "decline", "code_send", "code_verify", "link_request", "draft_save", "address_search", "attachment_upload", "attachment_remove"];
 /** The F04 wizard's draft ("Save and continue later"): at most this many characters of JSON. */
@@ -205,8 +228,8 @@ const documentPdfModule = () => import("../_shared/document-pdf.ts");
 const onboardingPdfModule = () => import("../_shared/agent-onboarding-pdf.ts");
 /** The error the CMS acts on: it uploads the two blanks shipped with the site (agent_onboarding_install) and sends again. */
 export const ONBOARDING_TEMPLATES_MISSING = "Install the agent onboarding templates first.";
-/** Today in Melbourne as YYYY-MM-DD (the date printed next to the institution's signature). */
-export const isoToday = (now = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+/** Today in the institution time zone (general.time_zone) as YYYY-MM-DD (the date printed next to the institution's signature). */
+export const isoToday = (now = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: institutionTimeZone(), year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 const ASSET_PATH = /\/template-assets\/([^?#]+)/;
 /** The bytes of each template-assets picture by its public URL (one that cannot be read is left out, and the PDF prints without it). */
 export async function templateAssetImages(ports: Pick<SigningPorts, "assets">, urls: readonly string[]): Promise<Record<string, Uint8Array>> {
@@ -225,6 +248,7 @@ export async function templateAssetImages(ports: Pick<SigningPorts, "assets">, u
 const safeName = (title: string) => (title.replace(/[^A-Za-z0-9 ._-]/g, "").trim().slice(0, 80) || "document");
 
 export async function handleSigning(call: SigningCall, ports: SigningPorts): Promise<unknown> {
+  setInstitutionTimeZoneFrom(await signingRules(ports));
   const body = { ...call.body };
   // The released single-recipient form (20261110154917, 20261113100000): recipientName / recipientEmail and a staff member's profileId.
   if (typeof body.profileId === "string" && UUID.test(body.profileId) && !body.subjectType) { body.subjectType = "employee"; body.subjectId = body.profileId; }
@@ -255,8 +279,9 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       const limited = async (key: string, limit: number, seconds: number) => {
         try { return (await ports.service("rate", { data: { key, limit, seconds } })) === false; } catch { return false; }
       };
-      if (call.ip && await limited(`ip:${call.ip.replace(/[^A-Za-z0-9.:_-]/g, "").slice(0, 60) || "unknown"}`, 120, 600)) throw new SigningError(TOO_MANY, 429);
-      if (TOKEN.test(token) && await limited(`link:${(await sha256Hex(new TextEncoder().encode(token))).slice(0, 40)}`, 60, 600)) throw new SigningError(TOO_MANY, 429);
+      const rates = await linkRateLimits(ports);
+      if (call.ip && await limited(`ip:${call.ip.replace(/[^A-Za-z0-9.:_-]/g, "").slice(0, 60) || "unknown"}`, rates.perAddressPer10Min, 600)) throw new SigningError(TOO_MANY, 429);
+      if (TOKEN.test(token) && await limited(`link:${(await sha256Hex(new TextEncoder().encode(token))).slice(0, 40)}`, rates.perLinkPer10Min, 600)) throw new SigningError(TOO_MANY, 429);
       if (action === "link_request") {
         // "Request a new link": the same answer whether or not the link was ours; admissions are told when it was.
         if (TOKEN.test(token)) {
@@ -304,7 +329,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       if (action === "address_search") {
         // The wizard's address boxes: the address-search function's lookup (same Geoscape key, server side) for a link holder, who has no login.
         waitingApplication();
-        if (await limited(`addr:${hash.slice(0, 40)}`, 40, 60)) throw new SigningError("Too many address searches. Please wait a moment.", 429);
+        if (await limited(`addr:${hash.slice(0, 40)}`, rates.addressSearchesPerMinute, 60)) throw new SigningError("Too many address searches. Please wait a moment.", 429);
         const q = String(body.q ?? "").trim().slice(0, 200);
         if (q.length < 4) return { ok: true, suggestions: [] };
         const found = ports.address ? await ports.address(q).catch(() => ({ kind: "unavailable" as const })) : { kind: "unavailable" as const };
@@ -321,9 +346,10 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
           await ports.serviceRpc!("agency_onboarding_attachment_remove", { p_request: record.id, p_recipient: record.recipient.id, p_kind: kind });
           return { removed: true, kind };
         }
-        if (await limited(`attach:${hash.slice(0, 40)}`, 20, 600)) throw new SigningError(TOO_MANY, 429);
+        if (await limited(`attach:${hash.slice(0, 40)}`, rates.attachmentUploadsPer10Min, 600)) throw new SigningError(TOO_MANY, 429);
         if (!call.upload?.bytes.length) throw new SigningError("Choose a file.");
-        if (call.upload.bytes.length > F04_ATTACHMENT_MAX) throw new SigningError("The file must be smaller than 5 MB.");
+        const attachMax = (await onboardingSignRules(ports)).attachmentMaxBytes;
+        if (call.upload.bytes.length > attachMax) throw new SigningError(`The file must be smaller than ${Math.round(attachMax / 1048576 * 10) / 10} MB.`);
         const contentType = attachmentType(call.upload.bytes);
         if (!contentType) throw new SigningError("Upload a PDF, PNG or JPEG file.");
         const name = call.upload.name.replace(/[\u0000-\u001f\u007f/\\]/g, " ").trim().slice(0, 160) || `${kind}.${contentType.split("/")[1]}`; // eslint-disable-line no-control-regex
@@ -724,7 +750,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       return subject;
     };
     const inspect = async (bytes: Uint8Array) => {
-      const inspected = await (await offerPdfModule()).inspectOfferPdf(bytes);
+      const maxMib = Math.max(1, ruleNumber(await signingRules(ports), "signing.pdf_upload_max_mib", MAX_OFFER_BYTES / 1048576));
+      const inspected = await (await offerPdfModule()).inspectOfferPdf(bytes, maxMib * 1048576);
       if (!inspected.ok) throw new SigningError(inspected.error.replaceAll("offer letter", "document"));
       return inspected.pages;
     };

@@ -4,6 +4,7 @@
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { PdfWriter, type Row } from "./notification/pdf-layout.ts";
 import { formatDateTime } from "./notification/submission-pdf.ts";
+import { institutionTimeZone } from "./time-zone.ts";
 import { paletteOf } from "./offer-letter-pdf.ts";
 import { DEFAULT_INSTITUTION, type Letterhead } from "./letterhead.ts";
 import { MAX_OFFER_BYTES, OFFER_ENCRYPTED, OFFER_UNREADABLE, type Signature } from "./offer-rules.ts";
@@ -18,8 +19,10 @@ const isPdf = (bytes: Uint8Array) => bytes.length > 5 && String.fromCharCode(...
  * Checks an uploaded offer before it is stored: a real PDF by content, not encrypted or protected, and one pdf-lib can load
  * AND modify (a page is added and the result saved, in memory only), so signing it later cannot fail on the file.
  */
-export async function inspectOfferPdf(bytes: Uint8Array): Promise<{ ok: true; pages: number } | { ok: false; error: string }> {
-  if (bytes.length < 1 || bytes.length > MAX_OFFER_BYTES) return { ok: false, error: "The offer letter must be a PDF of 7 MB or smaller." };
+export async function inspectOfferPdf(bytes: Uint8Array, maxBytes: number = MAX_OFFER_BYTES): Promise<{ ok: true; pages: number } | { ok: false; error: string }> {
+  // maxBytes: Business Rules signing.pdf_upload_max_mib for documents sent for signing; 7 MB otherwise. Never above what the request reader takes.
+  const max = Math.min(MAX_OFFER_BYTES, maxBytes > 0 ? maxBytes : MAX_OFFER_BYTES);
+  if (bytes.length < 1 || bytes.length > max) return { ok: false, error: `The offer letter must be a PDF of ${Math.round(max / 1048576 * 10) / 10} MB or smaller.` };
   if (!isPdf(bytes)) return { ok: false, error: "Upload the offer letter as a PDF." };
   let doc: PDFDocument;
   try {
@@ -59,7 +62,7 @@ export async function stampSignedOffer(original: Uint8Array, sig: Signature, let
   writer.block([{ spans: [{ text: `This page was added when the offer letter above was signed through a personal link sent by ${institution}.`, tone: "muted" }] }], 10);
   const rows: Row[] = [
     { label: "Signed by (typed name)", paras: [{ spans: [{ text: sig.signerName }], bold: true }] },
-    { label: "Signed at", paras: [{ spans: [{ text: `${signed} (Australia/Sydney)` }] }, { spans: [{ text: `${sig.signedAt} UTC`, tone: "muted" }] }] },
+    { label: "Signed at", paras: [{ spans: [{ text: `${signed} (${institutionTimeZone()})` }] }, { spans: [{ text: `${sig.signedAt} UTC`, tone: "muted" }] }] },
     // No IP address, browser or file hash on the signed copy (owner 2026-11-20): they are kept in the database (hr_svc_offer_sign) as evidence.
     { label: "Offer letter", paras: [{ spans: [{ text: sig.offerFilename }] }] },
     { label: "Agreement", paras: [{ spans: [{ text: sig.consent }], check: true }] },

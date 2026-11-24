@@ -4,7 +4,7 @@
 // module: PDF templates installed from the blanks, the sender's values printed, the signer's fields placed, the emailed link. The
 // database decides the stages (public.agency_onboarding_*); this module makes the PDFs and the emails. Runtime-neutral (tests mock the ports).
 import { AGENT_ONBOARDING_DOCS, AGENT_ONBOARDING_FIELDS, answerKey, composeRegistrationNumber, expiryDate, F04_RECORD_KEYS, groupOf, isPdfDate, normalizeOfficeAddress, resolveFields, signerRole, WITNESS_NAME_KEY,
-  WITNESS_SIGNATURE_KEY, yesNoDefaults, optionalAnswerGroups, relaxAnswerGroups, REQUIRED_GROUP_LABELS, commissionText, isCommissionGst, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
+  WITNESS_SIGNATURE_KEY, F04_ATTACHMENT_MAX, yesNoDefaults, optionalAnswerGroups, relaxAnswerGroups, REQUIRED_GROUP_LABELS, commissionText, isCommissionGst, type OnboardingDoc, type PlacedField } from "../_shared/agent-onboarding.ts";
 import { loadRules, ruleList, ruleNumber, ruleText } from "../_shared/business-rules.ts";
 import { ABR_PREFILL_KEYS, abnWithAcn, abrFacts, acnDigits, lookupAbr, lookupAbrCached, phoneE164, printAcn, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
 import { checkRecipients, signingNameValid } from "../_shared/signing.ts";
@@ -54,6 +54,8 @@ const serviceRpc = async (ports: SigningPorts, name: string, args: Record<string
 interface OnboardingRules {
   expiryDays: number; reminderDays: number; yesNoDefault: boolean; optionalGroups: Set<string>;
   agencyWitnessRequired: boolean; slitWitnessRequired: boolean; refereeEmailsDistinct: boolean; waitForReferees: boolean; reviewRecipients: Set<string>;
+  /** agents.agreement_term_years; agents.agent_application_attachment_cap_mib (bytes) */
+  termYears: number; attachmentMaxBytes: number;
 }
 /** The three sources of the staff emails (agents.review_email_recipients); all three before the rule existed. */
 export const REVIEW_RECIPIENTS = { starter: "Staff member who started it", admins: "Active CMS administrators", contacts: "Admissions and office contacts" } as const;
@@ -64,7 +66,8 @@ function onboardingRules(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<On
     const call = ctx.ports.serviceRpc ? ctx.ports.serviceRpc.bind(ctx.ports) : ctx.rpc ? ctx.rpc.bind(ctx) : null;
     read = loadRules({ rpc: async (fn, args) => { try { if (!call) throw new Error("no rpc"); return { data: await call(fn, args), error: null }; } catch (error) { return { data: null, error }; } } },
       ["agents.onboarding_document_expiry_default", "agents.onboarding_document_reminder_default", "agents.agent_application_yes_no_fallback", "agents.onboarding_required_answer_groups",
-        "agents.agency_witness_on_agreement", "agents.slit_witness_on_agreement", "agents.referee_emails_must_differ", "agents.business_approval_waits_for_referees", "agents.review_email_recipients"])
+        "agents.agency_witness_on_agreement", "agents.slit_witness_on_agreement", "agents.referee_emails_must_differ", "agents.business_approval_waits_for_referees", "agents.review_email_recipients",
+        "agents.agreement_term_years", "agents.agent_application_attachment_cap_mib"])
       .then((values) => ({
         expiryDays: Math.max(1, Math.round(ruleNumber(values, "agents.onboarding_document_expiry_default", 30))),
         reminderDays: Math.max(0, Math.round(ruleNumber(values, "agents.onboarding_document_reminder_default", 3))),
@@ -75,6 +78,8 @@ function onboardingRules(ctx: Pick<OnboardingContext, "ports"> & Partial<Pick<On
         refereeEmailsDistinct: ruleText(values, "agents.referee_emails_must_differ", "Must be different") !== "May be the same",
         waitForReferees: ruleText(values, "agents.business_approval_waits_for_referees", "Approve without waiting") === "Wait for every referee",
         reviewRecipients: new Set(ruleList(values, "agents.review_email_recipients", Object.values(REVIEW_RECIPIENTS))),
+        termYears: Math.max(1, Math.round(ruleNumber(values, "agents.agreement_term_years", 2))),
+        attachmentMaxBytes: Math.max(1, ruleNumber(values, "agents.agent_application_attachment_cap_mib", F04_ATTACHMENT_MAX / 1048576)) * 1048576,
       }));
     rulesRead.set(ctx, read);
   }
@@ -352,7 +357,7 @@ export async function sendAgreement(ctx: OnboardingContext): Promise<Json> {
   const record = await ctx.admin("create", id, { title, template_id: template.id, rendered_text: null, field_values: sentValues, original_hash: await sha256Hex(made.bytes), recipients,
     fields: recipientFields(made.recipient, signerRole("agreement").key), subject_type: "agent", subject_id: prepared.agent!.id, category: AGENT_ONBOARDING_DOCS.agreement.category,
     message: text(ctx.body.message, 2000) || null, edited: false, template_text: null, signing_mode: "sequential", expiry_days: template.expiryDays ?? (await onboardingRules(ctx)).expiryDays, reminder_days: template.reminderDays ?? (await onboardingRules(ctx)).reminderDays });
-  const onboarding = await ctx.rpc("agency_onboarding_agreement_create", { p_onboarding: onboardingId, p_request: id, p_data: { commencement_date: commencement, expiry_date: expiryDate(commencement),
+  const onboarding = await ctx.rpc("agency_onboarding_agreement_create", { p_onboarding: onboardingId, p_request: id, p_data: { commencement_date: commencement, expiry_date: expiryDate(commencement, (await onboardingRules(ctx)).termYears),
     territory, commission_percent: commission, admin_name: adminName, admin_position: adminPosition, values: sentValues, override_reason: text(ctx.body.overrideReason, 500) || null } });
   ctx.commit();
   return await sendRequest(ctx, id, { reference: record.reference, onboardingId, stage: onboarding.stage, override: onboarding.override === true, printed: made.printed.length, fields: made.recipient.length });
@@ -482,7 +487,7 @@ async function presendInput(body: Record<string, unknown>, sending: boolean): Pr
 }
 async function savePresend(ctx: OnboardingContext, agencyId: string, input: PresendInput, agentId: string | null): Promise<{ onboardingId: string; savedAt: string; contact: { id: string; name: string; email: string } }> {
   return await ctx.rpc("agency_onboarding_presend_save", { p_agency: agencyId, p_data: { agentId, answers: input.answers, acn: input.acn || null, marn: input.marn || null, message: input.message || null,
-    commencementDate: input.commencementDate || null, expiryDate: input.commencementDate ? expiryDate(input.commencementDate) : null, territory: input.territory, commissionPercent: input.commissionPercent || null,
+    commencementDate: input.commencementDate || null, expiryDate: input.commencementDate ? expiryDate(input.commencementDate, (await onboardingRules(ctx)).termYears) : null, territory: input.territory, commissionPercent: input.commissionPercent || null,
     commissionGst: input.commissionGst || null, adminName: text(input.signatory.adminName, 150) || null, adminPosition: text(input.signatory.adminPosition, 150) || null,
     witnessName: input.witness?.name ?? null, witnessPng: input.witness?.png ?? null } });
 }

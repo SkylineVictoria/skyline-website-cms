@@ -32,8 +32,9 @@ export interface ApplyDeps {
   remove(path: string): Promise<void>;
   hash(value: string): Promise<string>;
   newId(): string;
-  /** Business Rules hrms.job_attachment_limit_mib / hrms.cover_letter_limit_chars (index.ts); never above the fixed ceilings. */
-  limits?: { fileBytes?: number; coverLetterChars?: number };
+  /** Business Rules hrms.job_attachment_limit_mib / hrms.cover_letter_limit_chars / hrms.job_application_rate_limits (index.ts);
+   * each rule's own maximum is the limit. */
+  limits?: { fileBytes?: number; coverLetterChars?: number; perVisitor?: number; perEmail?: number };
 }
 
 // eslint-disable-next-line no-control-regex -- control characters are never valid in a name
@@ -49,11 +50,14 @@ function cleanPersonName(value: unknown, label: string): { ok: true; value: stri
 }
 
 export async function handleApply(form: FormData, meta: { ip: string | null }, deps: ApplyDeps): Promise<ApplyResult> {
-  const fileBytes = Math.min(MAX_RESUME_BYTES, Math.max(1, deps.limits?.fileBytes ?? MAX_RESUME_BYTES));
-  const coverChars = Math.min(MAX_COVER_LETTER_CHARS, Math.max(1, deps.limits?.coverLetterChars ?? MAX_COVER_LETTER_CHARS));
+  const fileBytes = Math.max(1, deps.limits?.fileBytes ?? MAX_RESUME_BYTES);
+  const coverChars = Math.max(1, deps.limits?.coverLetterChars ?? MAX_COVER_LETTER_CHARS);
+  const count = (n: number | undefined, fallback: number) => (Number.isInteger(n) && (n as number) >= 1 ? (n as number) : fallback);
+  const perVisitor = count(deps.limits?.perVisitor, 5);
+  const perEmail = count(deps.limits?.perEmail, 3);
   const fileMb = `${Math.round((fileBytes / (1024 * 1024)) * 10) / 10} MB`;
   const callerKey = await deps.hash(meta.ip ?? "anonymous");
-  if (!(await deps.takeRateLimit(`staff-register:caller:apply:${callerKey}`, 5, 600))) {
+  if (!(await deps.takeRateLimit(`staff-register:caller:apply:${callerKey}`, perVisitor, 600))) {
     return { status: 429, body: { error: "Please wait a few minutes before trying again." }, headers: { "Retry-After": "600" } };
   }
   // A filled honeypot field is a bot: answer as if it worked and record nothing.
@@ -98,7 +102,7 @@ export async function handleApply(form: FormData, meta: { ip: string | null }, d
       ? { status: 503, body: { error: "We could not check the security challenge. Please try again shortly." } }
       : fieldError("captcha", "Complete the security check and try again.");
   }
-  if (!(await deps.takeRateLimit(`staff-register:email:apply:${await deps.hash(email.value)}`, 3, 3600))) {
+  if (!(await deps.takeRateLimit(`staff-register:email:apply:${await deps.hash(email.value)}`, perEmail, 3600))) {
     return { status: 429, body: { error: "Please wait a while before applying again with this email." }, headers: { "Retry-After": "3600" } };
   }
 

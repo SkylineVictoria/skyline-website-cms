@@ -28,7 +28,7 @@ const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
 export default function BusinessDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  // Delete business (2026-11-20): offered only when the database says this administrator may delete it now (Inactive, or Application sent).
+  // Delete business (2026-11-20): offered when the database says this administrator may delete it (any status since 2026-11-24).
   const { user } = useAuth();
   const isAdmin = isSlitAdmin(user?.role);
   const [deletable, setDeletable] = useState(false);

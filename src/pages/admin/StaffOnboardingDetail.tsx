@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { STAFF_EMPLOYEES_PATH, staffCandidatePath } from "@/pages/admin/lib/staffRoutes";
 import { Badge, Button, Card, Field, Modal, PageHeader, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import {
@@ -108,6 +108,7 @@ const OFFER_DETAILS_STATUSES: readonly string[] = ["applied", "invited", "docume
 
 export default function StaffOnboardingDetail() {
   const { id = "" } = useParams();
+  const [params, setParams] = useSearchParams();
   const [detail, setDetail] = useState<StaffDetail | null>(null);
   const [flow, setFlow] = useState<StaffOnboarding | null>(null);
   const [extras, setExtras] = useState<OnboardingExtras | null>(null);
@@ -287,9 +288,28 @@ export default function StaffOnboardingDetail() {
   const spec = action ? EMPLOYEE_ACTION[action] : null;
   const target = action ? EMPLOYEE_ACTION_TARGET[action] : null;
 
+  // EMPLOYEE-PAGE-LAYOUT (2026-11-24, owner): same layout as the business page: back link, header, summary strip, tabs (?tab=).
+  const tab = (["details", "documents", "offer", "emails"] as const).find((t) => t === params.get("tab")) ?? "details";
+  const goTab = (next: string) => {
+    const nextParams = new URLSearchParams(params);
+    if (next === "details") nextParams.delete("tab"); else nextParams.set("tab", next);
+    setParams(nextParams);
+  };
+  const tabs: Array<{ id: string; label: string; count?: number }> = [
+    { id: "details", label: "Details" },
+    { id: "documents", label: "Documents", count: detail.documents.length },
+    { id: "offer", label: "Offer and pay" },
+    { id: "emails", label: "Emails and history", count: detail.emails.length },
+  ];
+  const cell = "bg-background-50 px-4 py-3";
+  const big = "mt-1 font-heading text-xl font-bold text-foreground-950";
+
   return (
     <div>
-      <PageHeader breadcrumb="HRMS / Employees / Onboarding" title={name}
+      <Link to={STAFF_EMPLOYEES_PATH} className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-foreground-600 hover:text-foreground-900">
+        <i className="ri-arrow-left-line" aria-hidden="true" /> Employees
+      </Link>
+      <PageHeader title={name}
         description={`${activeRole ? `Role: ${ROLE_LABEL[activeRole]} · ` : ""}${employment?.jobTitle ? `${employment.jobTitle} · ` : ""}Documents approved ${summary.approved}/${summary.required}${joining ? ` · Joining ${new Date(`${joining}T00:00:00`).toLocaleDateString()}` : ""}`}
         actions={<>
           <span data-testid="staff-detail-status"><Badge tone={STAFF_STATUS_TONE[profile.status]}>{STAFF_STATUS_LABEL[profile.status]}</Badge></span>
@@ -297,12 +317,11 @@ export default function StaffOnboardingDetail() {
             <Button key={a} variant={EMPLOYEE_ACTION[a].danger ? "outline" : i === 0 ? "primary" : "outline"} onClick={() => openAction(a)} data-testid={`staff-action-${a}`}>{EMPLOYEE_ACTION[a].label}</Button>
           ))}
         </>} />
-      <p className="-mt-3 mb-4 text-sm"><Link to={STAFF_EMPLOYEES_PATH} className="text-primary-700 hover:underline">&larr; All employees</Link></p>
       {error ? <p role="alert" className={`mb-4 ${ALERT}`}>{error}</p> : null}
       {notice ? <p role="status" className={`mb-4 ${NOTICE}`} data-testid="staff-notice">{notice}</p> : null}
       {failedEmails.length ? (
         <p className={`mb-4 ${ALERT}`} data-testid="staff-email-failed">
-          {failedEmails.length === 1 ? "An email" : `${failedEmails.length} emails`} to or about this person could not be sent. See Emails below to retry or resend the link.
+          {failedEmails.length === 1 ? "An email" : `${failedEmails.length} emails`} to or about this person could not be sent. See Emails and history to retry or resend the link.
         </p>
       ) : null}
       {flow ? (
@@ -318,6 +337,25 @@ export default function StaffOnboardingDetail() {
           </p>
         </div></Card>
       ) : null}
+      <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-4" data-testid="staff-summary">
+        <div className={cell}><dt className="text-xs text-foreground-500">Status</dt><dd className={big}>{STAFF_STATUS_LABEL[profile.status]}</dd></div>
+        <div className={cell}><dt className="text-xs text-foreground-500">Documents approved</dt><dd className="mt-1">
+          <button type="button" onClick={() => goTab("documents")} className="font-heading text-xl font-bold tabular-nums text-foreground-950 hover:text-primary-700">{summary.approved} / {summary.required}</button></dd></div>
+        <div className={cell}><dt className="text-xs text-foreground-500">Offer</dt><dd className="mt-1">
+          <button type="button" onClick={() => goTab("offer")} className="font-heading text-xl font-bold text-foreground-950 hover:text-primary-700">{signedOffer ? "Signed" : openOffer?.sentAt ? "Sent" : openOffer ? "Not sent" : "None yet"}</button></dd></div>
+        <div className={cell}><dt className="text-xs text-foreground-500">Start date</dt><dd className={big}>{joining ? new Date(`${joining}T00:00:00`).toLocaleDateString() : "—"}</dd></div>
+      </dl>
+
+      <nav className="mb-5 flex flex-wrap gap-1 border-b border-background-200" aria-label="Employee sections">
+        {tabs.map((item) => (
+          <button key={item.id} type="button" aria-current={tab === item.id ? "page" : undefined} onClick={() => goTab(item.id)} data-testid={`staff-tab-${item.id}`}
+            className={`-mb-px cursor-pointer border-b-2 px-4 py-2.5 text-sm font-medium ${tab === item.id ? "border-primary-500 text-primary-700" : "border-transparent text-foreground-600 hover:text-foreground-900"}`}>
+            {item.label}
+            {item.count !== undefined ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 py-0.5 text-2xs tabular-nums text-foreground-700">{item.count}</span> : null}
+          </button>
+        ))}
+      </nav>
+
       {profile.status === "applied" && openJob ? (
         <p className={`mb-4 ${NOTICE}`} data-testid="staff-hire-hint">
           This person applied for <strong>{openJob.jobTitle}</strong> ({STAGE_LABEL[openJob.stage]}). Sending the document link also marks that application as hired, the same as hiring them from{" "}
@@ -327,10 +365,10 @@ export default function StaffOnboardingDetail() {
       {application.files_purged_at ? <p className={`mb-4 ${NOTICE}`} data-testid="staff-files-purged">The resume, documents and offer files were deleted on {new Date(application.files_purged_at).toLocaleDateString()} under the retention rule. The record stays.</p> : null}
       {summary.expiringSoon ? <p className={`mb-4 ${ALERT}`} data-testid="staff-detail-expiring">A document expires within {EXPIRING_SOON_DAYS} days or has expired. Check the dates below.</p> : null}
 
-      <div className="grid gap-6 lg:grid-cols-5">
-        <Card className="p-5 lg:col-span-2">
+      {tab === "details" ? (<>
+        <Card className="p-5">
           <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Details</h2>
-          <dl className="grid gap-3">
+          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <Row label="Email">{profile.email}</Row><Row label="Mobile">{profile.phone_e164}</Row>
             <Row label="Date of birth">{profile.date_of_birth}</Row><Row label="Address">{address}</Row>
             <Row label="Australian citizen">{profile.is_australian_citizen === null ? "" : profile.is_australian_citizen ? "Yes" : "No"}</Row>
@@ -357,8 +395,47 @@ export default function StaffOnboardingDetail() {
             </div>
           ) : null}
         </Card>
+        <Card className="mt-6 p-5"><div data-testid="staff-employment">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-heading text-base font-bold text-foreground-950">Employment</h2>
+          <Button size="sm" variant="outline" onClick={() => setEditingEmployment(true)} data-testid="staff-employment-edit">{employment ? "Edit employment" : "Add employment details"}</Button>
+        </div>
+        {employment ? (
+          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Row label="Job title">{employment.jobTitle}</Row><Row label="Department">{employment.department}</Row>
+            <Row label="Job type">{employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employment.employmentType] : ""}</Row>
+            <Row label="Work location">{employment.workLocation || (employment.locationId ? "" : <span className="text-foreground-500">Choose one from HRMS › Locations</span>)}</Row>
+            <Row label="Pay type">{employment.payType ? PAY_TYPE_LABEL[employment.payType] : <span className="text-foreground-500">Set with the pay details</span>}</Row>
+            <Row label="Manager">{employment.managerId ? <Link to={`${STAFF_EMPLOYEES_PATH}/${employment.managerId}`} className="font-semibold text-primary-700 hover:underline">{employment.managerName ?? "Manager"}</Link> : ""}</Row>
+            <Row label="Joining date">{joining ? new Date(`${joining}T00:00:00`).toLocaleDateString() : <span className="text-foreground-500">Set with the pay details</span>}</Row>
+          </dl>
+        ) : <p className="text-sm text-foreground-600">No employment details yet. Hiring from Candidates fills them in from the job; the pay details add the rest.</p>}
+      </div></Card>
+      {detail.jobApplications.length ? (
+        <Card className="mt-6 p-5"><div data-testid="staff-job-applications">
+          <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Job applications</h2>
+          <ul className="space-y-3 text-sm">
+            {detail.jobApplications.map((j) => (
+              <li key={j.id} className="rounded-md border border-background-200 px-3 py-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span><span className="font-semibold text-foreground-900">{j.jobTitle}</span>{j.jobStatus !== "open" ? <span className="ml-1 text-xs text-foreground-500">({j.jobStatus})</span> : null}
+                    <span className="block text-xs text-foreground-600">{j.source === "manual" ? "Entered by an administrator" : "Applied"} {when(j.appliedAt)}{j.decidedAt ? ` · ${j.status === "hired" ? "hired, document link sent" : j.status} ${when(j.decidedAt)}` : ""}</span></span>
+                  <span className="flex items-center gap-2">
+                    <Badge tone={j.status === "hired" ? "success" : j.status === "applied" ? "warn" : "muted"}>{j.status === "applied" ? STAGE_LABEL[j.stage] : JOB_APPLICATION_STATUS_LABEL[j.status]}</Badge>
+                    <Link to={staffCandidatePath(j.id)} className="text-xs font-semibold text-primary-700 hover:underline">Open in Candidates</Link>
+                    {j.coverLetterFile && !application.files_purged_at ? <Button size="sm" variant="outline" onClick={() => void view(`Cover letter: ${j.coverLetterFile!.filename}`, j.coverLetterFile!.storagePath, j.coverLetterFile!.mimeType)}>Cover letter</Button> : null}
+                  </span>
+                </div>
+                {j.coverLetter ? <p className="mt-2 whitespace-pre-wrap text-foreground-800" data-testid="staff-job-cover-letter">{j.coverLetter}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </div></Card>
+      ) : null}
+      </>) : null}
 
-        <Card className="p-5 lg:col-span-3">
+      {tab === "documents" ? (<>
+        <Card className="p-5">
           <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Documents</h2>
           {!canReview ? <p className="mb-3 text-xs text-foreground-600">{profile.status === "applied" || profile.status === "invited" ? "Documents can be reviewed once they are submitted." : "Reviews are made while the documents are submitted (before the offer)."}</p> : null}
           <ul className="space-y-4" data-testid="staff-documents">
@@ -391,24 +468,13 @@ export default function StaffOnboardingDetail() {
             ))}
           </ul>
         </Card>
-      </div>
+      {["documents_submitted", "offer_sent", "offer_signed"].includes(profile.status) ? (
+        <StaffSignedDocuments profileId={profile.id} name={name} signing={signing} onChanged={load} />
+      ) : null}
+      </>) : null}
 
-      <Card className="mt-6 p-5"><div data-testid="staff-employment">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-heading text-base font-bold text-foreground-950">Employment</h2>
-          <Button size="sm" variant="outline" onClick={() => setEditingEmployment(true)} data-testid="staff-employment-edit">{employment ? "Edit employment" : "Add employment details"}</Button>
-        </div>
-        {employment ? (
-          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <Row label="Job title">{employment.jobTitle}</Row><Row label="Department">{employment.department}</Row>
-            <Row label="Job type">{employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employment.employmentType] : ""}</Row>
-            <Row label="Work location">{employment.workLocation || (employment.locationId ? "" : <span className="text-foreground-500">Choose one from HRMS › Locations</span>)}</Row>
-            <Row label="Pay type">{employment.payType ? PAY_TYPE_LABEL[employment.payType] : <span className="text-foreground-500">Set with the pay details</span>}</Row>
-            <Row label="Manager">{employment.managerId ? <Link to={`${STAFF_EMPLOYEES_PATH}/${employment.managerId}`} className="font-semibold text-primary-700 hover:underline">{employment.managerName ?? "Manager"}</Link> : ""}</Row>
-            <Row label="Joining date">{joining ? new Date(`${joining}T00:00:00`).toLocaleDateString() : <span className="text-foreground-500">Set with the pay details</span>}</Row>
-          </dl>
-        ) : <p className="text-sm text-foreground-600">No employment details yet. Hiring from Candidates fills them in from the job; the pay details add the rest.</p>}
-      </div></Card>
+      {tab === "offer" ? (<>
+      
 
       {pay && (flow?.documentsApproved || pay.completedAt || OFFER_DETAILS_STATUSES.includes(profile.status)) ? (
         <Card className="mt-6 p-5"><div data-testid="staff-pay-details">
@@ -444,34 +510,9 @@ export default function StaffOnboardingDetail() {
       </div></Card>
       {profile.status === "active" || profile.status === "inactive" ? <PaySetupCard profileId={profile.id} hasEmployment={Boolean(employment)} /> : null}
 
-      {detail.jobApplications.length ? (
-        <Card className="mt-6 p-5"><div data-testid="staff-job-applications">
-          <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Job applications</h2>
-          <ul className="space-y-3 text-sm">
-            {detail.jobApplications.map((j) => (
-              <li key={j.id} className="rounded-md border border-background-200 px-3 py-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span><span className="font-semibold text-foreground-900">{j.jobTitle}</span>{j.jobStatus !== "open" ? <span className="ml-1 text-xs text-foreground-500">({j.jobStatus})</span> : null}
-                    <span className="block text-xs text-foreground-600">{j.source === "manual" ? "Entered by an administrator" : "Applied"} {when(j.appliedAt)}{j.decidedAt ? ` · ${j.status === "hired" ? "hired, document link sent" : j.status} ${when(j.decidedAt)}` : ""}</span></span>
-                  <span className="flex items-center gap-2">
-                    <Badge tone={j.status === "hired" ? "success" : j.status === "applied" ? "warn" : "muted"}>{j.status === "applied" ? STAGE_LABEL[j.stage] : JOB_APPLICATION_STATUS_LABEL[j.status]}</Badge>
-                    <Link to={staffCandidatePath(j.id)} className="text-xs font-semibold text-primary-700 hover:underline">Open in Candidates</Link>
-                    {j.coverLetterFile && !application.files_purged_at ? <Button size="sm" variant="outline" onClick={() => void view(`Cover letter: ${j.coverLetterFile!.filename}`, j.coverLetterFile!.storagePath, j.coverLetterFile!.mimeType)}>Cover letter</Button> : null}
-                  </span>
-                </div>
-                {j.coverLetter ? <p className="mt-2 whitespace-pre-wrap text-foreground-800" data-testid="staff-job-cover-letter">{j.coverLetter}</p> : null}
-              </li>
-            ))}
-          </ul>
-        </div></Card>
-      ) : null}
 
-      {["documents_submitted", "offer_sent", "offer_signed"].includes(profile.status) ? (
-        <StaffSignedDocuments profileId={profile.id} name={name} signing={signing} onChanged={load} />
-      ) : null}
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Card className="p-5"><div data-testid="staff-offer-card">
+        <Card className="mt-6 p-5"><div data-testid="staff-offer-card">
           <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Offer</h2>
           {openOffer || signedOffer ? (
             <ul className="space-y-2 text-sm">
@@ -491,7 +532,9 @@ export default function StaffOnboardingDetail() {
           ) : <p className="text-sm text-foreground-600">No offer yet. It is made from a template once the documents are approved and the pay details are in.</p>}
           {flow?.offerLetter ? <p className="mt-2 text-xs text-foreground-600" data-testid="staff-offer-template">Letter “{flow.offerLetter.title}” made from the “{flow.offerLetter.templateName}” template on {when(flow.offerLetter.createdAt)}. Later template edits do not change it.</p> : null}
         </div></Card>
+      </>) : null}
 
+      {tab === "emails" ? (<>
         <Card className="p-5"><div data-testid="staff-emails">
           <h2 className="mb-3 font-heading text-base font-bold text-foreground-950">Emails</h2>
           {detail.emails.length ? (
@@ -513,7 +556,6 @@ export default function StaffOnboardingDetail() {
             </ul>
           ) : <p className="text-sm text-foreground-600">No emails yet.</p>}
         </div></Card>
-      </div>
 
       <Card className="mt-6 p-5"><div data-testid="staff-history">
         <h2 className="mb-1 font-heading text-base font-bold text-foreground-950">History</h2>
@@ -542,6 +584,7 @@ export default function StaffOnboardingDetail() {
           </ol>
         )}
       </div></Card>
+      </>) : null}
 
       <Modal open={preview !== null} title={preview?.title ?? ""} onClose={() => setPreview(null)}
         footer={<>{preview ? <a href={preview.url} target="_blank" rel="noopener noreferrer" className="mr-auto text-sm font-semibold text-primary-700">Open in a new tab</a> : null}<Button variant="outline" onClick={() => setPreview(null)}>Close</Button></>}>

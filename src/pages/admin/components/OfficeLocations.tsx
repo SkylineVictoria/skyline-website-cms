@@ -12,13 +12,20 @@ import { EMPTY_OFFICE, officeFromPlace, officeLine, saveOffices, STATES, type Of
  * the application form.
  */
 /** Search Google Maps by any text and pick one of up to five places. */
-export function MapsSearchBox({ initialQuery = "", onPick, onCancel, disabled, id = "maps-search" }: {
+export function MapsSearchBox({ initialQuery = "", onPick, onPickAll, onCancel, disabled, id = "maps-search", used = [], cancelLabel = "Cancel" }: {
   initialQuery?: string; onPick: (place: PlaceDetails) => void; onCancel?: () => void; disabled?: boolean; id?: string;
+  /** Adds every place still shown at once (branches). */
+  onPickAll?: (places: PlaceDetails[]) => void;
+  /** Offices already chosen (head office, branches): left out of the results (owner 2026-11-24). */
+  used?: Array<Pick<OfficeLocation, "placeId" | "street" | "postcode">>; cancelLabel?: string;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<PlaceDetails[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const usedKey = (o: Pick<OfficeLocation, "placeId" | "street" | "postcode">) => o.placeId || `${(o.street || "").toLowerCase().replace(/\s+/g, " ").trim()}|${o.postcode || ""}`;
+  const taken = new Set(used.filter(o => o.placeId || o.street).map(usedKey));
+  const shown = results.filter(p => !taken.has(p.placeId) && !taken.has(usedKey({ street: p.street, postcode: p.postcode })));
   const run = async () => {
     const q = query.trim();
     if (q.length < 3 || busy) return;
@@ -40,12 +47,16 @@ export function MapsSearchBox({ initialQuery = "", onPick, onCancel, disabled, i
             onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void run(); } }} />
         </div>
         <Button type="button" icon="ri-search-line" disabled={disabled || busy || query.trim().length < 3} onClick={() => void run()}>{busy ? "Searching…" : "Search"}</Button>
-        {onCancel ? <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}>Cancel</Button> : null}
+        {onCancel ? <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}>{cancelLabel}</Button> : null}
       </div>
       <p className="mt-1 text-xs text-foreground-500">Add the branch or suburb, e.g. "Aussizz Melbourne", or type a street address.</p>
       {message ? <p role="status" className="mt-2 text-sm text-amber-800">{message}</p> : null}
-      {results.length ? <ul className="mt-2 divide-y divide-background-200 rounded-lg border border-background-200">
-        {results.map(p => <li key={p.placeId || p.name} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+      {results.length && !shown.length ? <p role="status" className="mt-2 text-sm text-foreground-600">Every place found is already added. Search for another one.</p> : null}
+      {onPickAll && shown.length > 1 ? <div className="mt-2 flex justify-end">
+        <Button type="button" icon="ri-add-circle-line" disabled={disabled} onClick={() => onPickAll(shown)} data-testid="places-pick-all">Add all {shown.length} as branches</Button>
+      </div> : null}
+      {shown.length ? <ul className="mt-2 divide-y divide-background-200 rounded-lg border border-background-200">
+        {shown.map(p => <li key={p.placeId || p.name} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
           <div className="min-w-0">
             <p className="font-semibold text-foreground-900">{p.name}</p>
             <p className="text-xs text-foreground-600">{p.formattedAddress || placeAddressLine(p)}{p.phone ? ` · ${p.phone}` : ""}</p>
@@ -79,12 +90,15 @@ export function OfficeFields({ office, onChange, disabled, withLabel }: { office
 }
 
 /** Branches: each found on Google Maps or typed, editable, removable. */
-export function BranchList({ branches, onChange, disabled, searchHint = "" }: {
+export function BranchList({ branches, onChange, disabled, searchHint = "", head = null }: {
   branches: OfficeLocation[]; onChange: (b: OfficeLocation[]) => void; disabled?: boolean; searchHint?: string;
+  /** The head office, left out of the branch search results. */
+  head?: OfficeLocation | null;
 }) {
   const [adding, setAdding] = useState(false);
   const update = (i: number, o: OfficeLocation) => onChange(branches.map((b, j) => (j === i ? o : b)));
   const full = branches.length >= 30;
+  const asBranch = (p: PlaceDetails) => officeFromPlace(p, p.suburb ? `${p.suburb} branch` : "");
   return (
     <div className="space-y-3" data-testid="branches">
       {branches.map((b, i) => (
@@ -99,8 +113,11 @@ export function BranchList({ branches, onChange, disabled, searchHint = "" }: {
           <OfficeFields office={b} onChange={o => update(i, o)} disabled={disabled} withLabel />
         </div>
       ))}
-      {adding ? <MapsSearchBox id="branch-search" initialQuery={searchHint} disabled={disabled} onCancel={() => setAdding(false)}
-        onPick={p => { onChange([...branches, officeFromPlace(p, p.suburb ? `${p.suburb} branch` : "")]); setAdding(false); }} /> : null}
+      {/* The search stays open after Use this, so several branches can be added from one list; picked places leave the list. */}
+      {adding ? <MapsSearchBox id="branch-search" initialQuery={searchHint} disabled={disabled || full} cancelLabel={branches.length ? "Done" : "Cancel"}
+        used={[...(head ? [head] : []), ...branches]} onCancel={() => setAdding(false)}
+        onPick={p => onChange([...branches, asBranch(p)].slice(0, 30))}
+        onPickAll={ps => { onChange([...branches, ...ps.map(asBranch)].slice(0, 30)); setAdding(false); }} /> : null}
       {adding || full ? null : <div className="flex flex-wrap gap-2">
         <Button type="button" variant="secondary" icon="ri-map-pin-add-line" disabled={disabled} onClick={() => setAdding(true)} data-testid="branch-add-maps">Add branch from Google Maps</Button>
         <Button type="button" variant="secondary" icon="ri-add-line" disabled={disabled} onClick={() => onChange([...branches, { ...EMPTY_OFFICE }])}>Add branch by hand</Button>
@@ -172,13 +189,13 @@ export function BusinessOfficesCard({ agencyId, businessName }: { agencyId: stri
               <h3 className="text-sm font-semibold text-foreground-900">Head office</h3>
               {headSearch ? null : <Button type="button" variant="secondary" icon="ri-search-line" disabled={busy} onClick={() => setHeadSearch(true)}>Change with Google Maps</Button>}
             </div>
-            {headSearch ? <div className="mb-3"><MapsSearchBox id="head-search" initialQuery={businessName} disabled={busy} onCancel={() => setHeadSearch(false)}
+            {headSearch ? <div className="mb-3"><MapsSearchBox id="head-search" initialQuery={businessName} disabled={busy} used={draftBranches} onCancel={() => setHeadSearch(false)}
               onPick={p => { setDraftHead(officeFromPlace(p)); setHeadSearch(false); }} /></div> : null}
             <OfficeFields office={draftHead} onChange={setDraftHead} disabled={busy} />
           </section>
           <section>
             <h3 className="mb-2 text-sm font-semibold text-foreground-900">Branches</h3>
-            <BranchList branches={draftBranches} onChange={setDraftBranches} disabled={busy} searchHint={businessName} />
+            <BranchList branches={draftBranches} onChange={setDraftBranches} disabled={busy} searchHint={businessName} head={draftHead} />
           </section>
           {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
           <div className="flex justify-end gap-2">

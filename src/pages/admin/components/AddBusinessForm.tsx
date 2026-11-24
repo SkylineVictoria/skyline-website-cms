@@ -378,13 +378,13 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     <Button type="button" variant="secondary" icon="ri-search-line" disabled={saving} onClick={() => setMapsOpen(true)} data-testid="places-search-open">
       {office ? "Change head office with Google Maps" : "Search Google Maps"}
     </Button>
-  ) : <div className="mt-3"><MapsSearchBox id="places-search-input" initialQuery={[mapsHint, office?.suburb].filter(Boolean).join(" ")} disabled={saving} onPick={pickPlace} onCancel={() => setMapsOpen(false)} /></div>;
+  ) : <div className="mt-3"><MapsSearchBox id="places-search-input" initialQuery={[mapsHint, office?.suburb].filter(Boolean).join(" ")} disabled={saving} used={branches} onPick={pickPlace} onCancel={() => setMapsOpen(false)} /></div>;
   // Branches (2026-11-24): a business with several locations adds each one (Google Maps or by hand); saved on the business after it is created.
   const branchesPanel = () => (abr || details) ? (
     <section className="mt-4 rounded-lg border border-background-200 p-4" aria-label="Branches" data-testid="add-business-branches">
       <p className="flex items-center gap-1.5 text-sm font-semibold text-foreground-900"><i className="ri-store-2-line text-sky-700" aria-hidden="true" />Branches {branches.length ? `(${branches.length})` : ""}</p>
       <p className="mb-3 mt-0.5 text-xs text-foreground-600">Other locations of this business. Optional; you can also add them later on the business page.</p>
-      <BranchList branches={branches} onChange={setBranches} disabled={saving} searchHint={mapsHint} />
+      <BranchList branches={branches} onChange={setBranches} disabled={saving} searchHint={mapsHint} head={office ? { ...office } : null} />
     </section>
   ) : null;
   const officePanel = () => office ? (

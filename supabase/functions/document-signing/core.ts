@@ -14,6 +14,7 @@ import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, 
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
 import { abrApplicationValues, abrFacts, acnDigits, checkApplicationAnswers, factsToDetails, lookupAbrCached, phoneE164, type AbrCache, type AbrConfirmed, type AbrDetails, type AbrFacts } from "../_shared/validation/abr.ts";
+import type { PlacesCache } from "../_shared/google-places.ts";
 import type { AddressSearchResult } from "../_shared/validation/address.ts";
 import { AGREEMENT_FROM_DECLARATION, answerKey, collectAnswers, composeRegistrationNumber, composeSuburb, correctionDraftProblem, correctionEditable, WITNESS_NAME_KEY, F04_ATTACHMENTS, F04_DECLARATIONS, F04_OPEN_PREFILL_KEYS, F04_RECORD_KEYS, groupOf,
   normalizeOfficeAddress, splitSuburb } from "../_shared/agent-onboarding.ts";
@@ -55,6 +56,8 @@ export interface SigningPorts {
   mail: { provider: EmailProvider | null; config: HrMailConfig };
   /** ABN Lookup (ABR JSON service): the registered party's GUID (secret EF_ABR_GUID; empty = not set up). Tests inject fetch. */
   abr?: { guid: string; fetch?: typeof fetch };
+  /** Google Places (New) Text Search (secret EF_GOOGLE_MAPS_KEY; empty = not set up): the business's office address, website and phone. Tests inject fetch. */
+  places?: { key: string; fetch?: typeof fetch };
   /** Australian address suggestions (the address-search function's Geoscape lookup, same key, server side): the F04 wizard's address boxes. */
   address?(query: string): Promise<AddressSearchResult>;
   /** True when the request carries the service-role key itself (the scheduled job). */
@@ -108,6 +111,15 @@ export function abrCache(ports: Pick<SigningPorts, "serviceRpc">): AbrCache | nu
   };
 }
 
+/** Google Maps answers cached by ABN in public.google_place_lookups (service RPCs, agents.abn_cache_days); null without the service port. */
+export function placesCache(ports: Pick<SigningPorts, "serviceRpc">): PlacesCache | null {
+  if (!ports.serviceRpc) return null;
+  return {
+    get: async (abn) => (await ports.serviceRpc!("google_place_cache_get", { p_abn: abn })) ?? null,
+    put: async (abn, query, place) => { await ports.serviceRpc!("google_place_cache_put", { p_abn: abn, p_query: query, p_place: place }); },
+  };
+}
+
 /** The Agent Application Form's template: sent by itself (Add business, corrections), never from "Send a document to sign". */
 export const F04_SYSTEM_KEY = "agent_application_form";
 /** The agent onboarding blanks (F04, P06, F05): sent by the business onboarding flow only, never from New signing request. */
@@ -157,7 +169,8 @@ export function f04Prefill(input: { details: AbrDetails | null; confirmed: (AbrC
   const out: Record<string, string> = { ...abr };
   for (const key of F04_RECORD_KEYS) { const v = textOf(record[key]); if (v) out[key] = v; }
   // The register's postcode joins a suburb the record names; a postcode alone never fills the Suburb box (round 3).
-  const postcode = String(input.confirmed?.postcode ?? "").trim() || details?.postcode || "";
+  // The office's own postcode (Google Maps on Add business, 2026-11-24, kept as office_postcode on the business) first.
+  const postcode = textOf(record.office_postcode).replace(/\D/g, "").slice(0, 4) || String(input.confirmed?.postcode ?? "").trim() || details?.postcode || "";
   if (out.office_suburb) { const kept = splitSuburb(out.office_suburb); out.office_suburb = kept.suburb ? composeSuburb(kept.suburb, kept.postcode || postcode) : ""; }
   const phone = phoneE164(out.contact_phone); if (phone) out.contact_phone = phone;
   // Round 3: the declarant is the agency contact (name and position) unless the record names someone else.

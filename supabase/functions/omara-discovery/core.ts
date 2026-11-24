@@ -53,6 +53,7 @@ function factsFrom(body: Record<string, unknown>, stored: BusinessFacts | null):
   const names = [...(Array.isArray(body.names) ? body.names : []).map((n) => str(n, 200)), ...(stored?.names ?? [])].filter(Boolean);
   return { names: [...new Set(names)].slice(0, 8), website: str(body.website) || stored?.website || null,
     postcode: str(body.postcode, 4) || stored?.postcode || null, state: str(body.state, 3).toUpperCase() || stored?.state || null,
+    people: (Array.isArray(body.people) ? body.people : []).map((p) => str(p, 100)).filter(Boolean).slice(0, 5),
     places: [...new Set([...(Array.isArray(body.places) ? body.places : []).map((p) => str(p, 60)), ...(stored?.places ?? [])].filter(Boolean))].slice(0, 10) };
 }
 

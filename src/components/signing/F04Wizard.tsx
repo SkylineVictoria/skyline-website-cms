@@ -952,7 +952,9 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
         subtitle={admin ? <>Agent application of <strong>{view.onboarding?.agencyName ?? "the agency"}</strong> · Review the application, then approve or send it back.</> : <>{prefilling ? `To ${prefill?.contact ? `${prefill.contact.name} (${prefill.contact.email})` : "the point of contact"}, for` : "For"} <strong>{view.onboarding?.agencyName ?? "your agency"}</strong> · step {stepNumber} of {order.length}: {STEPS[step].text}</>}
         stepper={<div data-testid="f04-stepper"><WizardStepper items={order.map((i) => ({ id: STEPS[i].id, short: STEPS[i].short, icon: STEPS[i].icon, done: i < furthest && Object.keys(allProblems[i]).length === 0 }))} current={order.indexOf(step)} onSelect={(n) => goTo(order[n])} /></div>}
         footerStart={admin ? adminSave : <>
-          {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} /> : null}
+          {order.indexOf(step) > 0 ? <WizardBackButton onClick={() => goTo(prevOf(step))} disabled={!!busy || !!reviewBusy} />
+            // Step 1 of the staff pre-send (owner 2026-11-24: "allow me to go back too"): Back leaves the form for the business page.
+            : prefilling && prefill?.onClose ? <WizardBackButton onClick={prefill.onClose} disabled={!!prefill.busy} /> : null}
           {prefilling ? (prefill?.savedNote ? <span className="text-xs text-foreground-500" data-testid="f04-prefill-saved">{prefill.savedNote}</span> : null) : <span className="hidden sm:inline-flex">{saveLater}</span>}
         </>}
         footerEnd={adminButtons ?? prefillButtons ?? <span className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">

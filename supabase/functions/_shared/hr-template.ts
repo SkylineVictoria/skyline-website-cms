@@ -43,7 +43,35 @@ export const PLACEHOLDERS: readonly PlaceholderSpec[] = [
   { key: "job_location", label: "Job location", sample: "Melbourne", group: "Job and pay" },
   { key: "job_type", label: "Job type", sample: "Full time", group: "Job and pay" },
   { key: "pay_type", label: "Pay type (cycle)", sample: "Fortnightly", group: "Job and pay" },
+  { key: "employee_address", label: "Employee address", sample: "1 Example Street, Carlton VIC 3053", group: "Person" },
+  { key: "work_location_address", label: "Work location address", sample: "Level 8, 310 King St, Melbourne VIC 3000", group: "Job and pay" },
+  { key: "award", label: "Award", sample: "Educational Services (Post-Secondary Education) Award 2020", group: "Job and pay" },
+  // Offer terms: Settings & Policies (HRMS) values, so a letter has no fixed numbers or names in it.
+  { key: "probation_months", label: "Probation (months)", sample: "6", group: "Job and pay" },
+  { key: "notice_weeks", label: "Employee notice (weeks)", sample: "4", group: "Job and pay" },
+  { key: "super_rate", label: "Super rate (%)", sample: "12", group: "Job and pay" },
+  { key: "annual_leave_weeks", label: "Annual leave (weeks)", sample: "4", group: "Job and pay" },
+  { key: "personal_leave_days", label: "Personal/carer's leave (days)", sample: "10", group: "Job and pay" },
+  { key: "long_service_leave_law", label: "Long service leave law", sample: "Long Service Leave Act 2018 (Vic)", group: "Job and pay" },
+  // Wording chosen by the employment type (full time / part time / contract), numbers from the offer settings.
+  { key: "hours_clause", label: "Hours of work (by employment type)", sample: "You will work 38 ordinary hours per week.", group: "Job and pay" },
+  { key: "leave_clause", label: "Paid leave (by employment type)", sample: "4 weeks' paid annual leave and 10 days' paid personal/carer's leave each year, accruing progressively.", group: "Job and pay" },
+  { key: "probation_period", label: "Probation period (blank for contract)", sample: "6 months", group: "Job and pay" },
+  { key: "probation_clause", label: "Probation (by employment type, blank for contract)", sample: "The first 6 months of your employment are a probationary period.", group: "Job and pay" },
+  { key: "notice_clause", label: "Ending employment (by employment type)", sample: "Either party may end the employment by written notice.", group: "Job and pay" },
+  { key: "signatory_name", label: "Signatory name", sample: "Jordan Lee", group: "Company" },
+  { key: "signatory_title", label: "Signatory title", sample: "Chief Executive Officer", group: "Company" },
+  // Website settings.
   { key: "company_name", label: "Company name", sample: "Skyline Institute of Technology", group: "Company" },
+  { key: "company_legal_name", label: "Company legal name", sample: "Example Pty Ltd T/A Skyline Institute of Technology", group: "Company" },
+  { key: "company_abn", label: "Company ABN", sample: "12 345 678 901", group: "Company" },
+  { key: "company_rto", label: "RTO code", sample: "12345", group: "Company" },
+  { key: "company_cricos", label: "CRICOS provider code", sample: "01234A", group: "Company" },
+  { key: "company_address", label: "Company address", sample: "Level 8, 310 King Street, Melbourne VIC 3000", group: "Company" },
+  { key: "company_phone", label: "Company phone", sample: "03 9000 0000", group: "Company" },
+  { key: "company_email", label: "Company email", sample: "info@example.edu.au", group: "Company" },
+  { key: "company_website", label: "Company website", sample: "https://example.edu.au/", group: "Company" },
+  { key: "company_state", label: "Company state", sample: "VIC", group: "Company" },
   { key: "today", label: "Today's date", sample: "10 November 2026", group: "Company" },
   { key: "today_date", label: "Today's date", sample: "10 November 2026", group: "Company" },
   { key: "signing_link", label: "Offer sign-in link", sample: "https://example.com/staff/welcome", group: "Links", only: ["offer_email", "welcome_login"] },
@@ -55,7 +83,8 @@ export const PLACEHOLDERS: readonly PlaceholderSpec[] = [
 const PLACEHOLDER_KEYS = new Set(PLACEHOLDERS.map((p) => p.key));
 export const placeholdersFor = (type: TemplateType): PlaceholderSpec[] => PLACEHOLDERS.filter((p) => !p.only || p.only.includes(type));
 /** Values that may legitimately be empty for a person (the template still renders; the gap is simply left out). */
-export const OPTIONAL_PLACEHOLDERS: ReadonlySet<string> = new Set(["department", "manager_name", "work_location", "hours_per_week", "last_name"]);
+export const OPTIONAL_PLACEHOLDERS: ReadonlySet<string> = new Set(["department", "manager_name", "work_location", "hours_per_week", "last_name",
+  "employee_address", "work_location_address", "company_website", "company_rto", "company_cricos", "probation_period", "probation_clause"]);
 export const sampleValues = (): Record<string, string> => Object.fromEntries(PLACEHOLDERS.map((p) => [p.key, p.sample]));
 
 const TOKEN = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g;
@@ -303,6 +332,54 @@ export interface TemplatePerson {
   position?: string | null; department?: string | null; employmentType?: string | null; startDate?: string | null;
   payRate?: number | string | null; payBasis?: string | null; paySchedule?: string | null; payType?: string | null; hoursPerWeek?: number | string | null;
   managerName?: string | null; workLocation?: string | null; companyName?: string | null; today?: string | null;
+  employeeAddress?: string | null; workLocationAddress?: string | null; award?: string | null;
+  probationMonths?: number | string | null; noticeWeeks?: number | string | null; superRate?: number | string | null;
+  annualLeaveWeeks?: number | string | null; personalLeaveDays?: number | string | null; longServiceLeaveLaw?: string | null;
+  signatoryName?: string | null; signatoryTitle?: string | null;
+  companyLegalName?: string | null; companyAbn?: string | null; companyRto?: string | null; companyCricos?: string | null;
+  companyAddress?: string | null; companyPhone?: string | null; companyEmail?: string | null; companyWebsite?: string | null; companyState?: string | null;
+}
+const plainText = (value: unknown): string => String(value ?? "").trim();
+/** A setting number as plain text ("6", "12", "7.5"); empty when not a number zero or above. */
+const numberText = (value: unknown): string => {
+  const n = typeof value === "number" ? value : Number(plainText(value) || NaN);
+  return Number.isFinite(n) && n >= 0 ? String(Number(n.toFixed(2))) : "";
+};
+/**
+ * The clauses that differ by employment type, so one offer letter fits full time, part time and contract. Empty when the type is
+ * not set (the sender then refuses the letter: hours, leave and notice are required). Probation is empty for contract, so its
+ * lines drop out of the letter.
+ */
+function employmentClauses(person: TemplatePerson): Record<string, string> {
+  const type = plainText(person.employmentType);
+  const hours = numberText(person.hoursPerWeek);
+  const company = plainText(person.companyName) || "the company";
+  const annual = numberText(person.annualLeaveWeeks);
+  const personal = numberText(person.personalLeaveDays);
+  const months = numberText(person.probationMonths);
+  const weeks = numberText(person.noticeWeeks);
+  const award = "the Award and the National Employment Standards (NES)";
+  const ongoingNotice = `After probation, either party may end the employment by written notice. We will give you at least the notice (or pay instead of notice) required by ${award} for your length of service, and you must give us ${weeks ? `${weeks} weeks'` : "the"} written notice${weeks ? ", or the notice the Award requires if that is longer" : " the Award requires"}. We may end your employment without notice for serious misconduct.`;
+  const probation = months && months !== "0"
+    ? { probation_period: `${months} months`, probation_clause: `The first ${months} months of your employment are a probationary period, during which we will both assess whether the role is the right fit. During probation either party may end the employment by giving the notice required by ${award}.` }
+    : { probation_period: "", probation_clause: "" };
+  if (type === "full_time") return {
+    hours_clause: `You will work ${hours ? `${hours} ordinary hours per week` : "the ordinary hours shown above"}. You may be asked to work reasonable additional hours (for example enrolment periods, evening classes or audits), handled in line with ${award}.`,
+    leave_clause: annual && personal ? `${annual} weeks' paid annual leave and ${personal} days' paid personal/carer's leave each year, accruing progressively.` : "",
+    ...probation, notice_clause: ongoingNotice,
+  };
+  if (type === "part_time") return {
+    hours_clause: `You are guaranteed ${hours ? `${hours} ordinary hours per week` : "the ordinary hours shown above"}, worked in a pattern of days and times agreed with your manager and confirmed in writing. The pattern can only be changed by agreement in writing, and any additional hours are paid in line with ${award}.`,
+    leave_clause: annual && personal ? `Paid annual leave and paid personal/carer's leave pro rata to your ordinary hours (the full-time entitlement is ${annual} weeks and ${personal} days each year), accruing progressively.` : "",
+    ...probation, notice_clause: ongoingNotice,
+  };
+  if (type === "contract") return {
+    hours_clause: `Your hours vary with ${company}'s teaching and operational needs and are not guaranteed${hours ? ` (indicatively ${hours} hours per week)` : ""}. You are paid for every hour you work.`,
+    leave_clause: `Leave as provided by ${award} for your type of engagement.`,
+    probation_period: "", probation_clause: "",
+    notice_clause: `Either party may end this contract by written notice as set out in your contract schedule, never less than ${award} require. We may end the engagement without notice for serious misconduct.`,
+  };
+  return { hours_clause: "", leave_clause: "", probation_period: "", probation_clause: "", notice_clause: "" };
 }
 /** Job types: Full time, Part time, Contract (no casual staff are employed; "casual" is read for records written before 2026-11-11). */
 export const JOB_TYPES = ["full_time", "part_time", "contract"] as const;
@@ -346,6 +423,27 @@ function baseTemplateValues(person: TemplatePerson, links: Record<string, string
     work_location: String(person.workLocation ?? "").trim(),
     company_name: String(person.companyName ?? "").trim() || "Skyline Institute of Technology",
     today: longDate(person.today) || longDate(new Date().toISOString()),
+    employee_address: plainText(person.employeeAddress),
+    work_location_address: plainText(person.workLocationAddress),
+    award: plainText(person.award),
+    probation_months: numberText(person.probationMonths),
+    notice_weeks: numberText(person.noticeWeeks),
+    super_rate: numberText(person.superRate),
+    annual_leave_weeks: numberText(person.annualLeaveWeeks),
+    personal_leave_days: numberText(person.personalLeaveDays),
+    long_service_leave_law: plainText(person.longServiceLeaveLaw),
+    signatory_name: plainText(person.signatoryName),
+    signatory_title: plainText(person.signatoryTitle),
+    company_legal_name: plainText(person.companyLegalName),
+    company_abn: plainText(person.companyAbn),
+    company_rto: plainText(person.companyRto),
+    company_cricos: plainText(person.companyCricos),
+    company_address: plainText(person.companyAddress),
+    company_phone: plainText(person.companyPhone),
+    company_email: plainText(person.companyEmail),
+    company_website: plainText(person.companyWebsite),
+    company_state: plainText(person.companyState),
+    ...employmentClauses(person),
     ...links,
   };
 }

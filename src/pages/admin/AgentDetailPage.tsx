@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import DeleteAgentDialog from "@/pages/admin/components/DeleteAgentDialog";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
 import { Button, Card, ConfirmDialog, PageHeader, Select } from "@/pages/admin/components/ui";
 import { AgencyStatusBadge, ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
@@ -27,6 +28,8 @@ export default function AgentDetailPage() {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const navigate = useNavigate();
 
   const load = useCallback(async () => {
     try {
@@ -103,6 +106,7 @@ export default function AgentDetailPage() {
             : agent.status === "Inactive" || agent.status === "Declined"
             ? <Button onClick={() => setDialog(true)}>Activate agent</Button>
             : <Button variant="outline" disabled={busy} onClick={() => setConfirm(true)}>Deactivate agent</Button>}
+          <Button variant="outline" icon="ri-delete-bin-line" className="text-red-700" disabled={busy} onClick={() => setDeleting(true)} data-testid="delete-agent">Delete agent</Button>
         </>}
       />
       {awaitingPassword(agent) ? (
@@ -184,6 +188,9 @@ export default function AgentDetailPage() {
       <ActivateAgentDialog open={dialog} onClose={() => setDialog(false)} onDone={() => void load()}
         agent={{ agentId: agent.agentId, name: agent.name, email: agent.email, phone: agent.phone, marn: agent.marn, role: agent.role,
           hasLogin: Boolean(agent.profileId), business: agent.business }} />
+      {deleting ? <DeleteAgentDialog agent={{ agentId: agent.agentId, name: agent.name, businessName: agent.business.name }}
+        onClose={() => setDeleting(false)}
+        onDeleted={(message) => { push(message); navigate(`/admin/businesses/${agent.business.id}`); }} /> : null}
       <ConfirmDialog open={confirm} title={`Deactivate ${agent.name}?`}
         message="They will not be able to sign in, and an invitation still waiting is withdrawn. Their students and applications stay with the business. You can activate them again at any time."
         confirmLabel={busy ? "Deactivating…" : "Deactivate agent"} onConfirm={() => { if (!busy) void deactivate(); }} onCancel={() => { if (!busy) setConfirm(false); }} />

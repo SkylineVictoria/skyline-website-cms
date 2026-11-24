@@ -3601,7 +3601,8 @@ test("templates: placeholders fill from the person, values are escaped, missing 
   for (const key of ["first_name", "full_name", "position", "employment_type", "start_date", "pay_rate", "pay_basis", "pay_schedule", "hours_per_week", "manager_name", "company_name", "today", "signing_link", "login_url"]) {
     assert.ok(tpl.PLACEHOLDERS.some((p) => p.key === key), `{{${key}}} is in the list an Admin inserts from`);
   }
-  const sql = read("supabase/migrations/20261111100000_hr_templates.sql") + read("supabase/migrations/20261113090000_hr_locations_job_type_login.sql");
+  const sql = read("supabase/migrations/20261111100000_hr_templates.sql") + read("supabase/migrations/20261113090000_hr_locations_job_type_login.sql")
+    + read("supabase/migrations/20261124001517_staff_offer_variables.sql");
   for (const t of tpl.TEMPLATE_TYPES) assert.ok(sql.includes(`'${t.type}'`), `the database knows the ${t.type} template`);
   for (const p of tpl.PLACEHOLDERS) assert.ok(sql.includes(`'${p.key}'`), `the database allows {{${p.key}}}`);
 });

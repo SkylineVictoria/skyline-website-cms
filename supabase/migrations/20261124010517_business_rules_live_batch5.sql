@@ -457,8 +457,8 @@ begin
     end if;
   elsif v_id = 'assessment.attempts_allowed_range' then
     if jsonb_typeof(v->'minimum') is distinct from 'number' or jsonb_typeof(v->'maximum') is distinct from 'number'
-       or (v->>'minimum')::numeric < 1 or (v->>'maximum')::numeric > 20 or (v->>'minimum')::numeric > (v->>'maximum')::numeric then
-      raise exception 'Enter whole numbers: minimum at least 1, maximum at most 20, the minimum not above the maximum.' using errcode = '22023';
+       or (v->>'minimum')::numeric < 1 or (v->>'maximum')::numeric > 10 or (v->>'minimum')::numeric > (v->>'maximum')::numeric then
+      raise exception 'Enter whole numbers: minimum at least 1, maximum at most 10, the minimum not above the maximum.' using errcode = '22023';
     end if;
   elsif v_id = 'assessment.student_declaration' then
     if jsonb_typeof(v) is distinct from 'string' or char_length(btrim(v #>> '{}')) < 10 then
@@ -490,8 +490,7 @@ begin
   end if;
   return new;
 end $$;
-drop trigger if exists business_rule_versions_lms5_check on public.business_rule_versions;
-create trigger business_rule_versions_lms5_check before insert or update on public.business_rule_versions
+create or replace trigger business_rule_versions_lms5_check before insert or update on public.business_rule_versions
   for each row execute function public.business_rule_versions_lms5_check();
 
 -- ----- rules -----
@@ -549,10 +548,7 @@ select public.business_rule_add_setting('booking.history_days', 'Past bookings s
 
 -- ----- structural limits replaced by the rules -----
 -- Attempt numbers and the institution's maximum attempts: the cap of 10 is now assessment.attempts_allowed_range (checked on publish).
-alter table public.asm_attempts drop constraint if exists asm_attempts_attempt_no_check;
-alter table public.asm_attempts add constraint asm_attempts_attempt_no_check check (attempt_no >= 1);
-alter table public.asm_settings drop constraint if exists asm_settings_max_attempts_check;
-alter table public.asm_settings add constraint asm_settings_max_attempts_check check (max_attempts >= 1);
+-- The table checks keep attempts within 1 to 10, so the range rule's maximum is at most 10 (checked on publish).
 
 -- ----- functions follow the rules -----
 -- Parts of the day follow lms.day_part_cutoffs (rto_slot reads a rule, so it becomes STABLE; no index or constraint uses it).
@@ -1016,8 +1012,7 @@ begin
   end if;
   return new;
 end $$;
-drop trigger if exists business_rule_versions_time_zone_check on public.business_rule_versions;
-create trigger business_rule_versions_time_zone_check before insert or update on public.business_rule_versions
+create or replace trigger business_rule_versions_time_zone_check before insert or update on public.business_rule_versions
   for each row execute function public.business_rule_versions_time_zone_check();
 
 create or replace function public.business_rule_versions_time_zone_sync() returns trigger
@@ -1034,8 +1029,7 @@ exception when others then
   raise warning 'Institution time zone could not be copied to the settings: %', sqlerrm;
   return null;
 end $$;
-drop trigger if exists business_rule_versions_time_zone_sync on public.business_rule_versions;
-create trigger business_rule_versions_time_zone_sync after insert or update on public.business_rule_versions
+create or replace trigger business_rule_versions_time_zone_sync after insert or update on public.business_rule_versions
   for each row execute function public.business_rule_versions_time_zone_sync();
 
 update hr.settings set timezone = public.institution_tz_raw() where timezone is distinct from public.institution_tz_raw();

@@ -71,6 +71,30 @@ async function fillCricos(courseId: string, r: SyncResult): Promise<string> {
 }
 
 /** LMS course information workspace. Reads authoritative course records only; children manage their own records. */
+type PurgeCounts = Record<string, { deleted?: number; cleared?: number }>;
+/** Plain names for the tables a course delete touches; others are shown by their table name. */
+const PURGE_LABELS: Record<string, string> = {
+  "cms_courses": "course", "cms_course_units": "unit", "course_intakes": "intake", "class_sessions": "class", "intake_enrolments": "student placement",
+  "intake_enrolment_units": "student unit placement", "intake_units": "intake unit", "intake_class_times": "weekly class time", "intake_trainers": "intake trainer",
+  "unit_contents": "learning content item", "lms_unit_resources": "unit resource", "asm_assessments": "assessment", "asm_submissions": "submission",
+  "asm_unit_outcomes": "unit result", "course_completions": "certificate / statement", "class_attendance": "attendance mark", "attendance_marks": "attendance mark",
+  "course_fee_items": "fee line", "course_fee_setups": "fee setup", "course_master_units": "master timetable row", "enrollment_application_courses": "application course choice",
+  "rto_enrolment_units": "student unit", "lms_intake_students": "intake allocation", "course_term_breaks": "term break", "intake_groups": "intake group",
+};
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
+function describePurge(tables: PurgeCounts): string[] {
+  const rows = Object.entries(tables).map(([table, c]) => {
+    const short = table.replace(/^public\./, "").replace(/^"|"$/g, "");
+    const label = PURGE_LABELS[short] ?? short.replace(/^hr\./, "").replace(/_/g, " ");
+    return { short, label, deleted: c.deleted ?? 0, cleared: c.cleared ?? 0 };
+  }).filter(r => r.short !== "cms_courses");
+  rows.sort((x, y) => y.deleted - x.deleted);
+  const lines = rows.filter(r => r.deleted).map(r => `${plural(r.deleted, r.label)} deleted`);
+  const cleared = rows.filter(r => r.cleared && !r.deleted);
+  if (cleared.length) lines.push(`Links cleared (rows kept): ${cleared.map(r => `${r.cleared} ${r.label}`).join(", ")}`);
+  return lines;
+}
+
 export default function LmsCoursesPage() {
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [addingCourse, setAddingCourse] = useState<null | "tga">(null);
@@ -282,24 +306,26 @@ export default function LmsCoursesPage() {
     } catch (e) { setDetailError(e instanceof Error ? e.message : "Unable to save course."); }
     finally { setSaving(false); }
   }, [canEdit, selectedId, saving]);
-  // Deleting a course deletes its intakes too (owner, 2026-11-20: a course and its intakes go together), after a typed warning.
+  // Deleting a course deletes everything under it (owner, 2026-11-24: "delete any course; if it has sub records delete those too, just ask
+  // one time"): the dialog lists what goes (rto_course_delete_preview) and Yes deletes it all (rto_course_delete_all, 20261124121517).
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState("");
-  const remove = useCallback(() => { if (canEdit && selectedId && !saving) { setDeleteError(""); setDeleteOpen(true); } }, [canEdit, saving, selectedId]);
+  const [deletePreview, setDeletePreview] = useState<string[] | null>(null);
+  const remove = useCallback(() => {
+    if (!canEdit || !selectedId || saving) return;
+    setDeleteError(""); setDeletePreview(null); setDeleteOpen(true);
+    void supabase.rpc("rto_course_delete_preview", { p_course_id: selectedId }).then(({ data, error: e }) => {
+      if (e) { setDeletePreview([]); setDeleteError(/schema cache|does not exist/i.test(e.message) ? "Deleting a course with everything under it needs a database update that is not applied yet (COURSE-DELETE-EVERYTHING)." : e.message); return; }
+      setDeletePreview(describePurge((data as { tables?: PurgeCounts } | null)?.tables ?? {}));
+    });
+  }, [canEdit, saving, selectedId]);
   const confirmRemove = useCallback(async () => {
     const course = courses.find(c => c.id === selectedId);
     if (!course) return;
     setSaving(true); setDeleteError("");
-    let { error: failed } = await supabase.rpc("rto_course_delete", { p_course_id: course.id, p_force: true });
-    // Until COURSE-FORCE-DELETE is applied, a course without intakes still deletes with the older one-argument function.
-    if (failed && /schema cache|does not exist/i.test(failed.message)) ({ error: failed } = await supabase.rpc("rto_course_delete", { p_course_id: course.id }));
+    const { error: failed } = await supabase.rpc("rto_course_delete_all", { p_course_id: course.id });
     setSaving(false);
-    if (failed) {
-      setDeleteError(/schema cache|does not exist/i.test(failed.message)
-        ? "Deleting a course with its intakes needs a database update that is not applied yet (COURSE-FORCE-DELETE). Nothing was deleted."
-        : failed.message || "Unable to delete the course.");
-      return;
-    }
+    if (failed) { setDeleteError(failed.message || "Unable to delete the course."); return; }
     setDeleteOpen(false); setSavedAt(""); setSelectedId("");
     void load();
   }, [courses, load, selectedId]);
@@ -453,13 +479,9 @@ export default function LmsCoursesPage() {
         if (wizard.load !== "voe") { void openClasses(wizard.courseId, "voe"); return; }
         const id = wizard.intakeId; void releaseLock(); setWizard(null); if (id) navigate(`/admin/lms/intakes#${id}`);
       }} /> : null}
-    {selected ? <DangerDialog open={deleteOpen} title={`Delete ${selected.code}?`} intro={selected.name} busy={saving} error={deleteError}
-      items={[
-        `${units.length} unit${units.length === 1 ? "" : "s"} with their hours, content and the master timetable`,
-        detail?.intakes.length ? `${detail.intakes.length} intake${detail.intakes.length === 1 ? "" : "s"} with their class timetables; students in them wait to be placed in a new intake` : "No intakes",
-        "Applications that chose this course lose it, including submitted ones and accepted offers (recorded in the audit log)",
-      ]}
-      confirmLabel="Yes, delete"
+    {selected ? <DangerDialog open={deleteOpen} title={`Delete ${selected.code} and everything in it?`} intro={`${selected.name}. Students and applications stay; they lose this course.`} busy={saving || deletePreview === null} error={deleteError}
+      items={deletePreview === null ? ["Checking what is in this course…"] : deletePreview.length ? deletePreview : ["Only the course itself"]}
+      confirmLabel={deletePreview === null ? "Checking…" : "Yes, delete everything"}
       onCancel={() => setDeleteOpen(false)} onConfirm={() => void confirmRemove()} /> : null}
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
     {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}

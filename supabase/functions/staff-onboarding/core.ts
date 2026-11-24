@@ -172,6 +172,8 @@ async function documentsLink(req: OnboardingRequest, deps: OnboardingDeps): Prom
   const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const { data, error } = await deps.rpc("hr_svc_staff_documents_link", { p_user: req.session.userId, p_hash: await deps.hash(token) });
   if (error) return error.code === "28000" ? { status: 404, body: { error: "There are no documents to add for this login.", code: "no_documents" } } : fromDb(error);
+  // OFFER-SIGN-LAST: the documents are already in and the offer waits: no link was made; the person signs on My HR.
+  if ((data as { purpose?: string } | null)?.purpose === "sign") return { status: 200, body: { purpose: "sign" } };
   return { status: 200, body: { token, ...(data as Record<string, unknown>) } };
 }
 

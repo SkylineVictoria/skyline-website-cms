@@ -2492,6 +2492,30 @@ test("HR mail: the local Postmark mock is only reachable against a local Supabas
   assert.equal(hrMail.selectHrMailProvider({ SUPABASE_URL: "http://kong:8000" }), null, "sending off without the switches");
 });
 
+test("branded email layout (2026-11-24): same words, escaped, https buttons, sign-off becomes the signature, Postmark adds HTML to text-only mail", async () => {
+  const eh = await load.import<typeof import("../supabase/functions/_shared/email-html.ts")>("../supabase/functions/_shared/email-html.ts");
+  eh.resetEmailBranding();
+  eh.setEmailBranding({ logoUrl: "https://cdn.example/logo.png", logoWidth: 350, logoHeight: 88, legalName: "Example Pty Ltd T/A Skyline", rto: "45989", cricos: "04114B", email: "info@example.test" });
+  const text = "Hello Ann <b>,\n\nSet your password to open the agent portal:\nhttps://x.example/agency/accept-invite#t=abc\n\n- one\n- two\n\nName: Ann\nEmail: ann@example.test\n\nMessage from the sender:\nBring ID.\n\nPay your initial deposit: https://x.example/sign#t=def\n\nhttp://evil.example/x\n\nSkyline Institute of Technology\nThis is an automated message.";
+  const parts = eh.textEmailBlocks(text);
+  assert.deepEqual(parts.blocks.map((b) => b.type), ["p", "p", "button", "list", "details", "note", "button", "p"]);
+  assert.ok(parts.signedOff && parts.greeting, "the plain-text sign-off is taken off and the email greets the person");
+  const html = eh.textEmailHtml("Set your password", text);
+  assert.ok(html.startsWith("<!doctype html>") && html.includes("Hello Ann &lt;b&gt;,") && !html.includes("<b>,"), "data is escaped");
+  assert.ok(html.includes('href="https://x.example/agency/accept-invite#t=abc"') && html.includes(">Set your password</a>") && html.includes(">Pay your initial deposit</a>"), "labelled links are buttons");
+  assert.ok(!html.includes('href="http://evil.example/x"'), "plain http links are not made clickable on a hosted address");
+  assert.ok(html.includes('src="https://cdn.example/logo.png"') && html.includes('width="175"') && html.includes("RTO 45989") && html.includes("Kind regards,") && html.includes("<!--email-note-->"));
+  assert.equal(eh.readableOnWhite("#ea6619"), "#b64f13", "the button colour is darkened until white text reads on it");
+  assert.equal(eh.safeEmailUrl("javascript:alert(1)"), null);
+  const sent: Array<Record<string, unknown>> = [];
+  const fakeFetch = (async (_url: string, init: RequestInit) => { sent.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ ErrorCode: 0, MessageID: "abcdef12-3456" }), { status: 200 }); }) as unknown as typeof fetch;
+  const provider = hrMail.selectHrMailProvider({ EF_NOTIFICATION_EMAIL_ENABLED: "true", EF_POSTMARK_SERVER_TOKEN: "t", SUPABASE_URL: "https://xcpydisstlvtvcsqnjob.supabase.co" }, { fetch: fakeFetch })!;
+  await provider.send({ deliveryId: "d", from: { name: "n", email: "f@example.test" }, to: "x@example.test", subject: "Ready for review: ZZ", textBody: "ZZ signed." });
+  assert.equal(sent[0].TextBody, "ZZ signed.", "the text part is unchanged");
+  assert.ok(String(sent[0].HtmlBody).includes("Ready for review: ZZ") && String(sent[0].HtmlBody).includes("ZZ signed."), "text-only mail gets the branded HTML");
+  eh.resetEmailBranding();
+});
+
 test("HR mail templates: applicant mail without a link has no URL; links and names are one line; no token in admin mail", () => {
   for (const kind of ["application_received", "already_applied", "rejected"] as const) {
     const m = hrMail.renderHrEmail(kind, { name: "Ann" }, { siteUrl: "https://x.example", profileId: "p-1" })!;

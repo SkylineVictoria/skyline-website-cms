@@ -75,6 +75,7 @@ export function setEmailBranding(partial: Partial<EmailBranding>) {
 export function resetEmailBranding() { current = { ...DEFAULT_EMAIL_BRANDING }; loadedAt = 0; }
 
 // deno-lint-ignore no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the Supabase client, structurally
 type BrandingClient = { from: (table: string) => any; rpc?: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: any; error: unknown }> };
 
 /** Width and height of a PNG from its first bytes (IHDR), else null. */

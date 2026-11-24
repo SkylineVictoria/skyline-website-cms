@@ -4976,3 +4976,22 @@ test("Portal: the business admin agent deactivates / reactivates their agents; S
   // The invitation link opens the workspace's own page, where the agent creates their password.
   assert.ok(read("supabase/functions/portal-admin-users/index.ts").includes("/agency/accept-invite#t=${token}"));
 });
+
+test("Students (2026-11-24): the finish-application link asks for a password; agents, business admin agents and SLIT invite a student to the portal", () => {
+  const sql = read("supabase/migrations/20261124233517_student_portal_invite.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("create or replace function public.portal_my_password_set()") && sql.includes("u.encrypted_password"));
+  // An agent may invite only their own student (role student); the helper is internal.
+  assert.ok(sql.includes("c->>'role' = 'agent' and p_role = 'student' and public.portal_student_is_mine(p_actor, p_student)"));
+  assert.ok(sql.includes("revoke all on function public.portal_student_is_mine(uuid, uuid) from public, anon, authenticated;"));
+  assert.ok(sql.includes("c->>'role' = 'agent' and inv.role = 'student'"));
+  // Active only once the student has created a password.
+  assert.ok(sql.includes("case when coalesce(v_pw, false) then 'active' else 'no_password' end"));
+  const fn = read("supabase/functions/portal-admin-users/index.ts");
+  assert.ok(fn.includes('ctx?.role === "agent" && ((action === "invite" && parsed.role === "student") || action === "resend")'));
+  const page = read("src/pages/agency/application-invite/page.tsx");
+  assert.ok(page.includes('supabase.rpc("portal_my_password_set")') && page.includes("supabase.auth.updateUser({ password })") && page.includes("passwordProblem(password, confirm)"));
+  const detail = read("src/pages/agency/applications/detail/page.tsx");
+  assert.equal((detail.match(/<StudentPortalInvite /g) ?? []).length, 2, "both the incomplete and the full application views");
+  const ui = read("src/pages/agency/components/StudentPortalInvite.tsx");
+  assert.ok(ui.includes('action: "invite", role: "student", studentId') && ui.includes("portalPasswordResetUrl()"));
+});

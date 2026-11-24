@@ -20,6 +20,7 @@ import { activateBusinessOnboarding } from "@/lib/signingApi";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
 import { businessDeleteCheck, isSlitAdmin } from "@/pages/admin/lib/businessData";
+import OmaraAgentsPanel from "@/pages/admin/components/OmaraAgentsPanel";
 
 type Tab = "details" | "agents" | "students" | "applications";
 const TAB_IDS: Tab[] = ["details", "agents", "students", "applications"];
@@ -181,6 +182,7 @@ export default function BusinessDetailPage() {
 
       {tab === "details" ? <DetailsSection agencyId={agency.id} onSaved={load} /> : null}
       {tab === "details" && business.status === "Active" ? <div className="mt-6"><BusinessOnboarding business={business} onChanged={load} /></div> : null}
+      {tab === "details" ? <OmaraAgentsPanel mode="linked" agencyId={business.id} /> : null}
       {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null, holding: !operational && business.status === "Onboarding" && stage !== "declined" }} onChanged={load} /> : null}
       {tab === "students" ? <StudentsTable businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
       {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}

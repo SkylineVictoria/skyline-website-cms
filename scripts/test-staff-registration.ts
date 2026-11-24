@@ -3167,8 +3167,8 @@ test("businesses (2026-11-20): an Active business offers only Active / Inactive 
   const row = (over: Record<string, unknown> = {}) => ({ status: "Onboarding", onboardingLabel: "Application sent", agencyCode: "ZZ-1", ...over });
   assert.equal(del.canOfferBusinessDelete(row(), true), true);
   assert.equal(del.canOfferBusinessDelete(row(), false), false, "other staff: hidden");
-  for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), false, `${label}: hidden`);
-  assert.equal(del.canOfferBusinessDelete(row({ status: "Active" }), true), false, "Active: hidden");
+  for (const label of ["Not sent yet", "Awaiting referees", "Ready for review", "Correction requested", "Resubmitted", null]) assert.equal(del.canOfferBusinessDelete(row({ onboardingLabel: label }), true), true, `${label}: offered (owner 2026-11-24, any status)`);
+  assert.equal(del.canOfferBusinessDelete(row({ status: "Active" }), true), true, "Active: offered (owner 2026-11-24)");
   assert.equal(del.canOfferBusinessDelete(row({ status: "Inactive", onboardingLabel: "Ready for review" }), true), true, "Inactive: offered (owner 2026-11-24)");
   for (const code of ["SLIT-DIRECT", "TEST-VIEW", "slit-direct"]) assert.equal(del.canOfferBusinessDelete(row({ agencyCode: code }), true), false, `${code}: never`);
   // 2026-11-20 follow-up: the admin role is read whatever its case; every other row gets a reason (the greyed-out icon's tooltip).
@@ -3176,12 +3176,15 @@ test("businesses (2026-11-20): an Active business offers only Active / Inactive 
   assert.equal(del.deleteBlockReason(row(), true), null);
   assert.match(del.deleteBlockReason(row(), false)!, /Only a SLIT administrator/);
   assert.match(del.deleteBlockReason(row({ agencyCode: "SLIT-DIRECT", status: "Active" }), true)!, /never be deleted/);
-  assert.match(del.deleteBlockReason(row({ status: "Active", onboardingLabel: null }), true)!, /Make it Inactive first/);
+  assert.equal(del.deleteBlockReason(row({ status: "Active", onboardingLabel: null }), true), null);
   assert.equal(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: null }), true), null);
   assert.equal(del.deleteBlockReason(row({ status: "Inactive", onboardingLabel: "Awaiting referees" }), true), null);
-  assert.match(del.deleteBlockReason(row({ status: "Inactive", students: 1 }), true)!, /stays Inactive/);
-  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Not sent yet" }), true)!, /Make it Inactive first/);
-  assert.match(del.deleteBlockReason(row({ onboardingLabel: "Awaiting referees" }), true)!, /Make it Inactive first/);
+  assert.match(del.deleteBlockReason(row({ status: "Inactive", students: 1 }), true)!, /cannot be deleted/);
+  assert.equal(del.deleteBlockReason(row({ onboardingLabel: "Not sent yet" }), true), null);
+  assert.equal(del.deleteBlockReason(row({ onboardingLabel: "Awaiting referees" }), true), null);
+  // The database matches (owner 2026-11-24: any status).
+  const anySql = read("supabase/migrations/20261124091517_business_delete_any_status.sql");
+  assert.ok(!/a\.status = 'Active'/.test(anySql) && !/Inactive first/.test(anySql), "no status check left in admin_business_delete_block");
   assert.match(del.deleteBlockReason(row({ students: 2 }), true)!, /students or applications/);
   const listPage = read("src/pages/admin/BusinessesPage.tsx");
   assert.ok(listPage.includes("const isAdmin = isSlitAdmin(user?.role);") && listPage.includes("title={reason}") && listPage.includes("border-red-300"), "red Delete where possible, a tooltip elsewhere");

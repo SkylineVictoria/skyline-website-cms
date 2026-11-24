@@ -1,6 +1,6 @@
 import { normalizeAbn, validateAbn, type AgencyAbnDetails } from "../../../../supabase/functions/_shared/validation/abn";
 import type { AbrDetails } from "../../../../supabase/functions/_shared/validation/abr";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
@@ -88,6 +88,9 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [omaraAgents, setOmaraAgents] = useState<AgentRecord[]>([]);
   // People added by hand (CEO, directors, staff the search did not find): offered as the Admin too, saved on the business.
   const [keyPeople, setKeyPeople] = useState<KeyPerson[]>([]);
+  const [personStart, setPersonStart] = useState<string | null>(null);
+  const startPerson = useCallback((name: string) => setPersonStart(name), []);
+  const clearPersonStart = useCallback(() => setPersonStart(null), []);
   // The PhoneInput keeps its own text: a new key shows a picked person's phone.
   const [phoneKey, setPhoneKey] = useState(0);
   // "This person will be the Admin" popup: on picking / adding a person, and again on Create when the person changed since.
@@ -544,8 +547,9 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
 
         {mode === "abr" && !existing ? abrPanel() : null}
         {mode === "abr" && !existing && abr ? <>{officePanel()}{branchesPanel()}</> : null}
-        {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} /> : null}
-        {mode === "abr" && !existing && abr ? <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} /> : null}
+        {mode === "abr" && !existing && abr && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} onAddByHand={startPerson}>
+          <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} startWith={personStart} onStarted={clearPersonStart} />
+        </OmaraAgentsPanel> : null}
         {abrManual && !existing ? (
           <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
             <p className="text-sm font-semibold text-foreground-900">Business details (typed by hand)</p>
@@ -595,8 +599,9 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
           </section>
         ) : null}
         {mode !== "abr" && legacyReady && details ? <>{officePanel()}{branchesPanel()}</> : null}
-        {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} /> : null}
-        {mode !== "abr" && legacyReady && details ? <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} /> : null}
+        {mode !== "abr" && legacyReady && details && omaraFacts ? <OmaraAgentsPanel mode="select" facts={omaraFacts} disabled={saving} onSelection={setOmaraSel} onFound={setOmaraAgents} places={officePlaces} onAddByHand={startPerson}>
+          <KeyPeopleList people={keyPeople} onChange={setKeyPeople} disabled={saving} startWith={personStart} onStarted={clearPersonStart} />
+        </OmaraAgentsPanel> : null}
       </>)}
 
       {ready ? box(<>
@@ -610,7 +615,9 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
                 <AdminPersonPicker id="add-business-full-name" value={fullName} suggestions={suggestions} disabled={saving} invalid={Boolean(errors.givenName || errors.primaryContact)}
                   onName={name => { setFullName(name); setAdminAuto(null); if (adminMarn && name.trim().toLowerCase() !== fullName.trim().toLowerCase()) setAdminMarn(""); if (mode !== "abr") patch({ primaryContact: name }); }}
                   onPick={pickPerson} onAddNew={addNewPerson} />
-              </Field>{error("givenName")}{error("primaryContact")}
+              </Field>
+              <button type="button" disabled={saving} className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:underline" onClick={() => addNewPerson(fullName.trim())} data-testid="admin-add-new">
+                <i className="ri-user-add-line" aria-hidden="true" />Add a new person as the Admin (name, email and mobile)</button>{error("givenName")}{error("primaryContact")}
               {adminAuto ? <p className="mt-1 text-xs text-emerald-800" data-testid="admin-autofilled"><i className="ri-magic-line mr-1" aria-hidden="true" />Filled from the best match ({adminAuto.confidence}%) on the register. Check it, or search for someone else.</p> : null}
               {adminMarn ? <p className="mt-1 text-xs text-foreground-600">MARN {adminMarn}: printed on the application form.</p> : null}
             </div>

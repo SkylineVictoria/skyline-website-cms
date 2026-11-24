@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import type { KeyPerson } from "@/pages/admin/lib/offices";
 
@@ -8,8 +8,13 @@ const EMPTY: KeyPerson = { fullName: "", role: "", email: "", phone: "", marn: "
  * People added by hand (owner 2026-11-24): the CEO, directors or staff the register search did not find. One line each; Add person opens
  * a small form. They are offered in the Full name search for the business admin agent.
  */
-export default function KeyPeopleList({ people, onChange, disabled }: { people: KeyPerson[]; onChange: (p: KeyPerson[]) => void; disabled?: boolean }) {
+export default function KeyPeopleList({ people, onChange, disabled, startWith, onStarted }: { people: KeyPerson[]; onChange: (p: KeyPerson[]) => void; disabled?: boolean;
+  /** Opens the add form with this name (from the agents box's Add by hand). */ startWith?: string | null; onStarted?: () => void }) {
   const [draft, setDraft] = useState<KeyPerson | null>(null);
+  useEffect(() => {
+    if (startWith == null) return;
+    setDraft({ ...EMPTY, fullName: startWith }); setEditing(null); setProblem(""); onStarted?.();
+  }, [startWith, onStarted]);
   const [editing, setEditing] = useState<number | null>(null);
   const [problem, setProblem] = useState("");
   const set = (key: keyof KeyPerson, value: string) => setDraft(d => (d ? { ...d, [key]: value } : d));
@@ -22,9 +27,8 @@ export default function KeyPeopleList({ people, onChange, disabled }: { people: 
     setDraft(null); setEditing(null); setProblem("");
   };
   return (
-    <section className="mt-2 rounded-lg border border-background-200 px-3 py-2" aria-label="People" data-testid="key-people">
-      <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-foreground-900"><i className="ri-team-line text-sky-700" aria-hidden="true" />People {people.length ? `(${people.length})` : ""}
-        <span className="text-xs font-normal text-foreground-500">CEO, directors, staff; add anyone the search did not find</span></p>
+    <section aria-label="People added by hand" data-testid="key-people">
+      {people.length || draft ? <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-foreground-500">Added by hand {people.length ? `(${people.length})` : ""}</p> : null}
       {people.length ? <ul className="mb-2 divide-y divide-background-200 rounded-lg border border-background-200 bg-white">
         {people.map((p, i) => <li key={`${p.fullName}${i}`} className="flex items-center gap-3 px-3 py-2 text-sm">
           <p className="min-w-0 flex-1 truncate"><span className="font-semibold text-foreground-900">{p.fullName}</span>
@@ -46,7 +50,7 @@ export default function KeyPeopleList({ people, onChange, disabled }: { people: 
           <Button type="button" icon="ri-check-line" disabled={disabled} onClick={save}>{editing === null ? "Add person" : "Save"}</Button>
           <Button type="button" variant="secondary" disabled={disabled} onClick={() => { setDraft(null); setEditing(null); setProblem(""); }}>Cancel</Button>
         </div>
-      </div> : <Button type="button" variant="secondary" icon="ri-user-add-line" disabled={disabled || people.length >= 50} onClick={() => { setDraft({ ...EMPTY }); setEditing(null); }} data-testid="key-people-add">Add person by hand</Button>}
+      </div> : null}
     </section>
   );
 }

@@ -1,4 +1,5 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { TextInput } from "@/pages/admin/components/ui";
 
 /** A person the form can offer (the registered migration agents found for the business). */
@@ -17,6 +18,16 @@ export default function AdminPersonPicker({ value, onName, suggestions, onPick, 
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const closeTimer = useRef<number | undefined>(undefined);
+  // The list floats on <body> under the box (fixed position), so no card or scroll area can hide it.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const place = () => { const r = boxRef.current?.getBoundingClientRect(); if (r) setRect({ left: r.left, top: r.bottom + 4, width: r.width }); };
+    place();
+    window.addEventListener("scroll", place, true); window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [open]);
   const q = value.trim().toLowerCase();
   const matches = useMemo(() => {
     const words = q.split(/\s+/).filter(Boolean);
@@ -34,7 +45,7 @@ export default function AdminPersonPicker({ value, onName, suggestions, onPick, 
     if (o.kind === "person") onPick(o.person); else onAddNew(value.trim());
   };
   return (
-    <div className="relative">
+    <div className="relative" ref={boxRef}>
       <TextInput id={id} disabled={disabled} required autoComplete="off" value={value} aria-invalid={invalid}
         role="combobox" aria-expanded={open && options.length > 0} aria-controls={listId} aria-autocomplete="list"
         placeholder={suggestions.length ? "Search the agents found above, or type a new name" : "First and last name"}
@@ -48,8 +59,9 @@ export default function AdminPersonPicker({ value, onName, suggestions, onPick, 
           else if (e.key === "Enter") { e.preventDefault(); choose(active); }
           else if (e.key === "Escape") setOpen(false);
         }} />
-      {open && options.length ? (
-        <ul id={listId} role="listbox" className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-lg border border-background-200 bg-white py-1 shadow-lg" data-testid="admin-person-options">
+      {open && options.length && rect ? createPortal(
+        <ul id={listId} role="listbox" style={{ position: "fixed", left: rect.left, top: rect.top, width: rect.width }}
+          className="z-[85] max-h-72 overflow-y-auto rounded-lg border border-background-200 bg-white py-1 shadow-lg" data-testid="admin-person-options">
           {options.map((o, i) => (
             <li key={o.kind === "person" ? `${o.person.marn ?? ""}${o.person.fullName}${o.person.email}` : "new"} role="option" aria-selected={i === active}
               className={`cursor-pointer px-3 py-2 text-sm ${i === active ? "bg-primary-50" : "hover:bg-background-100"}`}
@@ -60,7 +72,7 @@ export default function AdminPersonPicker({ value, onName, suggestions, onPick, 
               </> : <p className="font-semibold text-primary-700"><i className="ri-user-add-line mr-1" aria-hidden="true" />Add &ldquo;{value.trim()}&rdquo; as a new person</p>}
             </li>
           ))}
-        </ul>
+        </ul>, document.body
       ) : null}
     </div>
   );

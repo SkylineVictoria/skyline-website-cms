@@ -68,7 +68,9 @@ function AgentCard({ a, checked, onToggle, linked, actions }: {
 export default function OmaraAgentsPanel(props:
   | { mode: "select"; facts: OmaraFacts; disabled?: boolean; onSelection: (s: OmaraSelection) => void;
       /** Every registered agent found (Add business offers them as the business admin agent). */ onFound?: (agents: AgentRecord[]) => void;
-      /** Office suburbs (head office, branches): searched too, without starting a new automatic search when they change. */ places?: string[] }
+      /** Office suburbs (head office, branches): searched too, without starting a new automatic search when they change. */ places?: string[];
+      /** Add by hand (owner 2026-11-24: one name box for search and add): opens the add form with the typed name. */ onAddByHand?: (name: string) => void;
+      /** Shown inside the box, under the agents (the people added by hand). */ children?: ReactNode }
   | { mode: "linked"; agencyId: string }) {
   const facts: OmaraFacts = props.mode === "select" ? props.facts : { agencyId: props.agencyId, names: [] };
   const [status, setStatus] = useState<OmaraStatus | null>(null);
@@ -83,6 +85,8 @@ export default function OmaraAgentsPanel(props:
   const [showPaste, setShowPaste] = useState(false);
   // Find a person by name (owner 2026-11-24: "not seeing its CEO"): searches the register for that name.
   const [person, setPerson] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const onAddByHand = props.mode === "select" ? props.onAddByHand : undefined;
   const autoRan = useRef("");
   const key = JSON.stringify(facts);
 
@@ -201,13 +205,15 @@ export default function OmaraAgentsPanel(props:
       {status && !canSearch ? <p className="mt-2 text-xs text-foreground-600" data-testid="omara-manual-note">
         {status.enabled ? "Automatic search is not set up (no Brave Search or Tavily key in Integrations › Connections)." : "Automatic search is switched off in Business Rules."}
         {" "}Search the register yourself at <a className="underline" href="https://portal.mara.gov.au/search-the-register-of-migration-agents/" target="_blank" rel="noreferrer">portal.mara.gov.au</a>, open each agent and paste the links below.</p> : null}
-      {canSearch ? <div className="mt-3 flex flex-wrap gap-2" data-testid="omara-person">
-        <label htmlFor="omara-person-input" className="sr-only">Find a person by name</label>
-        <input id="omara-person-input" value={person} disabled={disabled || !!busy} maxLength={100} placeholder="Find a person by name, e.g. Dharmesh Patel"
+      {canSearch || onAddByHand ? <div className="mt-3 flex flex-wrap gap-2" data-testid="omara-person">
+        <label htmlFor="omara-person-input" className="sr-only">A person's name</label>
+        <input id="omara-person-input" value={person} disabled={disabled || !!busy} maxLength={100} placeholder="A person's name, e.g. Dharmesh Patel"
           onChange={(e) => setPerson(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (person.trim().length >= 3) void discover(person.trim()); } }}
           className="min-w-[14rem] flex-1 rounded-md border border-background-300 bg-white px-3 py-1.5 text-sm" />
-        <Button type="button" size="sm" variant="secondary" icon="ri-user-search-line" disabled={disabled || !!busy || person.trim().length < 3 || (props.mode === "select" && !facts.names.length)}
-          onClick={() => void discover(person.trim())}>{busy === "person" ? "Searching…" : "Find person"}</Button>
+        {canSearch ? <Button type="button" size="sm" variant="secondary" icon="ri-user-search-line" disabled={disabled || !!busy || person.trim().length < 3 || (props.mode === "select" && !facts.names.length)}
+          onClick={() => void discover(person.trim())}>{busy === "person" ? "Searching…" : "Find on register"}</Button> : null}
+        {onAddByHand ? <Button type="button" size="sm" variant="secondary" icon="ri-user-add-line" disabled={disabled || !!busy}
+          onClick={() => { onAddByHand(person.trim()); setPerson(""); }} data-testid="omara-add-by-hand">Add by hand</Button> : null}
       </div> : null}
       {showPaste ? (
         <div className="mt-3 space-y-2">
@@ -256,8 +262,10 @@ export default function OmaraAgentsPanel(props:
               ? <Button type="button" size="sm" disabled={!!busy || ![...checked].some((m) => records.some((a) => a.marn === m))} onClick={() => void linkSelected()} data-testid="omara-link">{busy === "link" ? "Linking…" : `Link selected (${[...checked].filter((m) => records.some((a) => a.marn === m)).length})`}</Button>
               : <p className="text-xs text-foreground-600">{checked.size} selected: linked when you create the business. Check each official record first.</p>}
           </div>
-          <ul className="mt-2 max-h-80 divide-y divide-background-200 overflow-y-auto rounded-md border border-background-200 bg-white">{records.map((a) => <AgentCard key={a.marn} a={a} checked={checked.has(a.marn)}
+          <ul className="mt-2 divide-y divide-background-200 rounded-md border border-background-200 bg-white">{(showAll ? records : records.slice(0, 5)).map((a) => <AgentCard key={a.marn} a={a} checked={checked.has(a.marn)}
             onToggle={disabled ? undefined : (v) => { const next = new Set(checked); if (v) next.add(a.marn); else next.delete(a.marn); setSelection(next); }} />)}</ul>
+          {records.length > 5 ? <button type="button" className="mt-1 text-xs font-semibold text-primary-700 hover:underline" onClick={() => setShowAll((v) => !v)} data-testid="omara-show-all">
+            {showAll ? "Show top 5 only" : `Show all ${records.length} (${records.length - 5} more)`}</button> : null}
         </div>
       ) : ran && !searchOnly.length && !error ? <p className="mt-2 text-xs text-foreground-500">Nothing to link from this search.</p> : null}
 
@@ -268,6 +276,7 @@ export default function OmaraAgentsPanel(props:
             <li key={a.contactId}><a className="underline" href={a.sourceUrl} target="_blank" rel="noreferrer">{a.title || a.sourceUrl}</a> — {a.reason}</li>) : null)}</ul>
         </div>
       ) : null}
+      {props.mode === "select" && props.children ? <div className="mt-3">{props.children}</div> : null}
     </section>
   );
 }

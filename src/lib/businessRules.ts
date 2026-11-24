@@ -156,6 +156,9 @@ export const SCREEN_RULES = [
   "general.time_zone",
   "agents.contact_title_default",
   "agents.contact_position_default",
+  "agents.slit_signatory_name",
+  "agents.slit_signatory_position",
+  "agents.slit_witness_name",
 ] as const;
 
 let values: Record<string, unknown> = {};

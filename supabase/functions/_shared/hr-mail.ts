@@ -175,6 +175,8 @@ export interface DrainPort {
   result(id: number, state: "sent" | "queued" | "failed", messageId?: string, error?: string): Promise<void>;
   /** The HRMS template for this email filled for the person, or null (none, or it cannot be filled): the built-in text is used. */
   template?(row: HrEmailRow, type: TemplateType): Promise<RenderedMessage | null>;
+  /** OFFER-SIGNATURES (owner 2026-11-24): more people who get an admin email (the signed offer: the admin who sent it and the signatory). */
+  extraAdmins?(row: HrEmailRow): Promise<string[]>;
 }
 
 /** Sends queued outbox mail. Off (no provider): nothing is claimed and the rows stay queued. */
@@ -183,7 +185,8 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
   if (!provider) return totals;
   const rows = await port.claim(DRAINABLE_KINDS, limit);
   for (const row of rows) {
-    const to = row.audience === "admin" ? config.adminTo.join(", ") : row.to ?? "";
+    const extra = row.audience === "admin" && port.extraAdmins ? await port.extraAdmins(row).catch(() => []) : [];
+    const to = row.audience === "admin" ? [...new Set([...config.adminTo, ...extra.map((a) => a.trim().toLowerCase()).filter((a) => EMAIL.test(a))])].slice(0, 20).join(", ") : row.to ?? "";
     const missing = !config.from ? "EF_HR_EMAIL_FROM is not set" : !to ? (row.audience === "admin" ? "EF_HR_ADMIN_NOTIFY_TO is not set" : "no recipient") : null;
     const builtIn = renderHrEmail(row.kind, row.payload ?? {}, { siteUrl: config.siteUrl, profileId: row.profileId });
     const type = TEMPLATE_FOR_KIND[row.kind];

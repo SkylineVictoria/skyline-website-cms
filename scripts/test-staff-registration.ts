@@ -5053,6 +5053,10 @@ test("Offer signatures (2026-11-24): CEO signature and date under the closing li
   assert.ok(read("src/pages/staff/StaffOnboardingPage.tsx").includes("<SignaturePad onChange={setSignImage} />"));
   assert.ok(read("src/pages/staff/components/OfferPanel.tsx").includes("api.sign(name.trim(), signature)"));
   assert.ok(read("supabase/migrations/20261125003517_offer_signatory_ceo.sql").includes("('hrms.offer_signatory_name', 'Hardik Amin')"));
+  // The signed copy also goes to the admin who sent the offer and to the signatory (owner: "Admin and hardik all").
+  assert.ok(read("supabase/functions/_shared/hr-mail-drain.ts").includes('service.rpc("hr_svc_offer_mail_people", { p_offer: offerId })'));
+  assert.ok(read("supabase/functions/_shared/hr-mail.ts").includes("...extra.map((a) => a.trim().toLowerCase()).filter((a) => EMAIL.test(a))"));
+  assert.ok(read("supabase/migrations/20261125004517_offer_signed_copy_people.sql").includes("join public.cms_users u on u.auth_user_id = o.sent_by"));
 });
 
 test("Offer signed last (2026-11-24): Accept and continue opens the wizard; its last screen signs the offer and submits", () => {

@@ -4899,7 +4899,7 @@ test("OMARA: Brave / Tavily request shapes, hits filtered to the register, one G
 });
 
 test("Business Documents tab (2026-11-24): upload / view / resend / change email checked and logged in the database, never a certificate", () => {
-  const sql = read("supabase/migrations/20261124191517_business_document_actions.sql").replace(/\r\n/g, "\n");
+  const sql = read("supabase/migrations/20261124203517_business_document_actions.sql").replace(/\r\n/g, "\n");
   // Every new staff function starts with the SLIT administrator check (server-side, not hidden buttons).
   for (const fn of ["admin_business_document_add", "admin_business_document_status", "admin_business_resend_prepare", "admin_business_signed_copy_logged", "admin_business_contact_email_change"]) {
     const body = sql.slice(sql.indexOf(`function public.${fn}(`));

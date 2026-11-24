@@ -81,6 +81,8 @@ export default function OmaraAgentsPanel(props:
   const [ran, setRan] = useState(false);
   const [paste, setPaste] = useState("");
   const [showPaste, setShowPaste] = useState(false);
+  // Find a person by name (owner 2026-11-24: "not seeing its CEO"): searches the register for that name.
+  const [person, setPerson] = useState("");
   const autoRan = useRef("");
   const key = JSON.stringify(facts);
 
@@ -107,16 +109,17 @@ export default function OmaraAgentsPanel(props:
   const onFound = props.mode === "select" ? props.onFound : undefined;
   useEffect(() => { onFound?.(found.filter(isRecord).sort((x, y) => y.confidence - x.confidence)); }, [found, onFound]);
 
-  const discover = async () => {
-    setBusy("discover"); setError(""); setMessage("");
+  const discover = async (who?: string) => {
+    setBusy(who ? "person" : "discover"); setError(""); setMessage("");
     try {
       const places = props.mode === "select" ? props.places ?? [] : [];
-      const r = await omaraDiscover(places.length ? { ...facts, places: [...new Set([...(facts.places ?? []), ...places])] } : facts);
+      const base = places.length ? { ...facts, places: [...new Set([...(facts.places ?? []), ...places])] } : facts;
+      const r = await omaraDiscover(who ? { ...base, people: [who] } : base);
       setRan(true);
       if (!r.enabled || !r.configured) { setMessage(r.message ?? "Automatic search is not available. Paste OMARA links instead."); setShowPaste(true); return; }
       mergeFound(r.agents);
       const records = r.agents.filter(isRecord).length;
-      setMessage(`${records ? `${records} registered migration agent${records === 1 ? "" : "s"} found` : "No registered migration agents found"} (${r.run?.searches ?? 0} search${r.run?.searches === 1 ? "" : "es"}, ${r.run?.pagesFetched ?? 0} register page${r.run?.pagesFetched === 1 ? "" : "s"} read).${r.run?.errors?.length ? ` Some steps failed: ${r.run.errors.slice(0, 2).join(" ")}` : ""}`);
+      setMessage(`${who ? `${who}: ` : ""}${records ? `${records} registered migration agent${records === 1 ? "" : "s"} found` : who ? "not found on the register (they may not be a registered migration agent; try another spelling or paste their OMARA link)" : "No registered migration agents found"} (${r.run?.searches ?? 0} search${r.run?.searches === 1 ? "" : "es"}, ${r.run?.pagesFetched ?? 0} register page${r.run?.pagesFetched === 1 ? "" : "s"} read).${r.run?.errors?.length ? ` Some steps failed: ${r.run.errors.slice(0, 2).join(" ")}` : ""}`);
     } catch (e) { setError(e instanceof Error ? e.message : "The search failed."); }
     finally { setBusy(""); }
   };
@@ -198,6 +201,14 @@ export default function OmaraAgentsPanel(props:
       {status && !canSearch ? <p className="mt-2 text-xs text-foreground-600" data-testid="omara-manual-note">
         {status.enabled ? "Automatic search is not set up (no Brave Search or Tavily key in Integrations › Connections)." : "Automatic search is switched off in Business Rules."}
         {" "}Search the register yourself at <a className="underline" href="https://portal.mara.gov.au/search-the-register-of-migration-agents/" target="_blank" rel="noreferrer">portal.mara.gov.au</a>, open each agent and paste the links below.</p> : null}
+      {canSearch ? <div className="mt-3 flex flex-wrap gap-2" data-testid="omara-person">
+        <label htmlFor="omara-person-input" className="sr-only">Find a person by name</label>
+        <input id="omara-person-input" value={person} disabled={disabled || !!busy} maxLength={100} placeholder="Find a person by name, e.g. Dharmesh Patel"
+          onChange={(e) => setPerson(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); if (person.trim().length >= 3) void discover(person.trim()); } }}
+          className="min-w-[14rem] flex-1 rounded-md border border-background-300 bg-white px-3 py-1.5 text-sm" />
+        <Button type="button" size="sm" variant="secondary" icon="ri-user-search-line" disabled={disabled || !!busy || person.trim().length < 3 || (props.mode === "select" && !facts.names.length)}
+          onClick={() => void discover(person.trim())}>{busy === "person" ? "Searching…" : "Find person"}</Button>
+      </div> : null}
       {showPaste ? (
         <div className="mt-3 space-y-2">
           <TextArea rows={3} value={paste} disabled={disabled || !!busy} onChange={(e) => setPaste(e.target.value)} aria-label="OMARA agent links"
@@ -207,10 +218,12 @@ export default function OmaraAgentsPanel(props:
       ) : null}
       <div aria-live="polite">
         {/* Loading (owner 2026-11-24): a clear line while the register is searched, with the business's name. */}
-        {busy === "discover" || busy === "import" ? <div className="mt-3 flex items-center gap-3 rounded-md border border-violet-200 bg-white px-3 py-2.5" role="status" data-testid="omara-loading">
+        {busy === "discover" || busy === "import" || busy === "person" ? <div className="mt-3 flex items-center gap-3 rounded-md border border-violet-200 bg-white px-3 py-2.5" role="status" data-testid="omara-loading">
           <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-violet-300 border-t-violet-700" aria-hidden="true" />
           <div className="min-w-0 text-sm">
-            <p className="font-semibold text-foreground-900">{busy === "discover"
+            <p className="font-semibold text-foreground-900">{busy === "person"
+              ? <>Searching the register for <strong>{person.trim()}</strong>…</>
+              : busy === "discover"
               ? <>AI is finding OMARA agents working for {facts.names[0] ? <strong>{facts.names[0]}</strong> : "this business"}…</>
               : "Reading the OMARA links from the register…"}</p>
             <p className="text-xs text-foreground-600">{busy === "discover" ? "Searching the web, then reading each official register page. This can take up to a minute." : "One register page at a time."}</p>

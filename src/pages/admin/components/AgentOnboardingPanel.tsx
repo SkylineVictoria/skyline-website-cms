@@ -65,7 +65,17 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
     throw new Error("Nothing to resend: prepare the application and send it.");
   });
   const draft = current?.stage === "draft" ? current : null;
-  const canPrepare = !!rows && (!current || !!draft) && !business.onboarding?.readyToActivate;
+  // Signed and in force (owner 2026-11-24: "once all sign the application we have to disable"): no new application until it expires.
+  const signedInForce = agreement.status === "signed" && !business.agreement?.expired;
+  const canPrepare = !!rows && (!current || !!draft) && !business.onboarding?.readyToActivate && !signedInForce;
+  // Every signed document of every onboarding in one place: application form, agreement, each referee's check (owner 2026-11-24).
+  const documents = (rows ?? []).flatMap((row) => [
+    ...(["form", "agreement"] as const).filter((k) => row.files[k]).map((k) => ({ row, kind: k as OnboardingFileKind, label: ONBOARDING_FILE_LABEL[k],
+      when: row.applicationSignedAt ?? row.createdAt })),
+    ...row.referees.filter((ref) => ref.files.form).map((ref) => ({ row, kind: `referee:${ref.id}` as OnboardingFileKind,
+      label: `Referee check ${ref.position}${ref.name ? ` (${ref.name})` : ""}${ref.receivedVia === "upload" ? ", uploaded" : ", signed"}`,
+      when: ref.receivedAt ?? row.createdAt })),
+  ]);
   const closePresend = () => {
     setDialog(null);
     if (new URLSearchParams(window.location.search).has("prepare")) { const url = new URL(window.location.href); url.searchParams.delete("prepare"); window.history.replaceState(window.history.state, "", url.toString()); }
@@ -86,11 +96,26 @@ export default function AgentOnboardingPanel({ business, onChanged }: { business
         <div className="flex items-center gap-2">
           {badge}
           {rows && openForm && !business.onboarding?.readyToActivate ? <Button size="sm" variant="outline" icon="ri-mail-send-line" disabled={!!busy} onClick={() => void resendLink()} data-testid="resend-link">{busy === "resend-link" ? "Sending…" : "Resend link"}</Button> : null}
+          {signedInForce && !canPrepare ? <span className="text-xs text-foreground-500" data-testid="prepare-locked">Agreement signed: a new application can be prepared when it expires.</span> : null}
           {canPrepare ? <Button size="sm" icon="ri-edit-box-line" disabled={!!busy} onClick={() => setDialog("presend")} data-testid="prepare-application">{draft ? "Continue preparing" : "Prepare application"}</Button> : null}
         </div>
       </div>
       {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
       {rows === null ? !error && <p className="mt-3 text-sm text-foreground-500">Loading…</p> : null}
+      {documents.length ? <div className="mt-4 grid gap-3 md:grid-cols-2" data-testid="onboarding-documents">
+        {([["signed", "Signed documents", "The application form and the agreement as signed."],
+           ["reference", "Reference documents", "Each referee's signed check, kept when it arrives (approval never waits for it)."]] as const).map(([group, title, hint]) => {
+          const list = documents.filter((d) => (group === "reference") === d.kind.startsWith("referee:"));
+          return <div key={group} className="rounded-lg border border-background-200 p-3">
+            <p className="text-sm font-medium text-foreground-900">{title} ({list.length})</p>
+            <p className="text-xs text-foreground-500">{hint}</p>
+            {list.length ? <ul className="mt-2 divide-y divide-background-200">{list.map((d) => <li key={`${d.row.id}:${d.kind}`} className="flex items-center justify-between gap-3 py-1.5 text-sm">
+              <span className="min-w-0 truncate"><i className="ri-file-pdf-2-line mr-1 text-red-600" aria-hidden="true" />{d.label}<span className="text-xs text-foreground-500"> · {new Date(d.when).toLocaleDateString("en-AU")}</span></span>
+              <Button size="sm" variant="ghost" icon="ri-external-link-line" disabled={busy === `${d.row.id}:${d.kind}`} onClick={() => void download(d.row, d.kind, d.label)}>Open</Button>
+            </li>)}</ul> : <p className="mt-2 text-xs text-foreground-500">{group === "reference" ? "No referee has replied yet." : "Nothing signed yet."}</p>}
+          </div>;
+        })}
+      </div> : null}
       {draft ? <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" data-testid="onboarding-draft">
         <p className="font-medium">Not sent yet: nothing has been emailed to {draft.agent.name} ({draft.agent.email}).</p>
         <p className="mt-1">Prepare the application: check and fill in the business details, set the agreement's terms and, if you like, add the SLIT witness (the agency admin adds their own witness when signing). Then send it to the point of contact to sign once (application form and agreement together).

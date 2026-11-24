@@ -4937,3 +4937,15 @@ test("Business Documents tab: Send for signature to the business (agency admin f
   // The signer fills in from the record (subject_values), so nobody types the agency admin's email.
   assert.ok(read("src/pages/admin/components/signing/ComposeRequest.tsx").includes("i === 0 && !r.name && !r.email ? { ...r, name: s.name, email: s.email } : r"));
 });
+
+test("Portal: the business admin agent invites their own agents (Users › Your agents); Onboarding agents of an active business can be invited, Inactive cannot", () => {
+  const sql = read("supabase/migrations/20261124213517_portal_agent_invites.sql").replace(/\r\n/g, "\n");
+  assert.match(sql, /elsif c->>'role' = 'agency_admin' then v_agency := \(c->>'agencyId'\)::uuid;\n else raise exception 'Only the business admin agent can invite agents\.'/);
+  assert.ok(sql.includes("g.status in ('Inactive', 'Declined')") && sql.includes("where business_id = v_agency and email = v_email and status = 'Onboarding'"));
+  // The business must still be operational (signed agreement) before anyone is invited.
+  assert.ok(sql.includes("public.agency_effective_status(a) = 'Active'") && sql.includes("hint = 'business_not_operational'"));
+  assert.ok(sql.includes("and (inv.invited_by = p_actor or inv.role in ('agent', 'agency_admin'))"));
+  const data = read("src/pages/agency/lib/portalData.ts");
+  assert.ok(data.includes('if (a.hasLogin) return { label: "Can sign in"') && data.includes('return { label: "Not invited yet", tone: "warn", action: "invite" }'));
+  assert.ok(read("src/pages/agency/users/page.tsx").includes("{!isSlit ? <BusinessAgentInvites"));
+});

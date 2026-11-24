@@ -8,6 +8,7 @@ import type { PortalAgency } from "@/pages/agency/lib/portalAuthContext";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { usePortalAuth } from "../lib/portalAuthContext";
 import InstitutionAgents from "../components/InstitutionAgents";
+import BusinessAgentInvites from "../components/BusinessAgentInvites";
 import { canManagePortalUsers } from "../lib/applicationAccess";
 import { useToast } from "../components/Dialog";
 import { ConfirmUserDialog, UserDialog } from "../components/UserDialog";
@@ -199,6 +200,9 @@ function LegacyUsersPage() {
           {inviteLink ? <p className="mt-2 break-all rounded border border-secondary-200 bg-background-50 px-2 py-1.5 font-mono text-xs text-foreground-700">{inviteLink}</p> : null}
         </div>
       ) : null}
+
+      {/* PORTAL-AGENT-INVITES (2026-11-24): the business admin agent invites their own agents from the business's agent list. */}
+      {!isSlit ? <BusinessAgentInvites onSent={(m) => { show(m); void load(); }} /> : null}
 
       {invitations.length > 0 ? (
         <div className="mt-6 overflow-hidden rounded-card border border-background-200 bg-background-50">

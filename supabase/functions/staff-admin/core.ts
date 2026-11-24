@@ -453,8 +453,9 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       // Admin and state first, with the caller's JWT: a non-admin or a wrong state never gets a file stored.
       const before = await deps.adminRpc("hr_admin_staff_detail", { p_id: profileId });
       if (before.error) return fromDb(before.error);
-      if ((before.data as { profile?: { status?: string } } | null)?.profile?.status !== "documents_submitted") {
-        return { status: 400, body: { error: "Upload an offer once the documents are submitted (withdraw a sent offer first)." } };
+      // OFFER-BEFORE-DOCUMENTS-FIX: an offer may be uploaded before the documents too (Applied / Invited).
+      if (!["applied", "invited", "documents_submitted"].includes(String((before.data as { profile?: { status?: string } } | null)?.profile?.status))) {
+        return { status: 400, body: { error: "Upload an offer while the person is being onboarded (withdraw a sent offer first)." } };
       }
       const checked = await deps.inspectOffer(file.bytes);
       if (!checked.ok) return { status: 400, body: { error: checked.error, field: "file" } };

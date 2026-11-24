@@ -3348,7 +3348,8 @@ test("staff-admin offer upload: admin and state first, PDF checked before storag
   assert.deepEqual([r.status, r.body.error, r.body.field], [400, offerPdf.OFFER_ENCRYPTED, "file"], "the admin is told why");
   assert.ok(!run.names().includes("upload"), "nothing is stored");
 
-  run = adminDeps({ file, db: { hr_admin_staff_detail: { data: { profile: { status: "invited" } } } } });
+  // OFFER-BEFORE-DOCUMENTS-FIX: Invited may get an offer now; a sent offer still cannot be replaced by an upload.
+  run = adminDeps({ file, db: { hr_admin_staff_detail: { data: { profile: { status: "offer_sent" } } } } });
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, run.deps)).status, 400);
   assert.ok(!run.names().includes("upload"), "wrong state: nothing stored");
   run = adminDeps({ file, db: { hr_admin_staff_detail: { error: { code: "42501", message: "Only an administrator can do this." } } } });
@@ -5032,4 +5033,11 @@ test("Offer declined (2026-11-24): HR is emailed with the person's reason", () =
   assert.ok(mail.text.includes("Reason: Took another role") && mail.text.includes("https://site.example/admin/staff/employees/p-1"));
   assert.ok(hrMail.renderHrEmail("admin_offer_declined", { name: "Ann", email: "a@x.test" }, {} as never)!.text.includes("Reason: none given"));
   assert.ok(read("supabase/functions/staff-onboarding/index.ts").includes('action === "offer_decline") && result.status === 200'));
+});
+
+test("Offer before documents fix (2026-11-24): the letter is made from Applied / Invited without approved documents", () => {
+  const sql = read("supabase/migrations/20261125000517_offer_before_documents_fix.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("v_problem := case when v_status in ('applied', 'invited') then hr.onboarding_pay_problem(p_id)"));
+  assert.ok(sql.includes("if p.status not in ('applied', 'invited', 'documents_submitted') then raise exception 'Prepare an offer"));
+  assert.ok(read("supabase/functions/staff-admin/core.ts").includes('if (!["applied", "invited", "documents_submitted"].includes(String((before.data'));
 });

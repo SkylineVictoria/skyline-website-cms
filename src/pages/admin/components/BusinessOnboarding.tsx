@@ -53,7 +53,10 @@ export default function BusinessOnboarding({ business, onChanged, part = "onboar
         ) : docs ? <p className="mt-3 text-sm text-foreground-600">No signed copy uploaded.</p> : null}
       </details>
 
-      {contact ? <SubjectSigningPanel type="agent" id={contact.agentId} name={contact.name} /> : null}
+      {/* Send for signature (2026-11-24): amendments and other documents to the business; the agency admin is filled in as the signer. */}
+      <SubjectSigningPanel type="agency" id={business.id} name={business.name} alsoAgentId={contact?.agentId}
+        title="Send for signature" buttonLabel="Send for signature"
+        intro={`Amendments and other documents for ${business.name} to sign online. ${contact ? `${contact.name} (${contact.email}) is filled in as the signer` : "The agency admin is filled in as the signer"}; upload a PDF or use an agency template, place the fields, send.`} />
       </>}
     </div>
   );

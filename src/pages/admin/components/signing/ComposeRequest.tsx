@@ -33,17 +33,20 @@ const needsApplication = (t: SigningTemplate) => t.category === LETTER_CATEGORY;
  * Prepare a signing request: a template (its variables filled from the chosen student, employee or agent) or a ready-made PDF, one or more
  * recipients in order, the signing order, expiry, reminders and a message. It is saved as a draft; nothing is emailed until it is sent.
  */
-export default function ComposeRequest({ templates, templatesLoading = false, preset, onClose, onCreated, onOfferSent }: {
+export default function ComposeRequest({ templates, templatesLoading = false, preset, initialSource = "template", onClose, onCreated, onOfferSent }: {
   templates: SigningTemplate[];
   /** The page is still loading its templates: "Loading templates…", never the empty-state message. */
   templatesLoading?: boolean;
-  preset?: SubjectPreset; onClose: () => void;
+  preset?: SubjectPreset;
+  /** Where the form starts: a saved template, or a one-time PDF (the business Documents tab when no agency template exists, 2026-11-24). */
+  initialSource?: "template" | "upload";
+  onClose: () => void;
   /** `warning`: the request exists, but something after it (changing its payment) failed. */
   onCreated: (request: SigningRequest, warning?: string) => void;
   /** An offer letter prepared from an application was sent (the offer flow made the request); without it the dialog just closes. */
   onOfferSent?: (message: string) => void;
 }) {
-  const [source, setSource] = useState<"template" | "upload">("template");
+  const [source, setSource] = useState<"template" | "upload">(initialSource);
   const [templateId, setTemplateId] = useState(""); const [file, setFile] = useState<File | undefined>(); const [title, setTitle] = useState("");
   const [category, setCategory] = useState("other");
   const [subjectType, setSubjectType] = useState<"" | SubjectPreset["type"]>(preset?.type ?? ""); const [subjectId, setSubjectId] = useState(preset?.id ?? "");

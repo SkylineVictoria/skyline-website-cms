@@ -4927,3 +4927,13 @@ test("Business Documents tab (2026-11-24): upload / view / resend / change email
   assert.ok(ui.includes("Resend application") && ui.includes("Email signed copy") && ui.includes("Last sent") && ui.includes("Other documents") && ui.includes('aria-label="Change email"'));
   assert.ok(read("src/pages/admin/lib/agentOnboarding.ts").includes("export async function viewOnboardingFile"));
 });
+
+test("Business Documents tab: Send for signature to the business (agency admin filled in as the signer; one-time PDF when no agency template)", () => {
+  const tab = read("src/pages/admin/components/BusinessOnboarding.tsx");
+  assert.ok(tab.includes('<SubjectSigningPanel type="agency" id={business.id}') && tab.includes("alsoAgentId={contact?.agentId}") && tab.includes('buttonLabel="Send for signature"'));
+  const panel = read("src/pages/admin/components/signing/SubjectSigningPanel.tsx");
+  assert.ok(panel.includes('setSource(list.some((t) => t.status === "active" && t.kind !== "email" && (t.audience === "any" || t.audience === type)) ? "template" : "upload")'));
+  assert.ok(panel.includes('initialSource={source}') && read("src/pages/admin/components/signing/ComposeRequest.tsx").includes('useState<"template" | "upload">(initialSource)'));
+  // The signer fills in from the record (subject_values), so nobody types the agency admin's email.
+  assert.ok(read("src/pages/admin/components/signing/ComposeRequest.tsx").includes("i === 0 && !r.name && !r.email ? { ...r, name: s.name, email: s.email } : r"));
+});

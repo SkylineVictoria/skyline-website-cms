@@ -1,5 +1,6 @@
 // Documents & Signatures (SIGN-01, SIGN-02). verify_jwt stays on: an administrator calls with their session, a link holder with the public
 // anon key plus the token of their emailed link, and the scheduled job with the service-role key. All logic is in core.ts.
+import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { loadLetterhead } from "../_shared/letterhead.ts";
 import { readHrMailConfig, selectHrMailProvider } from "../_shared/hr-mail.ts";
@@ -54,6 +55,23 @@ Deno.serve(async (req) => {
       signedUrl: async (path, seconds, name) => { const { data, error } = await bucket.createSignedUrl(path, seconds, name ? { download: name } : undefined); return error || !data ? null : data.signedUrl; },
     },
     letterhead: () => loadLetterhead(service),
+    portalAccount: {
+      create: async (email, name, password) => {
+        const found = await findAuthUserByEmail(service, email);
+        if (found.error) throw new Error(found.error);
+        if (found.user) return "exists";
+        const { error } = await service.auth.admin.createUser({ email, password, email_confirm: true,
+          user_metadata: { name, portal_password_set_at_signing: new Date().toISOString() } });
+        if (error) { if (/already|exists|registered/i.test(error.message)) return "exists"; throw new Error(error.message); }
+        return "created";
+      },
+      setAtSigning: async (email) => {
+        const found = await findAuthUserByEmail(service, email.toLowerCase());
+        if (!found.user) return false;
+        const { data } = await service.auth.admin.getUserById(found.user.id);
+        return !!(data?.user?.user_metadata as Record<string, unknown> | undefined)?.portal_password_set_at_signing;
+      },
+    },
     mail,
     abr: { guid: Deno.env.get("EF_ABR_GUID") || Deno.env.get("ABR_GUID") || "" },
     // Fallback only: the Google Maps key saved in Integrations > Connections (Vault) wins (core.ts placesKey).

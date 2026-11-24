@@ -1031,6 +1031,21 @@ const base64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).rep
 export async function sendSetPasswordEmail(ports: SigningPorts, inv: { invitationId: string; email: string; name: string; role: string; agencyName: string; expiresAt: string | null; kind?: "business" | "member" }): Promise<boolean> {
   const { provider, config } = ports.mail;
   if (!provider || !config.from || !config.siteUrl) return false;
+  // The password was chosen while signing the application (2026-11-24): the invitation is unlocked now (the signing link already proved
+  // the email) and the email says "sign in with your email and password", with no set-password link.
+  if (inv.kind !== "member" && ports.portalAccount && await ports.portalAccount.setAtSigning(inv.email).catch(() => false)) {
+    let unlocked = false;
+    try { await serviceRpc(ports, "portal_invitation_preconfirm", { p_invitation: inv.invitationId }); unlocked = true; } catch { unlocked = false; }
+    if (unlocked) {
+      const login = `${config.siteUrl.replace(/\/+$/, "")}/agency/login`;
+      const sent = outcomeState(await provider.send({ deliveryId: `onboarding-activation-${inv.invitationId}-signin`, from: config.from, to: inv.email,
+        subject: `${text(inv.agencyName, 100)} is active: sign in to the Skyline agent portal`,
+        textBody: `Hello ${text(inv.name, 80) || "there"},\n\nYour agent agreement with Skyline Institute of Technology is signed and ${text(inv.agencyName, 120)} is now active. `
+          + `You are the business admin agent for it.\n\nSign in to the agent portal with your email (${inv.email}) and the password you created when you signed the application:\n${login}\n\n`
+          + "Forgot it? Choose Forgot password on the sign-in page." + SIGN_OFF }));
+      return sent.state === "sent";
+    }
+  }
   const token = base64Url(crypto.getRandomValues(new Uint8Array(32)));
   const hash = await sha256Hex(new TextEncoder().encode(token));
   await serviceRpc(ports, "portal_invitation_link_issue", { p_invitation: inv.invitationId, p_token_hash: hash });

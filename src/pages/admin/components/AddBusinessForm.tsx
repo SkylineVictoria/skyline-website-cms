@@ -230,11 +230,22 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     setPhoneKey(k => k + 1);
     setAdminAsk({ then: "none" });
   };
-  const addNewPerson = (name: string) => {
+  // Add new person (owner 2026-11-24: "add name, email and phone in one shot"): one popup with all three that also confirms the Admin.
+  const [newAdmin, setNewAdmin] = useState<null | { name: string; email: string; phone: string; problem: string }>(null);
+  const addNewPerson = (name: string) => setNewAdmin({ name, email: "", phone: "", problem: "" });
+  const saveNewAdmin = () => {
+    if (!newAdmin) return;
+    const name = newAdmin.name.trim().replace(/\s+/g, " "), email = newAdmin.email.trim().toLowerCase();
+    const problem = name.split(" ").length < 2 ? "Enter their first and last name."
+      : !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? "Enter their email address."
+      : !parseStoredPhone(newAdmin.phone)?.national ? "Enter their mobile number."
+      : validateStoredPhone(newAdmin.phone) || "";
+    if (problem) { setNewAdmin({ ...newAdmin, problem }); return; }
     setFullName(name); setAdminMarn(""); setTypedMarn(""); setAdminAuto(null);
-    patch({ businessEmail: "", phone: "", ...(mode !== "abr" ? { primaryContact: name } : {}) });
+    patch({ businessEmail: email, phone: newAdmin.phone, ...(mode !== "abr" ? { primaryContact: name } : {}) });
     setPhoneKey(k => k + 1);
-    setAdminAsk({ then: "none" });
+    setAdminConfirmedFor(`${name.toLowerCase()}|${email}`);
+    setNewAdmin(null);
   };
   // Fill all we can (owner 2026-11-24: "so we don't need to fill up the form manually"): the best-matching registered agent with an email
   // or phone becomes the suggested Admin, once, only while the contact is still empty; Create still asks to confirm.
@@ -629,6 +640,21 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         <Button type="submit" icon="ri-save-line" disabled={saving || lookupLoading || !ready || emailBlocking}>{saving ? "Creating…" : "Create business"}</Button>
         {inDialog ? null : cancel}
       </div>
+      <Modal open={!!newAdmin} title="Add the Admin" onClose={() => setNewAdmin(null)} footer={<div className="flex justify-end gap-2">
+        <Button type="button" variant="secondary" onClick={() => setNewAdmin(null)}>Cancel</Button>
+        <Button type="button" icon="ri-shield-user-line" onClick={saveNewAdmin} data-testid="new-admin-save">Make them the Admin</Button>
+      </div>}>
+        {newAdmin ? <div className="space-y-3 text-sm">
+          <p className="text-foreground-700">This person becomes the business&rsquo;s <strong>Admin</strong>: they get the application form when you press Send, and the sign-in invitation once the business is activated.</p>
+          <Field label="Full name" required><TextInput autoFocus value={newAdmin.name} maxLength={120} onChange={e => setNewAdmin({ ...newAdmin, name: e.target.value, problem: "" })} /></Field>
+          <Field label="Email" required><TextInput type="email" value={newAdmin.email} maxLength={200} onChange={e => setNewAdmin({ ...newAdmin, email: e.target.value, problem: "" })} /></Field>
+          <Field label="Mobile" required>
+            <PhoneInput id="new-admin-phone" name="new_admin_phone" value={newAdmin.phone} required placeholder="041 234 5678"
+              onValueChange={v => setNewAdmin(prev => (prev ? { ...prev, phone: v, problem: "" } : prev))} />
+          </Field>
+          {newAdmin.problem ? <p role="alert" className="text-xs font-medium text-red-700">{newAdmin.problem}</p> : null}
+        </div> : null}
+      </Modal>
       <Modal open={!!adminAsk} title="This person will be the Admin" onClose={() => setAdminAsk(null)} footer={<div className="flex justify-end gap-2">
         <Button type="button" variant="secondary" onClick={() => { setAdminAsk(null); window.setTimeout(() => document.getElementById("add-business-full-name")?.focus(), 0); }}>Choose someone else</Button>
         <Button type="button" icon="ri-shield-user-line" onClick={confirmAdmin} data-testid="admin-confirm">{adminAsk?.then === "submit" ? "Yes, create the business" : "Yes, make them the Admin"}</Button>

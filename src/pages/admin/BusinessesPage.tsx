@@ -1,4 +1,5 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
+import { listOnboarding } from "@/pages/admin/lib/agentOnboarding";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
@@ -32,13 +33,13 @@ export default function BusinessesPage() {
   const isAdmin = isSlitAdmin(user?.role);
   const [deleting, setDeleting] = useState<BusinessRow | null>(null);
   // Active is the default tab; "all" in the address shows every business.
-  const status = values.status === "all" ? "" : values.status === "Inactive" ? "Inactive" : values.status === "Onboarding" ? "Onboarding" : values.status === "Invited" ? "Invited" : values.status === "Pending" ? "Pending" : "Active";
+  const status = values.status === "all" ? "" : values.status === "Inactive" ? "Inactive" : values.status === "Onboarding" ? "Onboarding" : values.status === "Invited" ? "Active" : values.status === "Pending" ? "Pending" : "Active";
   // Invited: active, but nobody in it has signed in yet (its agents are all still invited).
   const [invited, setInvited] = useState<Map<string, DirectoryAgent[]>>(new Map());
   // Pending review: businesses that registered themselves from the sign-in page (migration 119).
   const [pending, setPending] = useState<PendingRegistration[]>([]);
   const [decline, setDecline] = useState<PendingRegistration | null>(null);
-  const countFor = (value: string) => (value === "Active" ? (counts ? Math.max(0, counts.active - invited.size) : null)
+  const countFor = (value: string) => (value === "Active" ? (counts ? counts.active : null)
     : value === "Invited" ? (counts ? invited.size : null) : value === "Pending" ? (counts ? (counts.pending ?? pending.length) : null) : value === "Inactive" ? counts?.inactive
     : value === "Onboarding" ? counts?.onboarding : undefined) ?? null;
   const [rows, setRows] = useState<BusinessRow[]>([]);
@@ -49,12 +50,22 @@ export default function BusinessesPage() {
   const [reload, setReload] = useState(0);
   const [confirm, setConfirm] = useState<BusinessRow | null>(null);
   const [busyId, setBusyId] = useState("");
+  const [refsPending, setRefsPending] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let live = true;
+    const ids = (rows ?? []).filter((r) => r.status === "Active").map((r) => r.id);
+    void Promise.all(ids.map((id) => listOnboarding(id).then((list) => {
+      const latest = list.find((o) => o.kind !== "agent") ?? list[0];
+      return [id, latest ? latest.referees.filter((r) => r.status !== "received" && r.status !== "cancelled").length : 0] as const;
+    }).catch(() => [id, 0] as const))).then((pairs) => { if (live) setRefsPending(Object.fromEntries(pairs)); });
+    return () => { live = false; };
+  }, [rows]);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError("");
-    const split = status === "Active" || status === "Invited";
+    const split = status === "Active";
     const pendingTab = status === "Pending";
     Promise.all([
       split ? listBusinesses({ search: values.q, status: "Active", limit: ACTIVE_LIMIT, offset: 0 })
@@ -70,7 +81,8 @@ export default function BusinessesPage() {
           setRows([]);
           setTotal(pendingList.length);
         } else if (split) {
-          const kept = result.rows.filter((r) => (status === "Invited") === invitedMap.has(r.id));
+          // Owner 2026-11-24: a signed, active business is Active even before its admin sets a password (shown as a sub-status).
+          const kept = result.rows;
           setRows(kept.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
           setTotal(kept.length);
         } else {
@@ -167,7 +179,7 @@ export default function BusinessesPage() {
         <StatusTabs label="Business status" value={status || "all"} onChange={(v) => update({ status: v === "Active" ? "" : v })}
           tabs={[{ id: "all", label: "All", count: counts?.all ?? null }, ...businessStatuses.flatMap((item) => {
             const tab = { id: item.value, label: item.label, count: countFor(item.value) };
-            return item.value === "Active" ? [tab, { id: "Invited", label: "Invited", count: countFor("Invited") }] : [tab];
+            return [tab];
           }), { id: "Pending", label: "Pending review", count: countFor("Pending") }]} />
         <div className="flex-1">
           <SearchBox label="Search businesses" value={values.q} onSearch={(q) => update({ q })} placeholder="Search business, ABN, agent name, MARN, email or phone" />
@@ -226,19 +238,21 @@ export default function BusinessesPage() {
                       {/* Invited is an active business nobody has signed in to yet; it is shown, never chosen. */}
                       {(() => {
                         const isInvited = row.status === "Active" && invited.has(row.id);
-                        const shown = isInvited ? "Invited" : row.status;
+                        const shown = row.status;
+                        const refs = refsPending[row.id] ?? 0;
                         // Onboarding: not a choice; it ends by itself when the agent agreement is signed (or the business is deactivated on its page).
                         if (row.status === "Onboarding") return row.onboardingLabel ? <OnboardingStatusPill label={row.onboardingLabel} /> : <AgencyStatusBadge status="Onboarding" />;
                         return (
                           <>
                             <SearchableSelect id={`business-status-${row.id}`} value={shown} disabled={busyId === row.id}
                               onChange={(e) => { if (e.target.value === "Inactive") setConfirm(row); else if (e.target.value === "Active" && row.status !== "Active") void change(row, "Active"); }}
-                              className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${isInvited ? "border-amber-200 bg-amber-50 text-amber-900" : row.status === "Active" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-background-300 bg-background-100 text-foreground-600"}`}>
-                              {isInvited ? <option value="Invited">Invited</option> : null}
+                              className={`cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${row.status === "Active" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-background-300 bg-background-100 text-foreground-600"}`}>
                               {dropdownStatuses.map((item) => (
-                                <option key={item.value} value={item.value} disabled={isInvited && item.value === "Active"}>{busyId === row.id && item.value === shown ? "Saving…" : item.label}</option>
+                                <option key={item.value} value={item.value}>{busyId === row.id && item.value === shown ? "Saving…" : item.label}</option>
                               ))}
                             </SearchableSelect>
+                            {isInvited ? <p className="mt-1.5 whitespace-nowrap text-2xs font-medium text-amber-700">Sign-in invitation sent</p> : null}
+                            {row.status === "Active" && refs > 0 ? <p className="mt-0.5 whitespace-nowrap text-2xs font-medium text-sky-800" data-testid={`refs-pending-${row.id}`}>Reference check pending ({refs})</p> : null}
                             {isInvited ? (
                               <button type="button" disabled={busyId === row.id} onClick={() => void resend(row)}
                                 className="mt-1.5 flex cursor-pointer items-center gap-1 whitespace-nowrap text-xs font-semibold text-primary-700 hover:underline disabled:cursor-not-allowed disabled:opacity-60">

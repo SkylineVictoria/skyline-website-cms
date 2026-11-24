@@ -154,6 +154,8 @@ export const SCREEN_RULES = [
   "cms.letter_picture_limit_mib",
   "cms.word_import_limit_mib",
   "general.time_zone",
+  "agents.contact_title_default",
+  "agents.contact_position_default",
 ] as const;
 
 let values: Record<string, unknown> = {};

@@ -543,6 +543,12 @@ select public.business_rule_add_setting('booking.guest_bookings_per_hour', 'Book
 select public.business_rule_add_setting('booking.slot_lookup_days', 'Days of free times listed', 'Other',
   'bookings', 'booking', 'json', '{"default":31,"max":62}'::jsonb, '{"keys":["default","max"]}'::jsonb,
   'Free booking times are listed for this many days (default) and never more than max days from the day asked for.', '[]'::jsonb);
+select public.business_rule_add_setting('agents.contact_title_default', 'Agent application: Title starts at', 'Agents',
+  'agency_agents', 'agent_onboarding', 'dropdown', '"Mr"'::jsonb, '{"allowed":["Mr","Mrs","Ms","Miss","Dr","Other"]}'::jsonb,
+  'The Title a blank agency contact starts with on the Agent Application Form (staff and the agency can change it).', '["Mr","Mrs","Ms","Miss","Dr","Other"]'::jsonb);
+select public.business_rule_add_setting('agents.contact_position_default', 'Agent application: Position starts at', 'Agents',
+  'agency_agents', 'agent_onboarding', 'dropdown', '"Director"'::jsonb, '{"allowed":["CEO","Director","Manager","Owner"]}'::jsonb,
+  'The Position a blank agency contact starts with on the Agent Application Form (staff and the agency can change it).', '["CEO","Director","Manager","Owner"]'::jsonb);
 select public.business_rule_add_setting('booking.history_days', 'Past bookings shown for', 'Other',
   'bookings', 'booking', 'days', '30'::jsonb, '{"min":1,"max":365}'::jsonb,
   'The Bookings page lists past and cancelled bookings from this many days back.', '[]'::jsonb);

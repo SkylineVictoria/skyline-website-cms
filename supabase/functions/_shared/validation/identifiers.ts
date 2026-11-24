@@ -32,14 +32,34 @@ export function hasForbiddenUsiCharacter(raw: string): boolean {
   return [...normalizeUsi(raw)].some((char) => !USI_ALPHABET.includes(char));
 }
 
-/**
- * Format check only. The 10th character is a check character, but the official algorithm is issued by the USI Registry on request
- * and has not been verified here, so it is deliberately not checked. Blank is valid (optional for offshore students).
- */
+/** The check-character alphabet in the Registry's own order (USI Developers Kit V5, "USI CHECK CHARACTER ALGORITHM"). */
+const USI_CHECK_CHARS = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+export const USI_CHECK_MESSAGE = "This USI is not valid: one of its characters is wrong (the last character is a check character). Check it against the student's USI.";
+
+/** The 10th character for the first nine (Luhn mod N, n = 32), or "" when a character is outside the alphabet. */
+export function usiCheckCharacter(first9: string): string {
+  const text = String(first9 ?? "").toUpperCase();
+  const n = USI_CHECK_CHARS.length;
+  let factor = 2, sum = 0;
+  for (let i = text.length - 1; i >= 0; i--) {
+    const codePoint = USI_CHECK_CHARS.indexOf(text[i]);
+    if (codePoint < 0) return "";
+    let addend = factor * codePoint;
+    factor = factor === 2 ? 1 : 2;
+    addend = Math.floor(addend / n) + (addend % n);
+    sum += addend;
+  }
+  return USI_CHECK_CHARS[(n - (sum % n)) % n];
+}
+
+/** Format only: 10 characters from the USI alphabet. Blank is valid (optional for offshore students). The check character is
+ *  not enforced (owner, 2026-11-23: "remove validation rule"); the USI Registry still confirms a USI when it is verified.
+ *  usiCheckCharacter stays for anyone who wants to warn about it. */
 export function validateUsi(raw: string): string {
   const text = String(raw ?? "").toUpperCase().replace(/[\s-]/g, "");
   if (!text) return "";
-  return text.length === USI_LENGTH && [...text].every((char) => USI_ALPHABET.includes(char)) ? "" : USI_FORMAT_MESSAGE;
+  if (text.length !== USI_LENGTH || ![...text].every((char) => USI_ALPHABET.includes(char))) return USI_FORMAT_MESSAGE;
+  return "";
 }
 
 /* ------------------------------------------------------------------- Phones */

@@ -349,7 +349,7 @@ export default function AgencyWorkspacePage() {
                                     {a.intake ? <span className="text-xs text-foreground-500">{a.intake}</span> : null}
                                     <span className="text-xs text-foreground-400">{a.reference}</span>
                                     <span className="ml-auto">
-                                      <StatusBadge status={a.status} />
+                                      {a.status === "draft" ? <span className="font-semibold text-primary-700">Finish Application</span> : <StatusBadge status={a.status} />}
                                     </span>
                                   </Link>
                                 </li>

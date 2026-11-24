@@ -59,14 +59,21 @@ export default function RuleEditor({ initial, rule, version, existingApprovalReq
     {version && <div className="mb-3 flex flex-wrap gap-2"><Badge>Version {version.version} · {version.state}</Badge>{version.origin === "migration" && <Badge tone="warn">Migration default · review required</Badge>}</div>}
     <div className="space-y-3">
       <Field label="Rule name" required><TextInput value={d.name} onChange={e => update({ name: e.target.value })} /></Field>
+      <Field label="Category" required><Select value={d.category_id} onChange={e => update({ category_id: e.target.value })}><option value="">Choose category</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</Select></Field>
+      <Field label="Description"><TextArea rows={2} value={d.description} onChange={e => update({ description: e.target.value })} /></Field>
+      <Field label="Value"><ValueControl key={d.value_type} definition={definition} update={update} /></Field>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Effective from" required><TextInput type="date" value={d.starts_on} onChange={e => update({ starts_on: e.target.value })} /></Field>
+        <Field label="Effective through"><TextInput type="date" value={d.ends_on} onChange={e => update({ ends_on: e.target.value })} /></Field>
+      </div>
+      <label className="flex gap-2"><input type="checkbox" checked={d.enabled} onChange={e => update({ enabled: e.target.checked })} />Active when published</label>
+      {/* // rule-policy: technical developer-options Technical fields stay available but folded away for everyday admins. */}
+      <details className="rounded-md border border-background-200 p-3"><summary className="cursor-pointer text-sm font-medium text-foreground-700">Developer options</summary><div className="mt-3 space-y-3">
       <Field label="Unique identifier" required><TextInput value={d.identifier} disabled={!!rule} onChange={e => update({ identifier: e.target.value })} /></Field>
       <Field label="Admin menu" required><Select value={d.scope} disabled={!!rule?.registration} onChange={e => update({ scope: e.target.value, groups: [] })}><option value="">Choose menu</option>{locations.map(location => <option key={location.id} value={location.id}>{locationLabel(locations, location.id)}</option>)}</Select></Field>
-      <Field label="Category" required><Select value={d.category_id} onChange={e => update({ category_id: e.target.value })}><option value="">Choose category</option>{categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}</Select></Field>
       <Field label="Entity" required><TextInput value={d.entity} disabled={!!rule?.registration} onChange={e => update({ entity: e.target.value })} /></Field>
-      <Field label="Description"><TextArea rows={2} value={d.description} onChange={e => update({ description: e.target.value })} /></Field>
       <Field label="Value type"><Select value={d.value_type} disabled={!!rule?.registration} onChange={e => update({ value_type: e.target.value, value: null })}>{valueTypes.map(type => <option key={type}>{type}</option>)}</Select></Field>
       {["dropdown", "multiple selection"].includes(d.value_type) && <Field label="Options" hint="One option per line"><TextArea value={optionsText} onChange={e => { setOptionsText(e.target.value); update({ options: choices(e.target.value) }); }} /></Field>}
-      <Field label="Value"><ValueControl key={d.value_type} definition={definition} update={update} /></Field>
       <fieldset className="space-y-2 rounded-md border border-background-200 p-3">
         <legend className="font-semibold">IF</legend>
         <Field label="Match condition groups"><Select value={d.match} onChange={e => update({ match: e.target.value as Definition["match"] })}><option value="all">All groups (AND)</option><option value="any">Any group (OR)</option></Select></Field>
@@ -99,12 +106,7 @@ export default function RuleEditor({ initial, rule, version, existingApprovalReq
       </fieldset>
       <Field label="THEN"><Select value={d.then_action} onChange={e => update({ then_action: e.target.value })}><option value="use_value">Apply rule value</option><option value="none">No action</option></Select></Field>
       <Field label="ELSE"><Select value={d.else_action} onChange={e => update({ else_action: e.target.value })}><option value="none">No action</option><option value="use_value">Apply rule value</option></Select></Field>
-      <div className="grid grid-cols-2 gap-2">
-        <Field label="Effective from" required><TextInput type="date" value={d.starts_on} onChange={e => update({ starts_on: e.target.value })} /></Field>
-        <Field label="Effective through"><TextInput type="date" value={d.ends_on} onChange={e => update({ ends_on: e.target.value })} /></Field>
-      </div>
       <Field label="Priority"><TextInput type="number" step="1" value={d.priority} onChange={e => update({ priority: Number(e.target.value) })} /></Field>
-      <label className="flex gap-2"><input type="checkbox" checked={d.enabled} onChange={e => update({ enabled: e.target.checked })} />Active when published</label>
       <label className="flex gap-2"><input type="checkbox" checked={d.approval_required} onChange={e => update({ approval_required: e.target.checked })} />Require a second administrator</label>
       <Field label="External source URL"><TextInput type="url" value={d.source_url} onChange={e => update({ source_url: e.target.value })} /></Field>
       <Field label="Compliance notes"><TextArea rows={2} value={d.notes} onChange={e => update({ notes: e.target.value })} /></Field>
@@ -116,6 +118,7 @@ export default function RuleEditor({ initial, rule, version, existingApprovalReq
         <Button size="sm" onClick={() => void test()} disabled={busy}>Preview outcome</Button>
         {result !== undefined && <p role="status" className="break-all">{valueSummary(result)}</p>}
       </div>}
+      </div></details>
       <Field label="Reason for change" required><TextArea rows={2} value={reason} onChange={e => setReason(e.target.value)} /></Field>
       <div className="flex flex-wrap gap-2">
         <Button disabled={busy || !reason.trim()} onClick={() => void submit("save", { ...reasons, definition })}>Save draft</Button>

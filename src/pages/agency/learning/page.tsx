@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import type { Completion } from "@/pages/CertificatePage";
+import { categoryLabel, downloadResource, listResources, type Resource } from "@/pages/admin/lib/bulkResources";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { PageHeading, PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import StudyProgress, { type ProgressCourse } from "@/pages/admin/components/StudyProgress";
+import StudentPracticePage from "@/pages/agency/practice/page";
 import { RateBadge } from "@/pages/admin/lms/AttendanceSummary";
 import type { AttendanceCounts } from "@/pages/admin/lms/attendanceRate";
 
@@ -19,7 +21,22 @@ const size = (n: number | null) => (!n ? "" : n < 1024 * 1024 ? `${Math.max(1, M
 export default function StudentLearningPage() {
   const [courses, setCourses] = useState<Course[] | null>(null);
   const [error, setError] = useState("");
+  const [imports, setImports] = useState<Record<string, Resource[]>>({});
   const [open, setOpen] = useState<string | null>(null);
+  // From Practice › Learn: open this unit's materials and name the topic being revised.
+  const [params, setParams] = useSearchParams();
+  // Learn and Practice on one page (owner, 2026-11-23): ?tab=practice shows the AI practice.
+  const practiceTab = params.get("tab") === "practice";
+  const wantUnit = params.get("unit");
+  const wantTopic = params.get("topic");
+  useEffect(() => {
+    if (!wantUnit || !courses) return;
+    const course = courses.find((c) => c.units.some((u) => u.unitId === wantUnit));
+    if (!course) return;
+    const key = `${course.enrolmentId}:${wantUnit}`;
+    setOpen(key);
+    window.setTimeout(() => document.getElementById(`unit-${wantUnit}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }, [wantUnit, courses]);
   const [certs, setCerts] = useState<Completion[]>([]);
   const [progress, setProgress] = useState<ProgressCourse[]>([]);
   useEffect(() => { void supabase.rpc("student_my_progress").then(({ data }) => { if (data) setProgress(data as ProgressCourse[]); }); }, []);
@@ -36,6 +53,18 @@ export default function StudentLearningPage() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    if (!open) return;
+    const unitId = open.slice(open.indexOf(":") + 1);
+    let active = true;
+    void listResources(unitId).then(rows => {
+      if (active) setImports(old => ({ ...old, [unitId]: rows.filter(r => r.published_at && r.audience === "student_staff") }));
+    }).catch(e => {
+      if (active && !/function.*lms_bulk_resources|schema cache/i.test(String(e))) setError("Published resources could not be loaded.");
+    });
+    return () => { active = false; };
+  }, [open]);
+
   const openFile = async (item: Item) => {
     if (!item.path) return;
     const tab = window.open("", "_blank");
@@ -46,7 +75,17 @@ export default function StudentLearningPage() {
 
   return (
     <div>
-      <PageHeading eyebrow="Learning" title="My learning" description="Notes, files, links and videos for each unit of your course, and your attendance." />
+      <PageHeading eyebrow="Learning" title="My learning" description="Learn from your units' notes, files, links and videos, then practise with questions made from them." />
+      <div className="mt-4 flex w-fit gap-1 rounded-lg border border-background-200 bg-white p-1" role="tablist" aria-label="Learn or practise">
+        {([["learn", "Learn", "ri-book-open-line"], ["practice", "Practice", "ri-focus-3-line"]] as const).map(([id, label, icon]) => {
+          const on = (id === "practice") === practiceTab;
+          return <button key={id} type="button" role="tab" aria-selected={on}
+            onClick={() => { const unit = params.get("unit"); setParams(id === "practice" ? { tab: "practice", ...(unit ? { unit } : {}) } : unit ? { unit } : {}); }}
+            className={`inline-flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-semibold ${on ? "bg-primary-600 text-white" : "text-foreground-700 hover:bg-background-100"}`}>
+            <i className={icon} aria-hidden="true" />{label}</button>;
+        })}
+      </div>
+      {practiceTab ? <div className="mt-5"><StudentPracticePage embedded /></div> : <>
       {error ? <div className="mt-4"><PortalError message={error} onRetry={() => void load()} /></div> : null}
       {courses === null && !error ? <PortalLoading label="Loading your courses…" /> : null}
       {courses && !courses.length ? <PortalEmpty icon="ri-book-open-line" title="No course yet" message="Once you are enrolled in a class, your units and learning materials appear here." /> : null}
@@ -85,18 +124,28 @@ export default function StudentLearningPage() {
                   const key = `${c.enrolmentId}:${u.unitId}`;
                   const isOpen = open === key;
                   return (
-                    <li key={key}>
+                    <li key={key} id={`unit-${u.unitId}`} className={wantUnit === u.unitId ? "bg-primary-50/50" : undefined}>
                       <button type="button" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : key)}
                         className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-background-100">
                         <span className="min-w-0">
                           <span className="block font-semibold text-foreground-950">{u.code ? `${u.code} ` : ""}{u.name}</span>
-                          <span className="block text-xs text-foreground-500">{u.startDate ? `${fmt(u.startDate)} – ${fmt(u.endDate)} · ` : ""}{u.items.length} item{u.items.length === 1 ? "" : "s"}</span>
+                          <span className="block text-xs text-foreground-500">{u.startDate ? `${fmt(u.startDate)} – ${fmt(u.endDate)} · ` : ""}{u.items.length + (imports[u.unitId]?.length ?? 0)} items</span>
                         </span>
                         <i className={isOpen ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" />
                       </button>
                       {isOpen ? (
                         <div className="space-y-3 px-4 pb-4">
-                          {!u.items.length ? <p className="text-sm text-foreground-500">Your trainer has not added materials for this unit yet.</p> : u.items.map((it) => (
+                          {wantUnit === u.unitId && wantTopic ? <p className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-foreground-800">
+                            <i className="ri-lightbulb-line mr-1 text-primary-700" aria-hidden="true" />Revising <b>{wantTopic}</b>: read the materials below, then go back to practise.</p> : null}
+                          <Link className="inline-flex items-center gap-1 rounded-md border border-primary-200 px-3 py-1.5 text-sm font-semibold text-primary-800 dark:text-primary-300"
+                            to={`/agency/learning?tab=practice&unit=${encodeURIComponent(u.unitId)}`}><i className="ri-focus-3-line" aria-hidden="true" />Practise this unit</Link>
+                          {(imports[u.unitId] ?? []).map(resource => <div key={resource.id} className="rounded-lg border border-background-200 bg-white p-3">
+                            <p className="text-xs text-foreground-600">{categoryLabel(resource.category)}</p>
+                            <p className="font-semibold text-foreground-900">{resource.title}</p>
+                            <button type="button" className="mt-2 text-sm font-semibold text-primary-700 underline"
+                              onClick={() => void downloadResource(resource.path, resource.name).catch(() => setError("This file could not be opened."))}>Open {resource.name}</button>
+                          </div>)}
+                          {!u.items.length && !imports[u.unitId]?.length ? <p className="text-sm text-foreground-500">Your trainer has not added materials for this unit yet.</p> : u.items.map((it) => (
                             <div key={it.id} className="rounded-lg border border-background-200 bg-white p-3">
                               <p className="flex items-center gap-2 font-semibold text-foreground-900"><i className={KIND_ICON[it.kind]} aria-hidden="true" />{it.title}</p>
                               {it.body ? <p className="mt-1 whitespace-pre-wrap text-sm text-foreground-700">{it.body}</p> : null}
@@ -122,6 +171,7 @@ export default function StudentLearningPage() {
           </section>
         ))}
       </div>
+      </>}
     </div>
   );
 }

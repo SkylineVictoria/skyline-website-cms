@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 /**
  * The frame every wizard uses: header (icon, title, one line of text, close), the step pills, the body, the footer and the
@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
 export const WIZARD_PRIMARY_CLASS =
   "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60";
 
-export default function WizardShell({ variant = "modal", title, subtitle, icon = "ri-magic-line", onClose, closeLabel = "Close", stepper, children, footerStart, footerEnd, notices, overlay, stickyFooter = false }: {
+export default function WizardShell({ variant = "modal", title, subtitle, icon = "ri-magic-line", onClose, closeLabel = "Close", stepper, children, footerStart, footerEnd, notices, overlay, stickyFooter = false, wide = false }: {
   /** "modal": a dialog over the page (students). "page": the same card in the page flow (staff link). */
   variant?: "modal" | "page";
   title: ReactNode;
@@ -30,9 +30,13 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
   overlay?: ReactNode;
   /** On a phone the footer (Back / Next) stays at the bottom of the screen as one row (the F04 wizard on the page). */
   stickyFooter?: boolean;
+  /** A wider card (max-w-5xl) for a step that shows a document page (the assessment wizard's Review step). */
+  wide?: boolean;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalIsolation(variant === "modal" ? dialogRef : null);
   const card = (
-    <div className={variant === "modal" ? "relative my-auto w-full max-w-3xl rounded-xl border border-background-200 bg-background-50" : "relative mx-auto w-full max-w-3xl rounded-xl border border-background-200 bg-background-50"}>
+    <div className={`${variant === "modal" ? "relative my-auto" : "relative mx-auto"} w-full ${wide ? "max-w-5xl" : "max-w-3xl"} rounded-xl border border-background-200 bg-background-50 transition-[max-width] duration-200`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-4 border-b border-background-200 p-5 md:p-6">
         <div className="flex items-start gap-3">
@@ -63,7 +67,7 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
       {stepper}
 
       {/* Body */}
-      <div className={variant === "modal" ? "max-h-[62vh] overflow-y-auto p-5 md:p-6" : "p-5 md:p-6"}>{children}</div>
+      <div className={variant === "modal" ? `${wide ? "max-h-[72vh]" : "max-h-[62vh]"} overflow-y-auto p-5 md:p-6` : "p-5 md:p-6"}>{children}</div>
 
       {/* Footer (none when there is nothing to put in it: a done page) */}
       {footerStart == null && footerEnd == null ? null : <div className={stickyFooter
@@ -81,6 +85,7 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
   return (
     <div
       className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-foreground-950/55 p-3 backdrop-blur-sm sm:items-center sm:p-4"
+      ref={dialogRef}
       role="dialog"
       aria-modal="true"
       aria-labelledby="wizard-title"
@@ -88,6 +93,33 @@ export default function WizardShell({ variant = "modal", title, subtitle, icon =
       {card}
     </div>
   );
+}
+
+/**
+ * A modal that really is modal (2026-11-23): while it is open everything else on the page is inert (not focusable, not clickable,
+ * hidden from screen readers), so keyboard users cannot Tab into the page behind (on a draft, the full application form with its own
+ * upload fields). Elements added later (toasts, dialogs the wizard opens) are not touched. Focus moves into the dialog when it opens
+ * and back to where it was when it closes.
+ */
+function useModalIsolation(ref: { current: HTMLElement | null } | null) {
+  useEffect(() => {
+    const dialog = ref?.current;
+    if (!dialog) return undefined;
+    const made: Element[] = [];
+    for (let node: Element | null = dialog; node && node.parentElement && node !== document.body; node = node.parentElement) {
+      for (const sibling of Array.from(node.parentElement.children)) {
+        if (sibling === node || sibling.hasAttribute("inert") || ["SCRIPT", "STYLE", "LINK"].includes(sibling.tagName)) continue;
+        sibling.setAttribute("inert", "");
+        made.push(sibling);
+      }
+    }
+    const before = document.activeElement as HTMLElement | null;
+    if (!dialog.contains(document.activeElement)) dialog.querySelector<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')?.focus();
+    return () => {
+      made.forEach((element) => element.removeAttribute("inert"));
+      if (before && document.contains(before)) before.focus();
+    };
+  }, [ref]);
 }
 
 export function WizardBackButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {

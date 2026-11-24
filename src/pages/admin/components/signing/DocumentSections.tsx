@@ -7,6 +7,7 @@ import { richPlainText, sanitizeRichHtml } from "../../../../../supabase/functio
 import { TEMPLATE_VARIABLES } from "../../../../../supabase/functions/_shared/template-variables";
 import { SECTION_TITLES as TITLES, type Section, type Sections } from "@/lib/templateSections";
 import type { LetterVariable } from "../../../../../supabase/functions/_shared/letter-variables";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 const LETTER_HINT: Record<Section, string> = {
   header: "Printed at the top of every page. A two-column table with its borders off puts the logo (Insert image, or paste) on the left and the office details on the right.",
   body: "The text of the letter. It flows across as many pages as it needs. Insert variables from the list; they print the application's details.",
@@ -90,10 +91,10 @@ export default function DocumentSections({ value, onChange, onError, letterVaria
     const chosen = selected[kind] ?? "";
     return <div className="flex flex-wrap items-end gap-2 rounded-md border border-background-200 bg-background-50 p-2 text-sm" data-testid={`section-tools-${kind}`}>
       <label className="flex flex-col gap-1 text-xs font-medium text-foreground-700">Use preset
-        <select value={chosen} onChange={(e) => { setSelected((s) => ({ ...s, [kind]: e.target.value })); applyPreset(kind, e.target.value); }} className="h-9 rounded border border-background-300 bg-white px-2 text-sm" data-testid={`preset-${kind}`}>
+        <SearchableSelect value={chosen} onChange={(e) => { setSelected((s) => ({ ...s, [kind]: e.target.value })); applyPreset(kind, e.target.value); }} className="h-9 rounded border border-background-300 bg-white px-2 text-sm" data-testid={`preset-${kind}`}>
           <option value="">{parts === null ? "Loading…" : options.length ? `Choose a saved ${kind}` : `No saved ${kind}s yet`}</option>
           {options.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        </SearchableSelect>
       </label>
       {chosen ? <Button variant="outline" size="sm" disabled={busy} onClick={() => void removePreset(kind, chosen)}>Delete this preset</Button> : null}
       <Button variant="outline" size="sm" disabled={busy || !sectionFilled(value[`${kind}_html`])} onClick={() => clearSection(kind)} data-testid={`section-clear-${kind}`}>Clear</Button>

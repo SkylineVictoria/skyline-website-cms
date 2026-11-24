@@ -162,8 +162,8 @@ export async function appToken(ports: Ports) {
   return t.access_token as string;
 }
 export function graphFor(ports: Ports, token: string) {
-  return (method: string, path: string, body?: unknown, extra: Record<string, string> = {}) => ports.fetch(GRAPH + path, {
-    method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...extra }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20000), redirect: "error" });
+  return (method: string, path: string, body?: unknown, extra: Record<string, string> = {}, encoding: "json" | "raw" = "json") => ports.fetch(GRAPH + path, {
+    method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...extra }, body: body === undefined ? undefined : encoding === "raw" ? String(body) : JSON.stringify(body), signal: AbortSignal.timeout(20000), redirect: "error" });
 }
 export type Graph = ReturnType<typeof graphFor>;
 const SELECT = "$select=id,userPrincipalName,mail,displayName,accountEnabled";

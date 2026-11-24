@@ -69,10 +69,36 @@ let mailInstitution = "Skyline Institute of Technology";
 export function setMailInstitution(name: unknown) { const n = typeof name === "string" ? oneLine(name, 120) : ""; if (n) { mailInstitution = n; setEmailBranding({ name: n }); } }
 const signOff = () => `\n\n${mailInstitution}\nThis is an automated message.`;
 
+export const DOCUMENT_INVITE_SUBJECT = "Welcome to Skyline Institute of Technology: your documents";
+const esc = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+/** The welcome email body for a new employee's document link (inside emailHtmlDocument). Every value is escaped. */
+export function documentInviteHtml(name: string, link: string, until: string): string {
+  const first = esc(name.split(" ")[0] || name);
+  const url = esc(link);
+  const step = (n: number, title: string, text: string) =>
+    `<tr><td style="padding:6px 12px 6px 0;vertical-align:top"><span style="display:inline-block;width:26px;height:26px;border-radius:13px;background:#fdebdc;color:#c2510f;font-weight:700;text-align:center;line-height:26px">${n}</span></td>` +
+    `<td style="padding:6px 0"><strong style="color:#1f2933">${title}</strong><br><span style="color:#52606d">${text}</span></td></tr>`;
+  // The branded layout (htmlEmailDocument) draws the logo header; this body starts with the greeting.
+  return `<p style="margin:0 0 6px;font-size:22px;font-weight:700;color:#1f2933">Welcome aboard, ${first}! &#127881;</p>` +
+    `<p style="margin:0 0 18px;color:#52606d">We are delighted to have you joining our team. To get you started, we just need a few documents from you.</p>` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 22px">` +
+    step(1, "Open your private link", "No account or password needed.") +
+    step(2, "Upload your documents", "Passport or ID, visa if you have one, and your qualifications.") +
+    step(3, "Check your details", "We read your documents and fill in most of it for you.") +
+    `</table>` +
+    `<p style="margin:0 0 22px;text-align:center"><a href="${url}" style="display:inline-block;background:#ea6619;color:#ffffff;text-decoration:none;font-weight:700;padding:13px 26px;border-radius:8px">Upload my documents</a></p>` +
+    // rule-policy: technical email-wording Shows the existing invite expiry; no new rule.
+    `<p style="margin:0 0 6px;font-size:13px;color:#7b8794">It takes about 10 minutes. The link works until ${esc(until)} and is just for you, so please do not forward it.</p>` +
+    `<p style="margin:0 0 20px;font-size:13px;color:#7b8794">Button not working? Copy this address into your browser:<br><span style="word-break:break-all;color:#c2510f">${url}</span></p>` +
+    `<p style="margin:0;color:#1f2933">We look forward to working with you.<br><strong>The Skyline team</strong></p>` +
+    `<p style="margin:18px 0 0;font-size:12px;color:#9aa5b1">This is an automated message from Skyline Institute of Technology.</p>`;
+}
+
 export interface RenderContext { siteUrl: string | null; profileId?: string; link?: string; expiresAt?: string; rejected?: Array<{ category: string; note: string }> }
 
 /** Plain-text templates. Applicant mail without a link never contains a URL. */
-export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown>, ctx: RenderContext): { subject: string; text: string } | null {
+export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown>, ctx: RenderContext): { subject: string; text: string; html?: string } | null {
   const name = oneLine(payload.name, 80) || "there";
   const adminLink = ctx.siteUrl && ctx.profileId ? `\n\nOpen the application: ${ctx.siteUrl}/admin/staff/employees/${ctx.profileId}` : "";
   const until = ctx.expiresAt ? new Date(ctx.expiresAt).toUTCString().replace(/ \d\d:\d\d:\d\d GMT$/, "") : "";
@@ -111,8 +137,10 @@ export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown
         text: `Hello ${name},\n\nWe are pleased to offer you a position. Please read your offer letter and, if you accept it, sign it on the page using this private link:\n\n${ctx.link}\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${signOff()}` };
     case "document_invite":
       if (!ctx.link) return null;
-      return { subject: "Next step: your details and documents",
-        text: `Hello ${name},\n\nThank you for applying. Please add your personal details and documents using this private link:\n\n${ctx.link}\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${signOff()}` };
+      return { subject: DOCUMENT_INVITE_SUBJECT,
+        // rule-policy: technical email-wording Welcome email text; the link expiry comes from the existing invite.
+        text: `Hello ${name},\n\nWelcome to Skyline Institute of Technology! We are delighted to have you joining our team.\n\nTo get you started, please upload your documents (passport or ID, visa if you have one, and your qualifications) using this private link:\n\n${ctx.link}\n\nIt takes about 10 minutes. We read your documents and fill in most of your details for you.\n\nThe link works until ${until}. It is personal: please do not forward it. You do not need an account or a password.${signOff()}`,
+        html: documentInviteHtml(name, ctx.link, until) };
     case "reupload_invite": {
       if (!ctx.link) return null;
       const items = (ctx.rejected ?? []).map((r) => `- ${oneLine(r.category, 40)}: ${oneLine(r.note, 300)}`).join("\n");
@@ -178,7 +206,8 @@ export async function sendLinkEmail(provider: EmailProvider | null, config: HrMa
   if (!config.from) return { state: "failed", error: "EF_HR_EMAIL_FROM is not set" };
   // An HRMS template filled for this person (HRMS > Templates), or the built-in text when there is none.
   const builtIn = mail.rendered ? null : renderHrEmail(mail.kind, { name: mail.name }, { siteUrl: config.siteUrl, link: mail.link, expiresAt: mail.expiresAt, rejected: mail.rejected });
-  const message = mail.rendered ? { subject: mail.rendered.subject, text: mail.rendered.text, html: emailHtmlDocument(mail.rendered.html, mail.rendered.subject) as string | undefined } : builtIn ? { ...builtIn, html: undefined as string | undefined } : null;
+  const message = mail.rendered ? { subject: mail.rendered.subject, text: mail.rendered.text, html: emailHtmlDocument(mail.rendered.html, mail.rendered.subject) as string | undefined }
+    : builtIn ? { ...builtIn, html: builtIn.html ? emailHtmlDocument(builtIn.html) : undefined } : null;
   if (!message) return { state: "failed", error: "no template" };
   const mapped = outcomeState(await provider.send({ deliveryId: mail.deliveryId, from: config.from, to: mail.to, subject: message.subject, textBody: message.text, ...(message.html ? { htmlBody: message.html } : {}) }));
   // A link that may or may not have arrived is treated as failed: the caller cancels it and the admin sends a new one.

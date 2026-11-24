@@ -4,6 +4,7 @@ import { checkOffice365Address, createOffice365, fetchEmailPeople, linkOffice365
   useMicrosoft365, usernameProblem, type EmailPerson, type MailboxKind, type Office365Existing, type Office365Lookup } from "@/pages/admin/lib/microsoft365";
 import { formatSignedAt } from "@/lib/signedTime";
 import { ruleText } from "@/lib/businessRules";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /*
  * Administration > Email Management > Create Email (owner 2026-11-20).
@@ -30,9 +31,31 @@ const agentMailboxOffered = () => ruleText("office365.agent_mailbox", "Staff mai
 const MATCH_LABEL: Record<Office365Existing["match"], string> = { linked: "linked to this record", email: "the email on this record", username: "same username", name: "same name" };
 const certain = (e: Office365Existing) => e.match === "linked" || e.match === "email";
 
+/**
+ * The application's "Mark as enrolled" dialog (EnrolMailboxDialog, 2026-11-21) uses this same form: the person type and the person are
+ * given and locked (the CRM student profile linked to the application; never a new record), the outcome is logged on the application
+ * (student-office365 with applicationId), and onCreated / onFailed tell the dialog.
+ */
+export interface CreateEmailFormProps {
+  initialKind?: MailboxKind;
+  /** The person to select once the list has loaded. */
+  personId?: string;
+  /** Search text for the list (the person's name), so the person is in it however many there are. */
+  personQuery?: string;
+  /** Person type and person cannot be changed. */
+  locked?: boolean;
+  applicationId?: string;
+  onCreated?: (email: string) => void;
+  onFailed?: (message: string) => void;
+}
+
 export default function CreateEmailSection() {
+  return <CreateEmailForm />;
+}
+
+export function CreateEmailForm({ initialKind, personId: givenPerson, personQuery = "", locked = false, applicationId, onCreated, onFailed }: CreateEmailFormProps) {
   const { status, loading } = useMicrosoft365();
-  const [kind, setKind] = useState<MailboxKind>("student");
+  const [kind, setKind] = useState<MailboxKind>(initialKind ?? "student");
   const [people, setPeople] = useState<EmailPerson[] | null>(null);
   const [peopleError, setPeopleError] = useState("");
   const [personId, setPersonId] = useState("");
@@ -53,9 +76,19 @@ export default function CreateEmailSection() {
   useEffect(() => {
     if (!status?.connected) return;
     let live = true; setPeople(null); setPeopleError(""); setPersonId("");
-    void fetchEmailPeople(kind).then((rows) => { if (live) setPeople(rows); }, (e: unknown) => { if (live) setPeopleError(e instanceof Error ? e.message : "The people could not be loaded."); });
+    // A given person: searched by name first (the list stops at 200), then without the search (the name on the application may differ).
+    const load = async () => {
+      let rows = await fetchEmailPeople(kind, personQuery);
+      if (givenPerson && personQuery && !rows.some((r) => r.id === givenPerson)) rows = await fetchEmailPeople(kind, "");
+      return rows;
+    };
+    void load().then((rows) => {
+      if (!live) return;
+      setPeople(rows);
+      if (givenPerson) { if (rows.some((r) => r.id === givenPerson)) setPersonId(givenPerson); else setPeopleError("This person's profile was not found in the list."); }
+    }, (e: unknown) => { if (live) setPeopleError(e instanceof Error ? e.message : "The people could not be loaded."); });
     return () => { live = false; };
-  }, [kind, status?.connected, reload]);
+  }, [kind, status?.connected, reload, givenPerson, personQuery]);
   // The Microsoft 365 lookup for the chosen person.
   useEffect(() => {
     setLook(null); setLookError(""); setDifferentPerson(false); setConfirming(false); setResendConfirm(false);
@@ -105,11 +138,13 @@ export default function CreateEmailSection() {
     if (!person || !canCreate) return;
     setBusy("create"); setResult(null);
     try {
-      const r = await createOffice365(kind, person.id, { differentPerson, domain, username });
+      const r = await createOffice365(kind, person.id, { differentPerson, domain, username, ...(applicationId ? { applicationId } : {}) });
       setResult({ tone: "ok", text: `Created ${r.email}.${r.welcomeSent ? " The login details were emailed to the person's own email." : ""}${r.warning ? ` ${r.warning}` : ""}` });
       setReload((n) => n + 1);
+      onCreated?.(r.email);
     } catch (e) {
       setResult({ tone: "error", text: e instanceof Error ? e.message : "The account could not be created." });
+      onFailed?.(e instanceof Error ? e.message : "The account could not be created.");
       // Taken between the check and Create (race): show it on the field; the administrator chooses another username.
       if (e instanceof Office365Refusal && (e.code === "address_in_use" || e.code === "address_reserved")) setAvail({ state: "taken", address: typed });
       if (e instanceof Office365Refusal && e.existing.length) setReload((n) => n + 1);
@@ -135,13 +170,13 @@ export default function CreateEmailSection() {
     <section className={panel}><h2 className="text-lg font-semibold">New email account</h2><p className={"mt-1 " + muted}>Select an existing CRM or HRMS record. No duplicate person records will be created.</p>
       <div className="mt-6 space-y-5">
         <div><label htmlFor="person-type" className="mb-2 block text-sm font-medium">Person type</label>
-          <select id="person-type" className={field} value={kind} onChange={(e) => { setKind(e.target.value as MailboxKind); setResult(null); }} data-testid="email-kind">
-            {(Object.keys(KIND_LABEL) as MailboxKind[]).filter((k) => k !== "agent" || agentMailboxOffered()).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}</select>
+          <SearchableSelect id="person-type" className={field + " disabled:opacity-60"} disabled={locked} value={kind} onChange={(e) => { setKind(e.target.value as MailboxKind); setResult(null); }} data-testid="email-kind">
+            {(Object.keys(KIND_LABEL) as MailboxKind[]).filter((k) => k !== "agent" || agentMailboxOffered()).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}</SearchableSelect>
           <p className="mt-2 text-xs text-foreground-500">{kind === "student" ? "Student accounts: @student.slit.edu.au with Office 365 A1 for students." : "Staff accounts (employees, trainers, agents): @slit.edu.au with Office 365 A1 for faculty."}</p></div>
         <div><label htmlFor="person-record" className="mb-2 block text-sm font-medium">Existing person</label>
-          <select id="person-record" disabled={!status?.connected || !people?.length} className={field + " disabled:opacity-60"} value={personId} onChange={(e) => { setPersonId(e.target.value); setResult(null); }} data-testid="email-person">
+          <SearchableSelect id="person-record" disabled={locked || !status?.connected || !people?.length} className={field + " disabled:opacity-60"} value={personId} onChange={(e) => { setPersonId(e.target.value); setResult(null); }} data-testid="email-person">
             <option value="">{!status?.connected ? (loading ? "Checking Microsoft 365…" : "Needs the Microsoft 365 connection") : peopleError ? "Could not load the list" : people === null ? "Loading…" : people.length ? `Choose a person (${people.length})` : "No people of this type"}</option>
-            {(people ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.email ? ` · ${p.email}` : ""}{p.mailbox ? " · has Microsoft 365" : ""}</option>)}</select>
+            {(people ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.email ? ` · ${p.email}` : ""}{p.mailbox ? " · has Microsoft 365" : ""}</option>)}</SearchableSelect>
           {peopleError ? <p role="alert" className="mt-2 text-xs text-red-700">{peopleError}</p> : null}
           <p className="mt-2 text-xs text-foreground-500">Source: existing {kind === "student" ? "CRM student" : kind === "agent" ? "CRM agent" : "HRMS staff"} profiles</p></div>
 
@@ -187,8 +222,8 @@ export default function CreateEmailSection() {
               placeholder={look ? (possible.length && !differentPerson ? "Choose above first" : "firstname.lastname") : "firstname.lastname"} data-testid="email-username" />
             <span className="flex items-center border-l border-background-200 px-2 text-sm text-foreground-600">@</span>
             <label htmlFor="email-domain" className="sr-only">Domain</label>
-            <select id="email-domain" className="border-l border-background-200 bg-white px-2 text-sm disabled:opacity-60" value={domain} disabled={!domains.length} onChange={(e) => setDomain(e.target.value)} data-testid="email-domain">
-              {domains.length ? domains.map((d) => <option key={d} value={d}>{d}</option>) : <option value="">{kind === "student" ? "student.slit.edu.au" : "slit.edu.au"}</option>}</select>
+            <SearchableSelect id="email-domain" className="border-l border-background-200 bg-white px-2 text-sm disabled:opacity-60" value={domain} disabled={!domains.length} onChange={(e) => setDomain(e.target.value)} data-testid="email-domain">
+              {domains.length ? domains.map((d) => <option key={d} value={d}>{d}</option>) : <option value="">{kind === "student" ? "student.slit.edu.au" : "slit.edu.au"}</option>}</SearchableSelect>
           </div>
           <div id="email-name-status" aria-live="polite" className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             {problem && (edited || username) ? <span className="text-red-700" data-testid="email-username-error">{problem}</span>

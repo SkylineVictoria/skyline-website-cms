@@ -9,9 +9,11 @@
 import { useState, type ReactNode } from "react";
 import { Button, Select, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
 import type { ChecklistItem, GridColumn, GridRow, Option } from "@/lib/assessment/registry";
-import { newId } from "@/lib/assessment/registry";
 import { ruleObject } from "@/lib/businessRules";
+import { attachmentCapable, attachmentSettings, newId } from "@/lib/assessment/registry";
 import type { EvidenceFile, Question, Responses } from "@/lib/assessment/types";
+import { asAdjustment, type AdjustmentRecord } from "@/lib/assessment/workbookLayout";
+import { AdjustmentSheet } from "./WorkbookTables";
 
 export interface InputProps {
   q: Question; value: unknown; onChange: (v: unknown) => void; disabled?: boolean;
@@ -111,12 +113,21 @@ const instruction: TypeUi = {
     </div>
   ),
 };
+/** The attached links of an instruction block alone (the Review step edits its text in place, never as HTML). */
+export function ContentLinksEditor({ q, onChange }: ConfigProps) {
+  return (
+    <ListEditor<{ id: string; label: string; url: string }> label="Attached documents / media (links)" items={cfg(q, "attachments", [])}
+      onChange={(attachments) => onChange({ config: { ...q.config, attachments } })}
+      render={(a, update) => <div className="grid grid-cols-2 gap-1.5"><TextInput value={a.label} placeholder="Label" onChange={(e) => update({ label: e.target.value })} /><TextInput value={a.url} placeholder="https://…" onChange={(e) => update({ url: e.target.value })} /></div>}
+      add={() => ({ id: newId("a"), label: "", url: "" })} addLabel="Add link" />
+  );
+}
 function ContentBlock({ q }: { q: Question }) {
   const html = cfg<string>(q, "html", "");
   const attachments = cfg<{ id: string; label: string; url: string }[]>(q, "attachments", []);
   return (
     <div className="text-sm text-foreground-800">
-      {/^\s*</.test(html) ? <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: sanitize(html) }} /> : <p className="whitespace-pre-wrap">{html}</p>}
+      {/^\s*</.test(html) ? <div className="asm-content prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: sanitize(html) }} /> : <p className="whitespace-pre-wrap">{html}</p>}
       {attachments.length ? (
         <ul className="mt-2 flex flex-wrap gap-2">{attachments.map((a) => <li key={a.id}><a className="inline-flex items-center gap-1 rounded-md border border-background-300 px-2 py-1 text-xs text-foreground-800 hover:bg-background-100" href={a.url} target="_blank" rel="noreferrer"><i className="ri-attachment-2" aria-hidden="true" />{a.label || a.url}</a></li>)}</ul>
       ) : null}
@@ -294,6 +305,58 @@ const observation_checklist: TypeUi = {
   View: ({ q, value }) => { const items = cfg<ChecklistItem[]>(q, "items", []); const v = (value && typeof value === "object" ? value : {}) as Record<string, unknown>; return Object.keys(v).length ? <ul className="text-sm text-foreground-900">{items.map((it) => <li key={it.id}>{v[it.id] === true ? "✓" : v[it.id] === false ? "✗" : "–"} {it.text}</li>)}{str(v.notes) ? <li className="mt-1 text-foreground-700">Notes: {str(v.notes)}</li> : null}</ul> : <span className="text-sm text-foreground-500">Not yet recorded by the assessor</span>; },
   Config: ({ q, onChange }) => <div className="space-y-3"><ListEditor<ChecklistItem> label="Items to observe" items={cfg(q, "items", [])} onChange={(items) => onChange({ config: { ...q.config, items } })} render={(it, update) => <TextInput value={it.text} onChange={(e) => update({ text: e.target.value })} />} add={() => ({ id: newId("o"), text: "" })} addLabel="Add item" /><Toggle label="Notes field" checked={cfg(q, "allowNotes", true)} onChange={(v) => onChange({ config: { ...q.config, allowNotes: v } })} /></div>,
 };
+/* ASM-WORKBOOK item 7: Appendix A – Reasonable Adjustments, completed by the trainer / assessor */
+/** The adjustment record's value: the shared layout's AdjustmentRecord (item 7). */
+export type AdjustmentValue = AdjustmentRecord;
+const adjValue = asAdjustment;
+function Ticks({ items, value, onChange, disabled }: { items: string[]; value: string[]; onChange: (v: string[]) => void; disabled?: boolean }) {
+  return <div className="grid gap-1 sm:grid-cols-2">{items.map((it) => <label key={it} className="flex items-start gap-2 text-sm text-foreground-900"><input type="checkbox" className="mt-0.5" disabled={disabled} checked={value.includes(it)} onChange={(e) => onChange(e.target.checked ? [...value, it] : value.filter((x) => x !== it))} />{it}</label>)}</div>;
+}
+const adjustment_record: TypeUi = {
+  Input: ({ q, value, onChange, disabled }) => {
+    const v = adjValue(value); const set = (p: Partial<AdjustmentValue>) => onChange({ ...v, ...p });
+    const intro = cfg(q, "intro", "");
+    return (
+      <div className="space-y-3" data-adjustment={q.id}>
+        {intro ? <p className="whitespace-pre-wrap text-xs text-foreground-600">{intro}</p> : null}
+        <div className="flex flex-wrap items-center gap-3 text-sm text-foreground-900"><span className="font-medium">Reasonable adjustments applied?</span>
+          {([[true, "Yes"], [false, "No"]] as const).map(([val, label]) => <label key={label} className="flex items-center gap-1"><input type="radio" name={`${q.id}-applied`} disabled={disabled} checked={v.applied === val} onChange={() => set({ applied: val })} />{label}</label>)}
+        </div>
+        {v.applied ? (
+          <>
+            <label className="block"><span className="mb-1 block text-xs text-foreground-600">Task name and number where they were applied</span><TextInput disabled={disabled} value={v.tasks ?? ""} onChange={(e) => set({ tasks: e.target.value })} /></label>
+            <div><p className="mb-1 text-xs text-foreground-600">Category</p><Ticks items={cfg<string[]>(q, "categories", [])} value={v.categories ?? []} onChange={(categories) => set({ categories })} disabled={disabled} /></div>
+            <div><p className="mb-1 text-xs text-foreground-600">Reasonable adjustment strategy</p><Ticks items={cfg<string[]>(q, "strategies", [])} value={v.strategies ?? []} onChange={(strategies) => set({ strategies })} disabled={disabled} /></div>
+            <label className="block"><span className="mb-1 block text-xs text-foreground-600">Explanation of the adjustments made</span><TextArea rows={3} disabled={disabled} value={v.explanation ?? ""} onChange={(e) => set({ explanation: e.target.value })} /></label>
+          </>
+        ) : null}
+        {v.applied !== undefined ? (
+          <div className="space-y-2 rounded-md border border-background-200 bg-background-100 p-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="block"><span className="mb-1 block text-xs text-foreground-600">Trainer / assessor name</span><TextInput disabled={disabled} value={v.assessorName ?? ""} onChange={(e) => set({ assessorName: e.target.value })} /></label>
+              <label className="block"><span className="mb-1 block text-xs text-foreground-600">Date</span><TextInput type="date" disabled={disabled} value={v.date ?? ""} onChange={(e) => set({ date: e.target.value })} /></label>
+            </div>
+            <label className="flex items-start gap-2 text-xs text-foreground-800"><input type="checkbox" className="mt-0.5" disabled={disabled} checked={Boolean(v.declared)} onChange={(e) => set({ declared: e.target.checked })} />{cfg(q, "declaration", "")}</label>
+          </div>
+        ) : null}
+      </div>
+    );
+  },
+  // read-only, as Appendix A prints it (the same rows as the PDF and the wizard's Review step)
+  View: ({ q, value }) => <AdjustmentSheet q={q} value={value} note={adjValue(value).applied === undefined ? <p className="text-sm text-foreground-500">Not yet recorded.</p> : null} />,
+  Config: ({ q, onChange }) => {
+    const lines = (k: string) => cfg<string[]>(q, k, []).join("\n");
+    const setLines = (k: string, text: string) => onChange({ config: { ...q.config, [k]: text.split("\n").map((x) => x.trim()).filter(Boolean) } });
+    return (
+      <div className="space-y-2">
+        <label className="block"><span className="mb-1 block text-xs text-foreground-600">Explanation shown to the assessor</span><TextArea rows={3} value={cfg(q, "intro", "")} onChange={(e) => onChange({ config: { ...q.config, intro: e.target.value } })} /></label>
+        <label className="block"><span className="mb-1 block text-xs text-foreground-600">Categories (one per line)</span><TextArea rows={4} value={lines("categories")} onChange={(e) => setLines("categories", e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs text-foreground-600">Strategies (one per line)</span><TextArea rows={6} value={lines("strategies")} onChange={(e) => setLines("strategies", e.target.value)} /></label>
+        <label className="block"><span className="mb-1 block text-xs text-foreground-600">Trainer / assessor declaration</span><TextArea rows={3} value={cfg(q, "declaration", "")} onChange={(e) => onChange({ config: { ...q.config, declaration: e.target.value } })} /></label>
+      </div>
+    );
+  },
+};
 const third_party_report: TypeUi = {
   Input: ({ q, value, onChange, disabled }) => { const fields = cfg<Option[]>(q, "fields", []); const v = (value && typeof value === "object" ? value : {}) as Record<string, unknown>; return <div className="space-y-2">{fields.map((f) => <label key={f.id} className="block"><span className="mb-1 block text-xs text-foreground-600">{f.label}</span>{f.id === "report" ? <TextArea rows={4} disabled={disabled} value={str(v[f.id])} onChange={(e) => onChange({ ...v, [f.id]: e.target.value })} /> : <TextInput disabled={disabled} value={str(v[f.id])} onChange={(e) => onChange({ ...v, [f.id]: e.target.value })} />}</label>)}</div>; },
   View: ({ q, value }) => { const fields = cfg<Option[]>(q, "fields", []); const v = (value && typeof value === "object" ? value : {}) as Record<string, unknown>; return Object.keys(v).length ? <dl className="text-sm">{fields.map((f) => <div key={f.id}><dt className="text-xs text-foreground-500">{f.label}</dt><dd className="whitespace-pre-wrap text-foreground-900">{str(v[f.id]) || "—"}</dd></div>)}</dl> : <span className="text-sm text-foreground-500">Not yet recorded</span>; },
@@ -305,8 +368,45 @@ const declaration: TypeUi = {
   Config: ({ q, onChange }) => <label className="block"><span className="mb-1 block text-xs text-foreground-600">Wording (empty = the institution's declaration from Settings)</span><TextArea rows={5} value={cfg(q, "text", "")} onChange={(e) => onChange({ config: { ...q.config, text: e.target.value } })} /></label>,
 };
 
-export const TYPE_UI: Record<string, TypeUi> = {
+/* ------------------------------------------------------------------ "Attach image / file" under any answer (config.allowAttachment) */
+function AttachmentBox({ q, evidence = [], disabled, onUpload, onRemoveEvidence, openEvidence }: Pick<InputProps, "q" | "evidence" | "disabled" | "onUpload" | "onRemoveEvidence" | "openEvidence">) {
+  const [busy, setBusy] = useState(false);
+  const s = attachmentSettings(q);
+  if (!s) return null;
+  const count = evidence.filter((f) => f.questionId === q.id && !f.byAssessor).length;
+  const full = count >= s.maxFiles;
+  return (
+    <div className="mt-2" data-attachments={q.id}>
+      {!disabled && onUpload ? (
+        <label className={`inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-background-300 px-3 py-1.5 text-sm text-foreground-700 hover:bg-background-100 ${busy || full ? "pointer-events-none opacity-60" : ""}`}>
+          <i className="ri-attachment-2" aria-hidden="true" />{busy ? "Uploading…" : "Attach image / file"}
+          <input type="file" className="hidden" multiple={s.maxFiles - count > 1} accept={s.accept.join(",") || undefined} onChange={async (e) => {
+            const files = e.target.files; if (!files?.length) return;
+            setBusy(true);
+            try { await onUpload(q, files); } finally { setBusy(false); e.target.value = ""; }
+          }} />
+        </label>
+      ) : null}
+      {!disabled && onUpload ? <Hint>{s.accept.length ? `${s.accept.map((a) => a.split("/")[1] ?? a).join(", ")}. ` : ""}Up to {s.maxFiles} file{s.maxFiles > 1 ? "s" : ""}, {s.maxMb} MB each.</Hint> : null}
+      <EvidenceList q={q} evidence={evidence} disabled={disabled || !onRemoveEvidence} onRemoveEvidence={onRemoveEvidence} openEvidence={openEvidence} />
+    </div>
+  );
+}
+
+/** Adds the attachment box under the answer (student) and the attached files beside it (review, marking) to every answerable type. */
+function withAttachments(ui: TypeUi): TypeUi {
+  return {
+    ...ui,
+    Input: (p) => (attachmentSettings(p.q) ? <>{ui.Input(p)}<AttachmentBox q={p.q} evidence={p.evidence} disabled={p.disabled} onUpload={p.onUpload} onRemoveEvidence={p.onRemoveEvidence} openEvidence={p.openEvidence} /></> : ui.Input(p)),
+    View: (p) => (attachmentSettings(p.q) && (p.evidence ?? []).some((f) => f.questionId === p.q.id && !f.byAssessor)
+      ? <>{ui.View(p)}<div className="mt-2"><p className="text-xs font-medium text-foreground-600">Attached by the student</p><EvidenceList q={p.q} evidence={p.evidence} disabled openEvidence={p.openEvidence} /></div></>
+      : ui.View(p)),
+  };
+}
+
+const BASE_UI: Record<string, TypeUi> = {
   instruction, content: instruction, short_answer, long_answer, single_choice, multi_choice, true_false, matching, ordering, fill_blanks, table_grid, likert, number, date, file_upload, url,
-  case_study, repeating_group, observation_checklist, third_party_report, declaration,
+  case_study, repeating_group, observation_checklist, third_party_report, adjustment_record, declaration,
 };
+export const TYPE_UI: Record<string, TypeUi> = Object.fromEntries(Object.entries(BASE_UI).map(([id, ui]) => [id, attachmentCapable(id) ? withAttachments(ui) : ui]));
 export const typeUi = (type: string): TypeUi => TYPE_UI[type] ?? short_answer;

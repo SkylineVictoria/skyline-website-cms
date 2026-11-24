@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Button, EmptyState, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export type TeamRow = { id: string; name: string; description: string; archived: boolean; microsoft?: boolean; memberCount: number; isMember: boolean; lastAt: string | null; last: { author: string; text: string } | null; unread: number };
 type Staff = { id: string; name: string; email: string; role: string };
@@ -227,11 +228,11 @@ function MicrosoftTeamsLink({ teamId, connected, host, disabled, onChanged }: { 
         <p className="text-sm text-foreground-700">No Microsoft Teams channels are connected yet. Add them in Integrations first.</p>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <select value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Microsoft Teams channel"
+          <SearchableSelect value={choice} onChange={(e) => setChoice(e.target.value)} aria-label="Microsoft Teams channel"
             className="min-w-0 flex-1 rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm">
             <option value="">Not linked</option>
             {channels.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+          </SearchableSelect>
           <Button size="sm" disabled={(choice || "") === (host ?? "")} onClick={() => void setLink(choice)}>{choice ? "Link channel" : "Unlink"}</Button>
           {connected ? <Button size="sm" variant="outline" onClick={() => void test()}>Send test message</Button> : null}
         </div>

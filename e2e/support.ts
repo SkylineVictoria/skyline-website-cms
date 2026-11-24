@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { PDFDocument } from "pdf-lib";
 import { E2E_ANON_KEY, E2E_API_URL, E2E_DB_CONTAINER, E2E_MAIL_URL, E2E_POSTMARK_MOCK_URL, E2E_SERVICE_KEY, assertLocalOnly } from "./env";
@@ -26,6 +26,32 @@ export function person(label: string) {
 }
 
 /** Runs SQL as postgres in the LOCAL database container and returns the trimmed output. */
+/**
+ * UI-SELECT: the real <select> behind a SearchableSelect. Labels and ids point at the dropdown's trigger button; the <select> that
+ * holds the options and the value (and the data-testid) follows it. A locator that already is a <select> is returned as it is.
+ */
+export const selectOf = (target: Locator): Locator => target.locator("xpath=self::select | following-sibling::select[1]").first();
+/**
+ * Picks an option as a user does: opens the dropdown (its trigger, also when the locator is the <select> behind it) and clicks the
+ * option, found by value, label (the option's text) or index (as selectOption counts them). A plain <select> uses selectOption.
+ */
+export async function choose(target: Locator, option: string | { label?: string; value?: string; index?: number }): Promise<void> {
+  const isSelect = (await target.evaluate((el) => el.tagName)) === "SELECT";
+  const trigger = isSelect ? target.locator("xpath=preceding-sibling::*[@data-select-trigger][1]") : target;
+  if (isSelect && !(await trigger.count())) { await target.selectOption(option); return; }
+  await trigger.click();
+  const list = target.page().getByRole("listbox");
+  // a string matches the value or the text, as selectOption does
+  const q = (v: string) => v.replace(/"/g, '\\"');
+  if (typeof option === "string") { await list.locator(`[role=option][data-value="${q(option)}"], [role=option][data-label="${q(option)}"]`).first().click(); await expect(list).toHaveCount(0); return; }
+  const want = option;
+  const row = want.value !== undefined ? list.locator(`[role=option][data-value="${want.value.replace(/"/g, '\\"')}"]`)
+    : want.label !== undefined ? list.locator(`[role=option][data-label="${want.label.replace(/"/g, '\\"')}"]`)
+    : list.locator(`[role=option][data-index="${want.index}"]`);
+  await row.first().click();
+  await expect(list).toHaveCount(0);
+}
+
 export function sql(query: string): string {
   return execFileSync("docker", ["exec", "-i", E2E_DB_CONTAINER, "psql", "-U", "postgres", "-At", "-v", "ON_ERROR_STOP=1"], { input: query, encoding: "utf8" }).trim();
 }
@@ -60,6 +86,8 @@ export async function createStudentLogin(label = "student") {
   const { email, local } = person(label);
   const id = await createAuthUser(email);
   const agency = sql(`insert into public.agencies(name, code, status) values ('E2E business ${label}', 'E2E-' || substr(md5(random()::text), 1, 8), 'Active') returning id`).split("\n")[0];
+  // AGENT-ONBOARDING-GATE (20261117220000): a business is operational only with an agreement; an uploaded one, as the SQL suites do
+  sql(`insert into public.business_documents(business_id, kind, file_name, storage_path) values ('${agency}', 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/${agency}/agreement.pdf')`);
   const student = sql(`insert into public.enrollment_students(agency_id, full_name, email, phone) values ('${agency}', 'E2E Student', ${q(email)}, ${q(local)}) returning id`).split("\n")[0];
   const profile = sql(`insert into public.portal_profiles(auth_user_id, full_name, email, phone, status) values ('${id}', 'E2E Student', ${q(email)}, ${q(local)}, 'Active') returning id`).split("\n")[0];
   sql(`insert into public.agency_memberships(user_id, agency_id, role, student_id) values ('${profile}', '${agency}', 'student', '${student}')`);
@@ -425,19 +453,19 @@ export async function journeyFromDocumentLink(visitor: Page, office: Page, baseU
   await office.getByTestId("staff-action-add_pay_details").click();
   await expect(office.getByTestId("pay-details-dialog")).toBeVisible();
   await office.getByTestId("pay-job-title").fill(who.jobTitle ?? "Trainer");
-  await office.getByTestId("pay-employment-type").selectOption("full_time");
+  await choose(office.getByTestId("pay-employment-type"), "full_time");
   await office.getByTestId("pay-start-date").fill(inDays(21));
-  await office.getByTestId("pay-basis").selectOption("hourly");
+  await choose(office.getByTestId("pay-basis"), "hourly");
   await office.getByTestId("pay-rate").fill("85000");
   await office.getByTestId("pay-details-save").click();
   await expect(office.getByTestId("pay-problem-rate")).toContainText("too high");
   await expect(office.getByTestId("pay-problem-payScheduleId")).toBeVisible();
   await expect(office.getByTestId("pay-problem-hoursPerWeek")).toBeVisible();
   await office.getByTestId("pay-rate").fill("42.50");
-  await office.getByTestId("pay-schedule").selectOption({ index: 1 });
+  await choose(office.getByTestId("pay-schedule"), { index: 1 });
   await office.getByTestId("pay-hours").fill("38");
   // A work location is required since LET-01 (20261113090000): the lab seeds one.
-  await office.getByTestId("pay-location").selectOption({ index: 1 });
+  await choose(office.getByTestId("pay-location"), { index: 1 });
   await shot(office, "admin-pay-details-form");
   await office.getByTestId("pay-details-save").click();
   await expect(office.getByTestId("staff-onboarding-progress")).toHaveAttribute("data-stage", "pay_details");

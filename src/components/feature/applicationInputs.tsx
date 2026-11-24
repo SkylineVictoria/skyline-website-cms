@@ -12,6 +12,7 @@ import {
   validateUsi,
 } from "../../../supabase/functions/_shared/validation/identifiers";
 import { baseFieldClass } from "./applicationFieldHelpers";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const OLDEST_YEAR = 1960;
 const lockedClass = " bg-background-100 text-foreground-600";
@@ -24,13 +25,13 @@ export function YearSelect({ id, name, value, locked, required }: { id: string; 
   }, []);
   const saved = (value ?? "").trim();
   return (
-    <select id={id} name={name} required={required && !locked} disabled={locked} defaultValue={saved} className={`${baseFieldClass}${locked ? lockedClass : ""}`}>
+    <SearchableSelect id={id} name={name} required={required && !locked} disabled={locked} defaultValue={saved} className={`${baseFieldClass}${locked ? lockedClass : ""}`}>
       <option value="">Select year</option>
       {saved && !years.includes(saved) ? <option value={saved}>{saved}</option> : null}
       {years.map((year) => (
         <option key={year} value={year}>{year}</option>
       ))}
-    </select>
+    </SearchableSelect>
   );
 }
 
@@ -140,7 +141,7 @@ export function PhoneInput({ id, name, value, locked, required, placeholder, onV
   return (
     <>
       <div className="flex gap-2">
-        <select
+        <SearchableSelect
           aria-label="Country code"
           value={dial}
           disabled={locked}
@@ -151,7 +152,7 @@ export function PhoneInput({ id, name, value, locked, required, placeholder, onV
             <option key={country.dial} value={country.dial}>{`${country.flag} +${country.dial} ${country.label}`}</option>
           ))}
           {PHONE_COUNTRIES.some((country) => country.dial === dial) ? null : <option value={dial}>{`+${dial}`}</option>}
-        </select>
+        </SearchableSelect>
         <input
           id={id}
           type="tel"

@@ -14,6 +14,7 @@ import {
   DAYS, LOAD_HOURS, clashText, generateClassSessions, loadIntakeLoads, rto, rtoFlow, setIntakeLoad, shortDate,
   type BatchSession, type StudyLoad, type Clash, type CourseDetail, type GenerateResult, type IntakeDetail, type LocationRooms, type RtoIntake, type SessionType, type StaffOption,
 } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** A class time in the week (minutes from midnight; weekday 1 = Monday ... 7 = Sunday). */
 type Block = { weekday: number; start: number; end: number; type: SessionType; roomId: string; trainerId: string; manual: boolean };
@@ -115,14 +116,14 @@ function SlotEditor({ value, onChange, avail, disabled, label, limit, taken = []
   const options = TIME_OPTIONS.filter((t) => toMin(t) >= lo && toMin(t) <= hi);
   const outside = avail?.length ? value.days.filter((d) => !covers(avail, d, toMin(value.from), toMin(value.to))) : [];
   const bad = !value.days.length ? "Pick at least one day." : toMin(value.to) <= toMin(value.from) ? "The end must be after the start." : "";
-  const timeSelect = (which: "from" | "to") => <select aria-label={`${label}: ${which}`} value={value[which]} disabled={disabled}
+  const timeSelect = (which: "from" | "to") => <SearchableSelect aria-label={`${label}: ${which}`} value={value[which]} disabled={disabled}
     onChange={(e) => onChange({ ...value, [which]: e.target.value })}
     className="h-8 rounded-md border border-background-300 bg-background-50 px-2 text-sm font-medium text-foreground-900">
     {(options.includes(value[which]) ? options : [value[which], ...options]).map((t) => {
       const past = t !== value[which] && over({ ...value, [which]: t });
       return <option key={t} value={t}>{clock(toMin(t))}{past ? ` · over ${limit.name}` : ""}</option>;
     })}
-  </select>;
+  </SearchableSelect>;
   return <div className="space-y-1.5">
     <div className="flex flex-wrap gap-1">
       {DAYS.map((d, i) => {

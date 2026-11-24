@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { VIEW_LABELS, clearViewAs, readViewAs, returnToAdmin, switchView, type ViewAsState, type ViewKind } from "@/lib/viewAs";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** Shown on every page while an administrator is looking at a workspace as its test account: says so, and offers the way back. */
 export default function ViewAsBanner() {
@@ -34,11 +35,11 @@ export default function ViewAsBanner() {
       <i className="ri-eye-line" aria-hidden="true" />
       <span>{state.personName ? <>Signed in as <b>{state.personName}</b> ({VIEW_LABELS[state.kind].toLowerCase()})</> : <>Viewing as <b>Test {VIEW_LABELS[state.kind]}</b></>}</span>
       <label className="sr-only" htmlFor="view-as-switch">Switch view</label>
-      <select id="view-as-switch" disabled={busy} value={state.personName ? "" : state.kind} onChange={(e) => run(() => switchView(e.target.value as ViewKind))}
+      <SearchableSelect id="view-as-switch" disabled={busy} value={state.personName ? "" : state.kind} onChange={(e) => run(() => switchView(e.target.value as ViewKind))}
         className="rounded-md border border-background-50/30 bg-foreground-900 px-2 py-1 text-sm text-background-50">
         {state.personName ? <option value="" disabled>Switch to a test account…</option> : null}
         {(Object.keys(VIEW_LABELS) as ViewKind[]).map((k) => <option key={k} value={k}>Test {VIEW_LABELS[k].toLowerCase()}</option>)}
-      </select>
+      </SearchableSelect>
       <button type="button" disabled={busy} onClick={() => run(returnToAdmin)} className="rounded-md bg-primary-500 px-3 py-1 font-semibold text-background-50 hover:bg-primary-600 disabled:opacity-60">
         {busy ? "Switching…" : "Back to admin"}
       </button>

@@ -110,5 +110,623 @@
     "fingerprints": [
       "42980fef4e582253211aeaf5150b7bf13737c3eb885d2750feca88411624fa5f"
     ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_max_mib",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "1749e4701b1167dd924a3da82163a113b4fce66672392ef573f4e48bedbdad45",
+      "a7e88aba5a17f28ebcd80902450daea777ca5eb58dacfbac6f0f3c33a8a86473",
+      "a8246218e0abd9caccb3f87e21eeb53d623047fb5261d47389d9c0fff4b015d2",
+      "b40b7ef289ab7cef8f283a3e93bc395860b326692a0ab36fb8ded25180c09538",
+      "ccb1f786076ed53b8eaac5691c9a47dd456653686c947d7cfc3b7e45723da162"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_max_files",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "2e9058a5ab0a2ced1b5ca84073989c4ebe0d6a7ffcc9351ce2e91418395832d4",
+      "5957e927e2729fa3754395de51ecf5712a73f9d603c2ceb83ac3976cf5204fac",
+      "89a9eee451d4df0e7ac934bf753c6e53d323fa01697295d11106e9f2ac239917"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_formats",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "08a29c0b2a5aab61f6efd153ae2379a2cf73f78dbea2d9fc89e4a9165b564b0f",
+      "acc6e86578fce08c8d3f5809131f3b18a2a894df400a5255e51c570cf48016b1"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_default_audience",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "049374e6200cc3c29b170801a17b7428637036f7562daea0f565393052e17bc6",
+      "862f144b683c4634dd7b197e254f5f193f5ca46c2f1a7da38d773a75d382ee1c",
+      "f78e5f908d741109e9c7916f338e0a9989c3ff4f2073c2f08c9a677bc0ddebc8"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_allow_publication",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "02cbfe039381616f5194b129122258b19508b7a7b77fa8558e2a2261d4663cf9",
+      "359e4ddb2bc46a286ece34cccb21ea734cce3522034ea3e4156462342c098783",
+      "a1e2f57a7172488f8b56f7610972e413ec714dff3563cc2f7443ff1bd664c05d"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "lms-bulk-implementation",
+    "reason": "Implements data schemas, queue execution, provider protocol or presentation of the workflow and its published settings.",
+    "fingerprints": [
+      "00cd5ac1b16a46462b8d1a9e96721b3b12c22ba1af32b7625d25a10cdf2d4fa3",
+      "01408df43562ca133b8fcd924a24037c566de035a8b15d79c220917dd034c895",
+      "025bbf065505ffa373648f3e0b8b8669b669e893357129175e76fa108dda5828",
+      "0a8f2719247b95b72cf05867581d1f58fd5e7d62b2bf54c8b59462c4888e0400",
+      "1180719a57ac22abed379e436e076b72e94191e43732e8add2675f386792e983",
+      "1980c2f2c9b9e814a36d9e84b06aeda9f3aa162feb593274faf315fbaf9b2b9e",
+      "199985ac511c9c1f8ca9b4272e5f5b426db57d5176f47fac8be9da36dd86adf4",
+      "1bee9ff12fe119a87bd126eacc960740922d34f0867c2564cc5953a8441e4471",
+      "1bfa8088666cf69db2aed6fe56318eccd75f8b74e72ee37588880b85dedcd7cd",
+      "1c548bbba1fa28af4fecca9f2ea7ac64ba02cd19eb19fbec886cacd9f367acd0",
+      "1e9819eaad9cc01d69579260a897fdebbc66a8b2ae48a932ffb36a51c86ce62a",
+      "1f874844cfe55d2c2d01c708d4eae1c197e818d10992cddabf1fefbfdfd64b74",
+      "2688b605e32a2a9a9ad3ac8d6ccc19eff62c71971cdadc33831f1695f6eb875f",
+      "27caf6aaf4641c3fb5ae7f4bb9be7eb1f72f8ca98a34ab4c4ebb25314897baa4",
+      "280a498575d80d47228a046d749361e88f654dba67d33b16accdd350511f9102",
+      "2c45b2fdb62af9210f46cf8b1dfb803c407976491ce6b4d8f213caaef4aafd60",
+      "2e4c262da9a9d023817ec386c8fc0f5f01a145cf312d6720ef67892e1d66cdd9",
+      "2f93bc896c8a220029b5d3974e4c6e783ef6e8a481071d52376f41832b593b35",
+      "3562670cfa83c9a0799dc09ea490ae9ddc07db26666c21b774210fcba091086a",
+      "35f4e13bbcad555748015142f351005a0a281520b22fc578e552e4aaf3d7dd44",
+      "3c1ee3297e5295ecf668959d695ae7477b809a338ad58cb6fe77f2a3d0b4df8a",
+      "3e0fced8a30747266cb8e6d86d4cdc453f48fe4bc7b6c4bf7e239a9456e8dcd9",
+      "3e7f89339bf4829bbe3d4ab9913a47d9482a13766206ac4a13c1c5040853a140",
+      "4008db11aecb6f0abac725a574285152ba43de1e85ed70551e81083078322b48",
+      "478ac34271bed4a484ae1839bbd5eab1cc2e3843798e1ff01090f92ef745b2ba",
+      "484e3095b95007d0095763b6254f2ca206306bb6b311182f2f9c4cf263364554",
+      "49d3f1ae01ae9eae7c231c42cc19acbb16842d174b979ffb99893f4939775f9e",
+      "4f6681d74f8371887cc3c44f6d6e73c064a5591ff351847d0b8bdaa8f44c7a29",
+      "4fc4f98d8b4e8b6775d3aed853cd5cc67155b12f324a525adc655fc976b8d55b",
+      "5a270efd0088c2041a2b4894bdc1ac692aa8b10d1c9e993be704d1fc88ce0f67",
+      "64ddc106d79fc41bee82af941e1aee14dfa71244bde216cc9cf654a2f351b46f",
+      "65c174da2c4952e647fee55ef0ad31cc1b692fcecfd8636b117571dae821c882",
+      "6a081c89e1f3d89f6f5252fff67ec3c01adc0d53521028e36b0929e9abc71b50",
+      "6c3abb738ce87edff04de49903f5bebfd273713b885544d5d654a4c132a6299f",
+      "7a737d74384e4b14e1b779fd58e6245bcf57e3b3d04e3004e4e661699b9d15f1",
+      "7f0165f555fb759cb1138dd21b67ac3dae2d9a2278ff5a82c5c57f02099a0ee6",
+      "83c08eb2f8c59c3ee22c4bb6fd652632d5bbab169806b40719f5dd11bc979610",
+      "8abfa78a8b940263d216e81fd74d730950497ce00a00012b5e07ac6aee3fc4a7",
+      "9061fb3ea25dd4e51cc154028b0565a716da17122d9767aa89fa82bc6af6d13e",
+      "9119af271d05b4023650738c3b6e55bce4b6fc032ad45db15334c5081b890c26",
+      "92d3be6c86591c5e4ab7ba9445f9d141dce2efa00f73b11bfeb6b117e163456b",
+      "948b47692e19e7fc858381d86897fce870a5b1d25891e6fc2ce733d905637c85",
+      "972b671ee3f375eed64dee92c1c7e34b152d0dedfc3bcc4ab3cf8400ffb2cf28",
+      "997175b684b8a50d25b0a50f50b1bd329b3a5be85798e517484194042a6fc46f",
+      "9f21699630ccc8970e1f4a04e8b313df9ff25b76862c42b0b2ab29a286aaa9c0",
+      "a106c1f1ae19f160aa6b961c99ae06625f76acedee09e8b519ae3c49dbfffce2",
+      "a4c972103d522e384a4fd9fc221cd97d70f652a5b5eadbda9ca9af8be87a0e7e",
+      "a5f0bf7152f124f2af8b06a5399b6342846fa445bae5c1b4873571df4a0bd8ec",
+      "b11ae3003bf87caa34bef0a804a29a48b326f4dad025631c1c00e526e9c3b732",
+      "b5ca4637a76d07da50ff8f85dd3c184c114b7dbd39f1ea52619b216c7db2ec49",
+      "b6e7811d3bb9d986adef8e2f58fb00d2f6987127879c38acd81f9467ddb5fe44",
+      "b85d64e36b9fd44824ce2262c235ba04699a3632408bb3a631f3875f8b9a7704",
+      "b9f639b475a26de4d18e73995a14f4a06928b07b399f2abb01c6ebcbd42e5ef2",
+      "bdc955b40d54e76d00e48741373c4c418f4ac05632e4f5674ec0c3f3e073c17f",
+      "c748c12b99ec41874913313b2ada29bf3d313c86aa98d7433cc4fa6ad1255318",
+      "ce86b0b20d39a3ee2970f4bef000811f8e6c536a66a3dd5364c43c63e99b85c8",
+      "cfb4a259d998e94cf0acf50641c9af31b478c79c41cf4485aa7825574af7085e",
+      "d08f1a70c5b62b8c1b20df64722c43524fe7038baffb5ad6712e5212983e3e20",
+      "db226fa66029e753b8a53a012fdd785fc710d321f9b66d238e2642752494c6f6",
+      "dc5cdf57e185d0b20192cb41fd4208d9ac4a6891b0ea0a38aa4b98692e1aa8da",
+      "e36aaf38f907e5804ec41a82e39d45f8023d67ca117d67c47f9c34c4d99a3bf0",
+      "eb1aec0cbaa701a101022d58e8ba421c085b876cc07416d469905d88b18719d7",
+      "f534dfcc6257f5e1c95369b64d0ab0373165bd38c1ac23bcb38a1ad133988c78",
+      "fda933f710913eca5135eb7ff320d8ede5631af51c2121d1a346b0e784e88b14"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_duplicates",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "298ce6ed0002385ba686f732a52c4c6d8610b026ac4cfab8ec2b8f31f26b24e6",
+      "463ff6b463f6e9631ee115d314bf0ad9ad8195535f3afeba708d4415df0bcbb2"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_confirm_each",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "50599ac5c4625bf7fa5454cdfcbc443c7fbb33f47c155149ba277e3386f436d1",
+      "d810c5e19804b537fe07f61ffcf19d39ae5bc72900ef09417d74b5eeabd4082b"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "lms-bulk-boundaries",
+    "reason": "Enforces file integrity, archive bounds or mandatory authorization independently of configurable policy.",
+    "fingerprints": [
+      "008363d3a65ec54f3e298ce6b64cb0812613b812fffd84ef76b9bb23d0a0bd32",
+      "01ac2c6540dbed4dcaf199658fda1e1a49ce24d2e5fedcf4a102c2ea2c4ffc8c",
+      "0b8ce374b2588e42db1b1ec03e9bb022c652613fa4dd6a4f5cc9c85e1660ca68",
+      "16d33d40ccea3bc743f3f85cacc1dcada04827f848f0b0e11e7599896caf0de1",
+      "5e4d318f478ff50f541081469b20441dacee14c18339e3a10caa717dd817a273",
+      "65c1781383c35d330dac852c5ee4ff61f79d8448230c603e0f3b3f0a8ed36ebe",
+      "8b8fa3f947297fee0b099c863cc080a2d375c34c9114996087c6c0c4f6604327",
+      "90ccd21b74018cbcfd6b0c3d8a0bc26a34c1203c30677e793002e15216eff9e6",
+      "95cd455d6f2e48b9a46655532ae91aed6df6bf6826824a6f8403107ad60cb16b",
+      "bafd2733df1961a229d1279a3bfd11356a3b5fb1d89fe0fd8d033b0fcd09965f",
+      "d8af754726ed8d4ac26667e9e8c653b967672871ce4c0eaab8216f3f7bd8093d",
+      "e0aee9d539bd9e259f1db070436d21feb14c642dce22fda5a97f2439c8dfcde1",
+      "ec6493ec19af687cfe061e20a7fef0a69bcaf33c1173955ffd2dacf1232d0e1a"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_confidence",
+    "reason": "Registers, displays or enforces the published LMS bulk upload setting.",
+    "fingerprints": [
+      "c90a0e8dd231d5c739484a4347feff93241ede5723c3a177cc43207dbd7efea8"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "unit-resources-layout",
+    "reason": "Shows courses, units, resources and import progress from existing data and controls.",
+    "fingerprints": [
+      "142fda32150cc3478fcde7280f7d3856c8689989a51285a098f967bb5fbf37d8",
+      "18112a2972e45f6f7f5a70a63515302e12fa574af6a1332ac9eecd8cdcfa6654",
+      "193bbc813781ca192f01abf8903bfd5f3ce5550c106f15f61a40af87347567e1",
+      "1f4c1c1c03c75c8cce852622b7f8f4e03ba0df78ee5e00d84773592ef40c7315",
+      "22d80b4d6d2729482176f630bf559f0e4b8c5fa480e9078089ab4dc6ad56b9ca",
+      "29224cc8caf41c2bf56bf3c7899178191715e7266204d338c0ae14274f0c0393",
+      "29d28af136e3049e29e5f5b88b6e63c92bc61b420326960b56efc02c31d90731",
+      "2a36a650593122376be7c347c312f73eb89ac8868e8be80d03126fb297de17f6",
+      "3330b8de627d0339364863fcbaa07ef41a0abaa5e912bee11f5bf7fbda900b99",
+      "3eca64f3b8c844fdca37881ce63cc8b68dd0f8a556e7758b309cb8520df150aa",
+      "530afe359eb116f49cc7f1a573a73e6c334dd1df5bcac4af3039d4e3b75a7272",
+      "5446393da219641a47b383bd592050673a2fd9080785c6f2cae2db840d1227e0",
+      "553534d6ae0f6b3f92f9cefe90200bb5b9ad3c0a2dd476136d2ed2ad3ae2967c",
+      "56989e9ed84f0877b5b6c294582433c59c2e0f4127878c2146251447ec6d51e0",
+      "5adfa5724d3184c946d93c5616dcf51a1208675f877ab79f2bcb1bf51f463895",
+      "5d013adb7d5dfe64ee52f949b5ba00a1ed7f22ae0291de7527c16ee894b13965",
+      "6acef3de1c485b19b22e41cf0c3c9e551d3a9e9a26ea175b7e8e23454b3547e4",
+      "728353d6f5526575471db2f39f129c6bd39926bfad50cc531a9f9b68f9affbe2",
+      "8a81108b347a4ae7e88f18d7d8f97669cfc00e282604b714e9ebe9aed889d9a6",
+      "9047acbcefc61c9f2b5bcea4c1366688c5edf9c357ad09215ce9ddabaf259d61",
+      "91c9506ea0a3789f6ee7e6cfab18ea0c1b489437f1265495c30ee2b43b28b639",
+      "961a3b827cd9d11150c9455383657111af207aac99a7196bcb246429bf4c8ffb",
+      "983637fc7ee27a8b98317802e48f5797ebbce3b332fcbb876eaaada3833aafc0",
+      "99e6c2969f1e47253c7b6c9ae3dbf6b6c87fbe888fd78072e85c8b4d4589345f",
+      "a0ee326f0d636ff79e859aeade8f3f938eff7e06d6380f4523fa19b46ce79f4b",
+      "a562eaa857d584401d2517fbe3315471fd1d5d3034a0c30c7bbcb86f1d0616ee",
+      "a9816e0dc4a46a4730f8552d8ef830f6d968d49553baac7333cb31fb0ac3b148",
+      "aebf027b58dc4eae4a3dce93edb00965f825a3cabd9c58c001446ee91552b08c",
+      "b4a13fc1240febef8f9ad3507f86b518e02d25b56ee2e366af2ebcc36eeaadad",
+      "ca22c46a2426738deae49d4ce7130638b9239d4a86f1ba0dc26e383de6d68d87",
+      "cbde8a61ec0c49dbeab0a869367d0405d9bca2621df7ee0350204b9b013c9cea",
+      "e44f08b4bc86e3f030b7148263ac0b0630c848e5f34d456739934fe194ef1fb6",
+      "f015c8e4e3da280177ec13c24928a4475cf873f5873230c9381bc7e130bf3e46",
+      "f92acb2d38126a04b51e308c00b08199ccc7c01eec84166e5cd790988905ae68",
+      "ff89950deb57ab7d50dc6848bd7dad11034ef30c1a065542c2ac2b305529efa1"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.bulk_formats",
+    "reason": "Displays the effective upload formats and size limit from SLIT business rules.",
+    "fingerprints": [
+      "a26882494b7d65ef4a0726f8e787fb383f130be7f5137992a81e2825d74d5711"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "lms.practice_daily_batches",
+    "reason": "Registers or applies the published daily generation allowance.",
+    "fingerprints": [
+      "5fcfd1138826214848c0053c558412b2bf55e32c448c430472ec563f9d7be7c8",
+      "78238368c1594fcb1c14aaec2697a8d69dc95e5f5a9fa6651c3d4affb3f3e3c9",
+      "a669a3ecc7a5f14e1134b1d317289714cb1654607d0e6542f4c5889f6f47ea27"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "student-practice-interface",
+    "reason": "Defines question shape, user interface, provider response handling or stored practice results.",
+    "fingerprints": [
+      "1e60827156a0860feb57e7b3a89dcdb162de0bdfadce6af2ece932b3b9c8d87d",
+      "2c2f7a0a6c640769b7971119c6df6cf321d7f7fefe7d17fd5d91ccb4c690465b",
+      "3b2daddfce9961002994fed8f5cd39f7b696cf1fd052fa147b7f23489c2aeb10",
+      "42fbd304dfab8b55b089a5aec84409ff7b7595ebba8b502a0db4a51f702a3f76",
+      "4a2be8fda4b472086d3b32b758b96555d88fbcaac00ef8eaa7c5ed46bf359362",
+      "5897fb21f3662753df5a925f006473629726d19c2df5a2dd2e2fb886a93de960",
+      "5ef92ea1518bdced48eb0fdb0c80ba98579dd34894e1a6d9d957cf639dd5867a",
+      "65bf64b3b728e2747f83e248c62e2a771fe9a941f88fed83224aaf8ab6dab052",
+      "6729223702222b3957b7b9fcb51b613937805fbc9f73d550a6880974995643e4",
+      "8a8197d1688a6e9c71299f1fe8befad1c8397371a16dc9fd05c974bed829a54b",
+      "94397388bb97f4d8a379de0f1ac6cd4130237c907f1e0696d0fa2a1a797cd954",
+      "9574c55c79d96bd39c5b0380b884652429a3b676b474b14b809340c29967aa29",
+      "a26c16386a0fe4be9a1d6e53ad8a5531fbf945d8ddfb8d07a5d1c81f8b0356ad",
+      "ad2a002db95d146fb9d08aa67583115d035e4bd45ea06ba81532f4eb0b9c8d22",
+      "af141d4e3b38848f9f659edacc049555cba6614cb992ffe499b6254ed0f5dea8",
+      "b256a6c9f0a61e28adb794c93adbe29942825b23ecb1e8a92a5daf19a112d07a",
+      "c8d4173ff14da8feccbedb9286a01ac7659de0b953eb1d43910a9a64b3168c67",
+      "c95b6f0d982a084799018ce173a401cd972c71886ab9ad4b775ec897379dd73a",
+      "d6506207b3bf3cf31a4d5884a767e527d9b59641cb79ebcdc87edda07bbe929d",
+      "e1bfedb0f47d9a6554c8ebb8a3eb44eab63df3ce4805891bfd3522b9fcf33333",
+      "f4b84e960ea02949d6c10c9dd769d7911d7285ee06b688c92a0df60182a973a8"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "student-practice-access",
+    "reason": "Applies existing student access, response boundaries, or request lease fencing.",
+    "fingerprints": [
+      "31d858569e35c3749cc9d7186b83dc96d525aacd06960f40c59025abd49464ee",
+      "36f51db3966f91de00bac5797541d0db354a8dd5c246d40ae0c4e3af7c58d797",
+      "4724b5500f90e2f8df651f073b3109f76d99f3cb4746bc2d82995dcdf18c3df6",
+      "b4f7a42acd60aca87751f52182d862cffb07b0834db963e31c9dd78963baa2f1",
+      "cb359579ee600ef84d374428cf90baf92af14a6695be742c1fb36cbc599ec435",
+      "f94bba717e3e7d56607468106d5543a3b72dce1b212bcc6ac95d11e01348e0ae"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "application-workflow-display",
+    "reason": "The frontend displays server state or retains existing workflow controls using the same server authorization.",
+    "fingerprints": [
+      "559c38cf6b9a81a2ed03d5feb9db5e793f6d562addf44dcab64797b55585404b",
+      "59d007d0f108cfd80c41b5e8cf7fdbe5b34d52052c70c7b36ae5ee0efec84c1b",
+      "641a2f2f370387d318abdccbd6d43a5c6ea4bb4c477184eaae9f0e4f6c5dad1a",
+      "6ab224589ff8c974a3a2d692d22459695e99122de663a7d36538335fa2746f32",
+      "78f09234db25bc6e24c1702da55d8575b5ec51617d4c3f1124c49f1d13e03096",
+      "846013423074c03be845528130a439f4db94a430c28bcc36af368ff8ad33ce78",
+      "8584e29096fe9f82b44bf665dca20974931dfc04df8f86247563f3b2ce68514c",
+      "86dbe96c99937694f18687e1ccf89cc238cea6cf6573e8e0ce17f4ca92fe02c1",
+      "949d58a080f8c26e48b2ebf2682ac0aba9f6d18508438476c77baf2d67f95015",
+      "996c2ee8d377a4169258aff49e8fc3d66085e2d736a9104e93cddaad1a9ff738",
+      "9bad01dd28e3e31621275fd90bc6d99eb797e01646073bc1a6e63f192111c5a7",
+      "a0be0aef21a26ddf6c5e20340c0107dc68a6cbea7188a3b67a0b74a39fd76ba8",
+      "b337f0e55edd0dda2ca8e68d267e74410f78269cb9b27af44a203303a3476d83",
+      "b81096e5d91397ca78b31ac47cdf08b017ae70dbf7aa2b375a95e138945e5bfc",
+      "c4ab9a6b8cb75bdc2d503d283d0ba1b409f16d92ce421af1b74237d9a86e2c60",
+      "c5cfa82f5f9300f4ed114292ca08d690257cf072e8fa3965d9a6b77c4c293523",
+      "c79cf6a4117e2ced6215263bd88ad9ea38e3af5af6aeb576e11ede4e96a7490f",
+      "caa7f2146a6bc5c8e8a3ed4a462068719ee9ab34d8dc48f8563806bbcec2be90",
+      "d9cd6ce8b298fa639e82831a3455bfb95bd27af21703a7e860b0183bbcf598c5",
+      "de0652c4109253592906b8e33913dfee254c3b2f1c0e045caef9ae5122843f2e",
+      "e12618dc363acb1ec9e3a53a2bb78f4849908bc266564e9a2120796b4d5cacbc",
+      "ea8d9d133ddf7feedde805050ba48071823371334f1da07289d896af651e801e",
+      "f84d98790232ae3e5d9665e800c3d1761e077e4ff6d2e2cc9ba5e41c3f2d9662"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "contact-input-protocol",
+    "reason": "The input uses the existing format validator or the technical email length limit.",
+    "fingerprints": [
+      "02098f8f1e96663efe9f6bf101b7b121991d4a35b7ed751690cb9096b1e35d1c",
+      "4c5867cdf0eb7adf1549207b8cf97e749c48480b24e5521b5a7315c21ce1a32f",
+      "a5a585dba07eb17455fe1a6f03a3ff553ea5453c3b61bec595f917c0c824398c"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_mobile_required",
+    "reason": "The published admissions rule sets whether mobile is mandatory at initial submission.",
+    "fingerprints": [
+      "10ff0d3053acec5743d3fbab4d68d16165ba46aff22d0f7b5ce79b8e1f10f9d1",
+      "335bbcc325aad36aace178be55299f2ea87b2c23dbefc20ef3e0c052dece0785",
+      "6ff3eda92dd67a4a25b64a83bca94aea766b063dd3bf8681bf523a17e37c5ea4",
+      "1cebb1b039777c195d1a4c5ddb27d57ee762e02f91a82092884692fc29fd229e",
+      "c46413b3f030b950184df0ac8f4c7584ec6a11eb6cb96f1d8bb9b351c26a0236",
+      "824f20f80a31be75e65d9ebc82a0956cc784f9c464d71c45a7e7452b0ca4e4cd"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "invitation-delivery-protocol",
+    "reason": "The HTTP method, response codes and provider acceptance code are fixed by the integration protocol.",
+    "fingerprints": [
+      "2a24c3c109ac1cb5bf3c5f4b366869209d481f7e420823e7ae76cd95840f5b56",
+      "5210b5b93da5b8ec997e1368cde0dd5ad031849900139354b45a820aa525f547",
+      "80c3b6bbb31d351f0907837d82215f51cc8a89348ef88374abe9610bac890f49",
+      "ec0f3631dce399766142b5e2fd75a96bab8b919067adc65ce07b3fd07e64861e"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "application-lifecycle-integrity",
+    "reason": "The statement fences concurrent requests or enforces application access and lifecycle integrity independently of settings.",
+    "fingerprints": [
+      "857d66afdeae4f43b5e02e5a21e30d9e13a5e0941e933954d5f4d1c0414beb4e",
+      "dfec5bf052fa3001ae4833c9fd882320eee76c40116578419215e72f1520d84d",
+      "616856983bfeed1d104d1533674679f31a7dc1456ae7bc6f465a2189a925d817",
+      "1acb05a727c6bd427064cb3cf4d3410d3433e5efdc6eed9faef1e437b6c23f2e",
+      "eb54d601660a3e9dfd01f59d66d562b1d5eb035efeccaf792bcb4abfa364419e",
+      "f1473fc8055a6537d68cad20177aadf46666f7680318c417d0a93a82cb7e6692"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "existing-admissions-schema",
+    "reason": "The statement preserves an existing admissions contract or implements fixed data and workflow presentation semantics.",
+    "fingerprints": [
+      "b29c293518fdac1153dcb1d63cfd1d9e4e5f59da34058867d3c14fb5a33351f6",
+      "fd4acbb6a054078ad00717ddc7dd49d3febad31ecb114c12c2c74a32e3d35e9c",
+      "a85f24b3b4c312a1905f6152051cb223774c1a5a25505035d6faf8a935ec8d5c",
+      "fa369d7e64a8bd7fa717def4d0882cbbb106b8caaa67f68d79a97f253800d689",
+      "9b5289f3b32bb37927bcec89e224550b3d57aee4add464c4ea59fc6f33aa30c2",
+      "1a6f6d152bd8c803f29fc120c71f0db9ac8270c287ba6915584cb34fb79b3727",
+      "e292125381d2c2fe9b2ae32b7edf8688f1f7b36115d619e93fa6f3c57bca5410",
+      "00174c5d4caed21d5341ca132525cad01b18c1cec2f54cf97f465733c7e3ec67",
+      "38c39766993617a2557bd5ea01f2c2535efc860855c03ca9cd3f21ae42ca70c0",
+      "5b72f33f7fd741c835f40e6d5eaf11ddc5e6d3194a847f2757be448dce184e24",
+      "c2220e52074f2d268e4f911d1a0813510993510ef3da124f660e619a16714027",
+      "3154ec68321aa756c60ebc6ba36f2cba31482f4087a3c83bccd7ee25b0c183a4",
+      "0fa251b10cc3c9d044a5db2d60ee9c3d2858217fcda9e7daef67ed47568573d6",
+      "75e53c19e72cca77d6d711d95626096e65f31904ce19d6996ae0b6a5f2f311ab",
+      "c3c8e5c6891046a66006df2d3a6dfbf1cf8bddb08b349c2f4188f89a7bc14648",
+      "436ad7d90f78e246687c14fc3d6aaad42a9259e5e0c3a6a00cd962bd0a9ea52e",
+      "c55d90b2aa9aaadd4a6f835de746f0fcff646755749ad2407ca9cca069a3f3e3",
+      "75e8fec14692d359922bdd553d51b2ab6b4a9556089779beb6a703d9e78d7c53",
+      "f012a665821a00c0c7ac82a2e8d26a86719f32d465fb6c40cb1814612b1e7129",
+      "77c6d7be00cfbcabe1117cc50e84f292a7cf7daab883a99b670e670189e061b6",
+      "90d9739690df4d631f56d1401a61419ea0c0365cd478c1b4ad6b045fc71e7d7e",
+      "de6b79862ff9db81c414e1180fa59481e01f4c75b9dc079a7dc3473c213a905e",
+      "39561e2413cb7964662d308c5b09c218c107fb5796c923a513f6d6cf96d366bb",
+      "2d12627787efbfac2fa0de2c12ddc6c9ee756ccaf88915b6d7e17108be21b503",
+      "f8cc4f558f1c40d79fbe5f23ceb6634a4d1e832721b4c27ccf471426c927b46a",
+      "75081ddae021d156593c1e8622747986f29a05376f852fe3883416d2cd236faa",
+      "14ea24b03c60699ca341408e88473653630189ee194345b695fd1e9a71aca0ba",
+      "1f93da9ce2e403f1bb10ea9673f6f2ba2fe18c2448ecd8d84f17049cb0ad17c7",
+      "09c4879af9521e8afd20028f6e4c0241969fbba3c94b6cd12f22fab1bf90056a",
+      "a41585afeaef4bc10bd3ab3b75f86c3a8340c305ef5dfe618494d4ccc2ba4568",
+      "689bf0df28b6199507ffd8cb75039bb83c204284d064a56df0817a551f928261",
+      "561a626bd4cafd6b3fc22adfe700720aac1898929ff62ef6c669a6ba0a971e0b",
+      "ab90e819999e9fe1db5d8a9a4c0f6ebb5ab77e597753eb7217df70f2b29fc37a",
+      "94afad917d73ecae79d820beb4466f77af5fd3d07fe69020e4cac2083053fb80",
+      "d23454b1143fa8941fc7e35727d81a38fa7a3f517c5e7ede286e645a796ab989",
+      "52120c927d05a0b4fdfff6ea9a8e814367eefb0647469b51517281807d940e1d"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_invite_hours",
+    "reason": "The published invitation rule determines how long a link remains valid.",
+    "fingerprints": [
+      "95c8d67c7fb5db0a428941d0bd155b73bf2bef83b21f38e559931c95eecca174",
+      "25ea03bed6799c9c0e79a876c843f4508f1d3399c23779fb1601db20bd4f45d0",
+      "cd16f853c49cc148b4603498bfdc9820c06a2912c00e5f6631021a5f7350d26f",
+      "2a20d1137bf518e6b1980b3c2a05d62bb4f559570e3ecfe38da7387ca66297f2"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_invite_resend_limit",
+    "reason": "The published resend setting controls the number of invitations in the defined daily window.",
+    "fingerprints": [
+      "36ff6cdffcb52e9a956ede5a9a2524661a0da7b7b9efd70c95aa20dd1d66467a",
+      "f5cf639efa412e4a9fa5c3f6b540fd3bff7731a05c68e6e5a29018ab5f3fac84",
+      "1373ccb101ebecb3d8076d3a08a70feccfee5e286b5ffe7ab2a8d8ab67c097c5",
+      "1f2469c09f6529e2c04a00f7d0bf472cd360750eb46132938759a630fc1faec9",
+      "be5dc987ca4b681f11528bd7fb11a5e095ca7d02d40ba62f2b4d201310f13551",
+      "ea13db2ff574a567af337ac205bcd3917f51359f1e25200de7c07a2897a5115e"
+    ]
+  },
+  {
+    "type": "business",
+    "id": "admissions.application_invite_template",
+    "reason": "The migration registers the SLIT wording as an editable, unpublished invitation template.",
+    "fingerprints": [
+      "2f4230ef7e4a285c1b7fa1b3acb2a9d0246df37a57753d84d1148b61d1668390"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "existing-submission-validation",
+    "reason": "The statement carries forward the existing published course rule while retaining its current fallback.",
+    "fingerprints": [
+      "ecbc528b2be57e69da63023087c3fed762d6cf8e070291f32644c2eafd8e8ad7"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-workbook-ui",
+    "reason": "Assessment wizard and page presentation: component props, styling class names, labels and loading states; no operational decision.",
+    "fingerprints": [
+      "2f3ecbd372c025c9d84483ecf8c354026a17645f1de94d3ba3f6e242db8e99e9",
+      "92fd64e17d2e20b8269dbad9883b05fab4b4e4e4a77d167427e68727a2ae8eb9",
+      "ec1a3aab1a8bce4324d4c8cba41dc4317b1caa1325a83aac7d4c4bf87aaa812b",
+      "902ac2664ef16143eb128b6fa2786012f4263848eb78e30a636c2da6828de3f1",
+      "f6c83a4e3746263713677cfff6ab3f6a27c06790824387f7f13c234dd6619192",
+      "99ba46b25bfdc66d2adba310bd2ab167f79e1e10abd8cc19fb9347a4419679f1",
+      "b5a3ed4574f7fbf8658a1246714e4bec74fdb3a92acbd087f8e850f1290f45ba",
+      "71d3da74c5035b9472a9b3a53a3954fb40ba9c3c494918d398e00d5e44d3667b",
+      "d69ae2e96d082f472dc49f26c5fed8391801585d75515ce6896eb9fd8c81a773",
+      "fcf9501ee03c4cf6e243cf762efcb7d3c4220d700f3b6af374480d4fe3c65e56",
+      "48d5eb4397cdfe2fcce8dece58297bc87c9947dae09af5a933981e4a91f14805",
+      "3979249250be7170e071d7d0f5153574b33477ed3b5e40e8ecf1f1871181377b",
+      "e006eadccd9fd78a4a0fa97cc7ab826be0b451d85b254df33c8d6c73e74e44d2",
+      "b98c4092d9ce1e0da15d31c663b7a70487f1436d459897e523fea039239c2af4",
+      "276d4ea961d6f5f06a2ebfd10e64ceadbb58a64ef1f71bc4bb380b4b520bace7",
+      "e35b44bf3592854b55b65c420b50b1b98c5494cb1459f8ca726ba767d758cde4",
+      "3d47c34ce41037afc29637dd26aa00876757ab2b966cfb0246db76c6b6b3cb1a",
+      "6fc2830739a96dbb8f868d0c8c309b0104ccf89d27ab9d0764a0f61bfd678d98",
+      "39005eddbe88a5f15a4356cb0e4001f1a006cef5f524d8a47752777fecb45de1",
+      "5ea16b02792ac26fa2a29de34cb767e0702c8e0e382d66bfb51815539a0d4a9b",
+      "add39927366b088611b359fdaf733639d510a3ce2663eca3e76f4cedb827bb9f",
+      "bbc10c2d77bb6e048fad604c9c36ee33763a55f80a80ee23084500dde69803aa",
+      "031a95d22c6dab01328ead13e5b25a02466d09ed32157846149dfbcc17b81cd7",
+      "abcbeb795897e6e8389c68ab4a56d076189491a05bae19de3ef9eaf60dad5859",
+      "7104cf42fb99ef1706843249409529ebe1d0375a1c55b79af130826d0a043ec8",
+      "164dceac339a716a02b0e9a6a423ab531f1e1aea96ec7f31e83a286fe0f930e9",
+      "73466d9da48d4a58e410f8d58de0c53f6e785c7eb7beceb6feb47f3c82a5f85d",
+      "a0cf3bd08630a79a6eaf183f1b2c9935e6e69193ba54d722312b187a8057165a",
+      "4bb6442fd1a9b48607ff20e984ac74dc0c34c169edff8c4b49f0c31830994b49",
+      "41b836e0e0e9cf183b21296d16beb683e3cd3829f8a2f85eb31d2691b8d3bd38"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-workbook-layout",
+    "reason": "Layout of the student workbook and its PDF (cover, header picture size limit, answer boxes, the form's three attempt columns); the number of attempts allowed stays in the attempts Business Rule.",
+    "fingerprints": [
+      "53a12e2eee815ab1dfb190af3fd05c8c4a241803fa02e5bda2ed21889b0d92d4",
+      "873cfe0847e6de2011dbc3d2c4e0fb4128bd8945accf3db14b859781888e49ab",
+      "7e47cbfe2f116b9aa486e84300cbbcf75c48b52450df539deb418a626263c5ef",
+      "f6061ac6d0c1c3b07648de07cde4c1ec7125507984c9bd6eae7e8a5cb248c6c1",
+      "d0829f72e1cb15a884bdd6cb792c608a667ca1ff37bd477339e37f8fb971ebf2",
+      "496e6a338d483b94348ae78d4f41cdd847e78b4e74d3569694efca2f993efda4",
+      "3384ae591695a8bbc00197baf5c9e25c76c38457f0cd6c2d9230579e9c8ab84a",
+      "9c840b3f5fdaace7cfe43fb7c0f7ba2031581af5cc3daec56109e610832433e5",
+      "8be243e585bd3017073ad84344696b9faf6caaac8b11ab80f6c79f01352bd416",
+      "eb80996b311ba02191865273457d8259676f10526f0d44023f0ccb2b911e8f77",
+      "5cdea15ae6832929e7828a4f78e389be13c3a72dfd22a3d4be2fd3d49f4a65f6",
+      "1bddd884ccf0157ebbd450e5f12cd53af5c46916a5ef83fc02c0f83e3f89cb0a"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-question-editor-defaults",
+    "reason": "Starting values of a new question and its attachment settings, edited per question by the admin; the institution's evidence size and type limits are enforced by the server from its settings.",
+    "fingerprints": [
+      "179e4abc5b0eaef8593f4e15a332b7e154ce05489f980e9439f6883a1e1b74b1",
+      "34e15f75c4591981a4ee53e12b3512af20d83464023b17ac7a576961c5ceb694",
+      "7df83160e7a67c33242a7179c4d20595b7d4ee4bf0aa3c3112d106035dbbaa2a",
+      "615bc841373c4072b19477ea32e3b8463332070314e91580b94edb502bfaa1af",
+      "8b90e6f5e8d8635e0fbdd61f78a1d579a81161d90c1f8b68f36ae93dec45ee38",
+      "7cc3e8d2c4707c2a9d08b7c187300ad0c74dca2677647a8c2049e85a4de9c0c1",
+      "b3f2c96b021a267b2804bda7af098e6163d2a7fa1c7798e81c5a05310ab4261b",
+      "a1e628753e304836f43adf506523fb214a042bfbf14cfb752e3473094c2095c3",
+      "a191a805dba6abdb855827668fabdeeb308159edf3ccc082f5ac7698760c225e",
+      "b2562149190b59849826a5e5c21545ce964754c0defc80965cff62143ac39692",
+      "8437cdb8feea51c92d80087ecfb79b268073378f8c9dfeeba0c2b658bf5ea295",
+      "8cac1a5585a6833837581fbb634a004df50f835546964b371384c5a90f25de5d",
+      "35c45fdad75d0d9baf456e008b66adb3bab558ae61a4c37604db4179b987df89",
+      "5086d235d655621e850e9e25e943ef4909cf574d4e305d2f1c301cfd5525f175",
+      "ae7ca02d30ea298985f23a7eebaf451628d68c4c68d3bf88ae885cf38822fc30",
+      "0c36579f3a9974a6f270806e3394796c00f4cd475e967739cb72b3b54b5a6397",
+      "7a4c22184b541405ab9f0c650945db914bc14c93a01337ebefc3c9568ce9a162",
+      "9f71ac94a83298d388a61eb6f5d3fa37d932d4ce70fd95c557f5a277e3ce1c6d"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-workbook-import",
+    "reason": "Workbook import heuristics (repeated headers, picture sizes, question mapping) that build a draft the admin reviews and edits before it is saved; not operational policy.",
+    "fingerprints": [
+      "8e252a7727b3261b813f4b884e573c6d361d6395f20d972b5d50c20943946fde",
+      "876800174de4bc768898b53b2b3dbf923b860a25d197167c154ab2409053d75c",
+      "c526a5e97e550acfda27a800bce1bee69fba133c8f928e7d5ea0b1edcf26a822",
+      "1ce2c5a9d022be4b6d64b5c5823755f6afa71916a115d7b4cdc8171ad33ead97",
+      "fbab8d3d45d948175dbe05bc353a36e162fcd4952a5c73d77e3f8234a5cc8ac3",
+      "af97723470e7f37dab11c886d2911ab9cda7ac1b0a9d7c97d1a52cddba7da8f6",
+      "2ab9fe699cf28dfb8664dbfb64ac2d73ad48642340f14e17201d1b24da628e0f",
+      "88c7fdd57d89a0b34255efc35d89f6ade91fbfa398f5842caa1ec46e9b558539",
+      "bc245ee151d16d3d83f109be0708b61732e0cecc2c59b7be7788f37d2694fd84",
+      "86babb11781cb51bf1022a536cf1d2b4ee1c47ac35ebc92ad163ee6efb043e38",
+      "ff7080af59e45b291de060131d32e43c97006f855ed589dad4b76499fd0b1f4b",
+      "bb324631e97fd2ca06ec1acee4c274a820141b15d4f3354707bf04788d30095c",
+      "455aa006d962e7d37ccdfa6ced3cb0e108b2f1fe3f0f0f50538a1f9859eb8ffb",
+      "a7acefe4b375818455a39f8f56a2be139c431223ab5dd4493e66f0c3856a7edf",
+      "fd44dbac41a2655e94d41d37fcabebc21d3b20456cff3fa5eef52171322f5bb0",
+      "05929985c0523b16de45bed30e71553efa5a3da2d77786befe50f8eaf73b048e",
+      "eab834a81724029ed872f90b69c5ee822fdda5181aa132995840acb8616192f0",
+      "d2816b09dc5b5743f9bea359074e283c6940cc3099324ecd398eac3c6ba1ecb1",
+      "7964eefe891a491c0ff69f01fd013e2fe9174051331bc3cc748a06719258f858",
+      "3c7d5fb942e5b55038c6aaa40b24bcdd7f6156ad32983da02ab917146de16964",
+      "7510b83feabb3a40727a2ad1edfa6278412601542ae5e713680165aba8201731",
+      "bed1c26833e06e9e8ecbe436d428feb2e6920fd2fa598fbf937b5d248c8a9abc",
+      "487f2e7ccddfa8b3ab8f4db59295fcd40e25d25fc3f0569332cb07eb3cda5855",
+      "d09683b50d87def7c8d6d79e8dababecf58088d8ba389793c93901fc27efab84"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-existing-rule-reads",
+    "reason": "Reads the published Business Rules assessment.attempts_default and assessment.reassessment_window_default through ruleNumber; the literal is only the rule engine's fallback, not a new rule.",
+    "fingerprints": [
+      "ef7412865739d87ac177adc33f06de118ad696efec918e43c99e494a9159c3ae",
+      "36654ba9226cec8f4a627abed1d660456d32351de143a1d5423b74afc7686902",
+      "2031a9cb45ccb157f6f96298cfcb4957d43ff961de4a1417934359d46f62b465"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "asm-db-helpers",
+    "reason": "Assessment database helpers: a display-name lookup for the results sheet and the start of an attempt through the existing asm_next_attempt / asm_due_for (due dates and attempt limits stay in those rules).",
+    "fingerprints": [
+      "bb84c5983f96dddbb6af3ad06c98e79e7b1243580e857d2a228fdd20b76066e3",
+      "e2b7f9e05c8c583c51952a4dd8863bdc24469bff07e1cc48b0e21fee61130e41",
+      "0e63386c4676cd489716140f131d7e676437ceff7201ded322868a68eca9fd71",
+      "19885811efed583c3ff3955d4c3c8c85268c3e68d5f12e5f0597154b002e4c06",
+      "72bf7c2ed4f6e381d8de102a556f729133a4202f3161cc4a66d9feeae41e90b7"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "ui-select-shared-dropdown",
+    "reason": "The native <select> tag swapped for the shared SearchableSelect (same props, the same <option>s and onChange); the values and any rule they carry are unchanged.",
+    "fingerprints": [
+      "b3bee9a28aa7a78f3efb8bf2820a96ec19b02f2be2b10f93579b8a669f33ebfc",
+      "108d74dda2ce33bfc3026a027cab295b96e54ee718f82cf894413ec91dd27b67",
+      "7878a7b909eaf4ca513cd4fb779b201f87d66d7da2e6d412be272591622fe8d6",
+      "13637f22037d914dd19d41390f40d099bfeb268258018781c47eb394a4d4a725",
+      "685e8fc45123277cf2bba6d9d317501d092eec38c578cb53673a6bd11caa9dcc",
+      "1efd0d9c82516cf4ae2c8c77bd8a934511eb75cc95c9ad176827198c1ccd0791",
+      "9f009ef79fe954b863caaef0803f923218a69f450bf0a464a9555dce79d8dca1",
+      "6ef1eb3a72452a71c7e9ab2839053f7fc28082122c62c80a89d853bc4f04abd3",
+      "2cec48f41bb6857241619c19ce1e55f745123a611aef8d99febe6e54b1b5135d",
+      "a7f58c3f877230f5e08ed6b6ad8c02aea47905ccae1b4e6825ca29f170362a5e",
+      "c8ba357e977dd82d457b5c0ae6113cbb0b6e0014d32d6fee9b80a7b2b6b9677c",
+      "be552baf45a840796a4dc90659165c886c3516c937ec350cc8389373b642066c",
+      "54cb86d34aa6891ed5749a664e2531a0ef65dee74a95dd5ddf1b5fa907df3dfd",
+      "ec39e31562962b4b758825b0f39ec90ccf4bf6477e941140d2e43237effe22a2",
+      "17b4224f044c4153f474bc8b5aadeac4d08d241fb9eec7a17e8f9c1e42cae75c",
+      "e054b9d970776e4199577d19c2feae8a52553093f3c7a53f13251e534a927aaa",
+      "ce31630188bc75cbd1d5fa5feac7cc09b4ded24bc876451c05c5ec46e58a2eff",
+      "cf7c0d5e8fe56be2fe0e5a1c4c4cce2013e80afbc2205e13e4fa8badef331609",
+      "a44e38150cb5d91c1c13e89c6a812aa56f1a8ed5f00c37f334220b89bede6a6d"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "ui-select-component",
+    "reason": "The shared dropdown component itself: row height, search-box threshold, list placement, keyboard handling and styling classes; no operational decision.",
+    "fingerprints": [
+      "0b61b341ef726d9e5e04e934c3fc0aef45e41892c479e7d1de2a5c64b1550bff",
+      "45eae1f512479e43636ff2028bda2435dd3fa24c3313172e83032312f3220820",
+      "f7fc6e7500dc379b2d316963b6332cda1dd2ef20cacd5d6a566e0ea502683a58",
+      "49cae1dcc017459adcb3b7a7b98028f7e001f38860145b2f869e022ace4b77ce",
+      "f96447212f41f35d416a4e43f39dbee31c22876056274ffb900695d8243fd425",
+      "ab52653dbc93500a9cb3fde7f6036918bf9956352175fb80fc49d6b5f0638f08",
+      "1b70abb6d8a3d27737e414f6fa2a4621985d7e87a4c5e6c793c7f880ec044175",
+      "7b824208a8f9018739edb45a752f70fdeb49bbc3f5f7d991983b65ac922d18d2",
+      "24655cb24c9a83d56f0e25e5d5e75e574d8ac0f8e0a0c3c81cd8ae71accfadf7",
+      "6e854b07bac9a11956b0d5e4abe6ca0a5f68021e88f6076f242d86fde3c71fca",
+      "119c39973f533f05e9ec43a5c6d56e322a61ba38d13ef0d77944f0cf16f10239",
+      "06c7f4bff54ee86932daf26566bb8164e94ab2c70ea46b2a852e6d0d97ba90f7",
+      "fcb64bc1e77592478cd376c30506ff3ea33d7db13684882c2e2beaa1a831d1d0",
+      "b54e8bbfd8bba7caae26dc3314d128aef9d908f92e7d07e4a27964f072b713cf",
+      "80fb371fd45b91e7fcf07c1c51a023bd5ce752d1cd7c00ce1be4c53c3f476df9",
+      "afa6f2edd8a096f531f0f444bc76c4664540f7d26dd792d5da43e1ed1b7b1323",
+      "ab145601c8f6631f4cd8d3a90617c6d5024c4f6a1ea149fc9103f21ce4be41ff",
+      "be7847e4091cb1780dc23b218740de23b961da1493f6c9734c864f47c00a98c8",
+      "fafb8598da814b15d9ba992127a60578b75817914bfbae9b586b06eb71c1b3f7",
+      "12bbd39f0dd6f0ce2b18c8c1bc3714c01f5cd8662d81d8008725c80df5e95e5d",
+      "c920df1f3b08836684b6346edc3a04fceffdc25b9c1118aff0ce5ec425f38609",
+      "068d15eb12ee1658de928ac5255257650ff309110780c245e5163261826058dd"
+    ]
   }
 ]

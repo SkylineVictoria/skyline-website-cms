@@ -3,6 +3,7 @@ import { Dialog } from "@/pages/agency/components/Dialog";
 import { getCoeDocument, issueCoeVoe, readCoeDocumentContent, uploadCoeDocument, type CoeDocumentInfo } from "@/pages/agency/lib/portalRegistrations";
 import { COE_KINDS, MAX_COE_BYTES, issueBlockers, validatePdfBytes, validatePdfFile, type CoeKind } from "@/pages/agency/lib/coeVoe";
 import { ruleNumber } from "@/lib/businessRules";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** Business Rules admissions.registration_coe_voe_pdf_mib, never above the 3 MB the database stores. */
 const coeMaxBytes = () => Math.min(MAX_COE_BYTES, ruleNumber("admissions.registration_coe_voe_pdf_mib", 3) * 1024 * 1024);
@@ -94,7 +95,7 @@ export default function CoeVoePanel({ registrationId, applicationId, application
       ) : <p className="text-foreground-500">Nothing uploaded yet.</p>}
       {!issued ? (
         <div className="grid gap-2 sm:grid-cols-[120px_1fr]">
-          <select aria-label="Document type" className={field} value={kind} onChange={(e) => setKind(e.target.value as CoeKind)}>{COE_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}</select>
+          <SearchableSelect aria-label="Document type" className={field} value={kind} onChange={(e) => setKind(e.target.value as CoeKind)}>{COE_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}</SearchableSelect>
           <input ref={fileInput} aria-label="CoE or VoE PDF" type="file" accept="application/pdf,.pdf" className={field} disabled={busy || registrationState !== "verified" || applicationStatus !== "offer_accepted"} onChange={(e) => void upload(e.target.files?.[0])} />
         </div>
       ) : null}

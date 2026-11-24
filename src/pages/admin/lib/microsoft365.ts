@@ -61,7 +61,8 @@ async function callWithBody<T>(body: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 export const lookupOffice365 = (personType: MailboxKind, personId: string) => callWithBody<Office365Lookup>({ action: "lookup", personType, personId });
-export const createOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string; username?: string } = {}) =>
+/** applicationId: made from an application's "Mark as enrolled" dialog; student-office365 logs the outcome on that application. */
+export const createOffice365 = (personType: MailboxKind, personId: string, opts: { dryRun?: boolean; differentPerson?: boolean; domain?: string; username?: string; applicationId?: string } = {}) =>
   callWithBody<Office365CreateReply>({ action: "create", personType, personId, ...opts });
 /** Create Email's live check (read-only): is username@domain free in Microsoft 365 (users, shared mailboxes, groups)? */
 export const checkOffice365Address = (personType: MailboxKind, username: string, domain: string) =>
@@ -111,6 +112,19 @@ export async function fetchEmailAudit(): Promise<EmailAuditRow[]> {
   const { data, error } = await supabase.rpc("email_account_audit_list", { p_limit: 200 });
   if (error) throw new Error(error.message || "The audit log could not be loaded.");
   return (data as EmailAuditRow[] | null) ?? [];
+}
+/** Email Management > Email Accounts: students with an Enrolled application and no active mailbox (email_mgmt_enrolled_without_mailbox). */
+export interface EnrolledWithoutMailbox { studentId: string; name: string; email: string | null; applicationId: string; reference: string | null; enrolledAt: string | null;
+  mailboxStatus: string | null; mailbox: string | null; mailboxError: string | null; last: { outcome: "skipped" | "failed"; at: string; by: string | null; reason: string | null; code: string | null } | null }
+export async function fetchEnrolledWithoutMailbox(): Promise<EnrolledWithoutMailbox[]> {
+  const { data, error } = await supabase.rpc("email_mgmt_enrolled_without_mailbox");
+  if (error) throw new Error(error.message || "The list could not be loaded.");
+  return (data as EnrolledWithoutMailbox[] | null) ?? [];
+}
+/** The application's audit log: the mailbox was skipped (created / failed are logged by student-office365). */
+export async function logApplicationMailbox(applicationId: string, outcome: "skipped" | "failed", detail: { reason?: string; code?: string } = {}): Promise<void> {
+  const { error } = await supabase.rpc("application_mailbox_log", { p_application: applicationId, p_outcome: outcome, p_detail: detail });
+  if (error) throw new Error(error.message || "The audit log could not be written.");
 }
 export const fetchEmailPeople =(personType: PersonType, q = "") => call<{ people: EmailPerson[] }>({ action: "people", personType, q }).then((r) => r.people ?? []);
 

@@ -27,7 +27,7 @@ export interface EmployeeForm { firstName: string; lastName: string; email: stri
 export const EMPTY_EMPLOYEE: EmployeeForm = { firstName: "", lastName: "", email: "", phone: "" };
 
 /** The document types the database accepts (hr.staff_documents category check on hosted). */
-export const EMPLOYEE_DOC_CATEGORIES = ["Passport", "Visa", "Driving Licence", "Academic", "English Certificate", "PTE", "Health Insurance", "Resume"] as const;
+export const EMPLOYEE_DOC_CATEGORIES = ["Passport", "Visa", "Driving Licence", "Academic", "English Certificate", "PTE", "Health Insurance", "Resume", "Void Cheque"] as const;
 export type EmployeeDocCategory = (typeof EMPLOYEE_DOC_CATEGORIES)[number];
 export const EMPLOYEE_DOC_ACCEPT = ".pdf,.jpg,.jpeg,.png,.doc,.docx,application/pdf,image/jpeg,image/png,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOC_MIME = ["application/pdf", "image/png", "image/jpeg", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
@@ -95,6 +95,7 @@ const GUESSES: [RegExp, EmployeeDocCategory][] = [
   [/ielts|toefl|english/i, "English Certificate"],
   [/health|insurance|oshc|ovhc|medicare/i, "Health Insurance"],
   [/resume|\bcv\b|curriculum/i, "Resume"],
+  [/cheque|\bcheck\b|bank[\s_-]*(letter|statement|details)/i, "Void Cheque"],
   [/degree|diploma|transcript|academic|certificate|qualification|bachelor|master/i, "Academic"],
 ];
 

@@ -27,7 +27,38 @@ function suggestStart(breaks: AcademicBreak[], taken: Set<string>) {
   return { date: d, why: `the next free ${dayName}` };
 }
 
-export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake", createLabel = "Create" }: {
+/** Searchable course box: type to filter; a course whose wizard is not finished is listed but cannot be picked. */
+function CourseSearch({ courses, chosen, finished, onPick }: { courses: { id: string; label: string }[]; chosen: string; finished: (id: string) => boolean; onPick: (id: string) => void }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const current = courses.find((c) => c.id === chosen);
+  const list = courses.filter((c) => c.label.toLowerCase().includes(query.trim().toLowerCase()));
+  return (
+    <div className="relative">
+      <input type="text" role="combobox" aria-expanded={open} aria-controls="new-intake-courses" autoComplete="off" data-testid="new-intake-course"
+        className="w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm"
+        placeholder="Search for a course by code or name…" value={open ? query : current?.label ?? query}
+        onFocus={() => { setQuery(""); setOpen(true); }} onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onBlur={() => window.setTimeout(() => setOpen(false), 150)} />
+      {open ? (
+        <ul id="new-intake-courses" role="listbox" className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-background-300 bg-background-50 py-1 shadow-lg">
+          {list.length === 0 ? <li className="px-3 py-2 text-sm text-foreground-500">No course matches.</li> : list.map((c) => {
+            const ok = finished(c.id);
+            return (
+              <li key={c.id} role="option" aria-selected={c.id === chosen} aria-disabled={!ok}
+                onMouseDown={(e) => { e.preventDefault(); if (ok) { onPick(c.id); setQuery(""); setOpen(false); } }}
+                className={`px-3 py-2 text-sm ${ok ? "cursor-pointer text-foreground-800 hover:bg-primary-50" : "cursor-not-allowed text-foreground-400"}`}>
+                {c.label}{ok ? "" : " · finish the course wizard first"}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCreated, allowBatch = true, requireUnitSchedule = false, zIndex, title = "New intake", createLabel = "Create", requireFinished = true }: {
   open: boolean; onClose: () => void;
   /** Courses to choose from when the drawer is not opened from a course. */
   courses: { id: string; label: string }[];
@@ -42,8 +73,19 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   title?: string;
   /** The Create button's words (the new course wizard goes on to the class timing). */
   createLabel?: string;
+  /** Only courses whose wizard is finished (weekly and daily calendars, CoE and VoE) can get a new intake; the course wizard itself turns this off. */
+  requireFinished?: boolean;
 }) {
   const [chosen, setChosen] = useState(courseId ?? "");
+  const [finishedIds, setFinishedIds] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!open || !requireFinished) return;
+    let live = true;
+    void supabase.rpc("course_wizard_finished_ids").then(({ data }) => { if (live) setFinishedIds((data ?? []) as string[]); });
+    return () => { live = false; };
+  }, [open, requireFinished]);
+  const finished = (id: string) => !requireFinished || (finishedIds?.includes(id) ?? false);
+  const unfinished = requireFinished && finishedIds !== null && !!chosen && !finishedIds.includes(chosen);
   const [course, setCourse] = useState<CourseDetail | null>(null);
   const [breaks, setBreaks] = useState<AcademicBreak[]>([]);
   const [start, setStart] = useState("");
@@ -91,14 +133,14 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
   // With a master the dates are the master's: several intakes share them, and term breaks are already in the master.
   const inBreak = master ? undefined : breaks.find((b) => start >= b.startDate && start <= b.endDate);
   const clash = !master && start && taken.has(start);
-  const blocked = !!busy || !chosen || !start || !load || !!clash || !!inBreak || (!!master && !name.trim())
+  const blocked = !!busy || unfinished || (requireFinished && finishedIds === null) || !chosen || !start || !load || !!clash || !!inBreak || (!!master && !name.trim())
     || (requireUnitSchedule && (course?.course.id !== chosen || !units.length));
 
   const create = async (addBatch: boolean) => {
     if (blocked) return;
     setBusy(addBatch ? "batch" : "create"); setError("");
     try {
-      let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, campus: course?.course.campus ?? "", ...(master ? { name: name.trim() } : {}) });
+      let out = await rto<IntakeDetail>("intake_save", { courseId: chosen, startDate: start, status: "open", generate: true, ...(requireFinished ? {} : { wizard: true }), campus: course?.course.campus ?? "", ...(master ? { name: name.trim() } : {}) });
       // VoE: 40 hours a week, so the unit timeline is laid out again at twice the CoE rate.
       if (load === "voe") { await setIntakeLoad(out.intake.id, "voe"); out = await rto<IntakeDetail>("intake_get", { intakeId: out.intake.id }); }
       onCreated(out, addBatch);
@@ -113,12 +155,11 @@ export default function NewIntakeDrawer({ open, onClose, courses, courseId, onCr
         {allowBatch ? <Button disabled={blocked} onClick={() => void create(true)}>{busy === "batch" ? "Creating…" : "Create & set up classes"}</Button> : null}
       </>}>
       <ErrorNote text={error} />
+      {unfinished ? <ErrorNote text="This course's wizard is not finished yet. Finish it first: CoE and VoE weekly calendars and CoE and VoE daily timetables. Then you can add intakes." /> : null}
       {courseId ? null : (
-        <Field label="Course" required>
-          <Select value={chosen} onChange={(e) => { setChosen(e.target.value); setTouched(false); if (requireUnitSchedule) setStart(""); }}>
-            <option value="">Choose a course</option>
-            {courses.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-          </Select>
+        <Field label="Course" required hint={requireFinished ? "Type to search. A course can get intakes once its wizard is finished (CoE and VoE weekly calendars and daily timetables)." : undefined}>
+          <CourseSearch courses={courses} chosen={chosen} finished={finished}
+            onPick={(id) => { setChosen(id); setTouched(false); if (requireUnitSchedule) setStart(""); }} />
         </Field>
       )}
       <Field label="Students on" required hint={`CoE students have ${LOAD_HOURS.coe} class hours a week; VoE students have ${LOAD_HOURS.voe}.`}>

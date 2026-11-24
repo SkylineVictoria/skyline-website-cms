@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ListPane from "@/pages/admin/components/ListPane";
 import { paneGrid, useListPane, type Pane } from "@/pages/admin/lib/listPane";
-import { courseWeeksLabel, HOURS_PER_WEEK, intakeDefaultName, registeredWeeks, loadIntakeLoads, loadUnitHours, rto, setIntakeLoad, shownHours, type CourseDetail, type IntakeDetail, type RtoCourse, type StudyLoad, type UnitHours } from "@/pages/admin/lib/rto";
+import { courseWeeksLabel, generateClassSessions, HOURS_PER_WEEK, intakeDefaultName, registeredWeeks, loadIntakeLoads, loadUnitHours, rto, rtoFlow, setIntakeLoad, shownHours, type CourseDetail, type IntakeDetail, type RtoCourse, type StudyLoad, type UnitHours } from "@/pages/admin/lib/rto";
 import TrainingGovCourseImport, { SavedTrainingGovDetails } from "./TrainingGovCourseImport";
 import { CourseFacts } from "@/pages/admin/components/rto/CourseSteps";
 import { supabase } from "@/pages/admin/lib/supabase";
@@ -9,16 +9,17 @@ import { DangerDialog } from "@/pages/admin/components/ui";
 import { invokeTga } from "@/pages/admin/lib/tga";
 import CricosCourseSection from "@/pages/admin/components/rto/CricosCourseSection";
 import TrainingGovBulkSync from "@/pages/admin/components/rto/TrainingGovBulkSync";
+import CourseFromDocuments from "@/pages/admin/components/rto/CourseFromDocuments";
 import LmsUnitsPage from "./LmsUnitsPage";
 import UnitHoursEditor from "./UnitHoursEditor";
 import StartDateBreaksEditor from "./StartDateBreaksEditor";
 import MasterTimetableTab from "./MasterTimetableTab";
-import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import VoeCalendarEditor, { VoeTab } from "./VoeCalendarEditor";
-import WeeklyClassBookingDialog from "@/pages/admin/components/rto/WeeklyClassBooking";
+import WeeklyClassBookingDialog, { type DraftWeek } from "@/pages/admin/components/rto/WeeklyClassBooking";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 type Tab = "overview" | "units" | "master" | "voe" | "prereq" | "coeDaily" | "voeDaily";
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -97,6 +98,7 @@ export default function LmsCoursesPage() {
   const [savedAt, setSavedAt] = useState("");
   const [editing, setEditing] = useState(false);
   const [bulkSync, setBulkSync] = useState(false);
+  const [fromDocs, setFromDocs] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncNote, setSyncNote] = useState<string[]>([]);
@@ -105,12 +107,11 @@ export default function LmsCoursesPage() {
   // hours (required), 4 the master timetable (start date and term breaks: every unit's dates are calculated), 5 its first
   // intake with its class timetable (the week grid, room and trainer). Students are added only through the enrolment wizard.
   // A step closed with X stays waiting (hidden): "Continue setup" on the unfinished course opens it again.
-  const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "voe" | "intake" | "classes"; intakeId?: string; hidden?: boolean; load?: StudyLoad } | null>(null);
+  const [wizard, setWizard] = useState<{ courseId: string; step: "units" | "hours" | "master" | "voe" | "classes"; intakeId?: string; startDate?: string; hidden?: boolean; load?: StudyLoad } | null>(null);
   const navigate = useNavigate();
   // Step 4 to 5 (owner, 2026-11-20: no intake screen): the intake is made by itself on the master timetable's dates, named
   // "Intake N", CoE (changed to VoE in the timetable form), and the weekly timetable opens. Without a saved master the old
   // intake form opens instead.
-  const makingIntake = useRef(false);
   // CoE / VoE, chosen first on step 4 and kept for the course's wizard (saved on the intake when it is made).
   const [wizardLoad, setWizardLoad] = useState<{ courseId: string; load: StudyLoad } | null>(null);
   const loadFor = (courseId: string) => (wizardLoad?.courseId === courseId ? wizardLoad.load : null);
@@ -128,33 +129,81 @@ export default function LmsCoursesPage() {
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per step 4 of a course
   }, [wizard?.step, wizard?.courseId]);
-  /** Weekly classes (owner, 2026-11-20): one screen for the CoE intake, then one for the VoE intake; an intake of that kind is
-   *  made on the master timetable's dates when the course has none open. */
+  // One-time create (owner, 2026-11-21): NO database drafts. The CoE and VoE intakes do not exist during the wizard: the two daily timetables are kept
+  // here in the browser and Finish creates both intakes on the master timetable's start date, books their classes and opens them together.
+  const [drafts, setDrafts] = useState<{ courseId: string; coe?: DraftWeek; voe?: DraftWeek } | null>(null);
+  const [finishing, setFinishing] = useState(false);
+  /** Daily timetable of one kind: an existing intake of that kind opens as before (editing); otherwise the draft screen opens. */
   const openClasses = async (courseId: string, load: StudyLoad) => {
     try {
+      if (!await acquireLock(courseId)) return; // another manager's wizard session holds the course
       const [course, loads] = await Promise.all([rto<CourseDetail>("course_get", { courseId }), loadIntakeLoads(courseId).catch(() => ({} as Record<string, StudyLoad>))]);
       const open = course.intakes.find(i => i.status !== "closed" && (loads[i.id] ?? "coe") === load);
-      if (open) setWizard({ courseId, step: "classes", intakeId: open.id, load });
-      else await startIntake(courseId, load);
-    } catch (e) { setDetailError(e instanceof Error ? e.message : "The intake could not be read."); }
-  };
-  const startIntake = async (courseId: string, load: StudyLoad | null = loadFor(courseId)) => {
-    if (makingIntake.current) return;
-    makingIntake.current = true;
-    try {
+      if (open) { setWizard({ courseId, step: "classes", intakeId: open.id, load }); return; }
       const { data } = await supabase.rpc("rto_master_timetable", { p_action: "get", p_data: { courseId } });
       const master = data as { saved?: boolean; startDate?: string | null } | null;
-      if (!master?.saved || !master.startDate) { setWizard({ courseId, step: "intake" }); return; }
-      const course = await rto<CourseDetail>("course_get", { courseId });
-      const name = nameFor(courseId) ?? intakeDefaultName(course.course.code, load ?? "coe", master.startDate, course.intakes.map(i => i.customName || i.name));
-      const out = await rto<IntakeDetail>("intake_save", { courseId, startDate: master.startDate, status: "open", generate: true, campus: course.course.campus ?? "", name });
-      if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
-      setWizard({ courseId, step: "classes", intakeId: out.intake.id, load: load ?? "coe" });
-    } catch (e) {
-      setDetailError(e instanceof Error ? e.message : "The intake was not created.");
-      setWizard({ courseId, step: "intake" });
-    } finally { makingIntake.current = false; setReloadKey(k => k + 1); }
+      if (!master?.saved || !master.startDate) { setTab("master"); setWizard({ courseId, step: "master" }); return; }
+      setWizard({ courseId, step: "classes", startDate: master.startDate, load });
+    } catch (e) { setDetailError(e instanceof Error ? e.message : "The intake could not be read."); }
   };
+  /** Finish: both intakes are created now, each with its booked week and dated classes; nothing is left behind if a step fails. */
+  const finishWizard = async (courseId: string, startDate: string, weeks: { coe?: DraftWeek; voe?: DraftWeek }) => {
+    if (finishing) return;
+    setFinishing(true);
+    const discard = () => supabase.rpc("rto_intake_wizard", { p_action: "discard", p_data: { courseId } });
+    try {
+      await discard();
+      const course = await rto<CourseDetail>("course_get", { courseId });
+      const names = course.intakes.map(i => i.customName || i.name);
+      let firstId = "";
+      for (const load of ["coe", "voe"] as const) {
+        const week = weeks[load];
+        if (!week) continue;
+        const name = intakeDefaultName(course.course.code, load, startDate, names);
+        names.push(name);
+        const out = await rto<IntakeDetail>("intake_save", { courseId, startDate, status: "open", generate: true, wizard: true, campus: course.course.campus ?? "", name });
+        if (load === "voe") await setIntakeLoad(out.intake.id, "voe");
+        const setup = await rtoFlow<IntakeDetail & { batchId: string }>("batch_setup", { batchId: null, intakeId: out.intake.id, sessions: week.sessions, capacity: week.capacity, trainerIds: week.trainerIds });
+        await generateClassSessions(setup.batchId);
+        if (!firstId) firstId = out.intake.id;
+      }
+      await supabase.rpc("rto_intake_wizard", { p_action: "finish", p_data: { courseId } });
+      await releaseLock();
+      setDrafts(null); setWizard(null); setReloadKey(k => k + 1);
+      if (firstId) navigate(`/admin/lms/intakes#${firstId}`);
+    } catch (e) {
+      await discard();
+      // Shown inside the timetable screen (it is open), which stays so the week can be changed.
+      throw new Error(`The intakes were not created: ${e instanceof Error ? e.message : "error"} Change the timetable and finish again; nothing was saved.`);
+    } finally { setFinishing(false); setReloadKey(k => k + 1); }
+  };
+  // Wizard lock: only one manager runs a course's wizard at a time (20261121180000). The page acquires the lock when the
+  // wizard opens, pings while it is open and releases it on Finish or when the page closes; a crashed page stops pinging
+  // and the lock goes stale after lms.wizard_lock_minutes (15), so another manager can take over.
+  const lockRef = useRef<string | null>(null);
+  const [lockHeld, setLockHeld] = useState<{ by: string; since: string } | null>(null);
+  const acquireLock = async (courseId: string): Promise<boolean> => {
+    const { data, error } = await supabase.rpc("rto_wizard_session", { p_action: "acquire", p_data: { courseId } });
+    if (error) return true; // the lock function is not on this database yet: the wizard still opens
+    const d = data as { ok?: boolean; lockedBy?: string; since?: string } | null;
+    if (d?.ok) { lockRef.current = courseId; setLockHeld(null); return true; }
+    setLockHeld({ by: d?.lockedBy ?? "another manager", since: d?.since ?? "" });
+    return false;
+  };
+  const releaseLock = async () => {
+    const courseId = lockRef.current;
+    lockRef.current = null;
+    if (courseId) await supabase.rpc("rto_wizard_session", { p_action: "release", p_data: { courseId } }).then(() => undefined, () => undefined);
+  };
+  useEffect(() => {
+    if (!wizard || wizard.hidden) return;
+    const courseId = wizard.courseId;
+    const t = window.setInterval(() => { void supabase.rpc("rto_wizard_session", { p_action: "ping", p_data: { courseId } }).then(() => undefined, () => undefined); }, 60_000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ping for as long as this wizard screen is open
+  }, [wizard?.courseId, wizard?.hidden]);
+  // Leaving the page with the wizard open releases the lock (the drafts stay; the wizard resumes from Continue setup).
+  useEffect(() => () => { void releaseLock(); }, []);
 
   // Only the latest load picks the course: an older one finishing later must not switch back (it hid the wizard after Sync).
   const loadSeq = useRef(0);
@@ -285,7 +334,7 @@ export default function LmsCoursesPage() {
   /** next: "units" opens Add units (then the first intake), "intake" opens New intake (units already chosen), "none" just shows it. */
   const reloadAfterAdd = (courseId: string, next: "units" | "intake" | "none" = "none") => {
     setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); setEditing(false); setSyncNote([]);
-    setTab(next === "none" ? "overview" : "units"); setWizard(next === "none" ? null : { courseId, step: next });
+    setTab(next === "none" ? "overview" : "units"); setWizard(next === "none" ? null : { courseId, step: next === "intake" ? "master" : next });
     setReloadKey(k => k + 1); void load(courseId);
   };
   // A new (inactive) course is finished only through the wizard (owner, 2026-11-20): units, their hours, the master timetable,
@@ -294,35 +343,34 @@ export default function LmsCoursesPage() {
   const setupStep: "units" | "hours" | "master" | "classes" | "done" | null = !detail || detail.course.id !== selectedId || masterSaved === null ? null
     : !units.length ? "units" : slit.some(h => !h?.confirmed) ? "hours" : !masterSaved ? "master" : !classesDone ? "classes" : "done";
   const SETUP_TEXT = { units: "Step 2 of 3 · Units", hours: "Step 3 of 3 · Hours", master: "CoE weekly calendar", classes: "CoE and VoE daily timetables" } as const;
-  /** The setup screens after the wizard, in order: the two weekly calendars, then the two daily timetables. */
+  /** Read-only progress: the single Continue setup button above opens the next unfinished screen. */
   const setupSteps = selected ? [
-    { key: "master", label: "CoE weekly calendar", done: !!masterSaved, ready: true, open: () => { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); } },
-    { key: "voe", label: "VoE weekly calendar", done: !!voeSaved, ready: !!masterSaved, open: () => { setTab("voe"); setWizard({ courseId: selected.id, step: "voe" }); } },
-    { key: "coeDaily", label: "CoE daily timetable", done: false, ready: !!masterSaved, open: () => void openClasses(selected.id, "coe") },
-    { key: "voeDaily", label: "VoE daily timetable", done: false, ready: !!masterSaved, open: () => void openClasses(selected.id, "voe") },
+    { key: "master", label: "CoE weekly calendar", done: !!masterSaved },
+    { key: "voe", label: "VoE weekly calendar", done: !!voeSaved },
+    { key: "coeDaily", label: "CoE daily timetable", done: false },
+    { key: "voeDaily", label: "VoE daily timetable", done: false },
   ] : [];
-  /** A weekly calendar tab opens the weekly calendar wizard until that calendar is saved (owner, 2026-11-21): CoE, then VoE. */
-  const openTab = (id: Tab) => {
-    setTab(id);
-    if (!selected || !canEdit) return;
-    if (id === "master" && masterSaved === false) setWizard({ courseId: selected.id, step: "master" });
-    else if (id === "voe" && masterSaved && voeSaved === false) setWizard({ courseId: selected.id, step: "voe" });
-    else if (id === "voe" && masterSaved === false) { setTab("master"); setWizard({ courseId: selected.id, step: "master" }); }
-  };
   const continueSetup = () => {
     if (!selected || !setupStep || setupStep === "done") return;
     const courseId = selected.id;
     // Weekly classes: the CoE intake's screen first (then VoE).
     if (setupStep === "classes") { void openClasses(courseId, "coe"); return; }
-    if (setupStep === "master") setTab("master");
-    setWizard({ courseId, step: setupStep });
+    void acquireLock(courseId).then(ok => {
+      if (!ok) return;
+      if (setupStep === "master") setTab("master");
+      setWizard({ courseId, step: setupStep });
+    }).catch(() => undefined);
   };
   const facts: [string, string][] = selected ? [
     ["Duration", detailLoading ? "…" : slitDuration || "—"], ["Delivery", selected.mode || "—"], ["Campus", selected.campus || "—"],
     ["Units", detail ? String(units.length) : "…"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" }] as const;
+  // The daily timetables sit next to the weekly calendars (owner, 2026-11-21): CoE weekly, VoE weekly, CoE daily, VoE daily.
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" },
+    { id: "coeDaily", label: "CoE Daily Timetable" }, { id: "voeDaily", label: "VoE Daily Timetable" }] as const;
+  /** The wizard is unfinished until both weekly calendars are saved and the weekly classes are booked. */
+  const wizardUnfinished = !!(canEdit && selected && detail && masterSaved !== null && (masterSaved === false || voeSaved === false || !classesDone));
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   const pane: Pane = tab === "master" || tab === "voe" || tab === "prereq" || tab === "coeDaily" || tab === "voeDaily" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
@@ -335,10 +383,24 @@ export default function LmsCoursesPage() {
       {canEdit ? <div className="flex items-center gap-2">
         <button type="button" onClick={() => setBulkSync(true)} title="Import one qualification from SLIT's Training.gov.au scope of registration and run the new course wizard on it"
           className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync from Training.gov.au</button>
+        <button type="button" onClick={() => setFromDocs(true)} title="Upload course documents: the qualification and units in them are found and synced from Training.gov.au"
+          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Add from documents</button>
         <button type="button" onClick={() => setAddingCourse("tga")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
       </div> : null}
     </header>
 
+    <CourseFromDocuments open={fromDocs && canEdit} courses={courses} onClose={() => setFromDocs(false)}
+      // Units and hours settled by the documents: straight to the CoE weekly calendar; otherwise the step still to do.
+      onCreated={(courseId, next, message) => {
+        setFromDocs(false);
+        if (next === "units") { reloadAfterAdd(courseId, "units"); setSyncNote([message]); return; }
+        reloadAfterAdd(courseId, "none"); setSyncNote([message]);
+        void acquireLock(courseId).then(ok => {
+          if (!ok) return;
+          if (next === "master") setTab("master");
+          setWizard({ courseId, step: next });
+        }).catch(() => undefined);
+      }} />
     <TrainingGovBulkSync open={bulkSync && canEdit} courses={courses} onClose={() => setBulkSync(false)}
       onDone={() => { setReloadKey(k => k + 1); void load(selectedId || undefined); }}
       onAddUnits={courseId => { setBulkSync(false); reloadAfterAdd(courseId, "units"); }} />
@@ -370,24 +432,26 @@ export default function LmsCoursesPage() {
         // Next: the daily timetables, the CoE intake's weekly classes then the VoE intake's (owner, 2026-11-21); or finish here.
         nextStep={{ label: "Save and next: CoE daily timetable", onClick: () => { setReloadKey(k => k + 1); void openClasses(wizard.courseId, "coe"); } }}
         dailyStep={{ label: "Save and finish", onClick: () => { setWizard(null); setTab("voe"); setReloadKey(k => k + 1); } }} /> : null}
-    {wizard?.step === "intake" && canEdit ? <NewIntakeDrawer open courses={courses.map(c => ({ id: c.id, label: c.label }))} courseId={wizard.courseId}
-      allowBatch={false} requireUnitSchedule title="Course setup · Intake" createLabel="Create and continue: rooms"
-      onClose={() => setWizard(null)}
-      onCreated={d => { setWizard({ courseId: wizard.courseId, step: "classes", intakeId: d.intake.id }); setReloadKey(k => k + 1); }} /> : null}
     {/* Last step, in the wizard itself: the intake's class timetable (the same form as Timetable › Create timetable). */}
     {/* Weekly classes, one screen for CoE then one for VoE: kind, room, trainer and times on one row, booked together. */}
-    {wizard?.step === "classes" && wizard.intakeId && canEdit ? <WeeklyClassBookingDialog key={wizard.intakeId}
+    {wizard?.step === "classes" && (wizard.intakeId || wizard.startDate) && canEdit ? <WeeklyClassBookingDialog key={wizard.intakeId ?? `${wizard.courseId}-${wizard.load}`}
       title={`Course setup · ${wizard.load === "voe" ? "VoE" : "CoE"} daily timetable · ${courses.find(c => c.id === wizard.courseId)?.code ?? ""}`}
-      intakeId={wizard.intakeId} courseId={wizard.courseId} load={wizard.load ?? "coe"} canEdit={canEdit}
-      saveLabel={wizard.load === "voe" ? "Book VoE week and finish" : "Book CoE week and next: VoE daily timetable"}
+      intakeId={wizard.intakeId ?? null} draft={wizard.intakeId || !wizard.startDate ? undefined : { startDate: wizard.startDate, initial: wizard.load === "voe" ? (drafts?.courseId === wizard.courseId ? drafts.voe : undefined) : (drafts?.courseId === wizard.courseId ? drafts.coe : undefined), others: wizard.load === "voe" && drafts?.courseId === wizard.courseId ? drafts.coe : undefined, onDraft: (week) => {
+        // Nothing is saved yet: the week is kept here; the VoE screen's Finish creates both intakes.
+        const next = { ...(drafts?.courseId === wizard.courseId ? drafts : { courseId: wizard.courseId }), [wizard.load === "voe" ? "voe" : "coe"]: week };
+        setDrafts(next);
+        if (wizard.load === "voe") return finishWizard(wizard.courseId, wizard.startDate as string, next);
+        void openClasses(wizard.courseId, "voe");
+      } }} courseId={wizard.courseId} load={wizard.load ?? "coe"} canEdit={canEdit}
+      saveLabel={wizard.load === "voe" ? "Finish: create the CoE and VoE intakes" : "Next: VoE daily timetable"}
       backLabel={wizard.load === "voe" ? "Back: CoE daily timetable" : "Back: VoE weekly calendar"}
       onBack={() => { if (wizard.load === "voe") void openClasses(wizard.courseId, "coe"); else { setWizard({ courseId: wizard.courseId, step: "voe" }); setTab("voe"); } setReloadKey(k => k + 1); }}
-      // Closed before the week is booked: the course stays unfinished and says so.
-      onClose={() => { setWizard(null); setReloadKey(k => k + 1); }}
+      // Closed before Finish: nothing was created; the course stays unfinished and says so. The lock is released.
+      onClose={() => { void releaseLock(); setWizard(null); setReloadKey(k => k + 1); }}
       onSaved={() => {
         setReloadKey(k => k + 1);
         if (wizard.load !== "voe") { void openClasses(wizard.courseId, "voe"); return; }
-        const id = wizard.intakeId; setWizard(null); navigate(`/admin/lms/intakes#${id}`);
+        const id = wizard.intakeId; void releaseLock(); setWizard(null); if (id) navigate(`/admin/lms/intakes#${id}`);
       }} /> : null}
     {selected ? <DangerDialog open={deleteOpen} title={`Delete ${selected.code}?`} intro={selected.name} busy={saving} error={deleteError}
       items={[
@@ -410,9 +474,9 @@ export default function LmsCoursesPage() {
         <div className="mt-2 flex items-center gap-2 text-xs">
           <button type="button" aria-pressed={activeOnly} onClick={() => setActiveOnly(v => !v)}
             className={"rounded-full border px-2.5 py-1 font-semibold " + (activeOnly ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-600")}>Active only</button>
-          {campuses.length ? <select aria-label="Campus" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={campus} onChange={e => setCampus(e.target.value)}>
+          {campuses.length ? <SearchableSelect aria-label="Campus" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={campus} onChange={e => setCampus(e.target.value)}>
             <option value="">All campuses</option>{campuses.map(x => <option key={x} value={x}>{x}</option>)}
-          </select> : null}
+          </SearchableSelect> : null}
           <span className="ml-auto text-foreground-500">{visible.length} course{visible.length === 1 ? "" : "s"}</span>
         </div>
         <div className="mt-3 max-h-[70vh] space-y-1 overflow-auto">
@@ -441,27 +505,22 @@ export default function LmsCoursesPage() {
             </div>
             {canEdit ? <div className="relative flex items-center gap-2">
               {editing ? <span className="text-xs text-foreground-500" role="status">{saving ? "Saving…" : savedAt ? "Saved " + savedAt : "Changes save automatically"}</span> : null}
-              <button type="button" onClick={() => { setEditing(v => !v); setMenuOpen(false); }} disabled={!detail}
-                className={"rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "bg-primary-600 text-white hover:bg-primary-700" : "border border-background-300 text-foreground-800 hover:bg-background-100")}>
-                {editing ? "Done" : "Edit"}</button>
-              {/* The daily timetables, in plain sight (owner, 2026-11-21): the CoE intake's and the VoE intake's weekly classes. */}
-              {(["coe", "voe"] as const).map(load => <button key={load} type="button" disabled={!masterSaved}
-                title={masterSaved ? undefined : "Save the CoE weekly calendar first"} onClick={() => { setMenuOpen(false); void openClasses(selected.id, load); }}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100 disabled:opacity-50">
-                <i className="ri-calendar-schedule-line" aria-hidden="true" />{load === "coe" ? "CoE" : "VoE"} daily timetable</button>)}
+              {wizardUnfinished && !editing
+                ? <button type="button" onClick={() => { setMenuOpen(false); continueSetup(); }} disabled={!detail}
+                  title="Resume the course setup at its next unfinished step"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+                  <i className="ri-magic-line" aria-hidden="true" />Continue setup</button>
+                : <button type="button" onClick={() => { setEditing(v => !v); setMenuOpen(false); }} disabled={!detail}
+                  className={"rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-50 " + (editing ? "bg-primary-600 text-white hover:bg-primary-700" : "border border-background-300 text-foreground-800 hover:bg-background-100")}>
+                  {editing ? "Done" : "Edit"}</button>}
               <button type="button" aria-label="More actions" aria-expanded={menuOpen} onClick={() => setMenuOpen(v => !v)}
                 className="rounded-lg border border-background-300 px-2.5 py-2 text-foreground-700 hover:bg-background-100"><i className="ri-more-2-fill" aria-hidden="true" /></button>
               {menuOpen ? <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setMenuOpen(false)} /> : null}
               {menuOpen ? <div className="absolute right-0 top-11 z-20 w-64 overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
                 <button type="button" className={menuItem} disabled={syncing || saving} onClick={() => { setMenuOpen(false); void sync(); }}>
                   <i className="ri-refresh-line" aria-hidden="true" />Sync with Training.gov.au and CRICOS</button>
-                {/* The daily timetables (weekly classes of the CoE and the VoE intake), any time after the CoE weekly calendar. */}
-                <button type="button" className={menuItem} disabled={!masterSaved} title={masterSaved ? undefined : "Save the CoE weekly calendar first"}
-                  onClick={() => { setMenuOpen(false); void openClasses(selected.id, "coe"); }}>
-                  <i className="ri-calendar-schedule-line" aria-hidden="true" />CoE daily timetable</button>
-                <button type="button" className={menuItem} disabled={!masterSaved} title={masterSaved ? undefined : "Save the CoE weekly calendar first"}
-                  onClick={() => { setMenuOpen(false); void openClasses(selected.id, "voe"); }}>
-                  <i className="ri-calendar-schedule-line" aria-hidden="true" />VoE daily timetable</button>
+                {wizardUnfinished ? <button type="button" className={menuItem} disabled={!detail} onClick={() => { setMenuOpen(false); setEditing(true); }}>
+                  <i className="ri-edit-line" aria-hidden="true" />Edit course details</button> : null}
                 <button type="button" className={menuItem} disabled={saving || !detail || (!selected.isActive && setupStep !== "done")}
                   title={!selected.isActive && setupStep !== "done" ? "Finish the new course wizard first." : undefined}
                   onClick={() => { setMenuOpen(false); void save("course_save", { isActive: !selected.isActive }); }}>
@@ -483,17 +542,17 @@ export default function LmsCoursesPage() {
             <ul className="space-y-0.5">{syncNote.map(line => <li key={line}>{line}</li>)}</ul>
             <button type="button" aria-label="Dismiss" onClick={() => setSyncNote([])}><i className="ri-close-line" aria-hidden="true" /></button></div> : null}
           {detailError ? <div role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{detailError}</div> : null}
-          {selected && !selected.isActive && setupStep && setupStep !== "done" ? <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
-            <span className="min-w-0 flex-1"><b>Setup not finished: {SETUP_TEXT[setupStep]}.</b> The course can be made active only after the new course wizard is finished.
-              {/* The four setup screens after the wizard (owner, 2026-11-21), each opened from here. */}
-              {setupStep === "master" || setupStep === "classes" ? <span className="mt-2 flex flex-wrap items-center gap-1.5">
-                {setupSteps.map((st, i) => <span key={st.key} className="inline-flex items-center gap-1.5">
-                  {i ? <i className="ri-arrow-right-s-line text-amber-700" aria-hidden="true" /> : null}
-                  <button type="button" disabled={!canEdit || !st.ready} onClick={st.open} title={st.ready ? undefined : "Save the CoE weekly calendar first"}
-                    className={"rounded-full border px-2.5 py-0.5 text-xs font-semibold disabled:opacity-50 " + (st.done ? "border-green-300 bg-green-50 text-green-800" : "border-amber-400 bg-background-50 text-amber-950 hover:bg-amber-100")}>
-                    {st.done ? <i className="ri-check-line mr-0.5" aria-hidden="true" /> : null}{st.label}</button></span>)}
-              </span> : null}</span>
-            {canEdit ? <button type="button" onClick={continueSetup} className="rounded-lg bg-primary-600 px-3 py-1.5 font-semibold text-white hover:bg-primary-700">Continue setup</button> : null}
+          {lockHeld ? <div role="status" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+            The course wizard is open by <b>{lockHeld.by}</b>{lockHeld.since ? ` since ${new Date(lockHeld.since).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" })}` : ""}.
+            You can view the course but not run its wizard until it is finished or the lock expires (Business Rules › lms.wizard_lock_minutes).</div> : null}
+          {selected && !selected.isActive && setupStep && setupStep !== "done" ? <div role="status" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+            <p><b>Setup not finished: {SETUP_TEXT[setupStep]}.</b> Use <b>Continue setup</b> above. The course can be made active only after the wizard is finished.</p>
+            {setupStep === "master" || setupStep === "classes" ? <div aria-label="Course setup progress" className="mt-2 flex flex-wrap items-center gap-1.5">
+              {setupSteps.map((st, i) => <span key={st.key} className="inline-flex items-center gap-1.5">
+                {i ? <i className="ri-arrow-right-s-line text-amber-700" aria-hidden="true" /> : null}
+                <span className={"rounded-full border px-2.5 py-0.5 text-xs font-semibold " + (st.done ? "border-green-300 bg-green-50 text-green-800" : "border-amber-400 bg-background-50 text-amber-950")}>
+                  {st.done ? <i className="ri-check-line mr-0.5" aria-hidden="true" /> : null}{st.label}</span></span>)}
+            </div> : null}
           </div> : null}
 
           {editing && canEdit && detail ? <div className="mt-5 space-y-5">
@@ -501,7 +560,7 @@ export default function LmsCoursesPage() {
             <CricosCourseSection key={selectedId + ":edit"} courseId={selectedId} onSaved={() => { setReloadKey(k => k + 1); void load(selectedId); }} />
           </div> : <>
             <div role="tablist" aria-label="Course sections" className="mt-5 flex gap-5 border-b border-background-200">
-              {tabs.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => openTab(t.id)}
+              {tabs.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}
                 className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t.label}</button>)}
             </div>
             <div role="tabpanel" className="pt-4">
@@ -526,7 +585,13 @@ export default function LmsCoursesPage() {
               </section> : null}
               </div> : null}
               {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
-              {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} onDaily={() => void openClasses(selected.id, "coe")} /> : null}
+              {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} /> : null}
+              {(tab === "coeDaily" || tab === "voeDaily") && selected ? <div className="space-y-3 rounded-lg border border-background-200 bg-background-50 p-5">
+                <h3 className="font-heading text-lg font-bold text-foreground-950">{tab === "coeDaily" ? "CoE" : "VoE"} daily timetable</h3>
+                <p className="text-sm text-foreground-600">The week's classes for {tab === "coeDaily" ? "CoE (20 hours a week)" : "VoE (40 hours a week)"} students: day, kind, room, trainer and times. The timetable is saved with the course setup.</p>
+                {wizardUnfinished ? <p className="text-sm font-semibold text-amber-800">Use <b>Continue setup</b> above to create or resume this timetable.</p>
+                  : <p className="text-sm text-foreground-600">The course setup is finished. Manage this timetable from its intake.</p>}
+              </div> : null}
               {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
             </div>
           </>}

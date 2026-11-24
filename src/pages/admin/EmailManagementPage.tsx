@@ -3,8 +3,10 @@ import { Link, useSearchParams } from "react-router-dom";
 import Microsoft365Panel, { Microsoft365Badge } from "@/pages/admin/components/Microsoft365Panel";
 import CreateEmailSection from "@/pages/admin/components/CreateEmailSection";
 import AccountDirectory from "@/pages/admin/components/AccountDirectory";
+import EnrolledWithoutMailbox from "@/pages/admin/components/EnrolledWithoutMailbox";
 import { fetchEmailAudit, useMicrosoft365, type EmailAuditRow } from "@/pages/admin/lib/microsoft365";
 import { institutionTimeZone } from "@/lib/timeZone";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /*
  * Email Management (2026-11-20): every screen reads the ONE Microsoft 365 status (useMicrosoft365: the same check as Integrations >
@@ -64,7 +66,7 @@ export default function EmailManagementPage() {
       <div><strong>{status.connected ? "Microsoft 365 is connected but not ready." : "Microsoft 365 is not connected."}</strong> {status.problems[0] ?? ""} <Link className="font-semibold underline" to="/admin/email-management?section=settings">See Microsoft 365 Settings</Link></div>
     </div> : null}
 
-    {active === "accounts" && <AccountDirectory create={<Link to="/admin/email-management?section=create" className={button}>Create email</Link>} />}
+    {active === "accounts" && <><EnrolledWithoutMailbox /><AccountDirectory create={<Link to="/admin/email-management?section=create" className={button}>Create email</Link>} /></>}
 
     {active === "create" && <CreateEmailSection />}
 
@@ -72,7 +74,7 @@ export default function EmailManagementPage() {
       <section className={panel}><div className="flex flex-wrap justify-between gap-3"><div><h2 className="text-lg font-semibold">Lifecycle automation</h2><p className={"mt-1 " + muted}>Review proposed triggers before enabling any workflow.</p></div><span className="rounded-full bg-background-100 px-3 py-1 text-xs font-semibold text-foreground-600">All rules inactive</span></div>
         <div className="mt-5 space-y-3">{[["Student enrolled", "Prepare student email account", "ri-graduation-cap-line"], ["Employee onboarded", "Prepare staff email account", "ri-user-follow-line"], ["Person offboarded", "Request review before disabling access", "ri-user-unfollow-line"]].map(([title, desc, icon]) => <div key={title} className="flex items-center gap-3 rounded-lg border border-background-200 p-4"><i className={icon + " text-xl text-foreground-500"} aria-hidden="true" /><div className="flex-1"><h3 className="text-sm font-semibold">{title}</h3><p className="text-xs text-foreground-600">{desc}</p></div><span className="text-xs text-foreground-500">Off</span></div>)}</div>
       </section>
-      <section className={panel}><h2 className="font-semibold">Rule preview</h2><label htmlFor="rule-select" className="mt-4 mb-2 block text-sm">When this event occurs</label><select id="rule-select" className={field} value={rule} onChange={e => setRule(e.target.value)}><option value="student-enrolled">Student enrolled</option><option value="employee-onboarded">Employee onboarded</option><option value="person-offboarded">Person offboarded</option></select><p className={"mt-3 " + muted}>Action: {rule === "person-offboarded" ? "Request an administrator's approval to disable the account." : "Queue a mailbox provisioning request for administrator review."}</p><button type="button" disabled className={button + " mt-5 opacity-50"}>Save rule (connection required)</button></section>
+      <section className={panel}><h2 className="font-semibold">Rule preview</h2><label htmlFor="rule-select" className="mt-4 mb-2 block text-sm">When this event occurs</label><SearchableSelect id="rule-select" className={field} value={rule} onChange={e => setRule(e.target.value)}><option value="student-enrolled">Student enrolled</option><option value="employee-onboarded">Employee onboarded</option><option value="person-offboarded">Person offboarded</option></SearchableSelect><p className={"mt-3 " + muted}>Action: {rule === "person-offboarded" ? "Request an administrator's approval to disable the account." : "Queue a mailbox provisioning request for administrator review."}</p><button type="button" disabled className={button + " mt-5 opacity-50"}>Save rule (connection required)</button></section>
     </div>}
 
     {active === "settings" && <div className="grid gap-5 lg:grid-cols-2">

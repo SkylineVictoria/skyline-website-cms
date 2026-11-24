@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
+import { categoryLabel, downloadResource, listResources, type Resource } from "@/pages/admin/lib/bulkResources";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Badge, Button, SectionTabs } from "@/pages/admin/components/ui";
 import CalendarView from "@/components/assessment/CalendarView";
@@ -10,7 +11,7 @@ import type { AssignmentRow, PendingRow } from "@/pages/admin/lib/assessments";
 interface Me { staffId: string | null; name: string | null; isTrainer: boolean; batches: { id: string; name: string; intake: string; courseName: string }[] }
 interface MyStudent { studentId: string; name: string; email: string; batchId: string; batchName: string; courseName: string }
 interface Notification { id: string; event: string; title: string; body: string; attemptId: string | null; assignmentId: string | null; readAt: string | null; createdAt: string }
-const TABS = [{ id: "marking", label: "Pending marking", icon: "ri-inbox-line" }, { id: "assignments", label: "My assessments", icon: "ri-file-list-3-line" }, { id: "students", label: "My students", icon: "ri-group-line" }, { id: "calendar", label: "Calendar", icon: "ri-calendar-2-line" }, { id: "notifications", label: "Notifications", icon: "ri-notification-3-line" }];
+const TABS = [{ id: "marking", label: "Pending marking", icon: "ri-inbox-line" }, { id: "assignments", label: "My assessments", icon: "ri-file-list-3-line" }, { id: "resources", label: "Unit resources", icon: "ri-folder-line" }, { id: "students", label: "My students", icon: "ri-group-line" }, { id: "calendar", label: "Calendar", icon: "ri-calendar-2-line" }, { id: "notifications", label: "Notifications", icon: "ri-notification-3-line" }];
 
 /** /staff/assessments: the trainer's assessment workspace (pending marking, assigned assessments, students' progress, calendar). */
 export default function StaffAssessmentsPage() {
@@ -56,6 +57,7 @@ export default function StaffAssessmentsPage() {
             {tab === "assignments" ? (assignments === null ? <p className="text-sm text-foreground-600">Loading…</p> : assignments.length === 0 ? <p className="rounded-card border border-background-200 bg-background-50 p-6 text-center text-sm text-foreground-600">No assessment is assigned to your intakes yet.</p> : (
               <ul className="space-y-2">{assignments.map((a) => <li key={a.id} className="rounded-card border border-background-200 bg-background-50 p-4 text-sm"><div className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1 font-medium text-foreground-900">{a.assessmentTitle}{a.unitCode ? <span className="ml-2 text-xs text-foreground-500">{a.unitCode}</span> : null}</span><Badge tone={a.status === "open" ? "success" : "muted"}>{a.status}</Badge></div><p className="text-xs text-foreground-600">{a.batchName} · {a.courseName} · v{a.versionNo} · due {fmtDateTime(a.dueAt)}</p><p className="mt-1 text-xs text-foreground-700">{a.eligibleCount} students · {a.submitted ?? 0} submitted · {a.toMark ?? 0} to mark · {a.final ?? 0} final</p><AssignmentStudents assignmentId={a.id} /></li>)}</ul>
             )) : null}
+            {tab === "resources" && <StaffResources />}
             {tab === "students" ? (students === null ? <p className="text-sm text-foreground-600">Loading…</p> : students.length === 0 ? <p className="text-sm text-foreground-600">No students in your intakes.</p> : (
               <ul className="divide-y divide-background-100 rounded-card border border-background-200 bg-background-50">{students.map((s) => <li key={`${s.batchId}-${s.studentId}`} className="px-4 py-2 text-sm"><div className="flex flex-wrap items-center gap-2"><span className="min-w-0 flex-1 font-medium text-foreground-900">{s.name}</span><span className="text-xs text-foreground-600">{s.batchName} · {s.courseName}</span><Button size="sm" variant="outline" onClick={() => void showProgress(s.studentId)}>{progress[s.studentId] ? "Hide progress" : "Competency progress"}</Button></div>{progress[s.studentId] ? <div className="mt-2"><ProgressList progress={progress[s.studentId]} onOpenAttempt={(id) => navigate(`/staff/assessments/attempts/${id}`)} /></div> : null}</li>)}</ul>
             )) : null}
@@ -68,6 +70,25 @@ export default function StaffAssessmentsPage() {
       </div>
     </div>
   );
+}
+
+function StaffResources() {
+  const [resources, setResources] = useState<Resource[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    void listResources(null).then(rows => setResources(rows.filter(row => row.published_at))).catch(() => setError("Unit resources could not be loaded."));
+  }, []);
+  return <section className="space-y-2" aria-label="Assigned unit resources">
+    {error && <p role="alert" className="text-sm text-red-800">{error}</p>}
+    {!error && resources === null && <p role="status" className="text-sm">Loading resources…</p>}
+    {resources?.length === 0 && <p className="p-4 text-sm">No resources have been published for your assigned units.</p>}
+    {resources?.map(resource => <article key={resource.id} className="rounded-lg border border-background-200 bg-background-50 p-3">
+      <p className="text-xs text-foreground-600">{categoryLabel(resource.category)}</p>
+      <p className="font-medium text-foreground-950">{resource.title}</p>
+      <button type="button" className="text-sm font-semibold text-primary-800 underline"
+        onClick={() => void downloadResource(resource.path, resource.name).catch(() => setError("The resource could not be opened."))}>Open {resource.name}</button>
+    </article>)}
+  </section>;
 }
 
 function AssignmentStudents({ assignmentId }: { assignmentId: string }) {

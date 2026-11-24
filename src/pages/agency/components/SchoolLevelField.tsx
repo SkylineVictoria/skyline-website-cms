@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { AppField } from "@/data/applicationForms";
 import { DEGREE_LEVELS, schoolLevelFor } from "@/pages/agency/lib/educationLevels";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 
 /**
@@ -57,7 +58,7 @@ export default function SchoolLevelField({ field, id, choice, schoolLevel, locke
 
   return (
     <>
-      <select
+      <SearchableSelect
         ref={selectRef}
         id={id}
         name="highest_education"
@@ -72,7 +73,7 @@ export default function SchoolLevelField({ field, id, choice, schoolLevel, locke
         <optgroup label="School">
           {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
         </optgroup>
-      </select>
+      </SearchableSelect>
       <input ref={hiddenRef} type="hidden" name={field.name} />
     </>
   );

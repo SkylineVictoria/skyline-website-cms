@@ -1,5 +1,6 @@
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, useLayoutEffect } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, useLayoutEffect } from "react";
+import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import AddressSearch from "@/components/shared/wizard/AddressSearch";
 import { useLocation, useNavigate } from "react-router-dom";
 import { openDeclarationKey } from "@/pages/agency/lib/wizardConfig";
@@ -57,6 +58,9 @@ import Toast from "@/components/shared/application-form/Toast";
 import { useToast } from "@/components/shared/application-form/useToast";
 import { stepTitle } from "@/components/shared/application-form/stepTitle";
 import { usiRequired } from "@/pages/agency/lib/admissionsRules";
+
+/** "AUR40226 - Certificate IV ... (36 weeks)" -> "AUR40226". */
+const courseCodeOf = (label: string) => label.split(" - ")[0].trim().toUpperCase();
 
 const FORM_ID = "portal-application-form";
 const STUDENT_CONTACT_FIELDS = new Set(["mobile", "email", "confirm_email", "email_note"]);
@@ -219,11 +223,8 @@ export default function ApplicationWorkspace({
   useEffect(() => {
     let live = true;
     void (async () => {
-      const me = await rto<{ rtoManager: boolean; admin: boolean }>("me").catch(() => null);
-      const choices = me
-        ? (await rto<RtoCourse[]>("course_list")).filter(c => c.code?.trim() && c.name?.trim())
-          .map(c => ({ label: staffCourseLabel(c), row: { courseId: c.id, code: c.code, title: c.name, variant: c.variantLabel ?? c.duration ?? "" } }))
-        : (await listInstitutionCourses()).map(row => ({ label: `${row.code} - ${row.title}`, row }));
+      // Staff, agents and students all see the same list: only courses with an active intake on offer.
+      const choices = (await listInstitutionCourses()).map(row => ({ label: `${row.code} - ${row.title}`, row }));
       if (live) setCourseChoices(choices);
     })().catch(e => { if (live) { setCourseChoices([]); setSaveError(e instanceof Error ? e.message : "The courses could not be loaded."); } });
     return () => { live = false; };
@@ -231,14 +232,17 @@ export default function ApplicationWorkspace({
   // A course saved on the draft that is not on offer any more still shows as selected (read-only, with a hint), so the draft stays readable.
   const legacyCourses = useMemo(() => {
     const saved = ((application.data as { values?: DraftValues } | null)?.values?.[COURSE_FIELD] as string[] | undefined) ?? [];
-    return courseChoices ? saved.filter(label => !courseChoices.some(c => c.label === label)) : [];
+    return courseChoices ? saved.filter(label => !courseChoices.some(c => c.label === label || c.row.code.toUpperCase() === courseCodeOf(label))) : [];
   }, [application.data, courseChoices]);
   const courseLabels = useMemo(() => courseChoices ? [...courseChoices.map(c => c.label), ...legacyCourses] : [], [courseChoices, legacyCourses]);
   const sections = useMemo(() => portalSections.map(section => ({ ...section, fields: section.fields.map(field => field.name === COURSE_FIELD ? { ...field, options: courseLabels } : field) })), [courseLabels]);
   const resolveCourse = useCallback((label: string): ApplicationCourseRow => {
+    // The staff form saves "CODE - Name (duration)", this page lists "CODE - Name": match on the course code when the text differs.
+    const code = courseCodeOf(label);
     const course = courseChoices?.find(item => item.label === label)?.row
+      ?? courseChoices?.find(item => item.row.code.toUpperCase() === code)?.row
       // An old draft's course keeps the row (and id) the application already holds.
-      ?? application.courses?.find(item => `${item.code} - ${item.title}` === label);
+      ?? application.courses?.find(item => `${item.code} - ${item.title}` === label || item.code.toUpperCase() === code);
     if (!course) throw new Error("This course is no longer offered. Choose a current course.");
     return course;
   }, [courseChoices, application.courses]);
@@ -391,8 +395,11 @@ export default function ApplicationWorkspace({
 
   useEffect(() => {
     if (!courseLabels.length || !formRef.current) return;
-    applyFormValues(formRef.current, { [COURSE_FIELD]: initialCoursesRef.current });
-  }, [courseLabels]);
+    // A saved label in another format ("CODE - Name (36 weeks)") shows as the course's current label.
+    const saved = initialCoursesRef.current;
+    const current = (Array.isArray(saved) ? saved : [saved].filter(Boolean)).map(label => courseChoices?.find(c => c.label === label || c.row.code.toUpperCase() === courseCodeOf(label))?.label ?? label);
+    applyFormValues(formRef.current, { [COURSE_FIELD]: current });
+  }, [courseLabels, courseChoices]);
 
   useEffect(() => {
     progressRef.current = progress;
@@ -589,6 +596,21 @@ export default function ApplicationWorkspace({
     await flushApplicationEdits(application.id);
   }, [enqueueSave, application.id]);
 
+  /** A form control's current text (uncontrolled form). */
+  const fieldValue = (name: string) => String((formRef.current?.elements.namedItem(name) as HTMLInputElement | null)?.value ?? "");
+  /** Puts a USI found or created by the USI Registry into the USI field as if typed (the draft saves it; has_usi becomes Yes). */
+  const fillUsi = useCallback((found: string) => {
+    const form = formRef.current;
+    const yes = form?.querySelector<HTMLInputElement>('input[name="has_usi"][value="Yes"]');
+    if (yes && !yes.checked) yes.click();
+    const input = form?.elements.namedItem("usi_number") as HTMLInputElement | null;
+    if (input) {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, found);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    setValues((prev) => ({ ...prev, usi_number: found, has_usi: "Yes" }));
+  }, []);
+
   useEffect(() => {
     const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(flushSave());
     window.addEventListener("portal-before-scope-switch", flush);
@@ -639,7 +661,7 @@ export default function ApplicationWorkspace({
       && (documentFields.has(editedName) || derivedFields.has(editedName) || prefilledFields.has(editedName))) {
       setUnlockedFields((prev) => (prev.has(editedName) ? prev : new Set(prev).add(editedName)));
     }
-    if (target?.name && (target.type === "radio" || target.type === "select-one")) {
+    if (target?.name && (target.type === "radio" || target.type === "select-one" || target.name === "usi_number")) {
       setValues((prev) => ({ ...prev, [target.name]: target.value }));
     }
     window.requestAnimationFrame(() => computeProgress());
@@ -1208,7 +1230,7 @@ export default function ApplicationWorkspace({
     if (window.location.hash !== `#${keys[index]}`) navigate({ search: window.location.search, hash: keys[index] }, { replace: true });
   };
 
-  // A stage has opened (or the page is ready): incomplete steps open, complete ones are one line, and the cursor goes to the first
+  // A stage has opened (or the page is ready): the first incomplete step opens, the rest are one line, and the cursor goes to the first
   // incomplete step (or the step asked for). Through a ref, so only the stage change runs it.
   const stageOpened = () => {
     if (stage >= reviewStage) return;
@@ -1218,7 +1240,8 @@ export default function ApplicationWorkspace({
     const asked = pending ?? (fromHash >= 0 && stageOf(fromHash) === stage ? { section: fromHash } : null);
     const list = (stages[stage]?.sections ?? []).filter(sectionShown);
     const incomplete = list.filter((index) => sectionIssues(index).length > 0);
-    setExpanded(new Set([...incomplete, ...(asked ? [asked.section] : [])]));
+    // One step open at a time (the one asked for, else the first incomplete); the others are one line and open on click.
+    setExpanded(new Set(asked ? [asked.section] : incomplete.slice(0, 1)));
     const first = asked?.section ?? incomplete[0];
     if (first !== undefined) window.setTimeout(() => focusSection(first, asked?.field), 260);
   };
@@ -1531,6 +1554,16 @@ export default function ApplicationWorkspace({
       return <input key={field.name} type="hidden" name={field.name} defaultValue={Array.isArray(kept) ? kept.join(", ") : String(kept ?? "")} />;
     }
     const autoFilled = !readOnly && !fixedAustralia && field.type !== "file" && isAutoFilled(field.name);
+    // USI-SERVICE: Verify / find / create the USI right under the field (the server reads the saved name and date of birth).
+    if (field.name === "usi_number" && !hiddenField(field.name)) {
+      return (
+        <Fragment key={field.name}>
+          {renderFieldBody(field, locked, autoFilled, fixedAustralia, marks, false)}
+          <UsiPanel applicationId={application.id} usi={values.usi_number ?? ""} onUsi={fillUsi} readOnly={readOnly} beforeCall={readOnly ? undefined : flushSave}
+            documentPrefill={() => ({ visa: { PassportNumber: fieldValue("passport_number") } })} />
+        </Fragment>
+      );
+    }
     return renderFieldBody(field, locked, autoFilled, fixedAustralia, marks, hiddenField(field.name));
   };
 
@@ -1850,7 +1883,8 @@ export default function ApplicationWorkspace({
   const missingNow = isReview ? collectMissing().missing : [];
   const documentProblems = isReview ? sections.map((_, index) => documentProblem(index)) : [];
   const crossFieldProblems = isReview ? sections.map((_, index) => fieldProblems(index)) : [];
-  const footerMessage = stageOpen ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
+  // A submitted (read-only) application is not being filled in: no "still needs details" line under it.
+  const footerMessage = stageOpen && !readOnly ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
   const firstSubmit = canSubmitFrom(workflow, application.status);
   // Action required: whoever the backend allows (the student, the agent, staff) corrects the form and resubmits it from here.
   const resubmitHere = actionsFor(workflow, application.status, "applicant")

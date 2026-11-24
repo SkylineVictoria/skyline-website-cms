@@ -5,6 +5,7 @@ import LmsAttendancePage from "./LmsAttendancePage";
 import LmsCompletionPage from "./LmsCompletionPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
+import LmsUnitsPage from "./LmsUnitsPage";
 import LmsTimetableHub from "./timetable/LmsTimetableHub";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
 import LmsLocationsPage from "./LmsLocationsPage";
@@ -25,8 +26,7 @@ export default function LmsPage() {
   const selected = LMS_MENU.find(x => x.id === area);
   if (!area || area === "dashboard") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "courses") return <LmsCoursesPage />;
-  // Units are managed inside each course (Courses > Units tab).
-  if (area === "units") return <Navigate to="/admin/lms/courses" replace />;
+  if (area === "units") return <LmsUnitsPage />;
   // The intake list is the same screen as Courses › Intakes; old ?intake= links open that intake in its sheet.
   if (area === "intakes") return query.get("intake") ? <Navigate to={`/admin/lms/intakes#${query.get("intake")}`} replace /> : <IntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;

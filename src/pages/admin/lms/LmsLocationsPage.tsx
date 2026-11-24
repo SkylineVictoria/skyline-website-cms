@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { rto } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 interface Room { id: string; name: string; capacity: number | null; isActive: boolean; locationId: string | null }
 interface Location { id: string; name: string; address: string | null; kind: "theory" | "practical"; isActive: boolean; rooms: Room[] }
@@ -135,9 +136,9 @@ export default function LmsLocationsPage() {
             <label className="block text-xs font-semibold text-foreground-700">Name<input autoFocus maxLength={120} className={field} value={loc.name} placeholder="e.g. Level 8, 123 Example St" onChange={e => setLoc({ ...loc, name: e.target.value })} /></label>
             <label className="block text-xs font-semibold text-foreground-700">Address<input maxLength={300} className={field} value={loc.address} onChange={e => setLoc({ ...loc, address: e.target.value })} /></label>
             <label className="block text-xs font-semibold text-foreground-700">Used for
-              <select className={field} value={loc.kind} onChange={e => setLoc({ ...loc, kind: e.target.value as LocDraft["kind"] })}>
+              <SearchableSelect className={field} value={loc.kind} onChange={e => setLoc({ ...loc, kind: e.target.value as LocDraft["kind"] })}>
                 <option value="theory">Theory classes</option><option value="practical">Practical classes (workshop)</option>
-              </select></label>
+              </SearchableSelect></label>
             <label className="flex items-center gap-2 text-sm text-foreground-800"><input type="checkbox" checked={loc.isActive} onChange={e => setLoc({ ...loc, isActive: e.target.checked })} />Active (shown in room lists)</label>
           </div>
           <div className="mt-5 flex justify-end gap-2">
@@ -150,10 +151,10 @@ export default function LmsLocationsPage() {
             <label className="block text-xs font-semibold text-foreground-700">Room name<input autoFocus maxLength={120} className={field} value={room.name} placeholder="e.g. Room 8.1" onChange={e => setRoom({ ...room, name: e.target.value })} /></label>
             <label className="block text-xs font-semibold text-foreground-700">Seats<input inputMode="numeric" className={field} value={room.capacity} placeholder="e.g. 25" onChange={e => setRoom({ ...room, capacity: e.target.value.replace(/\D/g, "") })} /></label>
             <label className="block text-xs font-semibold text-foreground-700">Location
-              <select className={field} value={room.locationId ?? ""} onChange={e => setRoom({ ...room, locationId: e.target.value || null })}>
+              <SearchableSelect className={field} value={room.locationId ?? ""} onChange={e => setRoom({ ...room, locationId: e.target.value || null })}>
                 <option value="">No location</option>
                 {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select></label>
+              </SearchableSelect></label>
             <label className="flex items-center gap-2 text-sm text-foreground-800"><input type="checkbox" checked={room.isActive} onChange={e => setRoom({ ...room, isActive: e.target.checked })} />Active (can be booked)</label>
           </div>
           <div className="mt-5 flex justify-end gap-2">

@@ -6,12 +6,16 @@ import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
 import { evidenceUrl, fmtDateTime, OUTCOME_LABEL, STATE_LABEL } from "@/lib/assessment/api";
 import type { Attempt, Definition, EvidenceFile } from "@/lib/assessment/types";
 import { asmAdmin } from "@/pages/admin/lib/assessments";
+import ResultsSheet from "@/components/assessment/ResultsSheet";
+import { useAttemptHistory } from "@/components/assessment/useAttemptHistory";
+import { downloadWorkbookPdf } from "@/lib/assessment/workbookExport";
 
 /** An administrator's read-only view of one attempt: responses, evidence, results, feedback, history, and the authorised overrides. */
 export default function AttemptDrawer({ attemptId, onClose, onChanged }: { attemptId: string; onClose: () => void; onChanged?: () => void }) {
   const { push } = useToast();
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [definition, setDefinition] = useState<Definition | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [reason, setReason] = useState(""); const [overrideLimit, setOverrideLimit] = useState(false);
   const load = async () => {
@@ -22,6 +26,14 @@ export default function AttemptDrawer({ attemptId, onClose, onChanged }: { attem
   };
   useEffect(() => { void load(); }, [attemptId]); // eslint-disable-line react-hooks/exhaustive-deps
   const open = async (f: EvidenceFile) => { const w = window.open("", "_blank"); try { const u = await evidenceUrl(f.path); if (w) { w.opener = null; w.location.href = u; } } catch (e) { w?.close(); setError(e instanceof Error ? e.message : "The file could not be opened."); } };
+  const history = useAttemptHistory(attempt?.id, attempt ? [attempt] : [], null, attempt?.rowVersion);
+  const exportPdf = async () => {
+    if (!attempt || !definition || !history) return;
+    setExporting(true);
+    try { await downloadWorkbookPdf({ definition, attempt, history, title: history.assessment?.title || definition.source?.unit?.name || "Assessment" }); }
+    catch (e) { setError(e instanceof Error ? `The PDF was not made: ${e.message}` : "The PDF was not made."); }
+    finally { setExporting(false); }
+  };
   const act = async (action: string, data: Record<string, unknown>, done: string) => { try { await asmAdmin(action, { id: attemptId, ...data }); push(done); await load(); onChanged?.(); } catch (e) { setError(e instanceof Error ? e.message : "Not done."); } };
   return (
     <Drawer open title={attempt ? `Attempt ${attempt.attemptNo} · ${STATE_LABEL[attempt.state] ?? attempt.state}` : "Attempt"} onClose={onClose} width="max-w-4xl" footer={<Button variant="outline" onClick={onClose}>Close</Button>}>
@@ -34,6 +46,7 @@ export default function AttemptDrawer({ attemptId, onClose, onChanged }: { attem
             {attempt.outcome ? <Badge tone={attempt.outcome === "S" ? "success" : "warn"}>{OUTCOME_LABEL[attempt.outcome]}</Badge> : null}
             {attempt.responsesHash ? <span title={attempt.responsesHash}>sha-256 {attempt.responsesHash.slice(0, 12)}…</span> : null}
             {attempt.declaration?.signature ? <span>Signed "{String(attempt.declaration.signature)}"</span> : null}
+            {attempt.state !== "draft" ? <Button size="sm" variant="outline" icon="ri-file-pdf-2-line" className="ml-auto" disabled={exporting || !history} onClick={() => void exportPdf()}>{exporting ? "Making the PDF…" : "Export as workbook PDF"}</Button> : null}
           </div>
           {attempt.state !== "draft" && attempt.state !== "void" ? (
             <div className="flex flex-wrap items-center gap-2 rounded-md border border-background-200 p-2 text-sm">
@@ -48,6 +61,7 @@ export default function AttemptDrawer({ attemptId, onClose, onChanged }: { attem
           {attempt.taskResults.length ? <ul className="flex flex-wrap gap-2 text-xs">{attempt.taskResults.map((t) => <li key={t.taskId}><Badge tone={t.outcome === "S" ? "success" : t.outcome === "NYS" ? "warn" : "muted"}>{definition.tasks.find((x) => x.id === t.taskId)?.title ?? t.taskId}: {t.outcome ? OUTCOME_LABEL[t.outcome] : "not decided"}</Badge></li>)}</ul> : null}
           <AssessmentRenderer definition={definition} responses={attempt.responses} assessorResponses={attempt.assessorResponses} mode="review" evidence={attempt.evidence} openEvidence={(f) => void open(f)}
             afterQuestion={(q) => { const rs = attempt.results.filter((r) => r.questionId === q.id); return rs.length ? <ul className="mt-2 space-y-0.5 text-xs text-foreground-700">{rs.map((r) => <li key={`${r.questionId}|${r.criterionId ?? ""}`}>{r.criterionId ? `${q.criteria?.find((c) => c.id === r.criterionId)?.text ?? r.criterionId}: ` : ""}<Badge tone={r.outcome === "S" ? "success" : r.outcome === "NYS" ? "warn" : "muted"}>{r.outcome ? OUTCOME_LABEL[r.outcome] : r.suggestedOutcome ? `suggested ${OUTCOME_LABEL[r.suggestedOutcome]}` : "unmarked"}</Badge>{r.feedback ? ` ${r.feedback}` : ""}</li>)}</ul> : null; }} />
+          {history && attempt.state !== "draft" ? <ResultsSheet definition={definition} history={history} /> : null}
           {attempt.feedback.length ? <div><p className="mb-1 text-xs font-medium uppercase tracking-wide text-foreground-500">Messages</p><ul className="space-y-1 text-sm">{attempt.feedback.map((f) => <li key={f.id} className="rounded-md bg-background-100 px-3 py-1.5"><span className="text-xs text-foreground-500">{f.role} · {fmtDateTime(f.createdAt)}</span><br />{f.body}</li>)}</ul></div> : null}
         </div>
       ) : !error ? <p className="text-sm text-foreground-600">Loading…</p> : null}

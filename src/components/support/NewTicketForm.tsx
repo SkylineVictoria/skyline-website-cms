@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ruleNumber } from "@/lib/businessRules";
 import { CATEGORY_LABEL, PRIORITY_LABEL, createTicket, defaultTicketPriority, ticketCategories, ticketStudents, supportAttachmentCount, uploadTicketFiles, type TicketCategory, type TicketPriority } from "@/lib/supportTickets";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** New ticket form for students and agents. Agents can say which student the ticket is about. */
 export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isStudent: boolean; onCreated: (id: string, ref: string) => void; onCancel: () => void }) {
@@ -40,22 +41,22 @@ export default function NewTicketForm({ isStudent, onCreated, onCancel }: { isSt
       <h2 className="font-heading text-lg font-semibold text-foreground-900">New ticket</h2>
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block text-sm font-medium text-foreground-800">Category
-          <select className={field} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>
+          <SearchableSelect className={field} value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)}>
             {ticketCategories().map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
-          </select>
+          </SearchableSelect>
         </label>
         <label className="block text-sm font-medium text-foreground-800">Priority
-          <select className={field} value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>
+          <SearchableSelect className={field} value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>
             {(Object.keys(PRIORITY_LABEL) as TicketPriority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
-          </select>
+          </SearchableSelect>
         </label>
       </div>
       {!isStudent && students.length ? (
         <label className="block text-sm font-medium text-foreground-800">About a student (optional)
-          <select className={field} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
+          <SearchableSelect className={field} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
             <option value="">Not about a specific student</option>
             {students.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          </SearchableSelect>
         </label>
       ) : null}
       <label className="block text-sm font-medium text-foreground-800">Subject

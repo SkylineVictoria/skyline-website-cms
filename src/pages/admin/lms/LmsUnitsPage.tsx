@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import BulkResourceWorkspace from "./BulkResourceWorkspace";
+import UnitResourcesPanel from "./UnitResourcesPanel";
 import UnitContentPanel from "./UnitContentPanel";
 import UnitAssessmentsPanel from "./UnitAssessmentsPanel";
 import { HOURS_PER_WEEK, loadUnitHours, rto, saveUnitHours, shownHours, suggestHours, weeksForHours, type CourseDetail, type HoursSplit, type RtoCourse, type RtoUnit, type UnitHours } from "@/pages/admin/lib/rto";
@@ -9,7 +12,22 @@ import { ruleObject } from "@/lib/businessRules";
 import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
 
+import { bulkAdmin, categories, categoryLabel, listResources, splitCategoryTitle, type ImportFile, type ImportJob, type Resource } from "@/pages/admin/lib/bulkResources";
+import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
+import SearchableSelect from "@/components/ui/SearchableSelect";
+
 type Entry = { course: RtoCourse; unit: RtoUnit; index: number };
+/** A unit's documents for the list (owner, 2026-11-23: "see all docs inside units on the main page"): its Learning content,
+ *  its Resources (AI bulk upload) and its Assessments. */
+type UnitDocs = { learning: { id: string; title: string; kind: string }[]; resources: Resource[]; assessments: AssessmentRow[];
+  /** AI Bulk Upload files for this unit not approved yet: they become Resources only after review (or failed / still reading). */
+  pending: { name: string; state: ImportFile["state"] }[] };
+/** The AI Bulk Upload files still in the queue (the latest 20 uploads), for the Documents column. */
+async function pendingBulkFiles(): Promise<ImportFile[]> {
+  const jobs = await bulkAdmin<ImportJob[]>("list");
+  const lists = await Promise.all(jobs.slice(0, 20).map(job => bulkAdmin<ImportFile[]>("detail", { job: job.id }).catch(() => [] as ImportFile[])));
+  return lists.flat().filter(file => !["imported", "excluded"].includes(file.state));
+}
 /** Filled from Training.gov.au or calculated: shown greyed out, not typed in. */
 const readOnlyClass = "w-full cursor-not-allowed rounded-lg border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-600";
 /** Hours SLIT enters by hand: white, outlined, bold, so they stand out from the greyed fields. */
@@ -27,7 +45,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const [adding, setAdding] = useState(false);
   const [picking, setPicking] = useState(false);
   const [page, setPage] = useState(1);
-  const [drawerTab, setDrawerTab] = useState<"content" | "details" | "learning" | "assessments">("details");
+  const [drawerTab, setDrawerTab] = useState<"content" | "details" | "learning" | "assessments" | "resources" | "settings">("details");
   const [hours, setHours] = useState<Record<string, UnitHours>>({});
   const [hoursError, setHoursError] = useState("");
   const [hoursDraft, setHoursDraft] = useState<HoursSplit | null>(null);
@@ -38,7 +56,16 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const [status, setStatus] = useState("all");
   const [selected, setSelected] = useState<Entry | null>(null);
   const [draft, setDraft] = useState<RtoUnit | null>(null);
+  const [startContent, setStartContent] = useState(false);
+  const [bulk, setBulk] = useState<{ hint?: string; files?: File[] } | null>(null);
+  const [canManageResources, setCanManageResources] = useState(false);
+  useEffect(() => {
+    void supabase.rpc("asm_is_admin").then(({ data }) => setCanManageResources(data === true));
+  }, []);
   const [canEdit, setCanEdit] = useState(false);
+  const [canEditContent, setCanEditContent] = useState(false);
+  const [docs, setDocs] = useState<Record<string, UnitDocs>>({});
+  const [showDocs, setShowDocs] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -46,8 +73,9 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, me] = await Promise.all([rto<RtoCourse[]>("course_list"), rto<{rtoManager:boolean}>("me")]);
+      const [list, me] = await Promise.all([rto<RtoCourse[]>("course_list"), rto<{rtoManager:boolean; admin?:boolean}>("me")]);
       setCourses(list); setCanEdit(me.rtoManager);
+      setCanEditContent(me.rtoManager || me.admin === true);
       setCourseId(prev => embeddedCourseId ?? (list.some(c => c.id === prev) ? prev : (list[0]?.id ?? "")));
       const wanted = embeddedCourseId ? list.filter(c => c.id === embeddedCourseId) : list;
       const results = await Promise.allSettled(wanted.map(c => rto<CourseDetail>("course_get", {courseId:c.id})));
@@ -97,15 +125,55 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   const paged = filtered.slice((currentPage - 1) * PAGE, currentPage * PAGE);
   useEffect(() => { setPage(1); }, [query, courseId, type, status]);
   const selectedCourse = courses.find(c => c.id === courseId);
+  const docsUnitIds = useMemo(() => (details.find(d => d.course.id === courseId)?.units ?? []).map(u => u.id).filter((id): id is string => !!id), [details, courseId]);
+  const docsKey = docsUnitIds.join(",");
+  useEffect(() => {
+    if (!courseId || !docsUnitIds.length) { setDocs({}); return; }
+    let live = true;
+    const empty = (): UnitDocs => ({ learning: [], resources: [], assessments: [], pending: [] });
+    void Promise.all([
+      supabase.from("unit_contents").select("id,unit_id,kind,title,sort").in("unit_id", docsUnitIds).order("sort").then(({ data }) => (data ?? []) as { id: string; unit_id: string; kind: string; title: string }[], () => []),
+      listResources(null).catch(() => [] as Resource[]),
+      asmAdmin<AssessmentRow[]>("assessment_list", { courseId, includeArchived: false }).catch(() => [] as AssessmentRow[]),
+      canManageResources ? pendingBulkFiles().catch(() => [] as ImportFile[]) : Promise.resolve([] as ImportFile[]),
+    ]).then(([learning, resources, assessments, pending]) => {
+      if (!live) return;
+      const out: Record<string, UnitDocs> = Object.fromEntries(docsUnitIds.map(id => [id, empty()]));
+      for (const row of learning) out[row.unit_id]?.learning.push({ id: row.id, title: row.title, kind: row.kind });
+      for (const row of resources) out[row.unit_id]?.resources.push(row);
+      for (const row of assessments) if (row.unitId) out[row.unitId]?.assessments.push(row);
+      // A queued file belongs to the unit the AI named (its code on this course), else to its only matching unit.
+      const byCode = new Map((details.find(d => d.course.id === courseId)?.units ?? []).filter(u => u.id).map(u => [u.code.trim().toUpperCase(), u.id as string]));
+      for (const file of pending) {
+        // A file the AI has not read yet has no unit code: the unit code in its file or folder name is used instead.
+        const fromPath = `${file.source_path ?? ""}/${file.name}`.toUpperCase().match(/(?<![A-Z0-9])[A-Z]{5,8}\d{3,4}[A-Z]?(?![A-Z0-9])/g)?.find(code => byCode.has(code));
+        const unitId = (file.result?.unitCode && byCode.get(file.result.unitCode.trim().toUpperCase())) || (file.matches?.length === 1 ? file.matches[0].id : "")
+          || (fromPath ? byCode.get(fromPath) ?? "" : "");
+        if (unitId) out[unitId]?.pending.push({ name: file.result?.title || file.name, state: file.state });
+      }
+      setDocs(out);
+    });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloaded when the course or its units change
+  }, [courseId, docsKey, drawerTab, selected, canManageResources, bulk]);
+  /** Open a unit on one of its document tabs. */
+  const openOn = (entry: Entry, tab: "learning" | "resources" | "assessments") => { open(entry); setDrawerTab(tab); };
   const shownCourses = courses.filter(c => (c.code+" "+c.name).toLowerCase().includes(courseQuery.toLowerCase()));
   const uniqueCount = new Set(rows.map(r => r.unit.code.trim().toLowerCase())).size;
   const hoursOf = (u: RtoUnit) => shownHours(u.id ? hours[u.id] : undefined, u.nominalHours);
-  const open = (entry:Entry) => {
-    const shown = hoursOf(entry.unit);
+  const open = useCallback((entry: Entry) => {
+    const shown = shownHours(entry.unit.id ? hours[entry.unit.id] : undefined, entry.unit.nominalHours);
     setSelected(entry); setAdding(false); setDraft({...entry.unit}); setNotice("");
     setHoursDraft(shown ? { slitHours: shown.slitHours, theoryHours: shown.theoryHours, practicalHours: shown.practicalHours, assessmentHours: shown.assessmentHours } : null);
-    setDrawerTab("details");
-  };
+    setStartContent(false);
+    setDrawerTab(embeddedCourseId ? "details" : "resources");
+  }, [embeddedCourseId, hours]);
+  useEffect(() => {
+    if (embeddedCourseId || selected || picking || !courseId) return;
+    const first = rows.find(row => row.course.id === courseId && row.unit.isActive)
+      ?? rows.find(row => row.course.id === courseId);
+    if (first) open(first);
+  }, [courseId, embeddedCourseId, open, picking, rows, selected]);
   const hoursSum = hoursDraft ? hoursDraft.theoryHours + hoursDraft.practicalHours + hoursDraft.assessmentHours : 0;
   const hoursValid = !!hoursDraft && [hoursDraft.slitHours, hoursDraft.theoryHours, hoursDraft.practicalHours, hoursDraft.assessmentHours]
     .every(n => Number.isInteger(n) && n >= 0) && hoursSum === hoursDraft.slitHours;
@@ -135,7 +203,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     const updated = await rto<CourseDetail>("course_get", { courseId: id });
     setDetails(old => old.some(d => d.course.id === id) ? old.map(d => d.course.id === id ? updated : d) : [...old, updated]);
   };
-  const chooseCourse = (id:string) => { setCourseId(id); setSelected(null); setDraft(null); setAdding(false); setAdding(false); setPage(1); };
+  const chooseCourse = (id:string) => { setCourseId(id); setSelected(null); setDraft(null); setAdding(false); setPage(1); };
   const save = async () => {
     if ((!selected && !adding) || !draft || !canEdit || busy || !courseId) return;
     if (!draft.code.trim() || !draft.name.trim()) { setNotice("Code and name are required."); return; }
@@ -153,124 +221,96 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
       }
       const updated = await rto<CourseDetail>("course_get", {courseId});
       setDetails(old => old.map(d => d.course.id === updated.course.id ? updated : d));
-      setSelected(null); setDraft(null);
+      if (!embeddedCourseId && selected) {
+        const index = updated.units.findIndex(item => item.id === unit.id);
+        if (index >= 0) {
+          setSelected({ course: updated.course, unit: updated.units[index], index });
+          setDraft({ ...updated.units[index] });
+          setDrawerTab("resources");
+        }
+      } else {
+        setSelected(null); setDraft(null);
+      }
     } catch(e) { setNotice(e instanceof Error ? e.message : "Unable to save unit."); }
     finally { setBusy(false); }
   };
-  return <div className={embeddedCourseId ? "space-y-4" : "mx-auto max-w-[1500px] space-y-5 pb-12"}>
-    {editingHours && selectedCourse ? <UnitHoursEditor course={selectedCourse} onClose={() => setEditingHours(false)}
-      onSaved={() => { void refreshHours(selectedCourse.id); void reloadCourse(selectedCourse.id); }} /> : null}
-    {picking && selectedCourse ? <AddUnitsFromTga course={selectedCourse} units={details.find(d => d.course.id === selectedCourse.id)?.units ?? []}
-      onClose={() => setPicking(false)} onDone={() => void reloadCourse(selectedCourse.id)} /> : null}
-    {!embeddedCourseId && <header className="flex flex-wrap items-end justify-between gap-3">
-      <div><h1 className="font-heading text-2xl font-bold text-foreground-950">Units</h1>
-        <p className="text-sm text-foreground-500">Units of each course, with their Training.gov.au content.</p></div>
-    </header>}
-    {error ? <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{error} <button className="ml-2 underline" onClick={() => void load()}>Retry</button></p> : null}
-    <div className={embeddedCourseId ? "" : "grid items-start gap-5 lg:grid-cols-[320px_minmax(0,1fr)]"}>
-    {!embeddedCourseId && <aside className="rounded-2xl border border-background-200 bg-background-50 p-3 shadow-sm">
-      <label className="relative block"><span className="sr-only">Search courses</span>
-        <i className="ri-search-line absolute left-3 top-2.5 text-foreground-400" aria-hidden="true" />
-        <input aria-label="Search courses" className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" placeholder="Search code or name" value={courseQuery} onChange={e=>setCourseQuery(e.target.value)} />
-      </label>
-      <p className="mt-2 text-right text-xs text-foreground-500">{shownCourses.length} course{shownCourses.length === 1 ? "" : "s"}</p>
-      <div className="mt-2 max-h-[70vh] space-y-1 overflow-auto">{shownCourses.map(course => {
-        const list = details.find(d => d.course.id === course.id)?.units;
-        const activeCount = list ? list.filter(u => u.isActive).length : null;
-        return <button type="button" key={course.id} aria-pressed={courseId===course.id} onClick={()=>chooseCourse(course.id)}
-          className={"flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors " + (courseId===course.id ? "bg-primary-50 ring-1 ring-primary-300" : "hover:bg-background-100")}>
-          <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-foreground-950">{course.code}</span>
-            <span className="block truncate text-xs text-foreground-600">{course.name}</span></span>
-          <span className="shrink-0 text-xs text-foreground-500">{activeCount ?? "…"}</span>
-        </button>;
-      })}</div>
-    </aside>}
-    <section className="min-w-0 rounded-2xl border border-background-200 bg-background-50 p-5 shadow-sm">
-      {!selectedCourse ? <p className="py-20 text-center text-sm text-foreground-500">{loading ? "Loading…" : "Select a course."}</p> : <>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
-          <h2 className="font-heading text-xl font-bold text-foreground-950">{selectedCourse.name}</h2></div>
-        {canEdit ? <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => setEditingHours(true)} title="Edit the SLIT hours of every selected unit in one table"
-            className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100">
-            <i className="ri-time-line mr-1" aria-hidden="true" />Edit all hours</button>
-          <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add or change units</button></div> : null}
-      </div>
-      {(() => {
-        const units = details.find(d => d.course.id === selectedCourse.id)?.units ?? [];
-        const active = units.filter(u => u.isActive);
-        const facts: [string, string][] = [["Active units", String(active.length)], ["Core", String(active.filter(u => u.unitType === "core").length)],
-          ["Electives", String(active.filter(u => u.unitType === "elective").length)], ["Nominal hours", active.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0).toLocaleString()],
-          ["SLIT hours", active.reduce((sum, u) => sum + (hoursOf(u)?.slitHours ?? 0), 0).toLocaleString() +
-            (active.some(u => hoursOf(u) && !hoursOf(u)?.confirmed) ? " (to review)" : "")]];
-        return <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-5 sm:divide-x sm:divide-background-200">
-          {facts.map(([label, value]) => <div key={label} className="px-3 py-2"><dt className="text-xs text-foreground-500">{label}</dt><dd className="text-sm font-semibold text-foreground-950">{loading ? "…" : value}</dd></div>)}
-        </dl>;
-      })()}
-      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
-        <label className="relative min-w-56 flex-1"><span className="sr-only">Search units</span>
-          <i className="ri-search-line absolute left-3 top-2.5 text-sm text-foreground-400" aria-hidden="true" />
-          <input aria-label="Search units" className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" placeholder="Search units" value={query} onChange={e=>setQuery(e.target.value)} />
-        </label>
-        {([["all","All"],["core","Core"],["elective","Electives"],["prereq","Prerequisite units"],["needs","Needs prerequisites"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={type===value} onClick={()=>setType(value)}
-          className={"rounded-full border px-2.5 py-1 font-semibold " + (type===value ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-600")}>{label}</button>)}
-        <select aria-label="Unit status" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={status} onChange={e=>setStatus(e.target.value)}>
-          <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
-      </div>
-      {hoursError ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{hoursError}</p> : null}
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[1000px] text-left text-sm">
-        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Type","Prerequisites","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
-        <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
-          className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
-          <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
-            </td>
-          <td className="px-3 py-2"><span className="capitalize">{r.unit.unitType}</span>{r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title="Another unit needs this one first, so it is taught earlier">Prerequisite</span> : null}</td>
-          <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="block max-w-xs space-y-0.5">{needs[r.unit.id].map(n => <span key={n.id} className="block"><b className="text-amber-800">{n.code}</b> <span className="text-foreground-600">{r.course && details.find(d => d.course.id === r.course.id)?.units.find(u => u.id === n.id)?.name}</span></span>)}</span> : <span className="text-foreground-400">—</span>}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
-          {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
-            return <>
-              <td className={cell}>{h ? h.slitHours : "—"}{h && !h.confirmed ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold not-italic text-amber-800">Review</span> : null}</td>
-              {HOUR_PARTS.map(([key]) => <td key={key} className={cell}>{h ? h[key] : "—"}</td>)}
-            </>; })()}
-          <td className="px-3 py-2"><span className={"rounded-full px-2 py-0.5 text-xs font-semibold " + (r.unit.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{r.unit.isActive ? "Active" : "Inactive"}</span></td>
-        </tr>)}</tbody></table>
-        {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading units…</p> : !filtered.length ? <p className="py-10 text-center text-sm text-foreground-500">{rows.some(r => r.course.id === courseId) ? "No matching units." : "No units yet. Use Add units to pick them from Training.gov.au."}</p> : null}
-      </div>
-      {pageCount > 1 ? <div className="mt-3 flex items-center justify-between text-xs text-foreground-500">
-        <span>{((currentPage-1)*PAGE+1) + "–" + Math.min(currentPage*PAGE,filtered.length) + " of " + filtered.length}</span>
-        <div className="flex items-center gap-2">
-          <button type="button" disabled={currentPage===1} onClick={()=>setPage(p=>p-1)} className="rounded-lg border border-background-300 px-2.5 py-1 disabled:opacity-40" aria-label="Previous page">‹</button>
-          <span>{currentPage} / {pageCount}</span>
-          <button type="button" disabled={currentPage===pageCount} onClick={()=>setPage(p=>p+1)} className="rounded-lg border border-background-300 px-2.5 py-1 disabled:opacity-40" aria-label="Next page">›</button>
+  const selectTab = (tab: typeof drawerTab) => {
+    setStartContent(false);
+    if (tab === "settings" && drawerTab !== "settings" && selected) {
+      const current = hoursOf(selected.unit);
+      setHoursDraft(current ? { slitHours: current.slitHours, theoryHours: current.theoryHours, practicalHours: current.practicalHours, assessmentHours: current.assessmentHours } : null);
+    }
+    setDrawerTab(tab);
+  };
+  const workspaceTabs = embeddedCourseId
+    ? ([["details", "Unit details"], ["resources", "Resources"], ["assessments", "Assessment setup"], ["learning", "Learning content"]] as const)
+    : ([["resources", "Resources"], ["details", "Unit details"], ["assessments", "Assessment setup"], ["settings", "Settings"]] as const);
+  const activeTab = !embeddedCourseId && (drawerTab === "learning" || drawerTab === "content") ? "details" : drawerTab;
+  const editingSettings = drawerTab === "settings" || (embeddedCourseId && drawerTab === "details");
+  const documentSummary = (entry: Entry) => {
+    const d = entry.unit.id ? docs[entry.unit.id] : undefined;
+    if (!d) return <span className="text-foreground-400">—</span>;
+    // Files on the unit are counted under their category (with the AI Bulk Upload resources of that category); notes and
+    // links stay "Learning content".
+    const files = d.learning.filter(x => x.kind === "file").map(x => splitCategoryTitle(x.title));
+    const other = d.learning.filter(x => x.kind !== "file");
+    const parts: (readonly ["learning" | "resources" | "assessments", string, number, string[]])[] = [
+      ...categories.map(c => {
+        const names = [...files.filter(x => x.category === c).map(x => x.title), ...d.resources.filter(x => x.category === c).map(x => x.title || x.name)];
+        return ["resources", categoryLabel(c), names.length, names] as const;
+      }),
+      ["learning", "Learning content", other.length, other.map(x => x.title)] as const,
+      ["assessments", "Assessments set", d.assessments.length, d.assessments.map(x => x.title)] as const,
+    ];
+    const waiting = d.pending.length ? <div>
+      <button type="button" onClick={e => { e.stopPropagation(); setBulk({ hint: entry.unit.id }); }}
+        title={d.pending.map(x => `${x.name} (${x.state === "review" ? "waiting for your review" : x.state === "failed" ? "failed: open AI Bulk Upload to retry" : "being read"})`).join("\n")}
+        className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 font-semibold text-amber-900 hover:bg-amber-100">Not approved yet {d.pending.length}</button>
+      {showDocs ? <ul className="mt-1 space-y-0.5 pl-2 text-foreground-600">{d.pending.map((x, i) => <li key={i} className="break-words">{x.name} · {x.state === "review" ? "review" : x.state}</li>)}</ul> : null}
+    </div> : null;
+    if (!parts.some(([, , n]) => n)) return waiting ?? <span className="text-foreground-400">None</span>;
+    return <div className="flex max-w-xs flex-col gap-1">{waiting}{parts.filter(([, , n]) => n).map(([tab, label, n, names]) => <div key={label}>
+      <button type="button" onClick={e => { e.stopPropagation(); openOn(entry, tab); }} title={names.join("\n")}
+        className="rounded-full border border-primary-200 bg-primary-50 px-2 py-0.5 font-semibold text-primary-800 hover:bg-primary-100">{label} {n}</button>
+      {showDocs ? <ul className="mt-1 space-y-0.5 pl-2 text-foreground-600">{names.map((name, i) => <li key={i} className="break-words">{name}</li>)}</ul> : null}
+    </div>)}</div>;
+  };
+  const unitPanel = draft ? <>
+        <div className={"flex items-start justify-between gap-3 px-4 py-4 " + (embeddedCourseId ? "border-b border-background-200" : "rounded-t-2xl bg-violet-50 dark:bg-violet-950/30")}>
+          <div className="flex min-w-0 gap-3">
+            <i className="ri-book-open-line grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-violet-100 text-xl text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+            <div className="min-w-0"><h2 className="font-heading text-lg font-bold text-foreground-950">{draft.code}</h2>
+              <p className="text-sm text-foreground-700">{draft.name}</p></div>
+          </div>
+          {!embeddedCourseId && <span className={draft.isActive ? "rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-900" : "rounded-full bg-background-200 px-2.5 py-1 text-xs text-foreground-700"}>{draft.isActive ? "Active" : "Inactive"}</span>}
+          {embeddedCourseId && <button type="button" onClick={()=>{setSelected(null);setDraft(null);}} className="shrink-0 rounded-lg border border-background-300 px-3 py-1.5 text-xs font-semibold">All units</button>}
         </div>
-      </div> : null}
-      </>}
-    </section>
-    </div>
-    {(selected || adding) && draft ? <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={()=>{setSelected(null);setAdding(false);setDraft(null);}}>
-      <section role="dialog" aria-modal="true" aria-label="Unit details" className="flex h-full w-full max-w-2xl flex-col bg-background-50 shadow-xl" onClick={e=>e.stopPropagation()}>
-        <div className="flex items-start justify-between gap-3 border-b border-background-200 px-6 py-4">
-          <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{draft.code} · {selectedCourse?.code} · {draft.unitType === "core" ? "Core" : "Elective"}{draft.isActive ? "" : " · inactive"}</p>
-            <h2 className="font-heading text-lg font-bold text-foreground-950">{draft.name || "New unit"}</h2></div>
-          <button type="button" onClick={()=>{setSelected(null);setDraft(null);}} aria-label="Close" className="rounded-lg p-1 text-foreground-500 hover:bg-background-100"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
+        <div role="tablist" className="flex flex-wrap gap-x-4 border-b border-background-200 px-4">
+          {workspaceTabs.filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
+            <button key={id} type="button" role="tab" aria-selected={activeTab===id} onClick={()=>selectTab(id)}
+              className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (activeTab===id ? "border-violet-700 text-violet-800 dark:text-violet-300" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
         </div>
-        <div role="tablist" className="flex gap-5 border-b border-background-200 px-6">
-          {([["details","Details"],["learning","Learning content"],["assessments","Assessments"],["content","Training.gov.au"]] as const).filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
-            <button key={id} type="button" role="tab" aria-selected={drawerTab===id} onClick={()=>setDrawerTab(id)}
-              className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (drawerTab===id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto px-6 py-4">
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          {!embeddedCourseId && activeTab === "details" && draft.id && <div className="mb-4 flex flex-wrap gap-2">
+            {([["details", "Unit information"], ["learning", "Learning content"], ["content", "Training.gov.au"]] as const).map(([id, label]) =>
+              <button type="button" key={id} aria-pressed={drawerTab === id} onClick={() => selectTab(id)} className="rounded-lg border border-background-300 px-3 py-1.5 text-sm aria-pressed:border-violet-500 aria-pressed:text-violet-700 dark:aria-pressed:text-violet-300">{label}</button>)}
+          </div>}
           {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
-          {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEdit} /> : null}
+          {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEditContent} initiallyAdding={startContent} /> : null}
+          {drawerTab==="resources" && draft.id && selectedCourse ? <UnitResourcesPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id}
+            canManage={canManageResources} canEdit={canEditContent} onBulk={files => setBulk({ hint: draft.id, files })} onAddContent={canEditContent ? () => { setStartContent(true); setDrawerTab("learning"); } : undefined} /> : null}
           {drawerTab==="assessments" && draft.id && selectedCourse ? <UnitAssessmentsPanel key={draft.id} courseId={selectedCourse.id} unitId={draft.id} canEdit={canEdit} /> : null}
-          {drawerTab==="details" ? <div className="space-y-5">
+          {(drawerTab==="details" || editingSettings) ? <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-[160px_minmax(0,1fr)]">
+            {drawerTab === "details" && <>
             <label className="block text-xs font-medium text-foreground-500">Unit code<input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"} value={draft.code} /></label>
             <label className="block text-xs font-medium text-foreground-500">Unit name<input readOnly tabIndex={-1} className={readOnlyClass + " mt-1"} value={draft.name} /></label>
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground-800 sm:col-span-2"><input type="checkbox" disabled={!canEdit} checked={draft.isActive} onChange={e=>setDraft(d=>d?{...d,isActive:e.target.checked}:d)}/>Active in this course</label>
+            </>}
+            {editingSettings && <label className="flex items-center gap-2 text-sm font-medium text-foreground-800 sm:col-span-2"><input type="checkbox" disabled={!canEdit} checked={draft.isActive} onChange={e=>setDraft(d=>d?{...d,isActive:e.target.checked}:d)}/>Active in this course</label>}
           </div>
-          {draft.id && selectedCourse ? <UnitPrerequisitesPicker key={draft.id} unitId={draft.id} canEdit={canEdit} needs={needs}
+          {editingSettings && draft.id && selectedCourse ? <UnitPrerequisitesPicker key={draft.id} unitId={draft.id} canEdit={canEdit} needs={needs}
             courseUnits={details.find(d => d.course.id === selectedCourse.id)?.units ?? []} onSaved={setNeeds} /> : null}
-          {draft.id ? <div className="space-y-3 border-t border-background-200 pt-4">
+          {editingSettings && draft.id ? <div className="space-y-3 border-t border-background-200 pt-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Hours</h3>
               {(() => { const shown = hoursOf(draft); return shown && !shown.confirmed
@@ -299,19 +339,154 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
               {canEdit ? <button type="button" className="underline" onClick={() => setHoursDraft(h => h ? suggestHours(h.slitHours) : h)}>Reset to 40 / 40 / 20</button> : null}
             </div> : <p className="text-sm text-foreground-600">Enter the SLIT hours for this unit.</p>}
           </div> : null}
-          <div className="border-t border-background-200 pt-5">
+          {drawerTab === "details" && <div className="border-t border-background-200 pt-5">
             <h3 className="font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Courses with this unit</h3>
             <ul className="mt-2 divide-y divide-background-100 text-sm">{details.filter(d=>d.units.some(u=>u.code.toLowerCase()===draft.code.toLowerCase())).map(d=>
               <li key={d.course.id} className="py-2"><span className="font-semibold">{d.course.code}</span> <span className="text-foreground-600">{d.course.name}</span></li>)}</ul>
-          </div>
+          </div>}
           </div> : null}
           {notice ? <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{notice}</p> : null}
         </div>
-        {canEdit && drawerTab==="details" ? <div className="flex justify-end gap-2 border-t border-background-200 px-6 py-3">
-          <button className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold" onClick={()=>{setSelected(null);setAdding(false);setDraft(null);}}>Cancel</button>
+        {canEdit && editingSettings ? <div className="flex justify-end gap-2 border-t border-background-200 px-6 py-3">
+          <button className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold" onClick={()=>{ if (!embeddedCourseId && selected) open(selected); else { setSelected(null); setAdding(false); setDraft(null); } }}>Cancel</button>
           <button disabled={busy || (!!hoursDraft && !hoursValid)} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50" onClick={()=>void save()}>
             {busy ? "Saving…" : adding ? "Add unit" : hoursDraft && draft.id && !hours[draft.id]?.confirmedAt ? "Accept hours and save" : "Save unit"}</button>
         </div> : null}
-      </section></div> : null}
+  </> : null;
+  if (bulk) return <BulkResourceWorkspace courses={courses}
+    units={rows.flatMap(({ course, unit }) => unit.id ? [{ id: unit.id, code: unit.code, name: unit.name, course_id: course.id }] : [])}
+    unitHint={bulk.hint} initialFiles={bulk.files} onClose={() => setBulk(null)} />;
+  const dialogs = <>
+    {editingHours && selectedCourse && <UnitHoursEditor course={selectedCourse} onClose={() => setEditingHours(false)}
+      onSaved={() => { void refreshHours(selectedCourse.id); void reloadCourse(selectedCourse.id); }} />}
+    {picking && selectedCourse && <AddUnitsFromTga course={selectedCourse} units={details.find(d => d.course.id === selectedCourse.id)?.units ?? []}
+      onClose={() => setPicking(false)} onDone={() => void reloadCourse(selectedCourse.id)} />}
+  </>;
+  const loadError = error && <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+    {error} <button type="button" className="ml-2 underline" onClick={() => void load()}>Retry</button>
+  </p>;
+  if (!embeddedCourseId) return <div className="mx-auto max-w-[1680px] space-y-4 pb-10">
+    {dialogs}
+    <header className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center gap-3">
+        <i className="ri-book-open-line grid h-11 w-11 place-items-center rounded-xl bg-violet-100 text-2xl text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+        <div><h1 className="font-heading text-3xl font-bold text-violet-800 dark:text-violet-300">Units</h1>
+          <p className="text-sm text-foreground-600">Manage course units, learning materials and assessments.</p></div>
+      </div>
+      {canManageResources && <button type="button" className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800"
+        onClick={() => setBulk({})}><i className="ri-upload-cloud-2-line mr-2" aria-hidden="true" />AI Bulk Upload</button>}
+    </header>
+    {loadError}
+    <div className="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(10rem,0.95fr)_minmax(11rem,1fr)_minmax(0,3fr)]">
+      <section className="min-w-0 rounded-2xl border border-background-200 bg-background-50 p-3 shadow-sm" aria-label="Courses">
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+          <h2 className="font-heading font-bold">Courses <span className="text-sm text-foreground-500">({courses.length})</span></h2>
+          <Link to="/admin/lms/courses" className="text-xs font-semibold text-violet-700 dark:text-violet-300">Manage courses</Link>
+        </div>
+        <input aria-label="Search courses" className="mb-3 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" placeholder="Search courses…" value={courseQuery} onChange={event => setCourseQuery(event.target.value)} />
+        <div className="max-h-56 space-y-1 overflow-auto xl:max-h-[64vh]">{shownCourses.map(course => <button type="button" key={course.id}
+          aria-pressed={courseId === course.id} onClick={() => chooseCourse(course.id)}
+          className={"flex w-full items-start gap-2 rounded-lg px-2.5 py-2.5 text-left " + (courseId === course.id ? "bg-violet-100 text-violet-950 dark:bg-violet-950 dark:text-violet-100" : "hover:bg-background-100")}>
+          <i className="ri-graduation-cap-line shrink-0 rounded-md bg-violet-50 p-1 text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+          <span className="min-w-0 flex-1"><span className="block text-sm font-bold">{course.code}</span>
+            <span className="block break-words text-xs">{course.name}</span></span>
+          <i className="ri-arrow-right-s-line" aria-hidden="true" />
+        </button>)}</div>
+        {!shownCourses.length && <p className="p-2 text-sm text-foreground-600">{loading ? "Loading courses…" : "No courses found."}</p>}
+      </section>
+      <section className="min-w-0 rounded-2xl border border-background-200 bg-background-50 p-3 shadow-sm" aria-label="Course units">
+        <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
+          <h2 className="font-heading font-bold">Units <span className="text-sm text-foreground-500">({rows.filter(row => row.course.id === courseId).length})</span></h2>
+          {canEdit && selectedCourse && <button type="button" onClick={add} className="rounded-lg bg-violet-700 px-2.5 py-1.5 text-xs font-semibold text-white">+ Add unit</button>}
+        </div>
+        <input aria-label="Search units" className="mb-3 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" placeholder="Search units…" value={query} onChange={event => setQuery(event.target.value)} />
+        <label className="mb-2 flex items-center gap-1.5 text-xs text-foreground-600"><input type="checkbox" checked={showDocs} onChange={event => setShowDocs(event.target.checked)} />Show document names</label>
+        <div className="max-h-56 space-y-1 overflow-auto xl:max-h-[60vh]">{filtered.map(entry => <div key={entry.unit.id ?? entry.index}><button type="button"
+          aria-pressed={selected?.course.id === entry.course.id && selected.index === entry.index} onClick={() => open(entry)}
+          className={"flex w-full items-start gap-2 rounded-lg px-2.5 py-2.5 text-left " + (selected?.course.id === entry.course.id && selected.index === entry.index ? "bg-violet-100 text-violet-950 dark:bg-violet-950 dark:text-violet-100" : "hover:bg-background-100")}>
+          <i className="ri-book-read-line shrink-0 rounded-md bg-violet-50 p-1 text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+          <span className="min-w-0 flex-1"><span className="block text-sm font-bold">{entry.unit.code}</span>
+            <span className="block break-words text-xs">{entry.unit.name}</span></span>
+          <i className="ri-arrow-right-s-line" aria-hidden="true" />
+        </button>
+          {(showDocs || (entry.unit.id && docs[entry.unit.id]?.pending.length)) && <div className="px-2.5 pb-2 text-xs">{documentSummary(entry)}</div>}
+        </div>)}</div>
+
+        {!filtered.length && <p className="p-2 text-sm text-foreground-600">{loading ? "Loading units…" : "No units found for this course."}</p>}
+        {canEdit && selectedCourse && <button type="button" onClick={() => setEditingHours(true)} className="mt-3 text-xs font-semibold text-violet-700 dark:text-violet-300">Edit course hours</button>}
+      </section>
+      <section aria-label="Unit workspace" className="min-w-0 rounded-2xl border border-background-200 bg-background-50 shadow-sm sm:col-span-2 xl:col-span-1">
+        {unitPanel ?? <p className="p-10 text-center text-sm text-foreground-600">{loading ? "Loading unit resources…" : "Select a unit to manage its resources."}</p>}
+      </section>
+    </div>
+  </div>;
+  return <div className="space-y-4">
+    {dialogs}
+    {loadError}
+    <section className={"min-w-0 rounded-2xl border border-background-200 bg-background-50 p-5 shadow-sm" + (draft ? " hidden" : "")}>
+      {!selectedCourse ? <p className="py-20 text-center text-sm text-foreground-500">{loading ? "Loading…" : "Select a course."}</p> : <>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
+          <h2 className="font-heading text-xl font-bold text-foreground-950">{selectedCourse.name}</h2></div>
+        {canEdit ? <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => setEditingHours(true)} title="Edit the SLIT hours of every selected unit in one table"
+            className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100">
+            <i className="ri-time-line mr-1" aria-hidden="true" />Edit all hours</button>
+          <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add or change units</button></div> : null}
+      </div>
+      {(() => {
+        const units = details.find(d => d.course.id === selectedCourse.id)?.units ?? [];
+        const active = units.filter(u => u.isActive);
+        const facts: [string, string][] = [["Active units", String(active.length)], ["Core", String(active.filter(u => u.unitType === "core").length)],
+          ["Electives", String(active.filter(u => u.unitType === "elective").length)], ["Nominal hours", active.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0).toLocaleString()],
+          ["SLIT hours", active.reduce((sum, u) => sum + (hoursOf(u)?.slitHours ?? 0), 0).toLocaleString() +
+            (active.some(u => hoursOf(u) && !hoursOf(u)?.confirmed) ? " (to review)" : "")]];
+        return <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-5 sm:divide-x sm:divide-background-200">
+          {facts.map(([label, value]) => <div key={label} className="px-3 py-2"><dt className="text-xs text-foreground-500">{label}</dt><dd className="text-sm font-semibold text-foreground-950">{loading ? "…" : value}</dd></div>)}
+        </dl>;
+      })()}
+      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+        <label className="relative min-w-56 flex-1"><span className="sr-only">Search units</span>
+          <i className="ri-search-line absolute left-3 top-2.5 text-sm text-foreground-400" aria-hidden="true" />
+          <input aria-label="Search units" className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" placeholder="Search units" value={query} onChange={e=>setQuery(e.target.value)} />
+        </label>
+        {([["all","All"],["core","Core"],["elective","Electives"],["prereq","Prerequisite units"],["needs","Needs prerequisites"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={type===value} onClick={()=>setType(value)}
+          className={"rounded-full border px-2.5 py-1 font-semibold " + (type===value ? "border-primary-500 bg-primary-50 text-primary-700" : "border-background-300 text-foreground-600")}>{label}</button>)}
+        <SearchableSelect aria-label="Unit status" className="rounded-full border border-background-300 bg-transparent px-2 py-1 text-foreground-600" value={status} onChange={e=>setStatus(e.target.value)}>
+          <option value="all">All statuses</option><option value="active">Active</option><option value="inactive">Inactive</option></SearchableSelect>
+        <label className="flex items-center gap-1.5 text-foreground-600"><input type="checkbox" checked={showDocs} onChange={event => setShowDocs(event.target.checked)} />Show document names</label>
+      </div>
+      {hoursError ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{hoursError}</p> : null}
+      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[1150px] text-left text-sm">
+        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Documents","Type","Prerequisites","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
+        <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
+          className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
+          <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
+            </td>
+          <td className="px-3 py-2 text-xs">{documentSummary(r)}</td>
+          <td className="px-3 py-2"><span className="capitalize">{r.unit.unitType}</span>{r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title="Another unit needs this one first, so it is taught earlier">Prerequisite</span> : null}</td>
+          <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="block max-w-xs space-y-0.5">{needs[r.unit.id].map(n => <span key={n.id} className="block"><b className="text-amber-800">{n.code}</b> <span className="text-foreground-600">{r.course && details.find(d => d.course.id === r.course.id)?.units.find(u => u.id === n.id)?.name}</span></span>)}</span> : <span className="text-foreground-400">—</span>}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
+          {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
+            return <>
+              <td className={cell}>{h ? h.slitHours : "—"}{h && !h.confirmed ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold not-italic text-amber-800">Review</span> : null}</td>
+              {HOUR_PARTS.map(([key]) => <td key={key} className={cell}>{h ? h[key] : "—"}</td>)}
+            </>; })()}
+          <td className="px-3 py-2"><span className={"rounded-full px-2 py-0.5 text-xs font-semibold " + (r.unit.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{r.unit.isActive ? "Active" : "Inactive"}</span></td>
+        </tr>)}</tbody></table>
+        {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading units…</p> : !filtered.length ? <p className="py-10 text-center text-sm text-foreground-500">{rows.some(r => r.course.id === courseId) ? "No matching units." : "No units yet. Use Add units to pick them from Training.gov.au."}</p> : null}
+      </div>
+      {pageCount > 1 ? <div className="mt-3 flex items-center justify-between text-xs text-foreground-500">
+        <span>{((currentPage-1)*PAGE+1) + "–" + Math.min(currentPage*PAGE,filtered.length) + " of " + filtered.length}</span>
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={currentPage===1} onClick={()=>setPage(p=>p-1)} className="rounded-lg border border-background-300 px-2.5 py-1 disabled:opacity-40" aria-label="Previous page">‹</button>
+          <span>{currentPage} / {pageCount}</span>
+          <button type="button" disabled={currentPage===pageCount} onClick={()=>setPage(p=>p+1)} className="rounded-lg border border-background-300 px-2.5 py-1 disabled:opacity-40" aria-label="Next page">›</button>
+        </div>
+      </div> : null}
+      </>}
+    </section>
+    {(selected || adding) && draft && <section aria-label="Unit" className="min-w-0 rounded-2xl border border-background-200 bg-background-50 shadow-sm">
+      {unitPanel}
+    </section>}
   </div>;
 }

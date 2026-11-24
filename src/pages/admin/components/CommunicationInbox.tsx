@@ -6,7 +6,7 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import { renderTemplate, smsInfo, templateVariables, type Channel } from "@/lib/communicationTemplates";
 
 type Kind = "student" | "agent" | "staff" | "applicant" | "agency" | "other";
-type SendChannel = Channel | "note" | "teams";
+type SendChannel = Channel | "note" | "teams" | "portal";
 type Person = { kind: Kind; ref: string; name: string; email: string | null; phone: string | null; detail: string; conversationId: string | null; lastMessageAt: string | null };
 type ConversationRow = { id: string; kind: Kind; ref: string | null; name: string; email: string | null; phone: string | null; lastMessageAt: string | null; createdAt: string;
   last: { channel: SendChannel; direction: "in" | "out"; text: string; at: string } | null };
@@ -20,6 +20,8 @@ const CHANNEL_META: Record<SendChannel, { label: string; icon: string }> = {
   email: { label: "Email", icon: "ri-mail-line" }, sms: { label: "SMS", icon: "ri-message-2-line" },
   whatsapp: { label: "WhatsApp", icon: "ri-whatsapp-line" }, note: { label: "Internal note", icon: "ri-sticky-note-line" },
   teams: { label: "Teams", icon: "ri-team-line" },
+  // The student portal's Messages (20261123161517): a student writes from the portal, staff answer here.
+  portal: { label: "Student portal", icon: "ri-chat-smile-2-line" },
 };
 const STATUS_LABELS: Record<Item["status"], { label: string; tone: "primary" | "muted" | "warn" | "secondary" }> = {
   sending: { label: "Sending…", tone: "secondary" }, sent: { label: "Sent", tone: "primary" }, failed: { label: "Not delivered", tone: "warn" },
@@ -169,7 +171,9 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
       ...(c.kind === "agency" ? { agency_name: c.name } : {}), ...(c.kind === "applicant" || c.kind === "staff" ? { booker_name: c.name } : {}),
     };
   }, [c]);
-  const usable = templates.filter((t) => channel === "note" || channel === "teams" || t.channels.includes(channel as Channel));
+  const usable = templates.filter((t) => channel === "note" || channel === "teams" || channel === "portal" || t.channels.includes(channel as Channel));
+  // Student portal: always available for a student's conversation (nothing to connect).
+  const canUse = (ch: SendChannel) => (ch === "portal" ? c?.kind === "student" && !!c?.ref : available.includes(ch));
   const chooseTemplate = (key: string) => {
     setTemplateKey(key);
     const t = templates.find((x) => x.key === key);
@@ -178,18 +182,20 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
     setBody(renderTemplate(t.body, values));
   };
   const missing = templateVariables(subject, body);
-  const blocked = !c || !body.trim() || !available.includes(channel) || (channel === "email" && (!c.email || !subject.trim())) || ((channel === "sms" || channel === "whatsapp") && !c.phone) || (channel === "teams" && !teamId);
+  const blocked = !c || !body.trim() || !canUse(channel) || (channel === "email" && (!c.email || !subject.trim())) || ((channel === "sms" || channel === "whatsapp") && !c.phone) || (channel === "teams" && !teamId);
 
   const send = async () => {
     if (!c || blocked) return;
     if (missing.length && !window.confirm(`These details are still blank: ${missing.map((m) => `{{${m}}}`).join(", ")}. Send anyway?`)) return;
     setSending(true);
-    const { error } = channel === "teams"
+    const { error } = channel === "portal"
+      ? await supabase.rpc("comm_send_portal", { p_conversation: c.id, p_body: body })
+      : channel === "teams"
       ? await supabase.rpc("comm_send_to_team", { p_conversation: c.id, p_team: teamId, p_body: body })
       : await supabase.rpc("comm_send", { p_conversation: c.id, p_channel: channel, p_subject: channel === "email" ? subject : "", p_body: body, p_template_key: templateKey || null });
     setSending(false);
     if (error) { push(`Not sent: ${error.message}`, "error"); return; }
-    push(channel === "email" ? "Email sent – it will show as Sent within a minute." : channel === "note" ? "Note saved." : channel === "teams" ? `Shared with ${myTeams.find((t) => t.id === teamId)?.name ?? "the team"}.` : `${CHANNEL_META[channel].label} sent – it will show as Sent or Not delivered in a moment.`);
+    push(channel === "portal" ? "Sent to the student's portal (Messages)." : channel === "email" ? "Email sent – it will show as Sent within a minute." : channel === "note" ? "Note saved." : channel === "teams" ? `Shared with ${myTeams.find((t) => t.id === teamId)?.name ?? "the team"}.` : `${CHANNEL_META[channel].label} sent – it will show as Sent or Not delivered in a moment.`);
     setBody(""); setSubject(""); setTemplateKey("");
     await load(); onSent();
   };
@@ -219,7 +225,7 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
                 <i className={CHANNEL_META[m.channel].icon} aria-hidden="true" /><span>{CHANNEL_META[m.channel].label}</span>
                 <span>·</span><span>{auto ? "Automatic" : m.direction === "in" ? "From " + c.name : m.by ?? "Staff"}</span>
                 <span>·</span><time>{when(m.at)}</time>
-                <Badge tone={STATUS_LABELS[m.status].tone}>{m.channel === "teams" ? `Shared with ${m.to ?? "team"}` : STATUS_LABELS[m.status].label}</Badge>
+                <Badge tone={STATUS_LABELS[m.status].tone}>{m.channel === "teams" ? `Shared with ${m.to ?? "team"}` : m.channel === "portal" ? (m.direction === "in" ? "Message" : "In the portal") : STATUS_LABELS[m.status].label}</Badge>
               </div>
               {m.subject ? <p className="font-semibold text-foreground-900">{m.subject}</p> : null}
               {m.status === "failed" && m.reason ? <p className="mb-1 text-xs text-primary-800">Not delivered: {m.reason}</p> : null}
@@ -233,8 +239,8 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
 
       <div className="space-y-2 border-t border-background-200 p-3">
         <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Send by">
-          {(["email", "sms", "whatsapp", "teams", "note"] as SendChannel[]).map((ch) => {
-            const on = available.includes(ch);
+          {((c.kind === "student" ? ["portal", "email", "sms", "whatsapp", "teams", "note"] : ["email", "sms", "whatsapp", "teams", "note"]) as SendChannel[]).map((ch) => {
+            const on = canUse(ch);
             return (
               <button key={ch} type="button" role="radio" aria-checked={channel === ch} data-testid={`send-by-${ch}`}
                 title={on ? CHANNEL_META[ch].label : ch === "teams" ? "Join or create a staff team first" : "Not connected yet: set it up in Integrations"}
@@ -245,7 +251,7 @@ export function ConversationView({ id, onBack, onSent, compact = false }: { id: 
             );
           })}
         </div>
-        {!available.includes(channel) ? (
+        {!canUse(channel) ? (
           <p className="rounded-md bg-background-100 px-3 py-2 text-xs text-foreground-700" role="status">
             {channel === "teams"
               ? <>You are not in a staff team yet. Create one or join one in <b>Messages › Teams</b>, then you can share messages there.</>

@@ -6,6 +6,7 @@ import Toast from "@/components/shared/application-form/Toast";
 import { useToast } from "@/components/shared/application-form/useToast";
 import ActionDrawer, { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import { badgeColors, refreshApplicationStatuses } from "@/lib/applicationStatuses";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /**
  * Settings › Application statuses (admins; the database's RLS allows only admins to write): the statuses (label, colour, order,
@@ -211,10 +212,10 @@ export default function ApplicationStatusesPage() {
                           </td>
                           <td className="px-2 py-1.5">
                             {t.to_status === null ? <span className="text-xs text-foreground-500">Keeps the status</span> : (
-                              <select value={t.to_status} disabled={locked || t.kind !== "status"} aria-label={`Target of ${t.label}`} className={INPUT}
+                              <SearchableSelect value={t.to_status} disabled={locked || t.kind !== "status"} aria-label={`Target of ${t.label}`} className={INPUT}
                                 onChange={(e) => void updateTransition(t, { to_status: e.target.value }, "Target saved.")}>
                                 {activeStatuses.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
-                              </select>
+                              </SearchableSelect>
                             )}
                           </td>
                           <td className="px-2 py-1.5">
@@ -252,11 +253,11 @@ export default function ApplicationStatusesPage() {
               <div className="flex flex-wrap items-end gap-2 border-t border-dashed border-background-200 px-3 py-2">
                 <input value={draft.label} placeholder="New action, e.g. Defer" aria-label={`New action from ${s.label}`} className={`${INPUT} w-52`}
                   onChange={(e) => setNewTransition((all) => ({ ...all, [s.value]: { ...draft, label: e.target.value } }))} />
-                <select value={draft.to} aria-label={`Target of the new action from ${s.label}`} className={`${INPUT} w-48`}
+                <SearchableSelect value={draft.to} aria-label={`Target of the new action from ${s.label}`} className={`${INPUT} w-48`}
                   onChange={(e) => setNewTransition((all) => ({ ...all, [s.value]: { ...draft, to: e.target.value } }))}>
                   <option value="">Target status</option>
                   {activeStatuses.filter((x) => x.value !== s.value).map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
-                </select>
+                </SearchableSelect>
                 <button type="button" onClick={() => void addTransition(s.value)} disabled={!draft.label.trim() || !draft.to}
                   className="h-8 rounded-md border border-background-300 px-3 text-sm font-medium text-foreground-800 hover:bg-background-100 disabled:opacity-50">Add action</button>
               </div>

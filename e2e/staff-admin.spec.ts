@@ -1,8 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
 import {
-  PDF, candidateAction, createAdmin, createEditor, employeeAction, expectStatus, hrMails, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, shot, signInAsAdmin, signedInClient, sql, staffAdmin, staffAt, waitForHrMail,
-} from "./support";
+  PDF, candidateAction, createAdmin, createEditor, employeeAction, expectStatus, hrMails, onboard, person, protectedPdf, resetRateLimits, setHrMailMode, shot, signInAsAdmin, signedInClient, sql, staffAdmin, staffAt, waitForHrMail, choose, selectOf } from "./support";
 
 // Staff > Employees (HR-02g) in the browser, against the LOCAL lab stack only: the sidebar, tabs, every lifecycle action with its
 // confirmation dialog (withdraw, deactivate, reactivate, reject, reopen, links), failed emails with Retry, and the status history.
@@ -45,7 +44,7 @@ test("Candidates: a manual candidate (no login) gets a resume through staff-admi
   await page.getByTestId("hr-person-last").fill("Manual");
   await page.getByTestId("hr-person-email").fill(who.email);
   await page.getByTestId("hr-person-phone").fill(who.local);
-  await page.getByTestId("candidate-job").selectOption(job[0]);
+  await choose(page.getByTestId("candidate-job"), job[0]);
   await page.getByTestId("candidate-recruiter-notes").fill("Referred by a trainer.");
   await page.getByTestId("candidate-save").click();
   await expect(page).toHaveURL(/\/admin\/staff\/candidates\/[0-9a-f-]{36}$/);
@@ -124,7 +123,7 @@ test("tabs, a failed rejection email with Retry, reopen and revoke, and a protec
 
   // An uploaded PDF instead of a template: a protected one is refused before anything is sent.
   await page.getByTestId("staff-action-send_offer").click();
-  await page.getByTestId("offer-letter-template").selectOption("__upload");
+  await choose(page.getByTestId("offer-letter-template"), "__upload");
   await page.getByTestId("offer-upload-file").setInputFiles({ name: "locked.pdf", mimeType: "application/pdf", buffer: await protectedPdf() });
   await page.getByTestId("offer-send-next").click();
   await page.getByTestId("offer-send-confirm").click();
@@ -353,7 +352,7 @@ test("HRMS > Templates: create with placeholders, preview with a real employee, 
   await expect(page.getByTestId("template-preview-body")).toContainText("Dear Asha, you start as Trainer (Commercial Cookery)");
   await page.getByTestId("template-preview-search").fill(p.email);
   await expect(page.getByTestId("template-preview-person").locator(`option[value="${p.id}"]`)).toHaveCount(1);
-  await page.getByTestId("template-preview-person").selectOption(p.id);
+  await choose(page.getByTestId("template-preview-person"), p.id);
   await expect(page.getByTestId("template-preview-body")).toContainText("Dear E2E, you start as Trainer on");
   await expect(page.getByTestId("template-preview-body")).toContainText("at $42.50");
   await expect(page.getByTestId("template-preview-subject")).toHaveText("Offer for E2E tpl");
@@ -377,7 +376,7 @@ test("HRMS > Templates: create with placeholders, preview with a real employee, 
   await page.goto(`/admin/staff/employees/${p.id}`);
   await page.getByTestId("staff-action-send_offer").click();
   await expect(page.getByTestId("offer-letter-template")).toHaveValue("");
-  await page.getByTestId("offer-letter-template").selectOption({ label: name });
+  await choose(page.getByTestId("offer-letter-template"), { label: name });
   await expect(page.getByTestId("offer-letter-preview")).toContainText("Dear E2E, you start as Trainer on");
   await page.getByRole("button", { name: "Cancel" }).click();
   await page.goto("/admin/staff/templates");
@@ -442,7 +441,7 @@ test("Documents & Signatures: a document template with Header, Body and Footer, 
   // Picking the preset copies it in (the header is emptied first to prove it).
   await setSource("header", "");
   page.once("dialog", (d) => void d.accept());
-  await page.getByTestId("preset-header").selectOption({ label: presetName });
+  await choose(page.getByTestId("preset-header"), { label: presetName });
   await expect(page.getByTestId("section-editor-header")).toContainText("Level 8, 310 King Street");
   await shot(page, "tpl02-header-preset");
 

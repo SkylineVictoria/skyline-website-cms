@@ -10,6 +10,7 @@ import { changeApplicationStatus, issueCoeVoe, offerLetterRecipient, type OfferR
 import { CcAgent } from "./CcAgent";
 import { sendCc, useCcDefault } from "@/lib/ccAgent";
 import { ruleNumber } from "@/lib/businessRules";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** Business Rules admissions.registration_coe_voe_pdf_mib (3 MB today), never above the 3 MB the database stores. */
 const coeMaxMib = () => Math.min(3, ruleNumber("admissions.registration_coe_voe_pdf_mib", 3));
@@ -93,10 +94,10 @@ export function ReasonDialog({ application, action, onClose, onDone }: { applica
       <Who application={application} />
       <div>
         <label htmlFor="status-reason" className={`${FORM_LABEL} mb-1 block`}>Reason <span className="text-red-600" aria-hidden="true">*</span></label>
-        <select id="status-reason" value={reasonId} onChange={(e) => setReasonId(e.target.value)} data-testid="reason-select" className={`${INPUT} h-10 py-0`}>
+        <SearchableSelect id="status-reason" value={reasonId} onChange={(e) => setReasonId(e.target.value)} data-testid="reason-select" className={`${INPUT} h-10 py-0`}>
           <option value="">Choose a reason</option>
           {reasons.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-        </select>
+        </SearchableSelect>
       </div>
       {chosen?.other ? (
         <div className="fade-in">

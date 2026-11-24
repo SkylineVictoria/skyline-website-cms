@@ -4,6 +4,7 @@
  */
 import { supabase } from "@/pages/admin/lib/supabase";
 import { institutionTimeZone } from "@/lib/timeZone";
+import type { AttemptHistory } from "./resultsSheet";
 
 async function call<T>(fn: "asm_admin" | "asm_trainer" | "asm_student", action: string, data: Record<string, unknown>): Promise<T> {
   const { data: out, error } = await supabase.rpc(fn, { p_action: action, p_data: data });
@@ -23,6 +24,21 @@ export async function asmCalendar(from: string, to: string, batchId?: string | n
   const { data, error } = await supabase.rpc("asm_calendar", { p_from: from, p_to: to, p_batch: batchId ?? null });
   if (error) throw new Error(error.message);
   return (data as CalendarEvent[] | null) ?? [];
+}
+
+/**
+ * ASM-WORKBOOK: every attempt of the attempt's student on its assignment, with assessor names and cover details (results sheet, PDF
+ * export). null while the database does not have asm_attempt_history yet (migration 20261123234517 not released): callers fall back
+ * to the attempts they already have.
+ */
+export async function attemptHistory(attemptId: string): Promise<AttemptHistory | null> {
+  const { data, error } = await supabase.rpc("asm_attempt_history", { p_attempt: attemptId });
+  if (error) {
+    if (error.code === "PGRST202" || error.code === "42883") return null;
+    throw new Error(error.message);
+  }
+  const d = (data ?? {}) as Partial<AttemptHistory>;
+  return { student: d.student ?? null, trainers: d.trainers ?? [], assessment: d.assessment ?? null, attempts: d.attempts ?? [], complete: true };
 }
 
 export const EVIDENCE_BUCKET = "assessment-evidence";

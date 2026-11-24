@@ -154,6 +154,28 @@ export async function adminListStaff(statuses: readonly StaffStatus[], search: s
   return data as { total: number; rows: StaffListRow[] };
 }
 
+/** Change a staff record's name, email and (optionally) mobile. The email cannot change once the person has a login. */
+export async function adminEditStaff(id: string, firstName: string, lastName: string, email: string, phone: string): Promise<void> {
+  // rule-policy: technical rpc-call Passes the edited fields to hr_admin_staff_edit, which checks them.
+  const { error } = await supabase.rpc("hr_admin_staff_edit", { p_id: id, p_first_name: firstName, p_last_name: lastName, p_email: email, p_phone: phone || null });
+  if (error) fail(error, "The details could not be saved.");
+}
+
+/** Delete a staff record that is not Active (the database refuses anyone with work or signing records), then its files. */
+export async function adminDeleteStaff(id: string): Promise<{ email: string; filesLeft: number }> {
+  // rule-policy: technical rpc-call hr_admin_staff_delete decides what may be deleted.
+  const { data, error } = await supabase.rpc("hr_admin_staff_delete", { p_id: id });
+  if (error) fail(error, "The staff member could not be deleted.");
+  const result = data as { email: string; paths: string[] };
+  let filesLeft = 0;
+  if (result.paths.length) {
+    const { error: removeError } = await supabase.storage.from("staff-documents").remove(result.paths);
+    // rule-policy: technical cleanup-count The record is already gone; files that could not be removed are only counted.
+    if (removeError) filesLeft = result.paths.length;
+  }
+  return { email: result.email, filesLeft };
+}
+
 export async function adminStaffDetail(id: string): Promise<StaffDetail> {
   const { data, error } = await supabase.rpc("hr_admin_staff_detail", { p_id: id });
   if (error) fail(error, "The application could not be loaded.");
@@ -227,7 +249,7 @@ export const staffAdminActions = {
   resendActivation: (profileId: string) => staffAdmin({ action: "resend_activation", profileId }),
   retryEmail: (emailId: number) => staffAdmin({ action: "retry_email", emailId }),
   /** HR-02i: an application on the person's behalf, then the document link at once. */
-  add: (person: { firstName: string; lastName: string; email: string; phone: string }) => staffAdmin({ action: "add", ...person }),
+  add: (person: { firstName: string; lastName: string; email: string; phone?: string; roleType?: string | null }) => staffAdmin({ action: "add", ...person }),
   /** HR-02j Candidates: "Hire and send document link" for a candidate application (selected stage); answers like sendLink, plus profileId. */
   hire: (applicationId: string) => staffAdmin({ action: "hire", applicationId }),
   /** HR-02j: a manual candidate's resume or cover letter, checked by content and stored by the function. */

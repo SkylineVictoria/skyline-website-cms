@@ -3,6 +3,7 @@ import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { listCourseIntakes, type CourseIntake } from "@/pages/admin/lib/courseIntakes";
 import { LOAD_HOURS } from "@/pages/admin/lib/rto";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 interface FeeRow { id: string; intakeId: string | null; tuition: number | null; enrolment: number | null; material: number | null; oshc: number | null; deposit: number | null; paymentPlan: string | null; campus: string | null; orientation: string | null; orientationDate: string | null; hoursPerWeek: string | null }
 const MONEY = [["tuition", "Tuition fee"], ["enrolment", "Enrolment fee"], ["material", "Material fee"], ["oshc", "OSHC"], ["deposit", "Initial deposit"]] as const;
@@ -69,10 +70,10 @@ export default function CourseFees({ courseId }: { courseId: string }) {
       ) : rows ? <p className="text-sm text-foreground-600">No fees yet: offer letters ask for them when they are issued.</p> : null}
       <div className="space-y-3 rounded-md border border-background-300 p-3">
         <Field label="Fees for">
-          <select value={target} onChange={(e) => setTarget(e.target.value)} className="h-10 w-full rounded-md border border-background-300 bg-background-50 px-3 text-sm" data-testid="fee-target">
+          <SearchableSelect value={target} onChange={(e) => setTarget(e.target.value)} className="h-10 w-full rounded-md border border-background-300 bg-background-50 px-3 text-sm" data-testid="fee-target">
             <option value="">Every intake (the course's fees)</option>
             {intakes.map((i) => <option key={i.id} value={i.id}>{i.display}</option>)}
-          </select>
+          </SearchableSelect>
         </Field>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           {MONEY.map(([key, label]) => (

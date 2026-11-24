@@ -5,6 +5,7 @@ import {
   CATEGORY_LABEL, PRIORITY_LABEL, STATUS_CLASS, STATUS_LABEL, getTicket, openTicketFile, requesterCanClose, replyTicket, ticketRequesterPhone, updateTicket, supportAttachmentCount, uploadTicketFiles,
   type TicketDetail, type TicketPriority, type TicketStatus,
 } from "@/lib/supportTickets";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /** One ticket: header, actions (administrators: status / priority / assign; requester: mark resolved), thread and reply box. */
 export default function TicketView({ id, backTo }: { id: string; backTo: string }) {
@@ -65,14 +66,14 @@ export default function TicketView({ id, backTo }: { id: string; backTo: string 
         {data.isHandler ? (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <label className="text-sm text-foreground-700">Status{" "}
-              <select className={field} value={t.status} disabled={busy} onChange={(e) => void run(() => updateTicket(id, { status: e.target.value as TicketStatus }))}>
+              <SearchableSelect className={field} value={t.status} disabled={busy} onChange={(e) => void run(() => updateTicket(id, { status: e.target.value as TicketStatus }))}>
                 {(Object.keys(STATUS_LABEL) as TicketStatus[]).map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
-              </select>
+              </SearchableSelect>
             </label>
             <label className="text-sm text-foreground-700">Priority{" "}
-              <select className={field} value={t.priority} disabled={busy} onChange={(e) => void run(() => updateTicket(id, { priority: e.target.value as TicketPriority }))}>
+              <SearchableSelect className={field} value={t.priority} disabled={busy} onChange={(e) => void run(() => updateTicket(id, { priority: e.target.value as TicketPriority }))}>
                 {(Object.keys(PRIORITY_LABEL) as TicketPriority[]).map((p) => <option key={p} value={p}>{PRIORITY_LABEL[p]}</option>)}
-              </select>
+              </SearchableSelect>
             </label>
             <span className="text-sm text-foreground-700">Assigned: <strong>{t.assignedName ?? "Nobody"}</strong></span>
             {t.assignedToMe

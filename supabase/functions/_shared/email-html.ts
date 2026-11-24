@@ -419,6 +419,8 @@ export interface SimpleEmail {
   /** Optional rows shown as a detail table under the paragraphs. */
   details?: Array<{ label: string; value: string }> | null;
   eyebrow?: string | null;
+  /** Accepted for older callers; the branded layout uses the Website settings logo. */
+  logo?: { url: string; alt: string };
 }
 
 export function simpleEmailHtml(email: SimpleEmail): string {

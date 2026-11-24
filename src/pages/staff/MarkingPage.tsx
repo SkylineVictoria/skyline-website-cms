@@ -4,6 +4,9 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { ruleNumber } from "@/lib/businessRules";
 import { Badge, Button, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import MarkingView, { type ElementRef, type MarkingPayload } from "@/components/assessment/MarkingView";
+import ResultsSheet from "@/components/assessment/ResultsSheet";
+import { useAttemptHistory } from "@/components/assessment/useAttemptHistory";
+import { downloadWorkbookPdf } from "@/lib/assessment/workbookExport";
 import { asmTrainer, evidenceUrl, fmtDateTime, fromLocalInput, OUTCOME_LABEL, STATE_LABEL, uploadEvidence } from "@/lib/assessment/api";
 import type { Attempt, Definition, EvidenceFile, Outcome, Question, QuestionKey } from "@/lib/assessment/types";
 
@@ -23,7 +26,17 @@ export default function MarkingPage() {
   const [message, setMessage] = useState("");
   const load = useCallback(async () => { try { setData(await asmTrainer<Loaded>("attempt_get", { id })); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "The attempt did not load."); } }, [id]);
   useEffect(() => { void supabase.auth.getUser().then(({ data: u }) => { if (!u.user) setSignedOut(true); else void load(); }); }, [load]);
+  const history = useAttemptHistory(data?.id, data ? [data] : [], data?.studentName, data?.rowVersion);
+  const [exporting, setExporting] = useState(false);
   if (signedOut) return <Navigate to="/login?next=%2Fstaff%2Fassessments" replace />;
+  const maxAttempts = Number(data?.settings.max_attempts ?? ruleNumber("assessment.attempts_default", 3));
+  const exportPdf = async () => {
+    if (!data || !history) return;
+    setExporting(true);
+    try { await downloadWorkbookPdf({ definition: data.definition, attempt: data, history: { ...history, student: history.student ?? { id: data.studentId, ref: data.studentId.slice(0, 8).toUpperCase(), name: data.studentName } }, title: data.assessmentTitle, maxAttempts }); }
+    catch (e) { setError(e instanceof Error ? `The PDF was not made: ${e.message}` : "The PDF was not made."); }
+    finally { setExporting(false); }
+  };
 
   const openEvidence = async (f: EvidenceFile) => { const w = window.open("", "_blank"); try { const u = await evidenceUrl(f.path); if (w) { w.opener = null; w.location.href = u; } } catch (e) { w?.close(); setError(e instanceof Error ? e.message : "The file could not be opened."); } };
   const save = async (p: MarkingPayload) => { setBusy(true); try { setData(await asmTrainer<Loaded>("mark_save", { id, rowVersion: data?.rowVersion, ...p })); setNote("Marks saved."); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Not saved."); } finally { setBusy(false); } };
@@ -45,7 +58,7 @@ export default function MarkingPage() {
       <div className="mx-auto max-w-6xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><h1 className="font-heading text-2xl font-bold text-foreground-950">{data ? `${data.studentName} · ${data.assessmentTitle}` : "Marking"}</h1>{data ? <p className="text-sm text-foreground-600">Attempt {data.attemptNo} · <Badge tone={data.state === "final" ? (data.outcome === "S" ? "success" : "warn") : "primary"}>{STATE_LABEL[data.state] ?? data.state}{data.outcome && data.state !== "draft" ? ` · ${OUTCOME_LABEL[data.outcome]}` : ""}</Badge> · submitted {fmtDateTime(data.submittedAt)} · receipt {data.receiptNo} · sha-256 {data.responsesHash?.slice(0, 12)}…</p> : null}</div>
-          <div className="flex gap-2">{data?.unitId && (data.state === "final" || data.state === "returned") ? <Button variant="outline" icon="ri-award-line" onClick={() => setSignOff(true)}>Record unit outcome</Button> : null}<Link to="/staff/assessments" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-4 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100"><i className="ri-arrow-left-line" aria-hidden="true" />Assessments</Link></div>
+          <div className="flex gap-2">{data && data.state !== "draft" ? <Button variant="outline" icon="ri-file-pdf-2-line" disabled={exporting || !history} onClick={() => void exportPdf()}>{exporting ? "Making the PDF…" : "Export as workbook PDF"}</Button> : null}{data?.unitId && (data.state === "final" || data.state === "returned") ? <Button variant="outline" icon="ri-award-line" onClick={() => setSignOff(true)}>Record unit outcome</Button> : null}<Link to="/staff/assessments" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-4 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100"><i className="ri-arrow-left-line" aria-hidden="true" />Assessments</Link></div>
         </div>
         {error ? <p role="alert" className="mt-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
         {note ? <p role="status" className="mt-4 rounded-md border border-background-200 bg-background-50 px-3 py-2 text-sm text-foreground-800">{note}</p> : null}
@@ -54,7 +67,8 @@ export default function MarkingPage() {
           <div className="mt-6 space-y-6">
             {data.canAssess === false ? <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">You can read this submission but not mark it: marking needs the Trainer role on your staff record, a named-assessor place on the assignment, or an administrator (Assessments › Settings › Who may mark).</p> : null}
             <MarkingView definition={data.definition} attempt={data} keys={data.keys} mappings={data.mappings} busy={busy} openEvidence={(f) => void openEvidence(f)} onSave={save} onReturn={ret} onUploadAssessorEvidence={uploadAssessor}
-              maxAttempts={Number(data.settings.max_attempts ?? ruleNumber("assessment.attempts_default", 3))} reassessmentDays={Number(data.settings.reassessment_days ?? ruleNumber("assessment.reassessment_window_default", 5))} />
+              maxAttempts={maxAttempts} reassessmentDays={Number(data.settings.reassessment_days ?? ruleNumber("assessment.reassessment_window_default", 5))} />
+            {history ? <ResultsSheet definition={data.definition} history={history} maxAttempts={maxAttempts} /> : null}
             <div className="rounded-card border border-background-200 bg-background-50 p-4">
               <h3 className="font-heading text-base font-semibold text-foreground-950">Messages with the student</h3>
               {data.feedback.length ? <ul className="mt-2 space-y-1 text-sm">{data.feedback.map((f) => <li key={f.id} className="rounded-md bg-background-100 px-3 py-1.5"><span className="text-xs text-foreground-500">{f.role} · {fmtDateTime(f.createdAt)}</span><br />{f.body}</li>)}</ul> : <p className="mt-1 text-sm text-foreground-600">No messages yet.</p>}

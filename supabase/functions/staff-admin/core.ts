@@ -490,7 +490,10 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
     case "add": {
       // HR-02i "Add staff member": an application on the person's behalf (no resume), then the document link at once. A failed email
       // leaves the record (Applied) with the cancelled link visible on its page, where the admin sends it again.
-      const made = await deps.adminRpc("hr_admin_staff_add", { p_first_name: String(body.firstName ?? ""), p_last_name: String(body.lastName ?? ""), p_email: String(body.email ?? ""), p_phone: String(body.phone ?? "") });
+      // Mobile and role are optional: the person gives their mobile in the document wizard; the role comes from HRMS roles.
+      // rule-policy: technical rpc-arguments Passes the optional role and mobile to hr_admin_staff_add, which checks them.
+      const made = await deps.adminRpc("hr_admin_staff_add", { p_first_name: String(body.firstName ?? ""), p_last_name: String(body.lastName ?? ""), p_email: String(body.email ?? ""),
+        p_phone: String(body.phone ?? ""), p_role_type: typeof body.roleType === "string" && body.roleType ? body.roleType : null });
       if (made.error) return fromDb(made.error);
       const newId = (made.data as { profileId: string }).profileId;
       const sent = await sendLinkFlow("documents", "hr_admin_staff_invite", { p_id: newId, p_purpose: "documents" }, newId);

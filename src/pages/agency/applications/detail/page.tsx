@@ -1,3 +1,4 @@
+import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useState } from "react";
@@ -14,6 +15,7 @@ import {
   assignApplicationAgent,
   deleteApplicationDocument,
   getApplication,
+  needsInitialWizard,
   getDocumentSignedUrl,
   listApplicationDocuments,
   listAssignableAgents,
@@ -91,13 +93,14 @@ export default function ApplicationDetailPage() {
     setLoading(true);
     setError("");
     try {
-      const detail = await getApplication(id);
+      const detail = await getApplication(id, false);
       if (!detail) {
         setApplication(null);
         setError("This application could not be found, or you do not have access to it.");
         return;
       }
       setApplication(detail);
+      if (needsInitialWizard(detail)) return;
       const [hist, docs] = await Promise.all([listStatusHistory(id), listApplicationDocuments(id)]);
       setHistory(hist);
       setDocuments(docs);
@@ -173,6 +176,8 @@ export default function ApplicationDetailPage() {
 
   const handleWizardFinish = async () => {
     closeWizard();
+    // Once submitted, it goes to the review queue: staff and agents see it in the applications list, a student in theirs.
+    if (application && application.status === "draft") { navigate(paths.list, { replace: true }); return; }
     setTab("form");
     setWorkspaceKey((key) => key + 1);
     await load();
@@ -181,9 +186,9 @@ export default function ApplicationDetailPage() {
   // Do not unmount an open wizard during a background detail refresh. Its
   // document and form state are independently persisted by the wizard/RPCs.
   // Administrators of the main site manage applications inside the CMS (this also covers links from emails).
-  if (paths.area === "portal" && isSlit && !requestWebsiteDomain()) return <Navigate to={cmsPaths.detail(id)} replace />;
+  if (paths.area === "portal" && isSlit && !requestWebsiteDomain()) return <Navigate to={cmsPaths.detail(id) + (wizardOpen ? "?wizard=1" : "")} replace />;
 
-  if ((loading && !application) || !workflow.ready) {
+  if (loading && !application) {
     return <PortalLoading label="Loading application\u2026" />;
   }
 
@@ -202,6 +207,20 @@ export default function ApplicationDetailPage() {
     );
   }
 
+  if (needsInitialWizard(application)) {
+    return (
+      <div className="space-y-4">
+        <Link to={paths.list} className="text-sm font-medium text-primary-700">All applications</Link>
+        <FinishApplicationPanel key={application.id} id={application.id} email={application.studentEmail}
+          canInvite={role === "slit_admin" || role === "agency_admin" || role === "agent"} onContinue={openWizard} />
+        {wizardOpen ? <ApplicationWizard key={application.id} applicationId={application.id}
+          agencyName={application.agencyName || agency?.name || ""}
+          onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); void load(); }} /> : null}
+      </div>
+    );
+  }
+
+  if (!workflow.ready) return <PortalLoading label="Loading application…" />;
   // SLIT administrators are not inherently read-only. Status alone controls
   // whether a record is editable; RLS separately determines who may edit it.
   const readOnly = !isEditableStatus(workflow, application.status);
@@ -344,7 +363,7 @@ export default function ApplicationDetailPage() {
             ) : undefined}
             onSaved={refreshAfterSave}
             onSubmitted={(reference, studentName) =>
-              navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName } })}
+              navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName, submittedPath: paths.detail(application.id) } })}
           />
         ) : null}
 

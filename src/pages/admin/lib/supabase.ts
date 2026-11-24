@@ -28,7 +28,16 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       // caller-supplied IDs. RLS separately verifies tenant membership on writes.
       headers.delete("x-tenant-domain");
       if (domain) headers.set("x-tenant-domain", domain);
-      const response = await fetch(input, { ...init, headers });
+      // A sign-in renewal that never answers (a phone on a weak network, a tab woken from sleep) holds supabase-js's session lock,
+      // and every other request then waits behind it: the app sat on Loading for ever. Give auth calls 20 seconds; the library
+      // treats the abort as a network error and tries again later, so nobody is signed out by it.
+      const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      let signal = init?.signal ?? undefined;
+      if (rawUrl.includes("/auth/v1/") && typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+        const limit = AbortSignal.timeout(20000);
+        signal = signal && typeof AbortSignal.any === "function" ? AbortSignal.any([signal, limit]) : signal ?? limit;
+      }
+      const response = await fetch(input, { ...init, headers, signal });
       // An Edge Function that answered 5xx / 546 is reported for the daily health check (2026-11-20), as the same signed-in person.
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       reportIfFunctionFailed(url, response, { supabaseUrl, apikey: supabaseAnonKey, authorization: headers.get("Authorization") });

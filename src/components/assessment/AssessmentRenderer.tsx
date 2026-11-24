@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { conditionMet } from "@/lib/assessment/conditions";
 import { isAnswerable, isAssessorOnly, questionType } from "@/lib/assessment/registry";
 import type { Definition, EvidenceFile, Question, Responses, Section, Task, ValidationError } from "@/lib/assessment/types";
-import { typeUi } from "./registry";
+import { sanitize, typeUi } from "./registry";
 
 export type RenderMode = "student" | "preview" | "review";
 
@@ -24,6 +24,8 @@ export interface RendererProps {
   /** Extra content under a question (marking panels live here in the trainer view). */
   afterQuestion?: (q: Question, path: string) => ReactNode;
   disabled?: boolean;
+  /** Trainer view of a preview: assessor-only questions (observation checklists, third-party reports) show their items, not the student's note. */
+  showAssessor?: boolean;
 }
 
 /** Numbers questions 1.1, 1.2 … per task, in reading order; content blocks are unnumbered. */
@@ -34,7 +36,7 @@ function numbering(task: Task, taskIndex: number): Map<string, string> {
 }
 
 export default function AssessmentRenderer(props: RendererProps) {
-  const { definition, responses, onChange, mode, assessorResponses = {}, evidence, onUpload, onRemoveEvidence, openEvidence, errors = [], declarationText, taskId, afterQuestion, disabled } = props;
+  const { definition, responses, onChange, mode, assessorResponses = {}, evidence, onUpload, onRemoveEvidence, openEvidence, errors = [], declarationText, taskId, afterQuestion, disabled, showAssessor } = props;
   const errorByPath = useMemo(() => new Map(errors.map((e) => [e.questionId, e.message])), [errors]);
   const readOnly = mode === "review" || disabled;
 
@@ -50,6 +52,7 @@ export default function AssessmentRenderer(props: RendererProps) {
     const renderChildrenView = (children: Question[], r: Responses, prefix: string) => children.map((c) => renderQuestion(c, r, () => undefined, prefix, null));
     let body: ReactNode;
     if (content) body = ui.Input({ q, value, onChange: () => undefined });
+    else if (assessor && showAssessor) body = ui.Input({ q, value, onChange: () => undefined, disabled: true });
     else if (assessor && mode !== "review") body = (
       <p className="rounded-md bg-background-100 px-3 py-2 text-sm text-foreground-600"><i className="ri-eye-line mr-1.5 text-foreground-400" aria-hidden="true" />Completed by your assessor{type?.id === "observation_checklist" ? " during observation" : ""}.</p>
     );
@@ -84,7 +87,7 @@ export default function AssessmentRenderer(props: RendererProps) {
   const tasks = taskId ? definition.tasks.filter((t) => t.id === taskId) : definition.tasks;
   return (
     <div className="space-y-8">
-      {!taskId && definition.instructions ? <div className="rounded-card border border-background-200 bg-background-100 p-4 text-sm text-foreground-800 whitespace-pre-wrap">{definition.instructions}</div> : null}
+      {!taskId && definition.instructions ? <AssessmentInfo text={definition.instructions} /> : null}
       {tasks.map((task) => {
         const taskIndex = definition.tasks.findIndex((t) => t.id === task.id);
         const numbers = numbering(task, taskIndex);
@@ -97,4 +100,10 @@ export default function AssessmentRenderer(props: RendererProps) {
       })}
     </div>
   );
+}
+
+/** The assessment's information before task 1: plain text, or the HTML sections imported from a workbook (ASM-WORKBOOK item 1). */
+export function AssessmentInfo({ text, className = "" }: { text: string; className?: string }) {
+  const html = /^\s*</.test(text);
+  return <div className={`rounded-card border border-background-200 bg-background-100 p-4 text-sm text-foreground-800 ${html ? "asm-content" : "whitespace-pre-wrap"} ${className}`} data-testid="assessment-info">{html ? <div dangerouslySetInnerHTML={{ __html: sanitize(text) }} /> : text}</div>;
 }

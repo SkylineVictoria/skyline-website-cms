@@ -32,7 +32,7 @@ export function useUiPrefs(userId: string | undefined) {
   }, [userId]);
   const update = useCallback((patch: Partial<UiPrefs>) => {
     setPrefs((p) => { const next = { ...p, ...patch }; remember(next); return next; });
-    void supabase.rpc("cms_user_prefs", { p_prefs: patch });
+    void supabase.rpc("cms_user_prefs", { p_prefs: patch }).then(({ error }) => { if (error) console.warn("Could not save display settings", error.message); });
   }, []);
   return [prefs, update] as const;
 }

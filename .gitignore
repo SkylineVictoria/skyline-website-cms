@@ -80,3 +80,7 @@ backups/
 
 # Environment files (the .env.example placeholders stay tracked)
 *.env
+
+# USI M2M keystores (kit test credential or production): never committed (docs/usi holds the kit documents only)
+keystore*.xml
+*.keystore.xml

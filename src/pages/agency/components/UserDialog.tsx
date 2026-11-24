@@ -6,6 +6,7 @@ import {
 } from "@/pages/agency/lib/userValidation";
 import EmailField from "@/components/identity/EmailField";
 import { isEmailTakenError } from "@/lib/identity/email";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const inputClass =
   "w-full rounded-md border bg-background-50 px-3.5 py-2.5 text-sm text-foreground-950 placeholder:text-foreground-400 transition-colors focus:outline-none focus:ring-2 read-only:bg-background-100 read-only:text-foreground-600 disabled:bg-background-100";
@@ -127,18 +128,18 @@ export function UserDialog({ open, mode, initial, roles, agencies, existingEmail
         </FieldRow>
         <FieldRow id={`${uid}-role`} label="Role" error={errors.role}>
           {(p) => (
-            <select {...p} value={values.role} onChange={(e) => set("role", e.target.value)} onBlur={() => blur("role")}>
+            <SearchableSelect {...p} value={values.role} onChange={(e) => set("role", e.target.value)} onBlur={() => blur("role")}>
               {roles.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-            </select>
+            </SearchableSelect>
           )}
         </FieldRow>
         {agencies ? (
           <FieldRow id={`${uid}-agency`} label="Agency" error={errors.agencyId}>
             {(p) => (
-              <select {...p} value={values.agencyId} onChange={(e) => set("agencyId", e.target.value)} onBlur={() => blur("agencyId")}>
+              <SearchableSelect {...p} value={values.agencyId} onChange={(e) => set("agencyId", e.target.value)} onBlur={() => blur("agencyId")}>
                 <option value="">Select an agency</option>
                 {agencies.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
+              </SearchableSelect>
             )}
           </FieldRow>
         ) : null}

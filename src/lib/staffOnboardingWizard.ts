@@ -17,8 +17,6 @@ export const STAFF_WIZARD: readonly StaffWizardStep[] = [
   { id: "documents", short: "Documents", icon: "ri-upload-cloud-2-line", title: "Upload your documents", subtitle: "Start here. We read your documents and fill in your details for you." },
   { id: "prefill", short: "Check details", icon: "ri-magic-line", title: "We filled this in for you", subtitle: "Read from your documents. Check each one and correct anything that is wrong." },
   { id: "personal", short: "Personal details", icon: "ri-user-line", title: "Personal details", subtitle: "Only what your documents could not tell us." },
-  { id: "bank", short: "Bank details", icon: "ri-bank-line", title: "Bank details", subtitle: "The account your pay goes into." },
-  { id: "tax", short: "Tax and super", icon: "ri-government-line", title: "Tax and super", subtitle: "A few answers for payroll. Your tax file number is not collected here." },
   { id: "review", short: "Review and submit", icon: "ri-checkbox-circle-line", title: "Review and submit", subtitle: "Check everything, then send it to us." },
 ];
 
@@ -70,6 +68,10 @@ export function taxSuperRows(d: TaxSuperAnswers): Array<[string, string]> {
 
 /* ------------------------------------------------------------------ what is still missing (mirrors hr_svc_onboarding_submit) */
 
+/** What the documents link checks: the details without tax and super (documents only since 2026-11-22; HR collects those). */
+const TAX_FIELDS = new Set<StaffField>(STAFF_STEP_FIELDS.tax);
+export const ONBOARDING_FIELDS: readonly StaffField[] = STAFF_FIELDS.filter((field) => !TAX_FIELDS.has(field));
+
 export interface WizardProblem { step: StaffWizardStepId; text: string; field?: StaffField; category?: string }
 
 const STEP_OF_FIELD = new Map<StaffField, StaffWizardStepId>(
@@ -108,13 +110,13 @@ export function documentProblems(citizen: boolean | null, documents: readonly Wi
   return out;
 }
 
-/** Everything Submit needs, in the order the database checks it: the details, the documents, the bank details. */
+/** Everything Submit needs, in the order the database checks it: the details and the documents. */
 export function wizardProblems(details: StaffDetails, documents: readonly WizardDocumentLike[], hasBank: boolean, now: Date = new Date()): WizardProblem[] {
   const addressOnPrefill = licenceGaveAddress(documents);
-  const out: WizardProblem[] = staffProblems(details, STAFF_FIELDS, true, now)
+  const out: WizardProblem[] = staffProblems(details, ONBOARDING_FIELDS, true, now)
     .map((p) => ({ step: addressOnPrefill && isAddress(p.field) ? "prefill" as const : STEP_OF_FIELD.get(p.field) ?? "personal", text: p.message, field: p.field }));
   out.push(...documentProblems(details.is_australian_citizen, documents, todayIso(now)));
-  if (!hasBank) out.push({ step: "bank", text: "Enter your bank details." });
+  void hasBank; // Documents only (2026-11-22): bank details are no longer asked on the link; HR adds them on the employee page.
   return out;
 }
 

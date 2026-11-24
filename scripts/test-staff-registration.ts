@@ -273,6 +273,25 @@ test("document PDF: the header and footer repeat on every page with the right pa
   assert.deepEqual([literal.fields.length, (await pdfText(literal.bytes)).some((t) => t.text.includes("[Guardian Name]"))], [0, true]);
 });
 
+test("Mark as enrolled (2026-11-21): only from CoE / VoE issued in the menu and the database; the mailbox step reuses Create Email and never blocks enrolment", () => {
+  const menu = read("src/components/shared/application-status/TakeActionMenu.tsx"), dialog = read("src/components/shared/application-status/EnrolMailboxDialog.tsx");
+  const form = read("src/pages/admin/components/CreateEmailSection.tsx"), list = read("src/pages/admin/components/EnrolledWithoutMailbox.tsx"), fn = read("supabase/functions/student-office365/index.ts");
+  const sql = read("supabase/migrations/20261121051517_enrolled_guard_and_mailbox.sql");
+  // Earlier statuses: shown disabled with the reason; after Enrol succeeds (the status is saved) the mailbox step opens.
+  assert.ok(menu.includes('const BEFORE_COE = ["draft", "submitted", "under_review", "action_required", "offer_issued", "offer_accepted"]') && menu.includes('aria-disabled="true" title="Issue the CoE/VoE first"'));
+  assert.ok(menu.includes("onDone={(result) => { changed(result); setMailbox(true); }}") && menu.includes("<EnrolMailboxDialog applicationId={application.id} studentId={application.studentId}"));
+  // The same Create Email form, Student and the linked profile locked, the outcome logged on the application; Skip logs and closes.
+  assert.ok(dialog.includes('<CreateEmailForm initialKind="student" personId={student}') && dialog.includes("locked applicationId={applicationId}") && dialog.includes('logApplicationMailbox(applicationId, "skipped"'));
+  // 2026-11-23: a caller without the student (the Applications list row) still gets the form: the dialog reads the application's own
+  // student profile (student_id is NOT NULL), and only if none is found lets staff choose the student there (never Email Management).
+  assert.ok(dialog.includes('supabase.from("enrollment_applications").select("student_id").eq("id", applicationId)') && dialog.includes('<CreateEmailForm initialKind="student" personQuery=')
+    && !dialog.includes("then use Email Management"));
+  assert.ok(form.includes("export default function CreateEmailSection() {") && form.includes("return <CreateEmailForm />;") && form.includes("disabled={locked || !status?.connected"));
+  assert.ok(fn.includes("caller.rpc('application_mailbox_log'") && fn.includes("body.dryRun!==true") && list.includes("<EnrolMailboxDialog"));
+  // The database: Enrolled only from CoE / VoE issued (or Undo back to it), never inserted as Enrolled, no "-> Enrolled" transition from elsewhere.
+  assert.ok(sql.includes("before insert or update of status on public.enrollment_applications") && sql.includes("if old.status = 'enrolled' or old.status = 'coe_issued' then return new; end if;")
+    && sql.includes("check (to_status is distinct from 'enrolled' or from_status = 'coe_issued')") && sql.includes("if p_outcome = 'created' and (m.student_id is null or m.ms_user_id is null)"));
+});
 test("offer letter ADMIN USE ONLY: boxes are drawn (never \"?\"), ACCEPTED ticked at signing, Yes + date only on the payment copy", async () => {
   const layout = await load.import<typeof import("../src/lib/offerSigningLayout.ts")>("../src/lib/offerSigningLayout.ts");
   const td = (t: string) => `<td style="border:1px solid #808080"><p>${t}</p></td>`;
@@ -1685,7 +1704,7 @@ test("Microsoft 365 status (2026-11-20): one app-only check behind Email Managem
   assert.ok(blocked.problems.some((p) => /student\.slit\.edu\.au is in Microsoft 365 but not verified/.test(p)) && blocked.problems.some((p) => /No STANDARDWOFFPACK_STUDENT seats are free/.test(p)));
   // The screens: no hard-coded status; one shared check; Microsoft 365 first on Connections; named "connection verified" messages.
   const page = read("src/pages/admin/EmailManagementPage.tsx"), connections = read("src/pages/admin/integrations/ConnectionsPage.tsx"), fn = read("supabase/functions/student-office365/index.ts"), adminFn = read("supabase/functions/integrations-admin/index.ts");
-  assert.ok(!page.includes("Not configured") && !page.includes("Microsoft 365 connection required.") && page.includes("<Microsoft365Badge />") && read("src/pages/admin/components/CreateEmailSection.tsx").includes("fetchEmailPeople(kind)"), "Email Management reads the live status and loads people");
+  assert.ok(!page.includes("Not configured") && !page.includes("Microsoft 365 connection required.") && page.includes("<Microsoft365Badge />") && read("src/pages/admin/components/CreateEmailSection.tsx").includes("fetchEmailPeople(kind, personQuery)"), "Email Management reads the live status and loads people");
   assert.ok(connections.includes("Number(b.connector_id === M365) - Number(a.connector_id === M365)") && connections.includes("<Microsoft365Panel />") && !connections.includes("announce('Connection verified.')") && !connections.includes("setNotice('Connection verified.')"), "Microsoft 365 first, its own panel, named messages");
   assert.ok(fn.includes("action==='m365_status'||action==='people'") && fn.includes("caller.rpc('admin_business_require')") && adminFn.includes("c.connector_id==='microsoft365'") && adminFn.includes("microsoft365Status("), "both functions use the one check");
   const sql = read("supabase/migrations/20261120163517_email_management_people.sql").replace(/\r\n/g, "\n");
@@ -1995,7 +2014,7 @@ test("Create Email for staff (2026-11-20): staff domain and faculty licence, exi
   // The screen: editable, live checks through the Edge Function, Use suggested, the helper text.
   const sec2 = read("src/pages/admin/components/CreateEmailSection.tsx");
   assert.ok(!/id="email-name" readOnly /.test(sec2) && sec2.includes("readOnly={!editable}") && sec2.includes("checkOffice365Address(") && !sec2.includes("graph.microsoft.com")
-    && sec2.includes("}, 500);") && sec2.includes('data-testid="email-use-suggested"') && sec2.includes("createOffice365(kind, person.id, { differentPerson, domain, username })")
+    && sec2.includes("}, 500);") && sec2.includes('data-testid="email-use-suggested"') && sec2.includes("createOffice365(kind, person.id, { differentPerson, domain, username, ...(applicationId ? { applicationId } : {}) })")
     && sec2.includes("Suggested from the person's name. You can change it. Only the tenant's verified domains are offered."), "editable username on Create Email");
 
   // Login email sender (2026-11-21). Missing sender: nothing created, no password reset, a clear message naming it.
@@ -2682,8 +2701,8 @@ test("staff-register creates no login and keeps no password code", () => {
 /* ------------------------------------------------------------------ documents and submit rules */
 
 const docs = (today: string) => [
-  { category: "Passport", expiryDate: "2031-01-01" }, { category: "Visa", expiryDate: "2030-01-01" }, { category: "English", expiryDate: null },
-  { category: "Academic", expiryDate: null }, { category: "Academic", expiryDate: null }, { category: "Health Insurance", expiryDate: today },
+  { category: "Passport", expiryDate: today }, { category: "Visa", expiryDate: "2030-01-01" }, { category: "Void Cheque", expiryDate: null },
+  { category: "Academic", expiryDate: null }, { category: "Academic", expiryDate: null },
 ].map((d, i) => ({ ...d, id: `d${i}`, extractionStatus: "pending" as const, extracted: {} }));
 const completeDetails = {
   is_australian_citizen: false as boolean | null, first_name: "Tara", middle_name: "", last_name: "Trainer", date_of_birth: "1990-05-06", phone: "+61400000111",
@@ -2692,7 +2711,7 @@ const completeDetails = {
   tax_residency: "resident", tax_free_threshold: "yes", study_loan: "no", super_choice: "default", super_fund_name: "", super_fund_abn: "", super_usi: "", super_member_number: "",
 };
 
-test("submit needs the details, citizenship, every required document with a current expiry date, and the bank details", () => {
+test("submit needs the details, citizenship and every required document with a current expiry date (documents only: no bank, tax or super)", () => {
   const now = new Date("2026-11-09T02:00:00Z");
   const today = "2026-11-09";
   const all = docs(today);
@@ -2700,34 +2719,31 @@ test("submit needs the details, citizenship, every required document with a curr
   const texts = (details = completeDetails, documents = all, bank = true) => wizardLib.wizardProblems(details, documents, bank, now).map((p) => p.text);
   assert.deepEqual(texts(), []);
   assert.deepEqual(texts(completeDetails, without("Passport")), ["A passport is required before you can submit."]);
-  assert.deepEqual(texts(completeDetails, without("Visa")), ["Upload your visa."]);
-  assert.deepEqual(texts(completeDetails, without("English")), ["Upload your English test result."]);
-  assert.deepEqual(texts({ ...completeDetails, is_australian_citizen: true, visa_subclass: "" }, without("Visa").filter((d) => d.category !== "English")), [], "a citizen needs no visa, no English result and no visa subclass");
-  assert.deepEqual(texts(completeDetails, without("Academic")), ["Upload your academic results."]);
-  assert.deepEqual(texts(completeDetails, without("Health Insurance")), ["Upload your health insurance."]);
-  assert.deepEqual(texts(completeDetails, docs("2026-11-08")), ["Enter a current expiry date for your health insurance."]);
-  assert.deepEqual(texts(completeDetails, [...without("English"), { ...all[2], expiryDate: "2026-01-01" }]), ["Enter a current expiry date for your English test result."]);
+  assert.deepEqual(texts(completeDetails, without("Visa")), [], "the visa is optional");
+  assert.deepEqual(texts(completeDetails, without("Void Cheque")), [], "the void cheque is optional");
+  assert.deepEqual(texts({ ...completeDetails, is_australian_citizen: true, visa_subclass: "" }, without("Visa")), [], "a citizen needs no visa and no visa subclass");
+  assert.deepEqual(texts(completeDetails, without("Academic")), [], "academic results are optional");
+  assert.deepEqual(texts(completeDetails, docs("2026-11-08")), ["Enter a current expiry date for your passport."]);
+  assert.deepEqual(texts(completeDetails, [...all, { ...all[0], id: "en", category: "English", expiryDate: "2020-01-01" }, { ...all[0], id: "hi", category: "Health Insurance", expiryDate: "2020-01-01" }]), [], "English and health insurance are no longer asked: an old upload never blocks Submit");
   assert.deepEqual(texts(completeDetails, [...without("Passport"), { ...all[0], expiryDate: null }]), ["Enter a current expiry date for your passport."], "a passport uploaded without its date still needs one before Submit");
   assert.deepEqual(texts(completeDetails, [...all, { ...all[0], id: "lic", category: "Driving Licence", expiryDate: "2020-01-01" }]), [], "the optional licence never blocks Submit");
   assert.deepEqual(texts({ ...completeDetails, is_australian_citizen: null }), ["Tell us whether you are an Australian citizen."]);
-  assert.deepEqual(texts(completeDetails, all, false), ["Enter your bank details."]);
+  assert.deepEqual(texts(completeDetails, all, false), [], "bank details are not asked on the link");
   assert.ok(!texts().some((p) => /role/i.test(p)), "no role is asked of an applicant");
   const blank = wizardLib.wizardProblems({ ...staffRules.EMPTY_STAFF_DETAILS }, [], false, now);
   assert.deepEqual(blank.map((p) => p.text), [
     "Tell us whether you are an Australian citizen.", "Enter your first name.", "Enter your last name.", "Enter your date of birth.", "Enter your mobile number.",
     "Enter the street address.", "Enter the suburb or city.", "Enter the country.", "Enter the emergency contact's name.", "Enter the emergency contact's phone number.",
     "Enter how they are related to you.", "Enter your nationality.", "Enter your passport number.",
-    "Tell us your residency status for tax purposes.", "Tell us whether you have a study or training support loan.", "Choose how your super is paid.",
-    "A passport is required before you can submit.", "Upload your visa.", "Upload your English test result.", "Upload your academic results.", "Upload your health insurance.",
-    "Enter your bank details.",
+    "A passport is required before you can submit.",
   ], "everything missing, in the order the database checks it");
   // Each problem belongs to the step that fixes it; a step is complete (ticked) once it has none.
-  assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal", "tax", "bank"]);
-  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "tax", "review"], "Tax and super sits between Bank details and Review");
+  assert.deepEqual([...new Set(blank.map((p) => p.step))], ["documents", "prefill", "personal"]);
+  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "review"], "documents only: no Bank details or Tax and super steps");
   assert.ok(!texts().some((p) => /tax file|tfn/i.test(p)) && !Object.keys(staffRules.EMPTY_STAFF_DETAILS).some((k) => /tfn|tax_file/.test(k)), "no tax file number is asked for anywhere");
   assert.equal(wizardLib.stepComplete("documents", blank), false);
   assert.equal(wizardLib.stepComplete("review", []), true);
-  assert.equal(wizardLib.stepComplete("review", wizardLib.wizardProblems(completeDetails, all, false, now)), false);
+  assert.equal(wizardLib.stepComplete("review", wizardLib.wizardProblems(completeDetails, without("Passport"), false, now)), false);
   // The address belongs to Personal details, or to Check details when an Australian licence gave it.
   const licence = { id: "lic", category: "Driving Licence", expiryDate: "2030-01-01", extractionStatus: "done" as const, extracted: { au_street: "9 Licence Rd" } };
   assert.equal(wizardLib.wizardProblems({ ...completeDetails, address_suburb: "" }, all, true, now)[0].step, "personal");
@@ -2738,18 +2754,20 @@ test("submit needs the details, citizenship, every required document with a curr
 
 test("the document rules match the database", () => {
   const sql = read("supabase/migrations/20261110090000_hr_staff_enrolment_v2.sql");
-  assert.deepEqual(status.requiredStaffCategories(true), ["Passport", "Academic", "Health Insurance"], "x/3 for citizens");
-  assert.deepEqual(status.requiredStaffCategories(false), ["Passport", "Visa", "English", "Academic", "Health Insurance"], "x/5 for non-citizens");
+  const voidCheque = read("supabase/migrations/20261122033517_staff_void_cheque_documents.sql");
+  const passportOnly = read("supabase/migrations/20261122053517_staff_docs_passport_only.sql");
+  assert.deepEqual(status.requiredStaffCategories(true), ["Passport"], "only the passport for citizens");
+  assert.deepEqual(status.requiredStaffCategories(false), ["Passport"], "only the passport for non-citizens");
+  assert.ok(passportOnly.includes("'citizen', jsonb_build_array('Passport'), 'other', jsonb_build_array('Passport')"), "the published rule lists only the passport");
   assert.deepEqual(status.requiredStaffCategories(null), status.requiredStaffCategories(false), "unanswered counts as a non-citizen");
-  assert.ok(sql.includes("array['Passport','Academic','Health Insurance'] else array['Passport','Visa','English','Academic','Health Insurance']"), "the SQL lists the same required types");
   assert.ok(!status.requiredStaffCategories(false).includes("Driving Licence" as never), "the licence is never required");
-  assert.ok(sql.includes("check (category in ('Passport','Visa','English','Academic','Driving Licence','Health Insurance'))"), "the allowed list has the six types and no legacy PTE / English Certificate");
-  assert.deepEqual([...status.STAFF_DOC_CATEGORIES].sort(), ["Academic", "Driving Licence", "English", "Health Insurance", "Passport", "Visa"]);
+  assert.ok(voidCheque.includes("check (category = any (array['Passport','Visa','English','Academic','Driving Licence','Health Insurance','Void Cheque']))"), "the allowed list has the seven types");
+  assert.deepEqual([...status.STAFF_DOC_CATEGORIES].sort(), ["Academic", "Driving Licence", "English", "Health Insurance", "Passport", "Visa", "Void Cheque"]);
   assert.ok(sql.includes("p_category in ('Passport','Visa','Driving Licence','Health Insurance'); $fn$;"), "the SQL requires the same expiry dates");
   assert.ok(sql.includes("p_category in ('Passport','Visa','English','Driving Licence','Health Insurance'); $fn$;"), "the SQL accepts the same expiry dates");
   for (const c of status.STAFF_DOC_CATEGORIES) {
     assert.equal(status.staffDocNeedsExpiry(c), ["Passport", "Visa", "Driving Licence", "Health Insurance"].includes(c), `needs expiry: ${c}`);
-    assert.equal(status.staffDocTakesExpiry(c), c !== "Academic", `takes expiry: ${c}`);
+    assert.equal(status.staffDocTakesExpiry(c), c !== "Academic" && c !== "Void Cheque", `takes expiry: ${c}`);
   }
   assert.equal(status.staffDocSlug("Health Insurance"), "health-insurance");
   assert.equal(status.staffDocSlug("Driving Licence"), "driving-licence");
@@ -2769,22 +2787,23 @@ test("expiry states, the shown document kinds and the checklist", () => {
   assert.equal(status.expiryState("2026-11-09", today), "soon");
   assert.equal(status.expiryState("2026-12-09", today), "soon");
   assert.equal(status.expiryState("2026-12-10", today), "ok");
-  // Citizens see passport, academic, the optional licence and health insurance; a visa they uploaded anyway is shown as optional.
-  assert.deepEqual(status.staffDocKinds(true).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Academic:true", "Driving Licence:false", "Health Insurance:true"]);
-  assert.deepEqual(status.staffDocKinds(true, [{ category: "Visa" }]).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Visa:false", "Academic:true", "Driving Licence:false", "Health Insurance:true"]);
+  // One screen each, in this order: passport, visa (non-citizens), the optional licence, void cheque, academic results; a visa a citizen
+  // uploaded anyway is shown as optional.
+  assert.deepEqual(status.staffDocKinds(true).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Driving Licence:false", "Void Cheque:false", "Academic:false"]);
+  assert.deepEqual(status.staffDocKinds(true, [{ category: "Visa" }]).map((k) => `${k.category}:${k.required}`), ["Passport:true", "Visa:false", "Driving Licence:false", "Void Cheque:false", "Academic:false"]);
   assert.deepEqual(status.staffDocKinds(false).map((k) => `${k.category}:${k.required}:${k.expiry}`),
-    ["Passport:true:required", "Visa:true:required", "English:true:optional", "Academic:true:none", "Driving Licence:false:required", "Health Insurance:true:required"]);
+    ["Passport:true:required", "Visa:false:required", "Driving Licence:false:required", "Void Cheque:false:none", "Academic:false:none"]);
   const list = status.staffChecklist([
     { category: "Passport", status: "approved", expiryDate: "2026-11-20" },
     { category: "Academic", status: "approved", expiryDate: null }, { category: "Academic", status: "rejected", expiryDate: null, reviewNote: "Unreadable" },
     { category: "Driving Licence", status: "pending", expiryDate: "2027-01-01" },
-    { category: "Health Insurance", status: "pending", expiryDate: "2027-06-01" },
+    { category: "Void Cheque", status: "pending", expiryDate: null },
   ], true, today);
-  assert.deepEqual(list.map((i) => [i.kind.category, i.state, i.files, i.expiry]), [["Passport", "approved", 1, "soon"], ["Academic", "rejected", 2, "none"], ["Driving Licence", "pending", 1, "ok"], ["Health Insurance", "pending", 1, "ok"]]);
-  assert.deepEqual(list[1].notes, ["Unreadable"]);
-  assert.deepEqual(checklistLib.approvedCount(list), { approved: 1, required: 3 }, "x/N counts required types only (the licence is not counted)");
-  assert.deepEqual(status.staffChecklist([], false, today).map((i) => i.state).join(","), "missing,missing,missing,missing,missing,missing");
-  assert.deepEqual(checklistLib.approvedCount(status.staffChecklist([], false, today)), { approved: 0, required: 5 });
+  assert.deepEqual(list.map((i) => [i.kind.category, i.state, i.files, i.expiry]), [["Passport", "approved", 1, "soon"], ["Driving Licence", "pending", 1, "ok"], ["Void Cheque", "pending", 1, "none"], ["Academic", "rejected", 2, "none"]]);
+  assert.deepEqual(list[3].notes, ["Unreadable"]);
+  assert.deepEqual(checklistLib.approvedCount(list), { approved: 1, required: 1 }, "x/N counts required types only (only the passport)");
+  assert.deepEqual(status.staffChecklist([], false, today).map((i) => i.state).join(","), "missing,missing,missing,missing,missing");
+  assert.deepEqual(checklistLib.approvedCount(status.staffChecklist([], false, today)), { approved: 0, required: 1 });
 });
 
 test("an applicant can never write review fields or grant themselves access", () => {
@@ -3482,7 +3501,8 @@ test("simple employees: validation, file checks, upload path, two statuses", asy
   assert.equal(emp.employeeDocPath("abc", "../My Passport (1).pdf", "r1"), "employees/abc/r1-My_Passport_1_.pdf", "the file name cannot leave the employee's folder");
   assert.deepEqual(Object.keys(emp.EMPLOYEE_STATUS_LABEL), ["active", "inactive"], "two statuses only");
   const sql = read("supabase/migrations/20261110170000_hr_employees_simple.sql");
-  for (const c of emp.EMPLOYEE_DOC_CATEGORIES) assert.ok(sql.includes(`'${c}'`), `the database accepts ${c}`);
+  const voidChequeSql = read("supabase/migrations/20261122033517_staff_void_cheque_documents.sql");
+  for (const c of emp.EMPLOYEE_DOC_CATEGORIES) assert.ok(sql.includes(`'${c}'`) || voidChequeSql.includes(`'${c}'`), `the database accepts ${c}`);
   assert.ok(sql.includes("'Enter a valid email address.'") && sql.includes("drop trigger if exists employment_activation_guard"), "the database validates too and activation needs no login");
   // Several documents at once: the type is guessed from the file name; each type once per batch.
   assert.equal(emp.guessDocCategory("John_Passport.pdf"), "Passport");
@@ -3605,7 +3625,8 @@ test("templates: placeholders fill from the person, values are escaped, missing 
   for (const key of ["first_name", "full_name", "position", "employment_type", "start_date", "pay_rate", "pay_basis", "pay_schedule", "hours_per_week", "manager_name", "company_name", "today", "signing_link", "login_url"]) {
     assert.ok(tpl.PLACEHOLDERS.some((p) => p.key === key), `{{${key}}} is in the list an Admin inserts from`);
   }
-  const sql = read("supabase/migrations/20261111100000_hr_templates.sql") + read("supabase/migrations/20261113090000_hr_locations_job_type_login.sql");
+  const sql = read("supabase/migrations/20261111100000_hr_templates.sql") + read("supabase/migrations/20261113090000_hr_locations_job_type_login.sql")
+    + read("supabase/migrations/20261124001517_staff_offer_variables.sql");
   for (const t of tpl.TEMPLATE_TYPES) assert.ok(sql.includes(`'${t.type}'`), `the database knows the ${t.type} template`);
   for (const p of tpl.PLACEHOLDERS) assert.ok(sql.includes(`'${p.key}'`), `the database allows {{${p.key}}}`);
 });
@@ -4337,7 +4358,7 @@ test("wizard: where each pre-filled value came from, what could not be read, and
   assert.equal(wizardLib.readerDate("03/02/1991"), "1991-02-03");
   assert.equal(wizardLib.isBeingRead({ ...passport, extractionStatus: "pending" as const }), true);
   assert.equal(wizardLib.isBeingRead({ ...passport, category: "Academic", extractionStatus: "pending" as const }), false, "academic results are never read");
-  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "bank", "tax", "review"]);
+  assert.deepEqual(wizardLib.STAFF_WIZARD.map((s) => s.id), ["documents", "prefill", "personal", "review"]);
   // What the server sends becomes the wizard's fields.
   const details = wizardLib.detailsOf({ first_name: "Jo", phone_e164: "+61400000111", emergency_phone_e164: null, is_australian_citizen: true, date_of_birth: null, passport_number: "N1234567" });
   assert.deepEqual([details.first_name, details.phone, details.emergency_phone, details.is_australian_citizen, details.date_of_birth, details.passport_number], ["Jo", "+61400000111", "", true, "", "N1234567"]);

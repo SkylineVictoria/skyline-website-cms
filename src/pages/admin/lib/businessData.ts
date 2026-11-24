@@ -422,4 +422,14 @@ export const activateAgent = (input: {
   p_agent: input.agentId ?? null, p_business: input.businessId, p_name: input.name, p_email: input.email, p_phone: input.phone ?? "", p_marn: input.marn ?? "", p_role: input.role,
 }, "We could not activate this agent.");
 
+export interface AgentDeletePreview {
+  agentId: string; name: string; students: number; assignedApplications: number; pointOfContact: boolean;
+  moveTo: Array<{ id: string; name: string; status: string; role: "agent" | "agency_admin" }>;
+}
+/** What deleting an agent affects (admin_agent_delete_preview): students to hand over, whether they are the business's point of contact. */
+export const agentDeletePreview = (agentId: string) => call<AgentDeletePreview>("admin_agent_delete_preview", { p_agent: agentId }, "We could not check this agent.");
+/** Deletes an agent (admin_agent_delete): their students go to `moveTo` (another agent of the same business); applications and history stay. */
+export const deleteAgent = (agentId: string, moveTo: string | null) =>
+  call<{ name: string; studentsMoved: number; applicationsMoved: number; movedTo: string | null; businessId: string }>(
+    "admin_agent_delete", { p_agent: agentId, p_move_to: moveTo }, "We could not delete this agent.");
 export const deactivateAgent = (agentId: string) => call<{ agentId: string; status: "Inactive" }>("admin_agent_deactivate", { p_agent: agentId }, "We could not deactivate this agent.");

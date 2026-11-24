@@ -4,6 +4,7 @@ import { PhoneInput, UsiInput, YearSelect } from "./applicationInputs";
 import { fitsSegments } from "@/components/shared/application-form/segments";
 import { SegmentedRadios } from "@/components/shared/application-form/SegmentedControl";
 import { englishMinimumScores, formatEnglishScore } from "@/pages/agency/lib/admissionsRules";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 export function ApplicationFieldControl({
   field,
@@ -95,7 +96,7 @@ export function ApplicationFieldControl({
 
   if (field.type === "select") {
     return (
-      <select
+      <SearchableSelect
         id={id}
         name={field.name}
         required={field.required && !locked}
@@ -111,7 +112,7 @@ export function ApplicationFieldControl({
             {option}
           </option>
         ))}
-      </select>
+      </SearchableSelect>
     );
   }
 

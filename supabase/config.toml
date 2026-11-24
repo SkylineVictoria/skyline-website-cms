@@ -105,3 +105,17 @@ verify_jwt = true
 # INTAKE-GROUPS: an Admin / RTO Manager (intake_group_can_manage) syncs one intake's Microsoft 365 group, or the scheduled job
 # (service role) syncs every group with work. App-only Microsoft Graph with the EF_MICROSOFT365_* secrets.
 verify_jwt = true
+
+[functions.lms-bulk-worker]
+verify_jwt = true
+
+[functions.usi-service]
+# USI-SERVICE: USI Verify / Locate / Create from the application form (usi_access decides who may run what with the caller's JWT),
+# and the service role's automatic re-checks (usi-reverify job). USI Web Services v5 with the EF_USI_* secrets (3PT until released).
+verify_jwt = true
+
+[functions.student-practice]
+verify_jwt = true
+
+[functions.student-application-invite]
+verify_jwt = true

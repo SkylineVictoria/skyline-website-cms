@@ -10,6 +10,7 @@ const BLOCK_LABELS: Record<string, string> = {
   "#if discount": "▸ Only for a course with a discount", "/if": "◂ End of the conditional part",
 };
 import { rehostImagesIn, uploadTemplateAsset } from "@/lib/offerLetters";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /* Offer letter variables: {{key}} text is shown as a chip (edited as one piece) and saved back as the text token. */
 const escapeAttr = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -626,7 +627,7 @@ export default function RichTextEditor({
 
         <span className="mx-1 h-5 w-px bg-background-300" aria-hidden="true" />
 
-        <select
+        <SearchableSelect
           aria-label="Text style"
           className={selectClass}
           defaultValue="p"
@@ -641,13 +642,13 @@ export default function RichTextEditor({
               {b.label}
             </option>
           ))}
-        </select>
+        </SearchableSelect>
 
         {/* Documents print in one family (Arimo, Arial-compatible): no family choice that the PDF would not keep. */}
         {doc ? (
           <span className="px-1 text-xs text-foreground-600" title="The PDF prints all text in Arial (Arimo)" data-testid="document-font">Arial</span>
         ) : (
-          <select
+          <SearchableSelect
             aria-label="Font family"
             className={selectClass}
             defaultValue=""
@@ -662,16 +663,16 @@ export default function RichTextEditor({
                 {f.label}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         )}
 
         {doc ? (
-          <select aria-label="Font size" className={selectClass} value="" onMouseDown={saveSelection} onChange={(e) => { if (e.target.value) applySize(Number(e.target.value)); }}>
+          <SearchableSelect aria-label="Font size" className={selectClass} value="" onMouseDown={saveSelection} onChange={(e) => { if (e.target.value) applySize(Number(e.target.value)); }}>
             <option value="">Size</option>
             {DOC_SIZES.map((pt) => <option key={pt} value={pt}>{pt} pt</option>)}
-          </select>
+          </SearchableSelect>
         ) : (
-          <select
+          <SearchableSelect
             aria-label="Font size"
             className={selectClass}
             defaultValue="3"
@@ -686,7 +687,7 @@ export default function RichTextEditor({
                 {s.label}
               </option>
             ))}
-          </select>
+          </SearchableSelect>
         )}
 
         <span className="mx-1 h-5 w-px bg-background-300" aria-hidden="true" />

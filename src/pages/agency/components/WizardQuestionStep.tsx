@@ -1,15 +1,17 @@
 import EmergencyContactFields from "@/components/shared/wizard/EmergencyContactFields";
 import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
 import IntakeSelect from "@/pages/agency/components/IntakeSelect";
+import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /**
  * One answer screen. Inputs are plain form controls named after the application fields; the wizard reads them from the
  * surrounding form when Next is pressed, so the phone control keeps its own formatting and validation. The label, input,
  * error line and the emergency contact fields are the shared wizard components (also used by staff onboarding).
  */
-export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0 }: {
+export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0, applicationId }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
@@ -25,6 +27,8 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   canAddIntake?: boolean;
   onAddIntake?: () => void;
   intakeReload?: number;
+  /** The application (USI screen: Verify / find / create the USI with usi-service). */
+  applicationId?: string;
 }) {
   const text = (name: string, label: string, props: { placeholder?: string; maxLength?: number; upper?: boolean } = {}) => (
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={answers[name] ?? ""} error={errors[name]} maxLength={props.maxLength ?? 200}
@@ -55,7 +59,12 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
         </div>
       ) : null}
 
-      {question.id === "usi" ? text("usi_number", "USI number", { placeholder: "10 characters, e.g. ABC234DEF5", maxLength: 10, upper: true }) : null}
+      {question.id === "usi" ? (
+        <div className="space-y-3">
+          {text("usi_number", "USI number", { placeholder: "10 characters, e.g. BNGH7C75FN", maxLength: 10, upper: true })}
+          {applicationId ? <UsiPanel applicationId={applicationId} usi={answers.usi_number ?? ""} onUsi={(found) => onChange("usi_number", found)} /> : null}
+        </div>
+      ) : null}
 
       {question.id === "emergency" ? (
         <EmergencyContactFields idPrefix="wizard-" names={{ name: "ec_name", phone: "ec_phone", relationship: "ec_relationship" }} who="the student"
@@ -68,11 +77,11 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
         <div className="grid grid-cols-1 gap-4">
           <div>
             <Label htmlFor="wizard-course">Course</Label>
-            <select id="wizard-course" name="course" value={answers.course ?? ""} aria-invalid={Boolean(errors.course) || courseOptions?.length === 0} disabled={!courseOptions || courseOptions.length === 0}
+            <SearchableSelect id="wizard-course" name="course" value={answers.course ?? ""} aria-invalid={Boolean(errors.course) || courseOptions?.length === 0} disabled={!courseOptions || courseOptions.length === 0}
               className={INPUT} onChange={(e) => onChange("course", e.target.value)} data-testid="wizard-course">
               <option value="">{courseOptions === null ? "Loading courses…" : courseOptions.length === 0 ? "No courses open" : "Select a course"}</option>
               {(answers.course && courseOptions && !courseOptions.includes(answers.course) ? [answers.course, ...courseOptions] : courseOptions ?? []).map((label) => <option key={label} value={label}>{label}</option>)}
-            </select>
+            </SearchableSelect>
             {courseOptions?.length === 0 ? <p className="mt-1 text-xs text-primary-700" role="alert" data-testid="wizard-no-courses">No courses are open for applications yet. Contact admissions.</p> : null}
             <FieldError text={errors.course} />
           </div>

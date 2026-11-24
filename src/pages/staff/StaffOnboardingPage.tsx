@@ -216,6 +216,8 @@ const EMPTY_BANK: BankDetails = { accountName: "", bsb: "", accountNumber: "" };
 
 function Wizard({ view, token, onChange, onError }: Props) {
   const [step, setStep] = useState(readStep);
+  // The documents step shows one document type per screen (as the student application does): Passport, Visa, Driving licence, ...
+  const [docIndex, setDocIndex] = useState(0);
   const [details, setDetails] = useState<StaffDetails>(() => detailsOf(view.profile as unknown as Record<string, unknown>));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [save, setSave] = useState<SaveState>("idle");
@@ -245,7 +247,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
   useEffect(() => {
     if (firstRender.current) { firstRender.current = false; return; }
     top.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [step]);
+  }, [step, docIndex]);
 
   // Reading a document fills EMPTY details on the server: take those in without overwriting what the person is typing.
   const served = useMemo(() => detailsOf(view.profile as unknown as Record<string, unknown>), [view.profile]);
@@ -375,6 +377,30 @@ function Wizard({ view, token, onChange, onError }: Props) {
   });
   const requiredKinds = kinds.filter((k) => k.required);
   const uploadedRequired = requiredKinds.filter((k) => documents.some((d) => d.category === k.category)).length;
+  const docAt = Math.min(docIndex, Math.max(0, docSteps.length - 1));
+  const onDocs = current.id === "documents";
+  const hasDoc = (category: string) => documents.some((d) => d.category === category);
+  const moreDocs = onDocs && docAt < docSteps.length - 1;
+  /** Continue: the next document screen while there is one (a required document must be uploaded first), then the next step. */
+  const next = () => {
+    if (moreDocs) {
+      const here = docSteps[docAt];
+      if (docAt === 0 && citizen === null) { setErrors((prev) => ({ ...prev, is_australian_citizen: "Tell us whether you are an Australian citizen." })); return; }
+      // rule-policy: technical step-gate Mirrors the required list the server checks on Submit (hr.staff_required_categories).
+      if (here?.kind.required && !hasDoc(here.kind.category)) { setNotice(`Upload your ${here.kind.label.toLowerCase()} to continue.`); return; }
+      setNotice(""); setDocIndex(docAt + 1); return;
+    }
+    void goTo(step + 1);
+  };
+  const back = () => {
+    if (onDocs && docAt > 0) { setNotice(""); setDocIndex(docAt - 1); return; }
+    if (STAFF_WIZARD[step - 1]?.id === "documents") setDocIndex(Math.max(0, docSteps.length - 1));
+    void goTo(step - 1);
+  };
+  const nextLabel = moreDocs
+    // rule-policy: technical button-label Next or Skip wording for the current document screen.
+    ? (docSteps[docAt] && !docSteps[docAt].kind.required && !hasDoc(docSteps[docAt].kind.category) ? `Skip: ${docSteps[docAt + 1].kind.label}` : `Next: ${docSteps[docAt + 1].kind.label}`)
+    : "Continue";
 
   const field = (name: StaffTextField, label: string, props: { required?: boolean; maxLength?: number; upper?: boolean; type?: string; min?: string; max?: string; placeholder?: string; source?: boolean } = {}) => (
     <WizardTextField id={`staff-${name}`} name={name} label={label} value={details[name]} error={errors[name]} required={props.required ?? true} maxLength={props.maxLength ?? 100}
@@ -423,20 +449,36 @@ function Wizard({ view, token, onChange, onError }: Props) {
       return (
         <div className="space-y-6">
           <StepHeading title={current.title} subtitle={current.subtitle} />
-          <div>
-            <p className="mb-2 text-label font-medium text-foreground-800">Are you an Australian citizen? <span className="text-primary-600">*</span></p>
-            <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Australian citizen">
-              <Choice selected={citizen === true} onClick={() => edit("is_australian_citizen", true, true)} title="Yes" text="No visa or English test needed." testId="staff-citizen-yes" />
-              <Choice selected={citizen === false} onClick={() => edit("is_australian_citizen", false, true)} title="No" text="You will also upload your visa and English test result." testId="staff-citizen-no" />
+          {/* One document per screen: the pills show where they are and which are done; any pill can be opened. */}
+          <ol className="flex flex-wrap gap-2" aria-label="Documents" data-testid="staff-doc-pills">
+            {docSteps.map(({ kind }, i) => {
+              const done = hasDoc(kind.category);
+              return (
+                <li key={kind.category}>
+                  <button type="button" onClick={() => { setNotice(""); setDocIndex(i); }} aria-current={i === docAt ? "step" : undefined}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${i === docAt ? "border-primary-500 bg-primary-50 text-primary-800" : done ? "border-green-300 bg-green-50 text-green-800" : "border-background-300 text-foreground-600"}`}>
+                    {/* // rule-policy: technical progress-pill Shows done / optional per document screen. */}
+                    <i className={done ? "ri-checkbox-circle-fill" : "ri-checkbox-blank-circle-line"} aria-hidden="true" />{kind.label}{kind.required ? "" : " (optional)"}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+          {docAt === 0 ? (
+            <div>
+              <p className="mb-2 text-label font-medium text-foreground-800">Are you an Australian citizen? <span className="text-primary-600">*</span></p>
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Australian citizen">
+                <Choice selected={citizen === true} onClick={() => edit("is_australian_citizen", true, true)} title="Yes" text="No visa needed." testId="staff-citizen-yes" />
+                <Choice selected={citizen === false} onClick={() => edit("is_australian_citizen", false, true)} title="No" text="You will also upload your visa." testId="staff-citizen-no" />
+              </div>
+              <FieldError text={errors.is_australian_citizen} />
             </div>
-            <FieldError text={errors.is_australian_citizen} />
-          </div>
-          <p className="rounded-md border border-background-200 bg-background-100 px-3 py-2 text-label text-foreground-800" role="status" data-testid="staff-required-summary">
-            {citizen === null ? "Answer the question above: it decides whether a visa and an English test result are needed. " : ""}
-            <strong>Required for you:</strong> {requiredKinds.map((k) => k.label).join(", ")} ({uploadedRequired} of {requiredKinds.length} uploaded).
-            {kinds.some((k) => !k.required) ? <> <strong>Optional:</strong> {kinds.filter((k) => !k.required).map((k) => k.label).join(", ")}.</> : null}
+          ) : null}
+          {/* // rule-policy: technical progress-text Shows how many required documents are uploaded. */}
+          <p className="text-xs text-foreground-600" role="status" data-testid="staff-required-summary">
+            Document {docAt + 1} of {docSteps.length} · {uploadedRequired} of {requiredKinds.length} required uploaded
           </p>
-          <DocumentWizard steps={docSteps} documents={documents.map(toWizardDocument)} adapter={linkAdapter(token, onChange)} testIdPrefix="staff" askExpiry={false} dropzone camera />
+          <DocumentWizard steps={docSteps.slice(docAt, docAt + 1)} documents={documents.map(toWizardDocument)} adapter={linkAdapter(token, onChange)} testIdPrefix="staff" askExpiry={false} dropzone camera />
         </div>
       );
     }
@@ -658,16 +700,6 @@ function Wizard({ view, token, onChange, onError }: Props) {
               {row("Phone", formatPhone(details.emergency_phone))}
             </dl>
           </ReviewCard>
-          <ReviewCard icon="ri-bank-line" title="Bank details" edit={edits("bank", "Bank details")}>
-            <dl className="mt-3 space-y-2" data-testid="staff-review-bank">
-              {view.bank ? <>{row("Account name", view.bank.accountName)}{row("BSB", view.bank.bsb)}{row("Account number", view.bank.accountNumber)}</> : row("Bank details", "Not entered yet")}
-            </dl>
-          </ReviewCard>
-          <ReviewCard icon="ri-government-line" title="Tax and super" edit={edits("tax", "Tax and super")}>
-            <dl className="mt-3 space-y-2" data-testid="staff-review-tax">
-              {taxSuperRows(details).map(([label, value]) => row(label, value))}
-            </dl>
-          </ReviewCard>
           {view.employment ? (
             <ReviewCard icon="ri-briefcase-line" title="Your role (as recorded by HR)">
               <dl className="mt-3 space-y-2" data-testid="staff-review-role">
@@ -699,7 +731,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
         stepper={<div data-testid="staff-stepper"><WizardStepper items={STAFF_WIZARD.map((s) => ({ id: s.id, short: s.short, icon: s.icon, done: stepComplete(s.id, problems) }))} current={step} onSelect={(index) => void goTo(index)} /></div>}
         footerStart={
           <>
-            {step > 0 ? <WizardBackButton onClick={() => void goTo(step - 1)} disabled={submitting} /> : null}
+            {step > 0 || (onDocs && docAt > 0) ? <WizardBackButton onClick={back} disabled={submitting} /> : null}
             <span className="text-xs text-foreground-500" role="status" aria-live="polite" data-testid="staff-save-state">
               {save === "saving" ? "Saving…" : save === "saved" ? "Saved" : save === "error" ? "Not saved" : ""}
             </span>
@@ -711,8 +743,8 @@ function Wizard({ view, token, onChange, onError }: Props) {
               {submitting ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Sending&hellip;</> : <>Send my details and documents <i className="ri-send-plane-line" aria-hidden="true" /></>}
             </button>
           ) : (
-            <button type="button" onClick={() => void goTo(step + 1)} disabled={savingBank} className={WIZARD_PRIMARY_CLASS} data-testid="staff-next">
-              {savingBank ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Continue <i className="ri-arrow-right-line" aria-hidden="true" /></>}
+            <button type="button" onClick={next} disabled={savingBank} className={WIZARD_PRIMARY_CLASS} data-testid="staff-next">
+              {savingBank ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>{nextLabel} <i className="ri-arrow-right-line" aria-hidden="true" /></>}
             </button>
           )
         }

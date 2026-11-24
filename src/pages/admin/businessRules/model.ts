@@ -89,3 +89,33 @@ export function definitionSummary(definition: Definition) {
   if (["days", "hours", "weeks"].includes(definition.value_type)) return `${value} ${definition.value_type}`;
   return value;
 }
+
+/*
+ * Owner (2026-11-22): the Advanced tab lists only real business choices. Every other rule is a system detail (file sizes, formats,
+ * workflow steps, defaults the screens already set, offer-letter wording, rescheduling steps that have their own screen); it keeps
+ * its value and still works, and shows only after "Show system rules".
+ */
+// rule-policy: technical rule-visibility Which existing rules the Advanced tab shows by default; no value changes.
+export const BUSINESS_RULE_IDS = new Set([
+  "admissions.application_required_documents", "admissions.english_minimum_scores", "admissions.english_result_valid_years",
+  "admissions.english_test_alternatives", "admissions.document_expiry_warning_months", "admissions.offer_letter_recipient",
+  "admissions.offer_unanswered_days", "admissions.offer_accept_in_portal", "admissions.usi_required", "admissions.withdrawal_class_removal",
+  "admissions.guest_link_required_documents",
+  "agents.activation_reference_minimum", "agents.agreement_term_years", "agents.commission_suggested", "agents.business_approval_waits_for_referees",
+  "agents.cancelled_abn_business", "agents.agency_witness_on_agreement", "agents.slit_witness_on_agreement", "agents.referee_emails_must_differ",
+  "agents.review_email_recipients",
+  "assessment.attempts_default", "assessment.due_soon_days", "assessment.late_submission_default",
+  "auth.password_min_staff", "auth.password_min_students_agents",
+  "booking.reminder_hours", "booking.new_type_duration", "booking.new_type_min_notice",
+  "finance.deposit_reminder_default_enabled", "finance.deposit_automatic_reminder_interval", "finance.deposit_automatic_reminder_cap",
+  "finance.course_fee_deposit_cap", "finance.course_fee_suggestions",
+  "hrms.applicant_document_checklist", "hrms.breaks_paid_default", "hrms.default_ordinary_hours", "hrms.usual_workdays",
+  "hrms.document_expiring_soon_days", "hrms.staff_document_link_days", "hrms.staff_offer_link_days", "hrms.pay_frequencies",
+  "hrms.rejected_reapply_days", "hrms.staff_minimum_age",
+  "lms.attendance_alert_threshold", "lms.attendance_alert_min_marks", "lms.coe_weekly_study_hours", "lms.voe_weekly_study_hours",
+  "lms.course_working_days", "lms.join_dates", "lms.optional_holidays_stop_classes", "lms.auto_intake_create", "lms.course_auto_go_live",
+  "lms.intake_manual_placement_reason",
+  "support.ticket_categories", "support.ticket_priority_default", "support.requester_can_close",
+  "website.assistant_daily_answers",
+]);
+export const isSystemRule = (rule: Rule) => !rule.identifier.startsWith("lms.bulk_") && !rule.identifier.startsWith("lms.practice_") && !BUSINESS_RULE_IDS.has(rule.identifier);

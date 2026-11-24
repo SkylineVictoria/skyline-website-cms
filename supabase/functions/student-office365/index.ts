@@ -93,6 +93,14 @@ Deno.serve(async(req:Request)=>{
    :action==='resend'?await resend(ports,kind,personId,{dryRun:body.dryRun===true})
    :action==='link'?await link(ports,kind,personId,String(body.msUserId??''))
    :await provision(ports,kind,personId,{dryRun:body.dryRun===true,differentPerson:body.differentPerson===true,domain:typeof body.domain==='string'?body.domain.slice(0,100):undefined,username:typeof body.username==='string'?body.username.slice(0,100):undefined});
+  // ENROL-MAILBOX (2026-11-21): created from an application's "Mark as enrolled" dialog: the outcome goes to that application's audit log
+  // (application_mailbox_log checks the caller, that the application is this student's, and that a created account is recorded). Never
+  // fails the reply.
+  if(action==='create'&&kind==='student'&&body.dryRun!==true&&typeof body.applicationId==='string'&&uuid.test(body.applicationId)){
+   const b=(r.body??{}) as Record<string,unknown>;
+   await caller.rpc('application_mailbox_log',{p_application:body.applicationId,p_outcome:r.status<300?'created':'failed',
+    p_detail:r.status<300?{}:{reason:String(b.error??'').slice(0,300),code:String(b.code??'').slice(0,60)}}).then(()=>undefined,()=>undefined);
+  }
   return json(r.body,r.status);
  }catch{return json({error:'The request could not be completed. Retry.'},500);}
 });

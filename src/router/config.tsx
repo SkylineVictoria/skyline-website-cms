@@ -27,6 +27,7 @@ import CmsFormPage from "@/pages/form/page";
 import { contentPages } from "@/data/pages";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import AcceptInvitePage from "@/pages/agency/accept-invite/page";
+import ApplicationInvitePage from "@/pages/agency/application-invite/page";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 
 import PortalProviders from "@/pages/agency/components/PortalProviders";
@@ -96,7 +97,9 @@ import AssessmentDetailPage from "@/pages/admin/assessments/AssessmentDetailPage
 import StudentAssessmentsPage from "@/pages/agency/assessments/page";
 import StudentAssessmentPage from "@/pages/agency/assessments/detail/page";
 import StudentLearningPage from "@/pages/agency/learning/page";
+import { PracticeRedirect } from "@/pages/agency/practice/page";
 import StudentTimetablePage from "@/pages/agency/timetable/page";
+import StudentMessagesPage from "@/pages/agency/messages/page";
 import StaffTimetablePage from "@/pages/staff/TimetablePage";
 import CertificatePage from "@/pages/CertificatePage";
 import StaffOnboardingPage from "@/pages/staff/StaffOnboardingPage";
@@ -184,6 +187,7 @@ const routes: RouteObject[] = [
     children: [
       { path: "login", element: <LoginRedirect /> },
       { path: "accept-invite", element: <AcceptInvitePage /> },
+      { path: "application-invite", element: <ApplicationInvitePage /> },
       {
         element: <RequirePortal />,
         children: [
@@ -198,7 +202,10 @@ const routes: RouteObject[] = [
           { path: "assessments", element: <StudentAssessmentsPage /> },
           { path: "assessments/:id", element: <StudentAssessmentPage /> },
           { path: "learning", element: <StudentLearningPage /> },
+          // Practice is a tab of My learning now; old links keep working.
+          { path: "practice", element: <PracticeRedirect /> },
           { path: "timetable", element: <StudentTimetablePage /> },
+          { path: "messages", element: <StudentMessagesPage /> },
           { path: "notifications", element: <PortalNotificationsPage /> },
           { path: "bookings", element: <BookingsHub /> },
           { path: "tickets", element: <PortalTicketsPage /> },

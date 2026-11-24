@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT, E2E_SERVICE_KEY } from "./env";
-import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, hrMails, latestLink, linkToken, markStudentDocumentRead, offerPdf, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql } from "./support";
+import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, hrMails, latestLink, linkToken, markStudentDocumentRead, offerPdf, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql, choose, selectOf } from "./support";
 import { courses } from "../src/data/courses";
 
 // Existing flows must behave exactly as before: student registration, agent registration, and the admin staff invitation.
@@ -168,11 +168,11 @@ test("the student document wizard: upload, reading, emergency contact and the ph
 
   // Finish into the full form, then a document on it: Replace uploads the new file, the shared reading panel shows while it is
   // read, then the compact row, the filled fields and a toast; the old file goes only once the new one is in.
-  await wizard.locator("#wizard-course").selectOption({ index: 1 });
-  const intake = wizard.locator("#wizard-preferred_intake");
+  await choose(wizard.locator("#wizard-course"), { index: 1 });
+  const intake = selectOf(wizard.locator("#wizard-preferred_intake"));
   await expect(intake).toBeEnabled();
   await expect.poll(async () => (await intake.locator("option").count())).toBeGreaterThan(1);
-  await intake.selectOption({ index: 1 });
+  await choose(intake, { index: 1 });
   await wizard.getByRole("button", { name: "Finish" }).click();
   await expect(page.getByTestId("form-step-nav")).toBeVisible({ timeout: 30_000 });
   // The drawer lists each stage with its steps nested underneath; a step is one click away.
@@ -247,11 +247,11 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   await expect(wizard.locator("#wizard-course")).toBeVisible();
 
   // INT-01: the intake dropdown follows the course and lists only the course's open intakes, from the database.
-  const intake = wizard.locator("#wizard-preferred_intake");
+  const intake = selectOf(wizard.locator("#wizard-preferred_intake"));
   const finish = wizard.getByRole("button", { name: "Finish" });
   await expect(intake).toBeDisabled();
   await expect(intake.locator("option").first()).toHaveText("Choose the course first");
-  const labels = (await wizard.locator("#wizard-course option").allTextContents()).filter((l) => l && l !== "Select a course");
+  const labels = (await wizard.locator("#wizard-course + select option").allTextContents()).filter((l) => l && l !== "Select a course");
   const slugOf = (label: string) => courses.find((c) => `${c.code} - ${c.name}` === label)!.slug;
   const [withIntakes, withoutIntakes] = [labels[0], labels[1]];
   // Re-runnable: the course behind each label is upserted by its slug and its intakes reset to this run's.
@@ -263,23 +263,23 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
     insert into public.course_intakes(course_id, start_date, label, is_active) values ('${courseA}', current_date + 45, null, true), ('${courseA}', current_date + 12, 'Early start', true), ('${courseA}', current_date - 5, null, true), ('${courseB}', current_date + 30, null, false)
     on conflict (course_id, start_date) do update set label = excluded.label, is_active = excluded.is_active`);
   const expected = sql(`select string_agg(public.course_intake_display(i), '|' order by i.start_date) from public.course_intakes i where i.course_id = '${courseA}' and i.is_active and i.start_date >= current_date`).split("|");
-  await wizard.locator("#wizard-course").selectOption(withIntakes);
+  await choose(wizard.locator("#wizard-course"), withIntakes);
   await expect(intake).toBeEnabled();
   await expect.poll(async () => (await intake.locator("option").allTextContents()).slice(1)).toEqual(expected);
   expect(expected[0]).toMatch(/^Early start \(starts /);
-  await intake.selectOption({ label: expected[1] });
+  await choose(intake, { label: expected[1] });
   await shot(page, "student-wizard-intake-chosen");
   // A course with no open intake (course B's only one is inactive): the previous automatic start months, from the database.
   const months = sql(`select string_agg(x->>'display', '|' order by n) from jsonb_array_elements(public.course_intakes_open('${courseB}')) with ordinality e(x, n)`).split("|");
   expect(months).toHaveLength(12);
-  await wizard.locator("#wizard-course").selectOption(withoutIntakes);
+  await choose(wizard.locator("#wizard-course"), withoutIntakes);
   await expect(intake).toHaveValue("");
   await expect.poll(async () => (await intake.locator("option").allTextContents()).slice(1)).toEqual(months);
   await expect(wizard.getByTestId("intake-help")).toContainText("No intake dates are published for this course yet");
   await shot(page, "student-wizard-intake-fallback");
   await finish.click();
   await expect(wizard.getByText("Choose the intake.").first()).toBeVisible();
-  await intake.selectOption({ label: months[1] });
+  await choose(intake, { label: months[1] });
   await finish.click();
   await expect.poll(() => sql(`select coalesce(c.intake_id::text, '-') || '|' || a.intake from public.enrollment_application_courses c join public.enrollment_applications a on a.id = c.application_id where a.id = '${applicationId}'`))
     .toBe(`-|${months[1]}`);
@@ -546,7 +546,7 @@ test("status workflow: the list opens an application from its name; Take action 
   await expect(dialog.getByTestId("reason-confirm")).toBeDisabled();
   const reasons = (await dialog.getByTestId("reason-select").locator("option").allInnerTexts()).slice(1);
   expect(reasons).toEqual(sql(`select string_agg(label, '|' order by is_other, sort, lower(label)) from public.status_reasons where status = 'rejected' and is_active`).split("|"));
-  await dialog.getByTestId("reason-select").selectOption({ label: "Other" });
+  await choose(dialog.getByTestId("reason-select"), { label: "Other" });
   await expect(dialog.getByTestId("reason-confirm")).toBeDisabled();
   await dialog.getByTestId("reason-other").fill("Course is full");
   await dialog.getByTestId("reason-confirm").click();
@@ -646,7 +646,7 @@ test("status flow: Submitted → Issue offer letter → accepted → Issue CoE /
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: wfLabel("submitted", "withdraw") }).click();
   const reason = page.getByTestId("reason-dialog");
   await expect(reason.getByTestId("reason-confirm")).toBeDisabled();
-  await reason.getByTestId("reason-select").selectOption({ label: "Student request" });
+  await choose(reason.getByTestId("reason-select"), { label: "Student request" });
   await reason.getByTestId("dialog-notify").uncheck();
   await reason.getByTestId("reason-confirm").click();
   await expect(row(`Flow${tag} Other`).getByTestId("status-badge")).toHaveText(wfStatusLabel("withdrawn"));
@@ -790,7 +790,7 @@ test("status workflow: a template letter goes to the student when staff created 
   await expect(drawer.getByTestId("offer-recipient")).toContainText("Student");
   await expect(drawer.getByTestId("offer-recipient")).toContainText(`tem.plate.${tag}@example.test`);
   await expect(drawer.getByTestId("offer-recipient")).toContainText("Staff created this application for the student");
-  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO ${tag} · v1` });
+  await choose(drawer.getByLabel("Template"), { label: `E2E LOO ${tag} · v1` });
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", "1", { timeout: 30_000 });
   await expect(drawer.getByTestId("needs-input")).toContainText("Every detail is filled from the application");
   // The fixture has no answers, so Review has open items: an admin issues the letter anyway with a note.
@@ -862,9 +862,9 @@ test("offer letter: the real SLIT letter on an application like SLIT-2026-0080 (
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
-  const picked = drawer.getByLabel("Template");
+  const picked = selectOf(drawer.getByLabel("Template"));
   await expect(picked).toHaveValue("");
-  await picked.selectOption(standard);
+  await choose(picked, standard);
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9][0-9]?$/, { timeout: 30_000 });
   // Needs your input: the start date, CRICOS and fees the course setup does not have (the course is found by its slug).
   const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
@@ -933,7 +933,7 @@ test("offer letter: a packaged application (2 courses): a course row and a fee b
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
-  await drawer.getByLabel("Template").selectOption(standard);
+  await choose(drawer.getByLabel("Template"), standard);
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[0-9]+$/, { timeout: 30_000 });
   await expect(drawer.getByTestId("offer-letter-preview")).not.toHaveAttribute("data-pages", "0", { timeout: 30_000 });
   // Both courses have their setup: no course or fee detail is asked for, of either course.
@@ -1043,7 +1043,7 @@ test("offer letter templates: a logo inserted and pictures pasted go to template
   await expect(check.getByTestId("unmapped-token")).toHaveCount(1);
   await expect(check.getByTestId("unmapped-token")).toHaveAttribute("data-token", "$[dogField]");
   await page.getByRole("button", { name: "Save as inactive" }).click();
-  await page.getByTestId("template-for-filter").selectOption("student");
+  await choose(page.getByTestId("template-for-filter"), "student");
   const row = page.getByTestId("sign-template-row").filter({ hasText: `E2E LOO tpl ${tag}` });
   await expect(row).toContainText("inactive");
   await expect(row).toContainText("Letter of Offer (student)");
@@ -1059,7 +1059,7 @@ test("offer letter templates: a logo inserted and pictures pasted go to template
   expect((await client.rpc("letter_template_set_active", { p_id: id, p_active: true })).error?.message).toMatch(/Map every variable/);
   // Map to variable converts it everywhere; saved again (version 2) it can be made active.
   await row.getByRole("button", { name: "Edit" }).click();
-  await page.getByTestId("unmapped-tokens").getByTestId("unmapped-map-select").selectOption("application.reference");
+  await choose(page.getByTestId("unmapped-tokens").getByTestId("unmapped-map-select"), "application.reference");
   await page.getByTestId("unmapped-tokens").getByTestId("unmapped-convert").click();
   await expect(page.getByTestId("unmapped-tokens")).toHaveCount(0);
   await page.getByTestId("template-save").click();
@@ -1098,7 +1098,7 @@ test("offer letter: values from the application, course, intake and fees; missin
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
-  await drawer.getByLabel("Template").selectOption({ label: `E2E LOO issue ${tag} · v1` });
+  await choose(drawer.getByLabel("Template"), { label: `E2E LOO issue ${tag} · v1` });
   const preview = drawer.getByTestId("offer-letter-preview");
   await expect(preview).toHaveAttribute("data-pages", /^[2-9]$/, { timeout: 30_000 });
   // Needs your input: the passport and CRICOS (required) and the material fee (optional); Send says how many.
@@ -1209,7 +1209,7 @@ test("offer signing: the SLIT letter is emailed to the student with a personal l
   await page.getByTestId("staff-review-bar").getByTestId("take-action").click();
   await page.getByTestId("take-action-menu").getByRole("menuitem", { name: "Issue offer letter" }).click();
   const drawer = page.getByTestId("offer-letter-drawer");
-  await drawer.getByLabel("Template").selectOption(standard);
+  await choose(drawer.getByLabel("Template"), standard);
   await expect(drawer.getByTestId("offer-letter-preview")).toHaveAttribute("data-pages", /^[1-9][0-9]?$/, { timeout: 30_000 });
   const keys = await drawer.getByTestId("needs-input-item").evaluateAll((items) => items.map((el) => el.getAttribute("data-key") ?? ""));
   const registry = Object.fromEntries(sql(`select key || chr(9) || required::text || chr(9) || input_type from public.letter_variables`).split("\n").map((l) => l.split("\t")).map(([k, r, t]) => [k, { required: r === "true", input: t }]));

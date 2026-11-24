@@ -1,6 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import StudentMobilePrompt from "@/pages/agency/components/StudentMobilePrompt";
 import { ROLE_LABELS } from "@/pages/agency/lib/portalData";
 import WorkspaceShell, { type NavEntry } from "@/pages/agency/components/WorkspaceShell";
 
@@ -21,6 +20,7 @@ const STUDENT_NAV: NavEntry[] = [
   { to: "/agency/timetable", label: "My timetable", icon: "ri-calendar-2-line" },
   { to: "/agency/assessments", label: "My assessments", icon: "ri-edit-box-line" },
   { to: "/agency/documents", label: "My documents", icon: "ri-folder-3-line" },
+  { to: "/agency/messages", label: "Messages", icon: "ri-chat-3-line" },
   { to: "/agency/bookings", label: "Bookings", icon: "ri-calendar-check-line" },
   { to: "/agency/tickets", label: "Support tickets", icon: "ri-customer-service-2-line" },
 ];
@@ -44,6 +44,7 @@ const CRUMB_LABELS: Record<string, string> = {
   assessments: "Assessments",
   learning: "My learning",
   timetable: "My timetable",
+  messages: "Messages",
   notifications: "Notifications",
   "agency-profile": "Agency Profile",
   profile: "My Profile",
@@ -112,7 +113,6 @@ export default function PortalLayout() {
       onSignOut={() => void handleSignOut()}
     >
       <Outlet key={scopeEpoch} />
-      {isStudent ? <StudentMobilePrompt key={authUser?.id ?? ""} onSignOut={() => void handleSignOut()} /> : null}
     </WorkspaceShell>
   );
 }

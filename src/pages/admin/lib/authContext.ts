@@ -41,6 +41,8 @@ export interface LoginResult {
 export interface AuthContextValue {
   user: SessionUser | null;
   authLoading: boolean;
+  authError: string | null;
+  retryAuth: () => void;
   users: AdminUser[];
   login: (email: string, password: string) => Promise<LoginResult>;
   logout: () => Promise<void>;

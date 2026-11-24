@@ -1,3 +1,4 @@
+import { ruleBool, ruleNumber } from "@/lib/businessRules";
 import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -9,19 +10,23 @@ import {
   listApplicationDocuments,
   listInstitutionCourses,
   queueDocumentExtraction,
-  saveApplicationDraft,
-  saveDocumentReview,
+  saveWizardDraft,
+  submitApplication,
   uploadApplicationDocument,
   type ApplicationCourseRow,
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
 import { detailRequired, portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
+import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
+import { CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { addressProblems, emailProblem } from "../../../../supabase/functions/_shared/validation/person";
+import { validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
+import type { AddressPick } from "@/components/shared/wizard/AddressSearch";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
-import { forgetIntakes, intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
-import NewIntakeDrawer from "@/pages/admin/components/rto/NewIntakeDrawer";
+import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
-import { OTHER_LANGUAGE, WIZARD_QUESTIONS, openDeclarationKey, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { OTHER_LANGUAGE, WIZARD_QUESTIONS, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
 import {
@@ -29,14 +34,14 @@ import {
   wizardExtractionState,
   type PendingUpload,
   type WizardDoc,
-  type WizardMeta,
   type WizardStep,
 } from "@/pages/agency/lib/wizardConfig";
 import { formatExtractionCandidates } from "@/pages/agency/lib/documentExtraction";
 import { formatExpiryDate, getDocumentExpiryStatus } from "@/pages/agency/lib/documentExpiry";
 import WizardDocumentStep from "@/components/shared/wizard/WizardDocumentStep";
 import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardLock, WizardNotice } from "@/components/shared/wizard/WizardShell";
-import WizardStepper from "@/components/shared/wizard/WizardStepper";
+import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
+import WizardStages, { type WizardStage } from "@/components/shared/wizard/WizardStages";
 import { englishAlternatives, usiRequired } from "@/pages/agency/lib/admissionsRules";
 import EnglishAlternative, { ENGLISH_PATHWAY, EnglishNotMetDialog, type AusStudyAnswer, type CambridgeAnswer } from "@/pages/agency/components/EnglishAlternative";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
@@ -67,6 +72,16 @@ const AUS_STUDY_STEP: WizardStep | null = ACADEMIC_WIZARD_STEP
   : null;
 const LAST_STEP = DOC_STEPS + WIZARD_QUESTIONS.length - 1;
 const PASSPORT_STEP = WIZARD_STEPS.findIndex((step) => step.id === "passport");
+/** The wizard's steps in order (documents, then questions) and their grouping into four stages; the last one submits the application. */
+const ALL_STEPS = [...WIZARD_STEPS, ...WIZARD_QUESTIONS];
+const STAGE_OF: Record<string, string> = {
+  personal: "about", address: "about", language: "about", identifier: "about", usi: "about", emergency: "about", course: "course", study: "course", declare: "submit",
+};
+const STAGE_TITLES: Record<string, string> = { documents: "Documents", about: "About the student", course: "Course", submit: "Submit" };
+const stageRanges = ["documents", "about", "course", "submit"].flatMap((id) => {
+  const idx = ALL_STEPS.map((item, i) => ((STAGE_OF[item.id] ?? "documents") === id ? i : -1)).filter((i) => i >= 0);
+  return idx.length ? [{ id, title: STAGE_TITLES[id], from: idx[0], to: idx[idx.length - 1] }] : [];
+});
 
 function wizardStepKey(applicationId: string): string {
   return `slit-portal-wizard-step:${portalScopeCacheKey()}:${applicationId}`;
@@ -96,6 +111,7 @@ function wizardDocs(rows: DocumentRow[]): WizardDoc[] {
 
 const isReading = (doc: WizardDoc) => doc.extraction === "queued" || doc.extraction === "processing";
 const isExpiredPassport = (doc: WizardDoc) =>
+  ruleBool("admissions.passport_reject_expired", true) &&
   doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && doc.extraction === "done" && !!doc.extracted &&
   getDocumentExpiryStatus("passport", doc.extracted).status === "expired";
 
@@ -113,10 +129,10 @@ const isWrongDocument = (doc: WizardDoc) => {
   const check = STEP_CHECKS[doc.category];
   if (!check) return false;
   // An academic file with nothing to read (a marksheet page, say) is kept; only one read as another kind is wrong.
-  if (doc.extraction === "empty") return check.keys.length > 0 || Boolean(doc.mismatch);
-  if (doc.extraction === "failed") return Boolean(doc.mismatch);
+  if (doc.extraction === "empty") return (doc.category !== "Academic" || ruleBool("admissions.academic_reject_mismatched", true)) && (check.keys.length > 0 || Boolean(doc.mismatch));
+  if (doc.extraction === "failed") return (doc.category !== "Academic" || ruleBool("admissions.academic_reject_mismatched", true)) && Boolean(doc.mismatch);
   if (doc.extraction !== "done") return false;
-  return Boolean(doc.mismatch) || (check.keys.length > 0 && !check.keys.some((key) => String(doc.extracted?.[key] ?? "").trim()));
+  return (doc.category === "Academic" ? ruleBool("admissions.academic_reject_mismatched", true) : true) && (Boolean(doc.mismatch) || (check.keys.length > 0 && !check.keys.some((key) => String(doc.extracted?.[key] ?? "").trim())));
 };
 // A file still being read after this long no longer locks the wizard; the step says so and Next waits for the result.
 const SLOW_READ_MS = 90_000;
@@ -126,11 +142,61 @@ const isOverseasLicence = (doc: WizardDoc) =>
   doc.category === "Driving Licence" && doc.extraction === "done" && !!doc.extracted &&
   (doc.extracted.address_type === "Overseas Address" || (!doc.extracted.au_street && Boolean(doc.extracted.ov_street)));
 
+/** WIZARD-FULL: the answers the new screens hold, and the ones the wizard fills itself on Submit (as the full form did). */
+const FINISH_FIELDS = Object.values(FINISH_SCREEN_FIELDS).flat();
+const SCREEN_OF_FIELD = new Map(Object.entries(FINISH_SCREEN_FIELDS).flatMap(([screen, names]) => names.map((name) => [name, screen] as const)));
+const OTHER_SCREENS: Record<string, string> = {
+  language_home: "language", language_other: "language", has_usi: "usi", usi_number: "usi", ec_name: "emergency", ec_phone: "emergency", ec_in_au: "emergency",
+  courses_of_interest: "course", preferred_intake: "course",
+};
+const USI_CONSENT_TEXT = "I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.";
+const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00`).getTime());
+
 export default function ApplicationWizard({ applicationId, agencyName, onFinish, onCancel }: Props) {
   const { profile, role } = usePortalAuth();
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [autoSave, setAutoSave] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const [autoSaveError, setAutoSaveError] = useState("");
+  const [inputVersion, setInputVersion] = useState(0);
+  const pendingValues = useRef<Record<string, string>>({});
+  const pendingWizard = useRef<Record<string, unknown>>({});
+  const completedSteps = useRef(new Set<string>());
+  const persistence = useRef<Promise<boolean> | null>(null);
+  const markDirty = () => {
+    setAutoSave("saving");
+    setInputVersion((version) => version + 1);
+  };
+  const persist = useCallback(async (): Promise<boolean> => {
+    if (persistence.current && !(await persistence.current)) return false;
+    const values = pendingValues.current;
+    const wizard = pendingWizard.current;
+    if (!Object.keys(values).length && !Object.keys(wizard).length) return true;
+    pendingValues.current = {};
+    pendingWizard.current = {};
+    setAutoSave("saving");
+    setAutoSaveError("");
+    const task = (async () => {
+      try {
+        await saveWizardDraft(applicationId, { values, wizard });
+        const queued = Object.keys(pendingValues.current).length || Object.keys(pendingWizard.current).length;
+        setAutoSave(queued ? "saving" : "saved");
+        return true;
+      } catch (error) {
+        pendingValues.current = { ...values, ...pendingValues.current };
+        pendingWizard.current = { ...wizard, ...pendingWizard.current };
+        setAutoSave("failed");
+        setAutoSaveError(error instanceof Error ? error.message : "Changes could not be saved.");
+        return false;
+      }
+    })();
+    persistence.current = task;
+    try { return await task; }
+    finally { if (persistence.current === task) persistence.current = null; }
+  }, [applicationId]);
   const [step, setStep] = useState(() => savedWizardStep(applicationId));
   const [documents, setDocuments] = useState<WizardDoc[]>([]);
   const [pending, setPending] = useState<PendingUpload[]>([]);
@@ -160,7 +226,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // Staff: the courses of Learning Management (rto_admin course_list, every status) by their CMS id; RTO Managers may add an intake from here.
   const [staffCourses, setStaffCourses] = useState<RtoCourse[] | null>(null);
   const [rtoManager, setRtoManager] = useState(false);
-  const [intakeDrawer, setIntakeDrawer] = useState(false);
   const [intakeReload, setIntakeReload] = useState(0);
   /** The intake just created from the wizard: chosen as soon as the re-read list holds it. */
   const pendingIntake = useRef<string | null>(null);
@@ -172,16 +237,42 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [englishNotMet, setEnglishNotMet] = useState(false);
   const [englishSaveError, setEnglishSaveError] = useState("");
   const [savingEnglish, setSavingEnglish] = useState(false);
+  // WIZARD-FULL: answers typed on the new screens are never replaced by values read later from the draft.
+  const touchedRef = useRef(new Set<string>());
+  const [submittedRef, setSubmittedRef] = useState("");
+  // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
+  const [hydrated, setHydrated] = useState(0);
 
   useEffect(() => {
     documentsRef.current = documents;
   }, [documents]);
 
   useEffect(() => {
-    const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(flushApplicationEdits(applicationId));
+    if (!inputVersion) return;
+    const timer = window.setTimeout(() => void persist(), 450);
+    return () => window.clearTimeout(timer);
+  }, [inputVersion, persist]);
+
+  useEffect(() => {
+    const dirty = () => persistence.current || Object.keys(pendingValues.current).length || Object.keys(pendingWizard.current).length;
+    const unload = (event: BeforeUnloadEvent) => { if (dirty()) event.preventDefault(); };
+    const hide = () => { if (document.visibilityState === "hidden" && dirty()) void persist(); };
+    const flush = (event: Event) => (event as CustomEvent<{ waits: Promise<unknown>[] }>).detail.waits.push(
+      persist().then((saved) => { if (!saved) throw new Error("Save the application before leaving."); }),
+    );
+    window.addEventListener("beforeunload", unload);
+    document.addEventListener("visibilitychange", hide);
     window.addEventListener("portal-before-scope-switch", flush);
-    return () => window.removeEventListener("portal-before-scope-switch", flush);
-  }, [applicationId]);
+    return () => {
+      window.removeEventListener("beforeunload", unload);
+      document.removeEventListener("visibilitychange", hide);
+      window.removeEventListener("portal-before-scope-switch", flush);
+    };
+  }, [persist]);
+
+  const leaveDraft = async () => {
+    if (await persist()) onCancel();
+  };
 
   // On an answer screen the document logic below keeps working on the last document step and stays out of the way.
   const question: WizardQuestion | null = step >= DOC_STEPS ? WIZARD_QUESTIONS[step - DOC_STEPS] ?? null : null;
@@ -221,22 +312,34 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         const pick = (name: string) => (typeof values[name] === "string" ? String(values[name]) : "");
         const courses = Array.isArray(values.courses_of_interest) ? (values.courses_of_interest as unknown[]).map(String) : [];
         if (active) {
-          const pathway = pick("english_pathway");
+          const saved = (application.data.wizard ?? {}) as { activeStep?: string; completedSteps?: string[]; courseChoice?: string; intakeChoice?: string; intakeLabel?: string; intakeJoin?: string; englishChoice?: string; studyChoice?: AusStudyAnswer; cambridgeChoice?: AusStudyAnswer };
+          const last = ALL_STEPS.findIndex((item) => item.id === saved.activeStep);
+          completedSteps.current = new Set(Array.isArray(saved.completedSteps) ? saved.completedSteps : []);
+          if (last >= 0) {
+            const docs = wizardDocs(stored);
+            const missing = WIZARD_STEPS.findIndex((item, index) => index < last && item.required && !docs.some((doc) => doc.category === item.category));
+            setStep(missing >= 0 ? missing : last);
+          }
+          const pathway = saved.englishChoice || pick("english_pathway");
           if (pathway === ENGLISH_PATHWAY.ausStudy) { setEnglishAlt(true); setAusStudy("Yes"); }
           else if (pathway === ENGLISH_PATHWAY.cambridge) { setEnglishAlt(true); setAusStudy("No"); setCambridge("Yes"); }
+          if (saved.studyChoice) { setEnglishAlt(true); setAusStudy(saved.studyChoice); }
+          if (saved.cambridgeChoice) setCambridge(saved.cambridgeChoice);
           setAnswers({
             // "Yes, another language" is selected unless an answer was already given.
             language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), usi_number: pick("usi_number"),
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
-            course: courses[0] ?? "", preferred_intake: pick("preferred_intake"),
+            course: saved.courseChoice ?? courses[0] ?? "", preferred_intake: saved.intakeLabel ?? pick("preferred_intake"),
             // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
-            intake_id: application.courses?.[0]?.intakeId ?? "", intake_join_date: pick("intake_join_date"),
+            intake_id: saved.intakeChoice ?? application.courses?.[0]?.intakeId ?? "", intake_join_date: saved.intakeJoin ?? pick("intake_join_date"),
           });
         }
         // A CMS user (staff) gets the Learning Management course list and, as an RTO Manager, may add an intake; anyone else is refused by rto_admin.
         const me = await rto<{ rtoManager: boolean; admin: boolean }>("me").catch(() => null);
         if (me) {
-          const list = await rto<RtoCourse[]>("course_list").catch(() => null);
+          // Only courses with an active intake on offer (the same list agents and students get).
+          const offeredIds = new Set((await listInstitutionCourses().catch(() => [])).map((row) => row.courseId));
+          const list = (await rto<RtoCourse[]>("course_list").catch(() => null))?.filter((c) => offeredIds.has(c.id)) ?? null;
           if (active) {
             setRtoManager(Boolean(me.rtoManager));
             if (list) setStaffCourses(list.filter((c) => c.code?.trim() && c.name?.trim()));
@@ -256,7 +359,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return () => {
       active = false;
     };
-  }, [applicationId]);
+  }, [applicationId, loadAttempt]);
 
   // Extraction is durable and asynchronous: poll only while a document is being
   // read. A sequence guard keeps an older response from replacing newer state.
@@ -277,6 +380,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       window.clearInterval(interval);
     };
   }, [applicationId, hasLiveExtraction]);
+
+  /** Re-reads the draft's documents (sequence-guarded like the extraction poll: a newer local change always wins). */
+  const [checkingAgain, setCheckingAgain] = useState(false);
+  const refreshDocuments = useCallback(async (byHand = false) => {
+    const sequence = ++refreshSequenceRef.current;
+    if (byHand) setCheckingAgain(true);
+    try {
+      const stored = await listApplicationDocuments(applicationId);
+      if (sequence === refreshSequenceRef.current) setDocuments(wizardDocs(stored));
+    } catch { /* keep what is shown; the next focus / tick tries again */ }
+    finally { if (byHand) setCheckingAgain(false); }
+  }, [applicationId]);
 
   /* ------------------------------------------------------------ uploads */
 
@@ -327,14 +442,24 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     [applicationId, profile?.id],
   );
 
-  // The loader starts here, synchronously, before any hashing or network call.
+  // A single-document step that already has a file: a new upload replaces it and is read again, so it is asked first (2026-11-23).
+  const [replaceAsk, setReplaceAsk] = useState<{ target: WizardStep; files: File[]; current: string } | null>(null);
   const handlePickFiles = (target: WizardStep, list: FileList | null) => {
     if (!list || list.length === 0) return;
+    const existing = target.multiple ? undefined
+      : documentsRef.current.find((doc) => doc.category === target.category && !dismissed.has(doc.id) && !isExpiredPassport(doc) && !isWrongDocument(doc));
+    if (existing) { setReplaceAsk({ target, files: Array.from(list), current: existing.filename }); return; }
+    uploadPicked(target, Array.from(list));
+  };
+
+  // The loader starts here, synchronously, before any hashing or network call.
+  const uploadPicked = (target: WizardStep, list: File[]) => {
+    if (list.length === 0) return;
     setUploadRejections((prev) => ({ ...prev, [target.category]: "" }));
     if (target.id === "passport") setExpiredPassport(null);
     if (target.id === "licence") setRejectedLicence(null);
     setRejectedDocs((prev) => { if (!prev[target.category]) return prev; const next = { ...prev }; delete next[target.category]; return next; });
-    const items = Array.from(list).map((file) => ({ key: crypto.randomUUID(), category: target.category, file }));
+    const items = list.map((file) => ({ key: crypto.randomUUID(), category: target.category, file }));
     setPending((prev) => [...prev, ...items]);
     items.forEach((item) => void startUpload(item));
   };
@@ -360,7 +485,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   // An expired passport is not kept: once it is read as expired the file is deleted straight away, no confirmation.
   useEffect(() => {
-    documents.filter((doc) => isExpiredPassport(doc) && !discardingRef.current.has(doc.id)).forEach((doc) => {
+    documents.filter((doc) => ruleBool("admissions.passport_auto_delete_expired", true) && isExpiredPassport(doc) && !discardingRef.current.has(doc.id)).forEach((doc) => {
       discardingRef.current.add(doc.id);
       const date = getDocumentExpiryStatus("passport", doc.extracted ?? {}).date ?? "";
       setExpiredPassport({ filename: doc.filename, date });
@@ -414,33 +539,39 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   /* ------------------------------------------------------------- finish */
 
   // Extraction fills empty fields of the draft on the server and never replaces
-  // an entered value, so finishing only waits for in-flight work, then records
-  // the outstanding items and the student name and opens the full form.
+  // an entered value, so finishing only waits for in-flight work, records the
+  // outstanding items and the student name, then submits the application
+  // (WIZARD-FULL: the declaration and both confirmations were given on the last screen).
+  // After Submit the success screen closes itself, or Continue closes it sooner: onFinish runs only once.
+  const finishedRef = useRef(false);
+  const leaveOnce = useRef(() => { if (!finishedRef.current) { finishedRef.current = true; onFinish(); } });
+  useEffect(() => { leaveOnce.current = () => { if (!finishedRef.current) { finishedRef.current = true; onFinish(); } }; }, [onFinish]);
   const complete = useCallback(async () => {
     if (completingRef.current) return;
     completingRef.current = true;
     setFinishError("");
     try {
       await flushApplicationEdits(applicationId);
-      const application = await getApplication(applicationId);
-      const values = (application?.data.values ?? {}) as Record<string, unknown>;
-      const studentName = [values.first_name, values.last_name].filter((part): part is string => typeof part === "string" && part.trim() !== "").join(" ").trim();
-      const meta: WizardMeta = {
-        completedSteps: WIZARD_STEPS.map((item) => item.id),
-        outstanding: WIZARD_STEPS.filter((item) => item.required && !documentsRef.current.some((doc) => doc.category === item.category))
-          .map((item) => `${item.title} not provided. It is required.`),
-        updatedAt: new Date().toISOString(),
-      };
-      await saveDocumentReview({ applicationId, values: {}, provenance: {}, confirmed: [], wizard: meta as unknown as Record<string, unknown>, studentName: studentName || undefined });
-      // The full form opens on its Student declaration page (step 14).
-      try { window.sessionStorage.setItem(openDeclarationKey(applicationId), "1"); } catch { /* session storage unavailable */ }
-      onFinish();
+      const application = await getApplication(applicationId, false);
+      const receipt = await submitApplication(applicationId, {
+        consent: { method: "electronic", confirmed: true, authorised: true, declarationVersion: "1.0", signedDocumentRef: "" },
+      });
+      try { window.localStorage.removeItem(wizardStepKey(applicationId)); } catch { /* storage unavailable */ }
+      setSubmittedRef(receipt || application?.reference || "Submitted");
+      // A student reads the thank-you message and closes it; agents and staff move on by themselves.
+      if (role !== "student") window.setTimeout(() => leaveOnce.current(), 2200);
     } catch (error) {
-      setFinishError(error instanceof Error ? error.message : "We could not open the application form.");
+      const message = error instanceof Error ? error.message : "We could not submit the application.";
+      // "Required field missing: title" and the like: say which screen holds it, so the agent can go straight there.
+      const field = message.match(/:\s*([a-z_]+)\s*$/)?.[1] ?? "";
+      const screen = SCREEN_OF_FIELD.get(field) ?? OTHER_SCREENS[field] ?? "";
+      const at = screen ? WIZARD_QUESTIONS.findIndex((item) => item.id === screen) : -1;
+      setFinishError(at >= 0 ? `${message}. Fix it on "${WIZARD_QUESTIONS[at].title}", then submit again.` : message);
+      if (at >= 0) setStep(DOC_STEPS + at);
       setFinishing(false);
       completingRef.current = false;
     }
-  }, [applicationId, onFinish]);
+  }, [applicationId, role]);
 
   const busy = pending.some((item) => !item.error) || documents.some((doc) => isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
   useEffect(() => {
@@ -449,31 +580,66 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   /* ------------------------------------------------------------ navigate */
 
-  // The passport is mandatory: the agent stays on the passport step until a current one is uploaded.
+  // Passport requirement is controlled by the published admissions.application_required_documents rule.
   const passportExpired = expiredPassport !== null || documents.some(isExpiredPassport);
   const hasPassport = documents.some((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && !isExpiredPassport(doc));
-  const passportRequired = PASSPORT_STEP >= 0 && (passportExpired || (!hasPassport && WIZARD_STEPS[PASSPORT_STEP].required));
+  const passportRequired = PASSPORT_STEP >= 0 && Boolean(WIZARD_STEPS[PASSPORT_STEP].required) && (passportExpired || !hasPassport);
   // Every required document must be uploaded before the agent can move past its step.
   const ausStudyDocs = AUS_STUDY_STEP ? documents.filter((doc) => doc.category === AUS_STUDY_STEP.category && !isWrongDocument(doc)) : [];
   /** The English requirement met without a test result: Australian study proof uploaded, or Yes to the Cambridge English course. */
   // Business Rules admissions.english_test_alternatives: only the ways SLIT accepts count.
   const alternatives = englishAlternatives();
   const englishAltMet = englishAlt && ((alternatives.ausStudy && ausStudy === "Yes" && ausStudyDocs.length > 0) || (alternatives.cambridge && ausStudy === "No" && cambridge === "Yes"));
-  const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
-    || documents.some((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc));
-  const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && !stepHasDoc(item));
-  const goTo = (index: number) => {
-    const target = Math.max(0, Math.min(index, LAST_STEP));
-    if (passportRequired && target > PASSPORT_STEP) { setStep(PASSPORT_STEP); return; }
-    const missing = firstMissingBefore(target);
-    setStep(missing >= 0 ? missing : target);
+  // Compare names extracted from the academic evidence and passport; preserve originals for review.
+  // Missing OCR names are unknown, not mismatches. Never delete academic evidence for a name difference.
+  const extractedName = (values?: Record<string, string>) => {
+    if (!values) return "";
+    const combined = ["full_name", "student_name", "name", "candidate_name", "holder_name"].map(key => values[key]).find(Boolean);
+    return combined || [values.first_name || values.given_names || values.given_name, values.middle_name, values.last_name || values.surname || values.family_name].filter(Boolean).join(" ");
   };
-  useEffect(() => {
-    if (loading) return;
-    if (passportRequired && step > PASSPORT_STEP) { setStep(PASSPORT_STEP); return; }
-    const missing = WIZARD_STEPS.findIndex((item, index) => index < step && item.required && !(item.id === "english" && englishAltMet) && !documents.some((doc) => doc.category === item.category));
-    if (missing >= 0) setStep(missing);
-  }, [loading, passportRequired, step, documents, englishAltMet]);
+  const nameTokens = (name: string) => name.normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase().replace(/[^a-z\\s]/g, " ").split(/\\s+/).filter(Boolean);
+  const passportName = documents.filter(doc => doc.category === "Passport" && doc.extraction === "done").map(doc => extractedName(doc.extracted)).find(Boolean) || "";
+  const academicNameReviews = ruleBool("admissions.academic_passport_name_review", true) && passportName
+    ? documents.filter(doc => doc.category === "Academic" && doc.extraction === "done").flatMap(doc => {
+        const name = extractedName(doc.extracted);
+        if (!name) return [];
+        const a = nameTokens(name), p = nameTokens(passportName);
+        if (!a.length || !p.length || (a.length === p.length && a.every(token => p.includes(token)))) return [];
+        return [{ filename: doc.filename, name }];
+      }) : [];
+  const visaDocuments = documents.filter(doc => doc.category === "Visa" && !isWrongDocument(doc));
+  const visaExpiry = (doc: WizardDoc) => {
+    const v = doc.extracted ?? {};
+    const raw = v.visa_expiry_date || v.visa_expiry || v.expiry_date || v.expiration_date || v.date_of_expiry || "";
+    if (!raw) return { known: false, expired: false };
+    const parsed = /^\\d{4}-\\d{2}-\\d{2}$/.test(raw) ? new Date(raw + "T23:59:59") : new Date(raw);
+    return { known: !Number.isNaN(parsed.getTime()), expired: !Number.isNaN(parsed.getTime()) && parsed.getTime() < Date.now() };
+  };
+  const acceptableVisa = visaDocuments.filter(doc =>
+    !(ruleBool("admissions.visa_reject_expired", true) && doc.extraction === "done" && visaExpiry(doc).expired) &&
+    !(ruleBool("admissions.visa_require_expiry_date", false) && doc.extraction === "done" && !visaExpiry(doc).known) &&
+    !(ruleBool("admissions.visa_require_subclass", false) && doc.extraction === "done" && !String(doc.extracted?.visa_subclass ?? "").trim())
+  );
+  const visaNamesForReview = ruleBool("admissions.visa_passport_name_review", true) && passportName
+    ? visaDocuments.filter(doc => doc.extraction === "done").flatMap(doc => {
+        const name = extractedName(doc.extracted);
+        if (!name) return [];
+        const a = nameTokens(name), p = nameTokens(passportName);
+        return a.length && p.length && !(a.length === p.length && a.every(token => p.includes(token))) ? [{ filename: doc.filename, name }] : [];
+      }) : [];
+  const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
+    || (item.id === "visa" ? acceptableVisa.length > 0 : documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1));
+  const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && item.required && (!stepHasDoc(item) || (item.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && documents.some((doc) => doc.category === item.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date))));
+  // Forward navigation cannot bypass documents marked required by the published admissions rule.
+  const goTo = async (index: number, completed = false) => {
+    if (loading || loadError || finishing) return;
+    const bounded = Math.max(0, Math.min(index, LAST_STEP));
+    if (completed && ALL_STEPS[step]) completedSteps.current.add(ALL_STEPS[step].id);
+    const missing = bounded > step ? firstMissingBefore(bounded) : -1;
+    const next = missing >= 0 ? missing : bounded;
+    pendingWizard.current = { ...pendingWizard.current, activeStep: ALL_STEPS[next]?.id, completedSteps: [...completedSteps.current] };
+    if (await persist()) setStep(next);
+  };
 
   /** Saves how the English requirement is met, then moves on from the English step. */
   const nextFromEnglish = async () => {
@@ -487,10 +653,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (englishAlt && pathway === ENGLISH_PATHWAY.cambridge) values.english_type = "Cambridge English";
     setSavingEnglish(true);
     try {
-      await flushApplicationEdits(applicationId);
-      await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { values }, studentName: "", studentEmail: "", intake: "", completion: 0 });
-      goTo(step + 1);
+      if (!(await persist())) return;
+      await saveWizardDraft(applicationId, { values });
+      await goTo(step + 1, true);
     } catch (error) {
       setEnglishSaveError(error instanceof Error ? error.message : "We could not save your English details. Try again.");
     } finally {
@@ -499,6 +664,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   };
   const chooseCambridge = (value: "Yes" | "No") => {
     setCambridge(value);
+    pendingWizard.current.cambridgeChoice = value;
+    markDirty();
     if (value === "No") setEnglishNotMet(true);
   };
   /** From the "requirement not met" dialog back to the start of the English step. */
@@ -513,13 +680,46 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   // null until the list has loaded; an empty list means no course is open for applications.
   const courseLabels: string[] | null = staffCourses ? staffCourses.map(staffCourseLabel) : institutionCourses ? institutionCourses.map((course) => `${course.code} - ${course.title}`) : null;
+  // A course saved on the draft that is no longer on offer (or is listed under another label) is not kept silently: the same course is
+  // matched by its code, otherwise the choice is cleared so the student picks again (instead of an error on Next).
+  useEffect(() => {
+    if (!courseLabels || !answers.course || courseLabels.includes(answers.course)) return;
+    const code = answers.course.split(" - ")[0].trim().toUpperCase();
+    const same = courseLabels.find((label) => label.split(" - ")[0].trim().toUpperCase() === code);
+    setAnswers((prev) => ({ ...prev, course: same ?? "", ...(same ? {} : { preferred_intake: "", intake_id: "", intake_join_date: "" }) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the offered list or the chosen course changes
+  }, [courseLabels?.join("|"), answers.course]);
   const institutionCourseOf = (label: string) => institutionCourses?.find((item) => `${item.code} - ${item.title}` === label) ?? null;
   const staffCourseOf = (label: string) => staffCourses?.find((c) => staffCourseLabel(c) === label) ?? null;
   const setAnswer = (name: string, value: string) => {
+    touchedRef.current.add(name);
     // A new course clears the intake: intakes belong to one course.
     setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
-    if (name === "course") setIntakeList(null);
+    if (name === "course") {
+      setIntakeList(null);
+      Object.assign(pendingWizard.current, { courseChoice: value, intakeChoice: "", intakeLabel: "", intakeJoin: "" });
+      markDirty();
+    } else if (name !== "mobile" && name !== "ec_phone" || !value || !validateStoredPhone(value)) {
+      const declaration = ["declaration_read", "consent_confirmed", "consent_authorised"];
+      if (!declaration.includes(name) && (name !== "email" || (!emailProblem(value) && role !== "student"))) {
+        pendingValues.current[name] = value;
+        if (name === "email") pendingValues.current.confirm_email = value;
+        markDirty();
+      }
+    }
     setAnswerErrors((prev) => (prev[name] ? { ...prev, [name]: "" } : prev));
+  };
+  /** A value read from a document, corrected on the document step: saved to the draft at once and used by the later screens. */
+  const [readSaveError, setReadSaveError] = useState("");
+  const correctReadValue = async (key: string, value: string) => {
+    setAnswer(key, value);
+    setReadSaveError("");
+    try {
+      await flushApplicationEdits(applicationId);
+      if (!(await persist())) throw new Error("This correction could not be saved.");
+    } catch (error) {
+      setReadSaveError(error instanceof Error ? error.message : "We could not save that correction. Try again.");
+    }
   };
   // The course's intakes as listed (real intakes, or the fallback months): the choice must be one of them.
   const [intakeList, setIntakeList] = useState<OpenIntake[] | null>(null);
@@ -528,6 +728,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return institutionCourseOf(label)?.courseId || null;
   };
   const setIntake = (intake: OpenIntake | null) => {
+    Object.assign(pendingWizard.current, { intakeChoice: intake?.id ?? "", intakeLabel: intake?.display ?? "", intakeJoin: intake?.joinDate ?? "" });
+    markDirty();
     setAnswers((prev) => ({ ...prev, intake_id: intake?.id ?? "", preferred_intake: intake?.display ?? "", intake_join_date: intake?.joinDate ?? "" }));
     setAnswerErrors((prev) => (prev.preferred_intake ? { ...prev, preferred_intake: "" } : prev));
   };
@@ -539,12 +741,58 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (created) { setIntake(created); pendingIntake.current = null; }
   };
   const currentCourseId = answers.course ? courseIdOf(answers.course) : null;
-  /** The intake the RTO Manager just created: the list is read again from the database and the new one chosen; the wizard keeps everything else. */
-  const intakeCreated = (intakeId: string) => {
-    setIntakeDrawer(false);
-    if (currentCourseId) forgetIntakes(currentCourseId);
-    pendingIntake.current = intakeId;
-    setIntakeReload((n) => n + 1);
+
+  /**
+   * WIZARD-FULL: the new screens start from the draft as it is now (the passport, licence and academic files were read into it
+   * while the documents were uploaded), with the same starting answers the full form used; anything typed here is kept.
+   */
+  const hydrateFinish = useCallback(async () => {
+    const application = await getApplication(applicationId, false).catch(() => null);
+    if (!application) return;
+    const values = (application.data.values ?? {}) as Record<string, unknown>;
+    const stored = (name: string) => (typeof values[name] === "string" ? String(values[name]).trim() : Array.isArray(values[name]) && (values[name] as unknown[]).length ? "Yes" : "");
+    const hasAcademic = documentsRef.current.some((doc) => doc.category === "Academic");
+    setAnswers((prev) => {
+      const next = { ...prev };
+      const fill = (name: string, value: string) => { if (!touchedRef.current.has(name)) next[name] = value; };
+      for (const name of FINISH_FIELDS) fill(name, stored(name));
+      // Nothing typed twice: what the student record already has (the name and email given when the student was added)
+      // fills the boxes the passport did not.
+      const fullName = application.studentName.trim().replace(/\s+/g, " ");
+      if (fullName && !next.first_name && !next.last_name) {
+        const parts = fullName.split(" ");
+        fill("first_name", parts[0] ?? "");
+        if (parts.length > 1) fill("last_name", parts[parts.length - 1]);
+        if (parts.length > 2 && !next.middle_name) fill("middle_name", parts.slice(1, -1).join(" "));
+      }
+      if (!next.email && application.studentEmail) fill("email", application.studentEmail.trim());
+      if (!next.confirm_email && next.email) fill("confirm_email", next.email);
+      const gender = next.gender ?? "";
+      if (!next.title) fill("title", gender === "Male" ? "Mr" : gender === "Female" ? "Miss" : "");
+      if (!next.citizenship) fill("citizenship", next.nationality ?? "");
+      if (!next.birth_country) fill("birth_country", next.citizenship || next.nationality || "");
+      if (!next.au_country) fill("au_country", "Australia");
+      if (!next.atsi) fill("atsi", "No");
+      if (!next.disability) fill("disability", "No");
+      if (!next.employment) fill("employment", "Unemployed - Seeking Part-Time Work - 07");
+      if (!next.secondary_enrolled) fill("secondary_enrolled", "No");
+      if (!next.prior_ed && hasAcademic) fill("prior_ed", "Yes");
+      if (!next.study_reason) fill("study_reason", "For personal interest or self-development - 09");
+      if (!next.rpl) fill("rpl", "No");
+      if (!next.oshc_require) fill("oshc_require", "No");
+      if (!next.hear_about) fill("hear_about", role === "student" ? "" : "Agent");
+      if (!next.declaration_name) fill("declaration_name", [next.first_name, next.middle_name, next.last_name].filter(Boolean).join(" "));
+      fill("declaration_date", todayIso());
+      return next;
+    });
+    setHydrated((n) => n + 1);
+  }, [applicationId, role]);
+  const finishScreen = question && FINISH_SCREEN_FIELDS[question.id] ? question.id : "";
+  const loaded = !loading && !loadError;
+  useEffect(() => { if (loaded && finishScreen) void hydrateFinish(); }, [loaded, finishScreen, hydrateFinish]);
+  const pickAddress = (pick: AddressPick) => {
+    for (const [name, value] of [["au_street", pick.line], ["au_line2", pick.line2], ["au_suburb", pick.suburb], ["au_state", pick.state.toUpperCase()], ["au_zip", pick.postcode], ["au_country", "Australia"]] as const) setAnswer(name, value);
+    touchedRef.current.add("address_source:search");
   };
 
   /** Checks the screen's answers and saves them to the draft; false when something is missing or the save failed. */
@@ -579,6 +827,88 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // An Australian number means the contact is in Australia (the form no longer asks).
       values.ec_in_au = phone.startsWith("+61") ? "Yes" : "No";
       setAnswers((prev) => ({ ...prev, ec_phone: phone }));
+    } else if (target.id === "personal") {
+      const oneOf = (name: string, message: string) => { if (!optionsOf(name).includes(filled(name))) errors[name] = message; };
+      oneOf("title", "Choose the title.");
+      oneOf("gender", "Choose the gender.");
+      if (!filled("first_name")) errors.first_name = "Enter the given name as on the passport.";
+      if (!filled("last_name")) errors.last_name = "Enter the surname as on the passport.";
+      if (!validDate(filled("dob")) || filled("dob") >= todayIso()) errors.dob = "Enter the date of birth.";
+      const emailIssue = filled("email") ? emailProblem(filled("email")) : "Enter the student's email.";
+      if (emailIssue) errors.email = emailIssue;
+      oneOf("nationality", "Choose the nationality.");
+      oneOf("citizenship", "Choose the country of citizenship.");
+      oneOf("birth_country", "Choose the country of birth.");
+      if (!filled("passport_number")) errors.passport_number = "Enter the passport number.";
+      if (!validDate(filled("passport_expiry"))) errors.passport_expiry = "Enter the passport expiry date.";
+      for (const name of FINISH_SCREEN_FIELDS.personal) values[name] = filled(name);
+      values.confirm_email = filled("email");
+    } else if (target.id === "address") {
+      const problems = addressProblems({ street: filled("au_street"), line2: filled("au_line2"), suburb: filled("au_suburb"), state: filled("au_state"), postcode: filled("au_zip"), country: "Australia" });
+      if (problems.street) errors.au_street = problems.street;
+      if (problems.line2) errors.au_line2 = problems.line2;
+      if (problems.suburb && detailRequired("au_suburb")) errors.au_suburb = problems.suburb;
+      if (problems.state && (detailRequired("au_state") || filled("au_state"))) errors.au_state = problems.state;
+      if (problems.postcode && (detailRequired("au_zip") || filled("au_zip"))) errors.au_zip = problems.postcode;
+      // The portal's address is always an Australian one (as the full form fixes it).
+      Object.assign(values, { address_type: "Australian Address", au_street: filled("au_street"), au_line2: filled("au_line2"), au_suburb: filled("au_suburb"),
+        au_state: filled("au_state").toUpperCase(), au_zip: filled("au_zip"), au_country: "Australia",
+        address_source: touchedRef.current.has("address_source:search") ? "search" : "manual" });
+    } else if (target.id === "identifier") {
+      const labels: Record<string, string> = { atsi: "Choose an answer.", employment: "Choose the employment status.", disability: "Choose an answer.",
+        secondary_enrolled: "Choose Yes or No.", school_level: "Choose the highest completed school level.", prior_ed: "Choose an answer." };
+      for (const name of FINISH_SCREEN_FIELDS.identifier) {
+        if (!optionsOf(name).includes(filled(name))) errors[name] = labels[name];
+        values[name] = filled(name);
+      }
+    } else if (target.id === "study") {
+      for (const [name, message] of [["study_reason", "Choose the main reason."], ["rpl", "Choose Yes or No."], ["oshc_require", "Choose an answer."], ["hear_about", "Choose how the student heard about SLIT."]] as const) {
+        if (!optionsOf(name).includes(filled(name))) errors[name] = message;
+      }
+      if (filled("oshc_require") === "No" && filled("oshc_self_confirm") !== "Yes") errors.oshc_self_confirm = "Confirm the student will arrange their own health cover.";
+      for (const name of ["oshc_start_date", "oshc_expiry"]) if (filled(name) && !validDate(filled(name))) errors[name] = "Enter a valid date.";
+      Object.assign(values, {
+        study_reason: filled("study_reason"), rpl: filled("rpl"), oshc_require: filled("oshc_require"), hear_about: filled("hear_about"),
+        oshc_start_date: filled("oshc_require") === "Yes" ? filled("oshc_start_date") : "",
+        oshc_self_confirm: filled("oshc_require") === "No" && OSHC_SELF_CONFIRM ? [OSHC_SELF_CONFIRM] : [],
+        oshc_provider: filled("oshc_require") === "Already Have" ? filled("oshc_provider") : "",
+        oshc_policy_number: filled("oshc_require") === "Already Have" ? filled("oshc_policy_number") : "",
+        oshc_expiry: filled("oshc_require") === "Already Have" ? filled("oshc_expiry") : "",
+      });
+    } else if (target.id === "declare") {
+      const mobile = filled("mobile");
+      const mobileProblem = mobile ? validateStoredPhone(mobile) : ruleBool("admissions.application_mobile_required", true) ? "Enter the student's mobile number." : "";
+      if (mobileProblem) errors.mobile = mobileProblem;
+      values.mobile = mobile;
+
+      // One tick agrees and signs: the name is the student's own (from Personal details), never typed again.
+      const signer = filled("declaration_name") || [filled("first_name"), filled("middle_name"), filled("last_name")].filter(Boolean).join(" ");
+      if (filled("declaration_read") !== "Yes" || filled("consent_confirmed") !== "Yes" || filled("consent_authorised") !== "Yes")
+        errors.declaration_read = "Tick the box to agree and sign.";
+      else if (!signer) errors.declaration_read = "Add the student's name on Personal details first.";
+      // What the full form used to fill itself: the checklist, USI consent, the agent block and the visa answer.
+      const application = await getApplication(applicationId, false).catch(() => null);
+      const stored = (application?.data.values ?? {}) as Record<string, unknown>;
+      const empty = (name: string) => !String(stored[name] ?? "").trim();
+      Object.assign(values, {
+        declaration_name: signer, digital_signature: signer, declaration_date: todayIso(),
+        checklist: CHECKLIST_OPTIONS, usi_consent: [USI_CONSENT_TEXT], address_type: "Australian Address", au_country: "Australia",
+        ...(empty("via_agent") ? { via_agent: "Yes" } : {}),
+        ...(empty("agent_agency") && (application?.agencyName || agencyName) ? { agent_agency: application?.agencyName || agencyName } : {}),
+        // The agent's own details come from the application's assigned agent, else the signed-in agent: never typed.
+        ...(() => {
+          const self = role === "agent" || role === "agency_admin";
+          const agentName = application?.agentName || (self ? profile?.fullName ?? "" : "");
+          const agentEmail = application?.agentEmail || (self ? profile?.email ?? "" : "");
+          const agentPhone = application?.agentPhone || (self ? profile?.phone ?? "" : "");
+          return {
+            ...(empty("agent_contact_name") && agentName ? { agent_contact_name: agentName } : {}),
+            ...(empty("agent_email") && agentEmail ? { agent_email: agentEmail } : {}),
+            ...(empty("agent_phone") && agentPhone ? { agent_phone: agentPhone } : {}),
+          };
+        })(),
+        ...(empty("holds_visa") ? { holds_visa: documentsRef.current.some((doc) => doc.category === "Visa") ? "Yes" : "No" } : {}),
+      });
     } else {
       if (!filled("course")) errors.course = "Choose the course.";
       const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
@@ -603,9 +933,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     setAnswerSaveError("");
     try {
       await flushApplicationEdits(applicationId);
-      // Reading documents moves the draft on; take its current version before saving.
-      await getApplication(applicationId, true);
-      await saveApplicationDraft(applicationId, { data: { values, ...patch }, studentName: "", studentEmail: "", intake: "", completion: 0 });
+      if (!(await persist())) return false;
+      await saveWizardDraft(applicationId, { values, ...patch });
+
       return true;
     } catch (error) {
       setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");
@@ -618,7 +948,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const nextFromQuestion = async () => {
     if (!question || !(await saveAnswers(question))) return;
     if (step === LAST_STEP) setFinishing(true);
-    else goTo(step + 1);
+    else await goTo(step + 1, true);
   };
 
   const stepDocs = documents.filter((doc) => doc.category === current.category);
@@ -630,6 +960,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const stepBusy = (target: WizardStep) =>
     pending.some((item) => item.category === target.category && !item.error) ||
     documents.some((doc) => doc.category === target.category && isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
+  const allSteps = ALL_STEPS;
+  const wizardStages: WizardStage[] = stageRanges.map((range) => ({ ...range, busy: WIZARD_STEPS.some((item, i) => i >= range.from && i <= range.to && stepBusy(item)) }));
   // While this step's file uploads or is read, the wizard is locked so nothing else can be clicked.
   const removingExpired = !expiredPassport?.error && stepDocs.some(isExpiredPassport);
   const removingWrong = !rejectedDocs[current.category]?.error && stepDocs.some(isWrongDocument);
@@ -639,8 +971,34 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const rejectedHere = rejectedDocs[current.category];
   const stepCheck = STEP_CHECKS[current.category];
   const blockedByPassport = passportRequired && step === PASSPORT_STEP;
+  const passportMissingExpiry = current.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && current.required && documents.some((doc) => doc.category === current.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date);
+  const blockedByRequiredDocument = !question && ((current.required && !stepHasDoc(current)) || passportMissingExpiry);
   // The document notices below belong to document screens only.
   const onDocStep = !question;
+
+  // A document added somewhere else while the wizard is open (the full form, another tab or device, another person) must show here,
+  // or the step keeps saying it is required and invites a second upload. Re-read the list when the window comes back into focus,
+  // when the step changes, and every 12 seconds while a required document is holding Next (2026-11-23).
+  const waitingForDocument = ready && onDocStep && (blockedByPassport || blockedByRequiredDocument) && !locked && stepPending.length === 0;
+  useEffect(() => {
+    if (!ready) return undefined;
+    const refresh = () => { if (document.visibilityState === "visible") void refreshDocuments(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [ready, refreshDocuments]);
+  useEffect(() => { if (ready) void refreshDocuments(); }, [ready, step, refreshDocuments]);
+  useEffect(() => {
+    if (!waitingForDocument) return undefined;
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refreshDocuments(); }, 12_000);
+    return () => window.clearInterval(timer);
+  }, [waitingForDocument, refreshDocuments]);
+  const checkAgain = waitingForDocument ? (
+    <button type="button" onClick={() => void refreshDocuments(true)} disabled={checkingAgain} data-testid="wizard-check-again"
+      className="ml-1 cursor-pointer font-semibold text-primary-700 underline-offset-2 hover:underline disabled:cursor-wait disabled:opacity-60">
+      {checkingAgain ? "Checking…" : "Uploaded it somewhere else? Check again"}
+    </button>
+  ) : null;
 
   const primaryClass = WIZARD_PRIMARY_CLASS;
 
@@ -651,10 +1009,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (loadError) {
       return (
         <div className="space-y-4">
-          <PortalError message={loadError} />
+          <PortalError message={loadError} onRetry={() => setLoadAttempt((attempt) => attempt + 1)} />
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => void leaveDraft()}
             className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 px-4 py-2.5 text-sm font-semibold text-foreground-800 hover:bg-background-100"
           >
             Close
@@ -662,20 +1020,40 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         </div>
       );
     }
+    if (submittedRef) {
+      return (
+        <div className="py-8 text-center" role="status" data-testid="wizard-submitted">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-600 text-background-50"><i className="ri-check-line text-3xl" aria-hidden="true" /></span>
+          {role === "student" ? <>
+            <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Thank you for submitting your application</h3>
+            <p className="mt-1 text-sm text-foreground-600">Skyline will review it and update you. Your reference is {submittedRef}.</p>
+          </> : <>
+            <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Application submitted</h3>
+            <p className="mt-1 text-sm text-foreground-600">Reference {submittedRef}. It is now with SLIT admissions for review.</p>
+          </>}
+          <button type="button" onClick={() => leaveOnce.current()} className={`${primaryClass} mt-5`}>{role === "student" ? "OK" : "Continue"}</button>
+        </div>
+      );
+    }
     if (question) {
+      const summary: FinishSummary = {
+        name: [answers.first_name, answers.middle_name, answers.last_name].filter(Boolean).join(" "),
+        course: answers.course ?? "",
+        intake: answers.preferred_intake ?? "",
+        documents: [...new Set(documents.filter((doc) => !dismissed.has(doc.id)).map((doc) => doc.category))],
+      };
       return (
         <>
           <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
-            <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
-              onIntake={setIntake} onIntakesLoaded={intakesLoaded}
-              canAddIntake={rtoManager && Boolean(staffCourses)} onAddIntake={() => { if (currentCourseId) setIntakeDrawer(true); }} intakeReload={intakeReload} />
+            {finishScreen ? (
+              <WizardFinishSteps question={question} answers={answers} errors={answerErrors} onChange={setAnswer} onAddress={pickAddress} summary={summary} version={hydrated}
+                studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }} />
+            ) : (
+              <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
+                onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId} />
+            )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>
-          {/* The same New intake drawer as Learning Management › Intakes, over the wizard, locked to the chosen course; the wizard's state stays. */}
-          {rtoManager && currentCourseId ? (
-            <NewIntakeDrawer open={intakeDrawer} onClose={() => setIntakeDrawer(false)} courses={[]} courseId={currentCourseId} allowBatch={false} zIndex="z-[100]"
-              onCreated={(detail) => intakeCreated(detail.intake.id)} />
-          ) : null}
         </>
       );
     }
@@ -697,9 +1075,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           ausStudy={ausStudy}
           cambridge={cambridge}
           allowAusStudy={alternatives.ausStudy} allowCambridge={alternatives.cambridge}
-          onAusStudy={(value) => { setAusStudy(value); if (value === "Yes") setCambridge(""); if (value === "No" && !alternatives.cambridge) setEnglishNotMet(true); }}
+          onAusStudy={(value) => {
+            setAusStudy(value);
+            pendingWizard.current.studyChoice = value;
+            if (value === "Yes") { setCambridge(""); pendingWizard.current.cambridgeChoice = ""; }
+            markDirty();
+            if (value === "No" && !alternatives.cambridge) setEnglishNotMet(true);
+          }}
           onCambridge={chooseCambridge}
-          onBack={() => { setEnglishAlt(false); setAusStudy(""); setCambridge(""); setEnglishSaveError(""); }}
+          onBack={() => {
+            setEnglishAlt(false); setAusStudy(""); setCambridge(""); setEnglishSaveError("");
+            Object.assign(pendingWizard.current, { englishChoice: "", studyChoice: "", cambridgeChoice: "" });
+            markDirty();
+          }}
           error={englishSaveError || uploadRejections[AUS_STUDY_STEP.category] || ""}
           upload={
             <WizardDocumentStep
@@ -716,7 +1104,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     return (
       <>
         {uploadRejections[current.category] ? <WizardNotice tone="error">{uploadRejections[current.category]}</WizardNotice> : null}
+        {readSaveError ? <WizardNotice tone="error">{readSaveError}</WizardNotice> : null}
         {current.id === "english" && englishSaveError ? <WizardNotice tone="error">{englishSaveError}</WizardNotice> : null}
+        {current.id === "visa" && visaNamesForReview.length > 0 ? <WizardNotice tone="error">Visa name review needed: {visaNamesForReview.map(item => `${item.filename}: ${item.name}`).join("; ")} differs from passport name {passportName}. Ask SLIT to verify before approval.</WizardNotice> : null}
+        {current.id === "visa" && visaDocuments.some(doc => doc.extraction === "done" && visaExpiry(doc).expired) && ruleBool("admissions.visa_reject_expired", true) ? <WizardNotice tone="error">Expired visa evidence cannot satisfy the visa requirement. Upload valid evidence or request SLIT review.</WizardNotice> : null}
+        {current.id === "visa" && ruleBool("admissions.visa_vevo_review", false) ? <WizardNotice tone="info">SLIT staff must verify visa status through VEVO. This upload has not been verified with VEVO automatically.</WizardNotice> : null}
+        {current.id === "academic" && academicNameReviews.length > 0 ? <WizardNotice tone="error">Name review needed: the academic document name differs from the passport ({academicNameReviews.map(item => `${item.filename}: ${item.name}`).join("; ")}). Passport name: {passportName}. Please have SLIT verify the documents before approval.</WizardNotice> : null}
         <WizardDocumentStep
           step={current}
           docs={stepDocs}
@@ -730,6 +1123,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           onRemoveDoc={handleRemoveDoc}
           signedUrl={(doc) => getDocumentSignedUrl(doc.storagePath, 300)}
           fieldLabel={fieldLabel}
+          onEditValue={(key, value) => void correctReadValue(key, value)}
+          editedValue={(key) => (touchedRef.current.has(key) ? answers[key] : undefined)}
           logView={
             role === "slit_admin"
               ? (doc) => logAdminAccess(applicationId, "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category })
@@ -751,37 +1146,38 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   return (
     <WizardShell
-      title={"Add New Form \u2014 document wizard"}
-      subtitle={`Upload documents to prefill the application, then continue to the full form. ${agencyName}`}
-      onClose={onCancel}
-      closeLabel="Cancel and close the wizard"
+      title={"New application"}
+      subtitle={`Upload the documents, answer a few questions and submit. ${agencyName}`}
+      onClose={() => void leaveDraft()}
+      closeLabel="Save and close the wizard"
       stepper={
-        <WizardStepper
-          items={[...WIZARD_STEPS, ...WIZARD_QUESTIONS].map((item) => ({ id: item.id, short: item.short, icon: item.icon, busy: "category" in item && stepBusy(item) }))}
-          current={step}
-          onSelect={goTo}
-        />
+        <WizardStages stages={wizardStages} current={step} total={WIZARD_STEPS.length + WIZARD_QUESTIONS.length} stepTitle={allSteps[step]?.title ?? ""} onSelect={(index) => { void goTo(index); }} />
       }
       footerStart={
         <>
+          <span role="status" className="text-xs text-foreground-600">
+            {autoSave === "saving" ? "Saving…" : autoSave === "saved" ? "Saved" : ""}
+          </span>
+          {autoSave === "failed" ? <button type="button" onClick={() => void persist()} title={autoSaveError}
+            className="text-xs font-semibold text-red-800 underline">Save failed. Retry</button> : null}
           <button
             type="button"
-            onClick={onCancel}
+            onClick={() => void leaveDraft()}
             className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium text-foreground-500 transition-colors hover:text-foreground-800"
           >
             <i className="ri-close-line" aria-hidden="true" />
-            Cancel
+            Save and close
           </button>
-          {step > 0 && ready ? <WizardBackButton onClick={() => goTo(step - 1)} disabled={finishing} /> : null}
+          {step > 0 && ready && !submittedRef ? <WizardBackButton onClick={() => void goTo(step - 1)} disabled={finishing} /> : null}
         </>
       }
       footerEnd={
-        ready ? (
+        ready && !submittedRef ? (
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
             {onDocStep && !hasFile && !blockedByPassport && !current.required ? (
               <button
                 type="button"
-                onClick={() => goTo(step + 1)}
+                onClick={() => void goTo(step + 1, true)}
                 className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:border-primary-300 hover:text-primary-700"
               >
                 {current.skipLabel}
@@ -795,19 +1191,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <>
                 {finishing ? (
                   <button type="button" onClick={() => void complete()} className="cursor-pointer text-xs font-semibold text-primary-700 underline">
-                    Continue now
+                    Submit now
                   </button>
                 ) : null}
                 <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers} className={primaryClass}>
                   {finishing ? (
                     <>
                       <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
-                      Finishing&hellip;
+                      Submitting&hellip;
                     </>
                   ) : (
                     <>
-                      Finish
-                      <i className="ri-arrow-right-circle-line" aria-hidden="true" />
+                      Submit application
+                      <i className="ri-send-plane-line" aria-hidden="true" />
                     </>
                   )}
                 </button>
@@ -815,11 +1211,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             ) : (
               current.id === "english" ? (
                 <button type="button" onClick={() => void nextFromEnglish()}
-                  disabled={(englishAlt ? !englishAltMet : !hasFile) || locked || slowHere.length > 0 || savingEnglish || pending.some((item) => !item.error)} className={primaryClass}>
+                  disabled={locked || blockedByRequiredDocument || savingEnglish || pending.some((item) => !item.error)} className={primaryClass}>
                   {savingEnglish ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
                 </button>
               ) : (
-                <button type="button" onClick={() => goTo(step + 1)} disabled={!hasFile || locked || blockedByPassport || slowHere.length > 0} className={primaryClass}>
+                <button type="button" onClick={() => void goTo(step + 1, true)} disabled={locked || blockedByRequiredDocument || pending.some((item) => !item.error)} className={primaryClass}>
                   Next
                   <i className="ri-arrow-right-line" aria-hidden="true" />
                 </button>
@@ -831,11 +1227,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       notices={
         <>
           {onDocStep && blockedByPassport && !passportExpired && !locked ? (
-            <WizardNotice tone="info">A current passport is required. Upload it to continue.</WizardNotice>
+            <WizardNotice tone="info">A current passport is required. Upload it to continue.{checkAgain}</WizardNotice>
           ) : null}
 
           {onDocStep && current.required && step !== PASSPORT_STEP && !hasFile && !locked && !(current.id === "english" && englishAlt) ? (
-            <WizardNotice tone="info">{current.title} is required. Upload it to continue.</WizardNotice>
+            <WizardNotice tone="info">{current.title} is required. Upload it to continue.{checkAgain}</WizardNotice>
           ) : null}
 
           {onDocStep && rejectedHere && stepCheck ? (
@@ -877,8 +1273,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           {ready ? (
             <div className="border-t border-background-200 px-5 py-3 text-center md:px-6">
               <p className="text-2xs text-foreground-400">
-                Nothing is submitted from this wizard. Documents are stored privately against this draft; the student
-                application is submitted only from the full form after review.
+                Everything is saved to this draft as you go. The application is submitted only when you press Submit
+                application on the last screen.
               </p>
             </div>
           ) : null}
@@ -894,6 +1290,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     >
       {body()}
       <EnglishNotMetDialog open={englishNotMet} onBack={backToEnglishOptions} />
+      {replaceAsk ? (
+        <ConfirmDialog title={`A ${replaceAsk.target.noun} is already uploaded. Replace it?`} confirmLabel={`Replace ${replaceAsk.target.noun}`}
+          body={`${replaceAsk.current} is already on this application. The new file is read again and replaces it.`}
+          onClose={() => setReplaceAsk(null)}
+          onConfirm={() => { const ask = replaceAsk; setReplaceAsk(null); uploadPicked(ask.target, ask.files); }} />
+      ) : null}
     </WizardShell>
   );
 }

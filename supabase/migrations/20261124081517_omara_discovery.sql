@@ -416,7 +416,8 @@ select public.business_rule_add_setting('omara.discovery_enabled', 'Find registe
   'Yes: Add business looks for the business''s registered migration agents on the public OMARA register (needs a Brave Search or Tavily key in Integrations › Connections; without one staff paste OMARA links). No: the panel offers only pasted links.');
 select public.business_rule_add_setting('omara.search_provider', 'Search service for OMARA pages', 'Agents',
   'agency_agents', 'business', 'dropdown', '"Brave"'::jsonb, '{"allowed":["Brave","Tavily"]}'::jsonb,
-  'Which web search API finds the public OMARA agent pages. Its key is saved in Integrations › Connections.');
+  'Which web search API finds the public OMARA agent pages. Its key is saved in Integrations › Connections.',
+  '["Brave","Tavily"]'::jsonb);
 select public.business_rule_add_setting('omara.max_search_queries', 'Searches per business (OMARA)', 'Agents',
   'agency_agents', 'business', 'number', '6'::jsonb, '{"min":1,"max":20}'::jsonb,
   'The most web searches made to find one business''s agents. Each search is paid (see Search cost).');

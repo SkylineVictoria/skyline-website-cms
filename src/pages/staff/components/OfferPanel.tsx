@@ -19,6 +19,10 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [fieldError, setFieldError] = useState<{ name?: string; consent?: string }>({});
+  // STAFF-OFFER-FULL-PART-TIME: Accept (sign) or Decline (optional reason, confirmed once).
+  const [declining, setDeclining] = useState(false);
+  const [reason, setReason] = useState("");
+  const [declined, setDeclined] = useState(false);
 
   const handle = useCallback((e: unknown) => {
     if (e instanceof LinkInvalidError || e instanceof NoOfferError) { onInvalid(); return; }
@@ -51,6 +55,23 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
       onSigned?.(r.view);
     } catch (e) { handle(e); } finally { setBusy(false); }
   };
+
+  const decline = async () => {
+    if (busy) return;
+    if (!window.confirm("Decline this offer? This cannot be undone from here: we will be told that you declined.")) return;
+    setBusy(true); setError("");
+    try { await api.decline(reason.trim()); setDeclined(true); }
+    catch (e) { handle(e); } finally { setBusy(false); }
+  };
+
+  if (declined || view?.offer.declinedAt) {
+    return (
+      <section className="rounded-card border border-background-200 bg-background-50 p-6" data-testid="offer-declined">
+        <h1 className="font-heading text-xl font-bold text-foreground-950">You declined the offer</h1>
+        <p className="mt-2 text-sm text-foreground-700">Thank you for letting us know. We have recorded your decision and the HR team can see it. If this was a mistake, please contact us.</p>
+      </section>
+    );
+  }
 
   if (!view) return error ? <p role="alert" className={ALERT}>{error}</p> : <p className="text-sm text-foreground-600" role="status">Opening your offer…</p>;
 
@@ -105,7 +126,22 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
             <span>{consentText}</span>
           </label>
           {fieldError.consent ? <p className="mt-1 text-xs text-primary-700" role="alert">{fieldError.consent}</p> : null}
-          <Button type="submit" className="mt-6" disabled={busy}>{busy ? "Signing…" : "Sign the offer"}</Button>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <Button type="submit" disabled={busy} data-testid="offer-accept">{busy ? "Signing…" : "Accept and sign the offer"}</Button>
+            {!declining ? <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(true)} data-testid="offer-decline-open">Decline the offer</Button> : null}
+          </div>
+          {declining ? (
+            <div className="mt-4 max-w-xl rounded-md border border-background-300 p-4" data-testid="offer-decline-form">
+              <Field label="Reason (optional)" hint="Shared with the HR team only.">
+                <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} rows={3}
+                  className="w-full rounded-md border border-background-300 px-3 py-2 text-sm" data-testid="offer-decline-reason" />
+              </Field>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button type="button" variant="danger" disabled={busy} onClick={() => void decline()} data-testid="offer-decline-confirm">{busy ? "Sending…" : "Decline the offer"}</Button>
+                <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(false)}>Cancel</Button>
+              </div>
+            </div>
+          ) : null}
         </form>
       )}
     </>

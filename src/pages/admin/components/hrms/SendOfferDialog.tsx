@@ -14,6 +14,14 @@ const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text
 const NOTICE = "rounded-md border border-secondary-200 bg-secondary-50 px-3 py-2 text-sm text-secondary-900";
 type Step = "choose" | "preview" | "edit" | "confirm";
 
+/** The offer letter template for a job type: "... - Full time" / "... - Part time" by name, else none (the admin chooses). */
+function offerTemplateFor(templates: ReadonlyArray<{ id: string; type: string; name: string }>, employmentType: string): string {
+  const label = employmentType === "full_time" ? "full time" : employmentType === "part_time" ? "part time" : "";
+  if (!label) return "";
+  const found = templates.find((t) => t.type === "offer_letter" && t.name.toLowerCase().replace(/[-_]/g, " ").replace(/\s+/g, " ").trim().endsWith(label));
+  return found?.id ?? "";
+}
+
 /** A PDF handed back as base64 becomes a blob URL for the iframe (revoked when it changes). */
 function usePdfUrl(base64: string | null): string {
   const [url, setUrl] = useState("");
@@ -59,7 +67,9 @@ export default function SendOfferDialog({ profileId, name, email, resend, onClos
     offerLetterContext(profileId).then((next) => {
       if (!live) return;
       setContext(next);
-      setLetterId("");
+      // STAFF-OFFER-FULL-PART-TIME: the letter matching the person's job type (Staff Offer Letter - Full time / - Part time) is picked
+      // for them; any other offer letter template can still be chosen.
+      setLetterId(offerTemplateFor(next.templates, String((next.values as Record<string, unknown>)?.employmentType ?? "")));
       setEmailId("");
     }, (e) => { if (live) setLoadError(e instanceof Error ? e.message : "The offer letter could not be prepared."); });
     return () => { live = false; };

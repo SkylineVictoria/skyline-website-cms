@@ -54,10 +54,10 @@ export default function PayDetailsDialog({ profileId, current, onClose, onSaved 
   const hourly = form.payBasis === "hourly";
 
   return (
-    <Modal open width="max-w-2xl" title="Pay details" onClose={() => { if (!busy) onClose(); }}
+    <Modal open width="max-w-2xl" title="Offer details" onClose={() => { if (!busy) onClose(); }}
       footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button><Button disabled={busy} onClick={() => void save()} data-testid="pay-details-save">{busy ? "Saving…" : "Save pay details"}</Button></>}>
       <div className="space-y-4" data-testid="pay-details-dialog">
-        <p className="text-sm text-foreground-700">These details fill the offer letter and set the person up for payroll. Nothing is sent when you save.</p>
+        <p className="text-sm text-foreground-700">These details fill the offer letter (Full time or Part time letter by job type; company details come from Website settings) and set the person up for payroll. Nothing is sent when you save: the offer goes once their documents are approved.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <div><Field label="Position (job title)" required><TextInput maxLength={150} value={form.jobTitle} onChange={(ev) => patch({ jobTitle: ev.target.value })} aria-invalid={Boolean(problems.jobTitle)} data-testid="pay-job-title" /></Field>{problem("jobTitle")}</div>
           <div><Field label="Job type" required><Select value={form.employmentType} onChange={(ev) => patch({ employmentType: ev.target.value as PayDetailsForm["employmentType"] })} aria-invalid={Boolean(problems.employmentType)} data-testid="pay-employment-type">

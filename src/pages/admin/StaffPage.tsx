@@ -135,7 +135,7 @@ export default function StaffPage() {
             setReload((n) => n + 1);
           }, (e: Error) => setDeleteError(e.message)).finally(() => setDeleteBusy(false));
         }} />
-      {adding ? <EmployeeFormDialog onClose={() => setAdding(false)} onSaved={(id, result) => navigate(staffEmployeePath(id), { state: { message: result?.message ?? "Employee added. Upload their documents below." } })} /> : null}
+      {adding ? <EmployeeFormDialog onClose={() => setAdding(false)} onSaved={(id, result) => navigate(staffEmployeePath(id), { state: { message: result?.message ?? "Employee added. Upload their documents below.", offerDetails: result?.mode === "onboard" } })} /> : null}
     </div>
   );
 }

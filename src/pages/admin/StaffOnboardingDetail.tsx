@@ -103,6 +103,9 @@ function ExtractedDetails({ doc }: { doc: StaffDocument }) {
   return <p className="mt-1 text-xs text-foreground-500" data-testid={`staff-doc-extracted-${doc.id}`}>{text}</p>;
 }
 
+/** Offer details (position, job type, start date, pay, hours, pay cycle, location, manager, award) can be set from Add employee until the offer goes out. */
+const OFFER_DETAILS_STATUSES: readonly string[] = ["applied", "invited", "documents_submitted"];
+
 export default function StaffOnboardingDetail() {
   const { id = "" } = useParams();
   const [detail, setDetail] = useState<StaffDetail | null>(null);
@@ -139,6 +142,12 @@ export default function StaffOnboardingDetail() {
     } catch (e) { setError(e instanceof Error ? e.message : "The application could not be loaded."); return null; }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
+  // STAFF-OFFER-FULL-PART-TIME: Add employee › Start onboarding lands here and asks the offer details at once (step 2 of 2).
+  const askOfferDetails = Boolean((location.state as { offerDetails?: boolean } | null)?.offerDetails);
+  const [askedOffer, setAskedOffer] = useState(false);
+  useEffect(() => {
+    if (askOfferDetails && !askedOffer && flow?.payDetails && !flow.payDetails.completedAt) { setAskedOffer(true); setPayOpen(true); }
+  }, [askOfferDetails, askedOffer, flow]);
 
   const openAction = (next: EmployeeAction) => {
     setError(""); setNotice("");
@@ -401,11 +410,11 @@ export default function StaffOnboardingDetail() {
         ) : <p className="text-sm text-foreground-600">No employment details yet. Hiring from Candidates fills them in from the job; the pay details add the rest.</p>}
       </div></Card>
 
-      {pay && (flow?.documentsApproved || pay.completedAt) ? (
+      {pay && (flow?.documentsApproved || pay.completedAt || OFFER_DETAILS_STATUSES.includes(profile.status)) ? (
         <Card className="mt-6 p-5"><div data-testid="staff-pay-details">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-heading text-base font-bold text-foreground-950">Pay details <span className="ml-2 align-middle"><Badge tone={flow?.payComplete ? "success" : "warn"}>{flow?.payComplete ? "Complete" : "Needed before the offer"}</Badge></span></h2>
-            {profile.status === "documents_submitted" && flow?.documentsApproved ? <Button size="sm" variant="outline" onClick={() => setPayOpen(true)} data-testid="staff-pay-details-edit">{pay.completedAt ? "Edit pay details" : "Add pay details"}</Button> : null}
+            {OFFER_DETAILS_STATUSES.includes(profile.status) ? <Button size="sm" variant="outline" onClick={() => setPayOpen(true)} data-testid="staff-pay-details-edit">{pay.completedAt ? "Edit offer details" : "Add offer details"}</Button> : null}
           </div>
           {pay.completedAt ? (
             <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

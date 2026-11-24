@@ -74,9 +74,10 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
       if (!personId && mode === "onboard") {
         // HR-02 "Add staff member": creates their application and emails the document link (staff-admin).
         try {
-          const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), roleType: role?.key ?? null });
+          const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), roleType: role?.key ?? null, offerFirst: true });
           personId = result.profileId ?? null;
-          message = result.link ? "Onboarding started. Email is switched off: copy the document link on this page and send it to them." : `Welcome email sent to ${form.email.trim().toLowerCase()} with their document link. Next: review their documents, then send the offer letter.`;
+          // STAFF-OFFER-FULL-PART-TIME: nothing is emailed yet; the offer letter (with their set-password link) is the first email.
+          message = "Added. Now enter the offer details (position, job type, salary or rate, hours, start date), then send the offer letter. They create their password, accept or decline, and add their documents after signing.";
         } catch (err) {
           const created = (err as { result?: { profileId?: string } }).result?.profileId;
           if (!created) throw err;
@@ -122,12 +123,12 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
     <Modal open width="max-w-2xl" title={id ? "Edit employee" : "Add employee"} onClose={() => { if (!busy) onClose(); }}
       footer={<><Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>
         <Button type="submit" form="employee-form" disabled={busy || !bankLoaded || emailBlocking} data-testid="employee-save">
-          {busy ? "Saving…" : id ? "Save" : mode === "onboard" ? "Save and send link" : "Add employee"}</Button></>}>
+          {busy ? "Saving…" : id ? "Save" : mode === "onboard" ? "Save and add offer details" : "Add employee"}</Button></>}>
       <form id="employee-form" noValidate className="space-y-4" onSubmit={(e) => void submit(e)}>
         {!id ? (
           <fieldset className="grid gap-2 sm:grid-cols-2" data-testid="employee-mode">
             <legend className="mb-1.5 text-label font-medium text-foreground-800">How do you want to add them?</legend>
-            {option("onboard", "Start onboarding", "Just their name, email and role. We email them a welcome with a private link to upload their documents.")}
+            {option("onboard", "Send an offer", "Name, email and role, then the offer details. They get the offer letter by email, create their password, accept or decline, then add their documents.")}
             {option("active", "Add as Active now", "No emails. They are Active straight away and you upload their documents yourself.")}
           </fieldset>
         ) : null}

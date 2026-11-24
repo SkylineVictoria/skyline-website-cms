@@ -83,8 +83,10 @@ export interface EmployeeContext {
 }
 export function employeeActions(c: EmployeeContext): EmployeeAction[] {
   switch (c.status) {
-    case "applied": return ["send_documents_link", "reject"];
-    case "invited": return [...(c.liveDocumentLink ? ["resend_documents_link", "revoke_link"] as const : ["resend_documents_link"] as const), "reject"];
+    // STAFF-OFFER-FULL-PART-TIME: the offer may go first (documents follow once it is signed): offer details, then Send offer.
+    case "applied": return [...(c.payComplete ? ["send_offer", "edit_pay_details"] as const : ["add_pay_details"] as const), "send_documents_link", "reject"];
+    case "invited": return [...(c.payComplete ? ["send_offer", "edit_pay_details"] as const : ["add_pay_details"] as const),
+      ...(c.liveDocumentLink ? ["resend_documents_link", "revoke_link"] as const : ["resend_documents_link"] as const), "reject"];
     case "documents_submitted": {
       const out: EmployeeAction[] = [];
       if (c.rejectedDocuments > 0) out.push("send_reupload_link");

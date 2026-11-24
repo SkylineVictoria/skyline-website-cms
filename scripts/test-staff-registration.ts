@@ -2306,9 +2306,11 @@ test("the TypeScript transition table matches the database function and the stat
 test("Employees actions follow the status and what exists; each one is a legal move with a confirmation", () => {
   const base = { liveDocumentLink: false, rejectedDocuments: 0, allApproved: false, offer: null, activationInvited: false };
   const acts = (status: string, extra: Record<string, unknown> = {}) => status && staffStatusLib.employeeActions({ ...base, ...extra, status } as never);
-  assert.deepEqual(acts("applied"), ["send_documents_link", "reject"]);
-  assert.deepEqual(acts("invited"), ["resend_documents_link", "reject"], "no live link: nothing to revoke");
-  assert.deepEqual(acts("invited", { liveDocumentLink: true }), ["resend_documents_link", "revoke_link", "reject"]);
+  // STAFF-OFFER-FULL-PART-TIME: offer details first, then Send offer, before any document.
+  assert.deepEqual(acts("applied"), ["add_pay_details", "send_documents_link", "reject"]);
+  assert.deepEqual(acts("applied", { payComplete: true }), ["send_offer", "edit_pay_details", "send_documents_link", "reject"]);
+  assert.deepEqual(acts("invited"), ["add_pay_details", "resend_documents_link", "reject"], "no live link: nothing to revoke");
+  assert.deepEqual(acts("invited", { liveDocumentLink: true }), ["add_pay_details", "resend_documents_link", "revoke_link", "reject"]);
   assert.deepEqual(acts("documents_submitted"), ["reject"], "nothing to offer before every document is approved");
   assert.deepEqual(acts("documents_submitted", { rejectedDocuments: 1 }), ["send_reupload_link", "reject"]);
   assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["add_pay_details", "reject"], "pay details come before the offer");
@@ -3741,7 +3743,7 @@ const submissionLib = await load.import<typeof import("../supabase/functions/_sh
 test("onboarding: only the step that is next is offered, and every stage has its label and banner", () => {
   const base = { liveDocumentLink: false, rejectedDocuments: 0, allApproved: false, offer: null, activationInvited: false };
   const acts = (st: string, extra: Record<string, unknown> = {}) => staffStatusLib.employeeActions({ ...base, ...extra, status: st } as never);
-  assert.deepEqual(acts("applied", { openJobApplication: true }), ["send_documents_link", "reject"], "a Careers applicant gets the document link from the employee page too");
+  assert.deepEqual(acts("applied", { openJobApplication: true }), ["add_pay_details", "send_documents_link", "reject"], "a Careers applicant gets the document link from the employee page too");
   assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["add_pay_details", "reject"], "documents approved: pay details are next, not the offer");
   assert.deepEqual(acts("documents_submitted", { allApproved: true, payComplete: true }), ["send_offer", "edit_pay_details", "reject"]);
   assert.deepEqual(acts("documents_submitted", { rejectedDocuments: 1, payComplete: true }), ["send_reupload_link", "reject"], "no offer while a document is rejected");
@@ -4133,7 +4135,7 @@ test("staff-admin offer_send_login: a failed email undoes everything; a refusal 
   assert.ok(!resend.names().includes("admin:hr_admin_onboarding_offer_unsend"), "an offer that is out is never silently unsent");
   assert.deepEqual(resend.calls.find(([n]) => n === "admin:hr_admin_staff_invite_cancel")![1], { p_id: PROFILE, p_invite: "inv-acct" });
 
-  const wrongStage = flowDeps({ db: { hr_admin_staff_detail: { data: { profile: { ...DETAIL_READY.profile, status: "invited" } } } } });
+  const wrongStage = flowDeps({ db: { hr_admin_staff_detail: { data: { profile: { ...DETAIL_READY.profile, status: "active" } } } } });
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, wrongStage.deps as never)).status, 400);
   const notAdmin = flowDeps({ db: { hr_admin_staff_detail: { error: { code: "42501", message: "Only an administrator can do this." } } } });
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, notAdmin.deps as never)).status, 403);
@@ -5001,4 +5003,22 @@ test("Employees list (2026-11-24): a Sign-in column; Can sign in only once a pas
   assert.ok(page.includes('"Status", "Sign-in"]') && page.includes("<EmployeeSignIn row={r}"));
   assert.ok(page.includes('if (r.hasLogin && r.passwordSet) return { label: "Can sign in"') && page.includes('return { label: "Not invited", tone: "muted" }'));
   assert.ok(page.includes('row.status === "active" && !(row.hasLogin && row.passwordSet)') && page.includes("staffAdminActions.inviteLogin(row.id)"));
+});
+
+test("Staff offer first (2026-11-24): Full time / Part time letters, offer before documents, accept or decline, documents after signing", () => {
+  const sql = read("supabase/migrations/20261124235517_staff_offer_full_part_time.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("('Staff Offer Letter - Full time', 'Full time'") && sql.includes("('Staff Offer Letter - Part time', 'Part time'"));
+  assert.ok(sql.includes("Run 20261124001517_staff_offer_variables first"));
+  assert.ok(sql.includes("or (p_from in ('applied', 'invited') and p_to = 'offer_sent') or (p_from = 'offer_sent' and p_to = 'invited')"));
+  assert.ok(sql.includes("if p.status not in ('applied', 'invited', 'documents_submitted') then raise exception 'Offer details are added"));
+  assert.ok(sql.includes("create or replace function public.hr_svc_offer_decline") && sql.includes("update hr.staff_profiles set status = 'rejected' where id = p.id;"));
+  assert.ok(sql.includes("else v_status in ('invited', 'offer_signed') end") && sql.includes("if p.status = 'invited' then update hr.staff_profiles set status = 'documents_submitted'"));
+  assert.ok(sql.includes("create or replace function public.hr_svc_staff_documents_link") && sql.includes("grant execute on function public.hr_svc_staff_documents_link(uuid, text) to service_role;"));
+  const onboarding = read("supabase/functions/staff-onboarding/core.ts");
+  assert.ok(onboarding.includes('case "offer_decline"') && onboarding.includes('if (action === "documents_link") return documentsLink(req, deps);'));
+  const admin = read("supabase/functions/staff-admin/core.ts");
+  assert.ok(admin.includes('if (body.offerFirst === true) return') && admin.includes('["applied", "invited", "documents_submitted", "offer_sent"].includes'));
+  assert.ok(read("src/pages/staff/components/OfferPanel.tsx").includes("api.decline(reason.trim())"));
+  assert.ok(read("src/pages/staff/StaffHomePage.tsx").includes("{me.status === \"offer_signed\" ? <DocumentsWizardButton /> : null}"));
+  assert.ok(read("src/pages/admin/components/EmployeeFormDialog.tsx").includes("offerFirst: true"));
 });

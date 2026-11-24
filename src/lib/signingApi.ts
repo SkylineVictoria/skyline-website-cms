@@ -1,6 +1,7 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { ruleNumber } from "@/lib/businessRules";
 import type { AbrConfirmed, AbrDetails } from "../../supabase/functions/_shared/validation/abr";
+import type { PlaceDetails } from "../../supabase/functions/_shared/google-places";
 import { docxXmlToText } from "../../supabase/functions/_shared/signing";
 
 export type SignFieldType = "signature" | "initials" | "date" | "name" | "text" | "checkbox";
@@ -305,13 +306,21 @@ export const discardPresend = (onboardingId: string) => signingAction<{ discarde
 export const warmPresend = () => onboardingAction<{ ready: boolean }>({ action: "agent_onboarding_presend_warm" });
 /** What staff confirmed from ABN Lookup on Add business (kept on the business for the F04 prefill). */
 export type BusinessAbrInput = AbrConfirmed & { givenName: string; familyName: string };
-export const createBusinessWithOnboarding = (input: { agency: Record<string, string>; contactEmail: string; contactName: string; message?: string; abr?: BusinessAbrInput }) =>
+export const createBusinessWithOnboarding = (input: { agency: Record<string, string>; contactEmail: string; contactName: string; message?: string; abr?: BusinessAbrInput; places?: BusinessPlacesInput }) =>
   onboardingAction<BusinessCreateResult>({ action: "agent_onboarding_business_create", ...input });
 /**
  * ABN Lookup on Add business (ABR JSON service, administrators): configured false = no GUID set up yet (the earlier lookup is used);
  * ok false with reason invalid / not_found / unavailable; the answer is cached for the business about to be saved.
  */
-export type AbnLookupResult = { configured: boolean; ok: true; details: AbrDetails; fetchedAt: string; cached: boolean } | { configured: boolean; ok: false; reason: "not_configured" | "invalid" | "not_found" | "unavailable"; message: string };
+export type AbnLookupResult = ({ configured: boolean; ok: true; details: AbrDetails; fetchedAt: string; cached: boolean } | { configured: boolean; ok: false; reason: "not_configured" | "invalid" | "not_found" | "unavailable"; message: string })
+  & { places?: PlacesLookup };
+/**
+ * Google Maps (2026-11-24) beside the ABN lookup: configured false = no Google Maps key set on the server yet (nothing shown); ok false = no matching place
+ * (or Google not answering); ok true = the office address, website and phone found (staff confirm and may edit them).
+ */
+export type PlacesLookup = { configured: boolean; ok: boolean; place?: PlaceDetails; reason?: string; message?: string; cached?: boolean };
+/** The office details staff confirmed on Add business (kept on the business profile, blank keys only, for the F04). */
+export interface BusinessPlacesInput { street: string; suburb: string; state: string; postcode: string; country: string; website: string; phone: string; placeId?: string; mapsUri?: string; name?: string; source: "google" | "staff" }
 export const lookupAbnDetails = (abn: string) => signingAction<AbnLookupResult>({ action: "agent_onboarding_abn_lookup", abn });
 /** Activate (administrator): the business, its point of contact and every agent added meanwhile become active; one set-password email each. */
 export interface BusinessActivateResult { businessId: string; name: string; contact: { id: string; name: string; email: string }; heldReleased: number; emailed: string[]; failed: string[]; skipped: Array<{ email: string; reason: string }> }

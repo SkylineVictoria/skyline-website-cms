@@ -6,14 +6,15 @@ import { PhoneInput } from "@/components/feature/applicationInputs";
 import { parseStoredPhone, validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { Button, Card, Field, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { EMPTY_AGENCY_FORM, suggestAgencyCode, validateAgencyForm, type AgencyFormErrors, type AgencyFormState } from "@/pages/admin/lib/agencyForm";
-import { createBusinessWithOnboarding, lookupAbnDetails, type AbnLookupResult, type BusinessAbrInput } from "@/lib/signingApi";
+import { createBusinessWithOnboarding, lookupAbnDetails, type AbnLookupResult, type BusinessAbrInput, type BusinessPlacesInput, type PlacesLookup } from "@/lib/signingApi";
+import { placeAddressLine, type PlaceDetails } from "../../../../supabase/functions/_shared/google-places";
 import { validateName } from "@/pages/agency/lib/userValidation";
 import { findAgencyByAbn, invokePortalUsers } from "@/pages/agency/lib/portalData";
 import EmailField from "@/components/identity/EmailField";
 import { ruleText } from "@/lib/businessRules";
 import { isEmailTakenError } from "@/lib/identity/email";
 
-type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string };
+type Errors = AgencyFormErrors & { form?: string; givenName?: string; familyName?: string; legalEntity?: string; tradingName?: string; postcode?: string; override?: string; officePostcode?: string; website?: string };
 
 export interface CreatedBusiness {
   agencyId: string;
@@ -28,6 +29,10 @@ const STATES = ["ACT", "NSW", "NT", "QLD", "SA", "TAS", "VIC", "WA"] as const;
 interface Confirmed { legalEntity: string; tradingName: string; otherName: boolean; gst: "yes" | "no" | ""; state: string; postcode: string; override: boolean; reason: string }
 const EMPTY_CONFIRMED: Confirmed = { legalEntity: "", tradingName: "", otherName: false, gst: "", state: "", postcode: "", override: false, reason: "" };
 type AbrFailure = Extract<AbnLookupResult, { ok: false }>;
+/** The office details from Google Maps (2026-11-24), editable before saving; kept on the business and printed on the application form. */
+type Office = Omit<BusinessPlacesInput, "source"> & { matchPercent: number };
+const officeFrom = (p: PlaceDetails): Office => ({ street: p.street, suburb: p.suburb, state: p.state, postcode: p.postcode, country: p.country || "Australia", website: p.website,
+  phone: p.phone, placeId: p.placeId, mapsUri: p.mapsUri, name: p.name, matchPercent: p.matchPercent });
 
 /** Keeps only digits (at most 11) and groups them as an ABN is written: 12 345 678 901. */
 function formatAbnInput(value: string): string {
@@ -70,6 +75,9 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
   const [abrFailure, setAbrFailure] = useState<AbrFailure | null>(null);
   const [confirmed, setConfirmed] = useState<Confirmed>(EMPTY_CONFIRMED);
   const [givenName, setGivenName] = useState("");
+  // Google Maps: the office found for this ABN (null: none / not set up), and a note when it was looked for and not found.
+  const [office, setOffice] = useState<Office | null>(null);
+  const [officeNote, setOfficeNote] = useState("");
   const [familyName, setFamilyName] = useState("");
 
   const [form, setForm] = useState<AgencyFormState>(EMPTY_AGENCY_FORM);
@@ -82,7 +90,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
 
   // Look the ABN up once it is complete and valid (Fetch from ABN and leaving the field look it up again); a newer ABN discards an older answer.
   useEffect(() => {
-    setDetails(null); setExisting(null); setLookupError(""); setEditing(false); setAbr(null); setAbrFailure(null);
+    setDetails(null); setExisting(null); setLookupError(""); setEditing(false); setAbr(null); setAbrFailure(null); setOffice(null); setOfficeNote("");
     if (abnProblem) { setLookupLoading(false); return; }
     let cancelled = false;
     setLookupLoading(true);
@@ -91,6 +99,11 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         // The ABR service first; a function without it (not deployed yet) or without a GUID answers "not set up": the earlier lookup runs.
         const [abrResult, already] = await Promise.all([lookupAbnDetails(abn).catch(() => null), findAgencyByAbn(abn)]);
         if (cancelled) return;
+        // Google Maps beside the ABN lookup: the office address, website and phone (never the key: the function looks it up).
+        const places: PlacesLookup | undefined = abrResult?.places;
+        const found = places?.ok && places.place ? officeFrom(places.place) : null;
+        setOffice(found);
+        setOfficeNote(places?.configured && !found ? places.message || "Not found on Google Maps: the agency fills in the office address." : "");
         if (abrResult?.configured) {
           setMode("abr");
           setExisting(already);
@@ -100,7 +113,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
             setAbr(d);
             setConfirmed({ legalEntity: d.entityName, tradingName: trading, otherName: false, gst: d.gstRegistered ? "yes" : "no", state: d.state, postcode: d.postcode, override: false, reason: "" });
             setForm(prev => ({ ...prev, registrationNumber: abn, name: trading, code: suggestAgencyCode(trading, suffix.current), country: "Australia",
-              address: [d.state, d.postcode].filter(Boolean).join(" "), status: "Active" }));
+              address: (found && placeAddressLine(found)) || [d.state, d.postcode].filter(Boolean).join(" "), status: "Active" }));
           } else {
             setAbrFailure(abrResult);
             // The register did not answer: the business can be added by hand, without the prefill.
@@ -118,7 +131,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         setExisting(already);
         setForm(prev => ({
           ...prev, registrationNumber: abn, name: business.legalName, code: suggestAgencyCode(business.legalName, suffix.current),
-          country: "Australia", address: [business.state, business.postcode].filter(Boolean).join(" "), status: "Active",
+          country: "Australia", address: (found && placeAddressLine(found)) || [business.state, business.postcode].filter(Boolean).join(" "), status: "Active",
         }));
         setErrors({});
       } catch (error) {
@@ -189,6 +202,8 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     // The same check as every other phone field: a country code plus a number valid for that country.
     if (!parseStoredPhone(form.phone)?.national) next.phone = "Enter the contact's phone number.";
     else { const phoneProblem = validateStoredPhone(form.phone); if (phoneProblem) next.phone = phoneProblem; else delete next.phone; }
+    if (office?.postcode && !/^\d{4}$/.test(office.postcode.trim())) next.officePostcode = "A postcode has 4 digits.";
+    if (office?.website && !/^https?:\/\/\S+$/i.test(office.website.trim())) next.website = "Enter the website starting with https://, or leave it empty.";
     setErrors(next);
     if (Object.keys(next).some(key => next[key as keyof Errors])) {
       if (next.name || next.code || next.address || next.country) setEditing(true);
@@ -203,12 +218,18 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         legalEntity: confirmed.legalEntity.trim(), tradingName: confirmed.tradingName.trim(), gstRegistered: confirmed.gst === "" ? null : confirmed.gst === "yes",
         state: confirmed.state, postcode: confirmed.postcode.trim(), cancelledOverride: abr.active ? undefined : confirmed.reason.trim(), givenName: givenName.trim(), familyName: familyName.trim(),
       } : undefined;
+      // The office details from Google Maps as staff left them: the business's address and, on its profile, the F04's office row and website.
+      const officeInput: BusinessPlacesInput | undefined = office ? {
+        street: office.street.trim(), suburb: office.suburb.trim(), state: office.state.trim(), postcode: office.postcode.trim(), country: office.country.trim(),
+        website: office.website.trim(), phone: office.phone.trim(), placeId: office.placeId, mapsUri: office.mapsUri, name: office.name, source: "google",
+      } : undefined;
+      const address = (officeInput && placeAddressLine(officeInput)) || form.address.trim();
       const data = await createBusinessWithOnboarding({
         agency: {
           name: form.name.trim(), code: form.code.trim(), registration_number: abn, business_email: email,
-          phone: checked.phone, address: form.address.trim(), country: form.country.trim(), primary_contact: contactName,
+          phone: checked.phone, address, country: form.country.trim(), primary_contact: contactName,
         },
-        contactEmail: email, contactName, ...(abrInput ? { abr: abrInput } : {}),
+        contactEmail: email, contactName, ...(abrInput ? { abr: abrInput } : {}), ...(officeInput ? { places: officeInput } : {}),
       });
       const id = String(data.agencyId ?? "");
       if (!id) throw new Error("The business was created but could not be opened. Find it in Businesses.");
@@ -312,6 +333,34 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
     </section>
   ) : null;
 
+  // Google Maps (2026-11-24): the office found for this business, to confirm and edit; a link to the place so staff can check it is the right one.
+  const setOfficeField = (key: keyof Office, value: string) => setOffice(prev => (prev ? { ...prev, [key]: value } : prev));
+  const officeInputBox = (key: "street" | "suburb" | "postcode" | "country" | "website" | "phone", label: string, props: { inputMode?: "numeric" | "url" | "tel"; maxLength?: number } = {}) => (
+    <Field label={label}><TextInput disabled={saving} inputMode={props.inputMode} maxLength={props.maxLength} value={office?.[key] ?? ""} onChange={e => setOfficeField(key, key === "postcode" ? e.target.value.replace(/\D/g, "").slice(0, 4) : e.target.value)} /></Field>
+  );
+  const officePanel = () => office ? (
+    <section className="mt-4 rounded-lg border border-sky-300 bg-sky-50 p-4" aria-label="Office details from Google Maps" data-testid="places-details">
+      <p className="flex items-center gap-1.5 text-sm font-semibold text-sky-900"><i className="ri-map-pin-line" aria-hidden="true" />Found on Google Maps: check this is the right office</p>
+      <p className="mt-0.5 text-xs text-sky-800">
+        {office.name}{office.mapsUri ? <>{" · "}<a href={office.mapsUri} target="_blank" rel="noreferrer" className="underline" data-testid="places-link">Open in Google Maps</a></> : null}
+        {" · "}Printed on the application form; you and the agency can still change it.
+      </p>
+      <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+        {officeInputBox("street", "Street address")}
+        {officeInputBox("suburb", "Suburb")}
+        <Field label="State">
+          <Select disabled={saving} value={office.state} onChange={e => setOfficeField("state", e.target.value)}>
+            <option value="">—</option>{STATES.map(st => <option key={st} value={st}>{st}</option>)}
+          </Select>
+        </Field>
+        <div>{officeInputBox("postcode", "Postcode", { inputMode: "numeric", maxLength: 4 })}{error("officePostcode")}</div>
+        <div>{officeInputBox("website", "Website", { inputMode: "url" })}{error("website")}</div>
+        {officeInputBox("phone", "Business phone", { inputMode: "tel" })}
+      </div>
+      <div className="mt-3"><Button type="button" variant="secondary" icon="ri-close-line" disabled={saving} onClick={() => setOffice(null)} data-testid="places-discard">Not this business</Button></div>
+    </section>
+  ) : officeNote && (abr || details) ? <p className="mt-3 text-xs text-foreground-500" data-testid="places-note"><i className="ri-map-pin-line" aria-hidden="true" /> {officeNote}</p> : null;
+
   return (
     <form onSubmit={submit} noValidate>
       {box(<>
@@ -345,6 +394,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
         </div>
 
         {mode === "abr" && !existing ? abrPanel() : null}
+        {mode === "abr" && !existing && abr ? officePanel() : null}
         {abrManual && !existing ? (
           <section className="mt-4 rounded-lg border border-background-300 bg-background-50 p-4" aria-label="Business details typed by hand">
             <p className="text-sm font-semibold text-foreground-900">Business details (typed by hand)</p>
@@ -379,20 +429,21 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
                 {input("name", "Business name", details.businessNames.length ? `Registered names: ${details.businessNames.join(", ")}` : "As it appears to staff and on applications.", { required: true })}
                 {input("code", "Agency code", "A short unique code, for example GPE-001.", { required: true })}
                 {input("country", "Country", "Where the business is based.")}
-                {input("address", "Address", "Street address, if known.")}
+                {office ? null : input("address", "Address", "Street address, if known.")}
               </div>
             ) : (
               <dl className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                 {lockedRow("Business name", form.name)}
                 {lockedRow("Agency code", form.code)}
                 {lockedRow("Country", form.country)}
-                {lockedRow("Address", form.address)}
+                {office ? null : lockedRow("Address", form.address)}
                 {details.businessNames.length ? lockedRow("Registered business names", details.businessNames.join(", ")) : null}
                 {lockedRow("ABN", details.abn.replace(/^(\d{2})(\d{3})(\d{3})(\d{3})$/, "$1 $2 $3 $4"))}
               </dl>
             )}
           </section>
         ) : null}
+        {mode !== "abr" && legacyReady && details ? officePanel() : null}
       </>)}
 
       {ready ? box(<>

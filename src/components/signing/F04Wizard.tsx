@@ -302,6 +302,15 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   const terms = view.onboarding?.agreement ?? null;
   const witnessPlan = view.onboarding?.witness ?? null;
   const needWitness = combined && !witnessPlan?.preset;
+  // The agent portal password (owner 2026-11-24): chosen here, when the agency admin signs the application and agreement, so after approval
+  // they sign in with this email and password. Not on a correction (the account was made at the first signature).
+  const needPassword = combined && !correcting;
+  const [portalPw, setPortalPw] = useState("");
+  const [portalPw2, setPortalPw2] = useState("");
+  const [showPw, setShowPw] = useState(false);
+  const passwordProblem = !needPassword ? "" : portalPw.length < 8 ? "Create your portal password (at least 8 characters)."
+    : !/[A-Za-z]/.test(portalPw) || !/\d/.test(portalPw) ? "Use letters and at least one number in your password."
+    : portalPw !== portalPw2 ? "The two passwords are not the same." : "";
   // Business Rules (agents.agency_witness_on_agreement): the agency's witness may be optional; one given still needs a name and a drawing.
   const witnessOptional = ruleText("agents.agency_witness_on_agreement", "Required") === "Optional";
   const witnessRequired = needWitness && !witnessOptional;
@@ -395,8 +404,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
   // The witness (2026-11-20): a full name and a drawn signature, unless staff gave the witness before sending.
   const witnessName = (a[WITNESS_NAME_KEY] ?? "").trim();
   const witnessReady = !needWitness || (witnessOptional && !witnessName && !witnessPng) || (witnessName.length >= 2 && !!witnessPng);
-  const canSubmit = Object.keys(problems).length === 0 && consent && signatureReady && witnessReady && (!codeCheck.needed || !!codeCheck.session);
-  const submitHint = canSubmit ? "" : missing || (!signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code.");
+  const canSubmit = Object.keys(problems).length === 0 && consent && signatureReady && witnessReady && !passwordProblem && (!codeCheck.needed || !!codeCheck.session);
+  const submitHint = canSubmit ? "" : missing || (!signatureReady ? "Add your signature." : !witnessReady ? "Add your witness: their full name and their drawn signature." : passwordProblem ? passwordProblem : !consent ? "Tick the agreement to sign electronically." : "Confirm the emailed code.");
 
   const save = async () => {
     if (busy === "save") return;
@@ -481,7 +490,8 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
     try {
       await signWithRetry({ action: "sign", token, name: (a.declarant_name ?? "").trim(), agreed: true, signatureKind: method, signatureImage: method === "typed" ? null : picture,
         values: f04Values(fields, state), documentHash: view.documentHash, codeSession: codeCheck.session,
-        application: { acn: state.acn, marn: state.marn.replace(/\s/g, ""), declarations: state.declarations, ...(needWitness ? { witness: { name: witnessName, png: witnessPng } } : {}) } });
+        application: { acn: state.acn, marn: state.marn.replace(/\s/g, ""), declarations: state.declarations, ...(needWitness ? { witness: { name: witnessName, png: witnessPng } } : {}),
+          ...(needPassword && !passwordProblem ? { account: { password: portalPw } } : {}) } });
       closed.current = true;
       await onSigned();
     } catch (e) { setNotice({ tone: "error", text: e instanceof Error ? e.message : "The form could not be submitted. Please try again." }); }
@@ -947,6 +957,22 @@ export default function F04Wizard({ token, view, codeCheck, onSigned, mode: mode
             {method === "typed" ? <p className={`flex min-h-20 items-center rounded-md border border-background-300 bg-background-50 px-5 py-3 text-4xl text-[#0d1a4d] ${SCRIPT_FONT}`} data-testid="f04-typed-signature">
               {a.declarant_name || <span className="font-sans text-sm text-foreground-400">Your name appears here as your signature</span>}</p> : <SignaturePad onChange={setPicture} />}
           </div>
+          {needPassword ? <div className="rounded-lg border border-primary-200 bg-primary-50/40 p-4" data-testid="f04-portal-password">
+            <p className="text-label font-medium text-foreground-900">Create your agent portal password <span className="text-primary-600">*</span></p>
+            <p className="mt-0.5 text-xs text-foreground-600">Once SLIT approves your business, sign in to the agent portal with your email{view.recipient?.email ? ` (${view.recipient.email})` : ""} and this password. If you already have a Skyline portal account, your current password stays.</p>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="block text-sm"><span className="mb-1 block text-xs font-semibold text-foreground-700">Password</span>
+                <input type={showPw ? "text" : "password"} autoComplete="new-password" value={portalPw} maxLength={72} onChange={(e) => setPortalPw(e.target.value)}
+                  className="w-full rounded-md border border-background-300 bg-white px-3 py-2" data-testid="f04-portal-password-1" /></label>
+              <label className="block text-sm"><span className="mb-1 block text-xs font-semibold text-foreground-700">Confirm password</span>
+                <input type={showPw ? "text" : "password"} autoComplete="new-password" value={portalPw2} maxLength={72} onChange={(e) => setPortalPw2(e.target.value)}
+                  className="w-full rounded-md border border-background-300 bg-white px-3 py-2" data-testid="f04-portal-password-2" /></label>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <label className="flex items-center gap-1.5 text-foreground-700"><input type="checkbox" checked={showPw} onChange={(e) => setShowPw(e.target.checked)} />Show password</label>
+              <span className={passwordProblem && (portalPw || portalPw2) ? "text-amber-800" : "text-foreground-500"}>{passwordProblem && (portalPw || portalPw2) ? passwordProblem : "At least 8 characters, with letters and a number."}</span>
+            </div>
+          </div> : null}
           <label className="flex cursor-pointer items-start gap-3 text-sm"><input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0" data-testid="f04-consent" /><span>{view.consent}<span className="text-primary-600"> *</span></span></label>
           {codeCheck.needed && !codeCheck.session ? codeCheck.render() : null}
         </section>

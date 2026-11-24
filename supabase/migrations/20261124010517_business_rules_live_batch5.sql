@@ -442,7 +442,7 @@ grant execute on function public.lms_day_part_cutoff(text), public.lms_day_part_
 -- Values the registration limits cannot check are refused on save.
 create or replace function public.business_rule_versions_lms5_check() returns trigger
 language plpgsql set search_path = '' as $$
-declare v jsonb := new.definition->'value'; v_id text := new.definition->>'identifier'; k text; e jsonb;
+declare v jsonb := new.definition->'value'; v_id text := new.definition->>'identifier'; k text; e jsonb; lo numeric; hi numeric;
 begin
   if v_id = 'lms.day_part_times' then
     foreach k in array array['morning','afternoon','evening'] loop
@@ -474,10 +474,11 @@ begin
       if jsonb_typeof(v->k) is distinct from 'array' or jsonb_array_length(v->k) = 0 then
         raise exception 'Give at least one choice for %.', k using errcode = '22023';
       end if;
+      lo := case k when 'lengths' then 5 when 'daysAhead' then 1 else 0 end;
+      hi := case k when 'lengths' then 480 when 'buffers' then 120 when 'noticeHours' then 720 else 365 end;
       for e in select x from jsonb_array_elements(v->k) x loop
         if jsonb_typeof(e) <> 'number' or (e #>> '{}')::numeric <> trunc((e #>> '{}')::numeric)
-           or (e #>> '{}')::numeric < case k when 'lengths' then 5 when 'daysAhead' then 1 else 0 end
-           or (e #>> '{}')::numeric > case k when 'lengths' then 480 when 'buffers' then 120 when 'noticeHours' then 720 else 365 end then
+           or (e #>> '{}')::numeric < lo or (e #>> '{}')::numeric > hi then
           raise exception 'Use whole numbers: lengths 5 to 480 minutes, buffers 0 to 120 minutes, noticeHours 0 to 720, daysAhead 1 to 365.' using errcode = '22023';
         end if;
       end loop;

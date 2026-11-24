@@ -43,7 +43,7 @@ begin
   if exists (select 1 from hr.sign_templates s where s.name = v.name and s.category = 'offer_letter' and s.deleted_at is null) then continue; end if;
   insert into hr.sign_templates(name, title, body, created_by, kind, audience, category, status, version, roles, fields, signing_mode, expiry_days,
     reminder_days, body_html, subject, is_default, header_html, footer_html, bracket_variables)
-  values (v.name, base.title, '', base.created_by, base.kind, base.audience, base.category, 'active', 1, base.roles, base.fields, base.signing_mode,
+  values (v.name, base.title, null, base.created_by, base.kind, base.audience, base.category, 'active', 1, base.roles, base.fields, base.signing_mode,
     base.expiry_days, base.reminder_days,
     replace(replace(replace(replace(replace(replace(base.body_html,
       '{{hours_clause}}', v.hours_clause), '{{leave_clause}}', v.leave_clause), '{{probation_period}}', '{{probation_months}} months'),

@@ -23,9 +23,10 @@ import { businessDeleteCheck, isSlitAdmin } from "@/pages/admin/lib/businessData
 import OmaraAgentsPanel from "@/pages/admin/components/OmaraAgentsPanel";
 import { listOnboarding } from "@/pages/admin/lib/agentOnboarding";
 import { BusinessOfficesCard } from "@/pages/admin/components/OfficeLocations";
+import BusinessCommissions from "@/pages/admin/components/commissions/BusinessCommissions";
 
-type Tab = "details" | "documents" | "agents" | "students" | "applications";
-const TAB_IDS: Tab[] = ["details", "documents", "agents", "students", "applications"];
+type Tab = "details" | "documents" | "agents" | "students" | "applications" | "commissions";
+const TAB_IDS: Tab[] = ["details", "documents", "agents", "students", "applications", "commissions"];
 
 /** Agencies > Businesses > {name}: the business, its agents, their students and the students' applications. The tab lives in the URL. */
 export default function BusinessDetailPage() {
@@ -129,6 +130,8 @@ export default function BusinessDetailPage() {
     { id: "agents", label: "Agents", count: people + c.inactiveAgents },
     { id: "students", label: "Students", count: c.students },
     { id: "applications", label: "Applications", count: c.applications },
+    // AVETMISS-UI (2026-11-25): agent commissions, admins only (agent_commissions RLS is cms_is_admin).
+    ...(isAdmin ? [{ id: "commissions" as Tab, label: "Commissions" }] : []),
   ];
 
   return (
@@ -190,6 +193,7 @@ export default function BusinessDetailPage() {
       {tab === "details" ? <OmaraAgentsPanel mode="linked" agencyId={business.id} /> : null}
       {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null, holding: !operational && business.status === "Onboarding" && stage !== "declined" }} onChanged={load} /> : null}
       {tab === "students" ? <StudentsTable businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
+      {tab === "commissions" && isAdmin ? <BusinessCommissions agencyId={business.id} /> : null}
       {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
 
       <ConfirmDialog

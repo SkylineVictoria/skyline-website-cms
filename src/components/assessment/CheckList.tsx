@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import PdfPages from "@/components/signing/PdfPages";
 import RichBlockEditor from "./RichBlockEditor";
 import { questionType } from "@/lib/assessment/registry";
-import type { AutoResolvedRow, CheckRow } from "@/lib/assessment/checkList";
+import { lineText, rowTitle, type AutoResolvedRow, type CheckRow } from "@/lib/assessment/checkList";
 import type { Question, QuestionKey } from "@/lib/assessment/types";
 
 export const FIELD = "w-full rounded-lg border border-background-300 bg-white px-3 py-2 text-sm text-foreground-900 focus:border-primary-400 focus:outline-none";
@@ -92,38 +92,54 @@ export function AutoResolvedList({ rows, onReopen, readOnly }: { rows: AutoResol
   );
 }
 
-export function QuestionLine({ q, number, open, onClick, depth = 0, actions, tags = [], answered }: {
+/**
+ * One compact row (ASM-BUILDER-COMPACT): number · short title (first sentence) · type icon · response chips (table, upload, calc) ·
+ * "optional" only when not required · "n parts ▸" for sub-parts / table rows (collapsed until clicked). The page and the actions
+ * (reorder, duplicate, delete) show on hover, and on keyboard focus. A section heading is a section label, never a question row.
+ */
+export function QuestionLine({ q, number, open, onClick, depth = 0, actions, tags = [], answered, optional, parts }: {
   q: Question;
   number: string;
   open: boolean;
   onClick: () => void;
   depth?: number;
   actions?: ReactNode;
+  /** Response chips ("table", "upload", "calc", "assessor", "conditional"). */
   tags?: string[];
   /** Has a model answer (assessor only). */
   answered?: boolean;
+  /** Not required (required is the default and shows nothing). */
+  optional?: boolean;
+  /** Sub-parts or table rows, collapsed: "6 parts ▸". */
+  parts?: { label: string; open: boolean; onToggle: () => void } | null;
 }) {
   const [showOriginal, setShowOriginal] = useState(false);
   const type = questionType(q.type);
   const content = q.type === "instruction" || q.type === "content";
-  const text = content ? (q.config?.html ? String(q.config.html).replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim() : "") || (String(q.config?.html ?? "").includes("<img") ? "Picture" : "Instruction") : q.label || type?.label || q.type;
+  const text = rowTitle(q) || type?.label || q.type;
   const edited = Boolean(q.importMeta?.editedAt);
   const original = q.importMeta?.original ?? "";
   // a section heading found by the import ("1. Introduction"): a section label, not a question
   const heading = q.importMeta?.itemType === "section_heading";
+  const page = q.importMeta?.page ? <span className="px-1 text-2xs text-foreground-500" title="Page in the imported workbook" data-testid="row-page">p.{q.importMeta.page}</span> : null;
   return (
     <div className="group" data-question-line={q.id} data-section-heading={heading ? "true" : undefined}>
-      <div className={`flex items-center gap-2 px-3 py-2 sm:px-4 ${depth ? "pl-8 sm:pl-10" : ""} ${open ? "bg-primary-50/30" : heading ? "bg-background-50" : "hover:bg-background-50"}`}>
+      <div className={`flex items-center gap-2 px-3 ${heading ? "pb-0.5 pt-2" : "py-1.5"} sm:px-4 ${depth ? "pl-8 sm:pl-10" : ""} ${open ? "bg-primary-50/30" : heading ? "" : "hover:bg-background-50"}`}>
         <button type="button" onClick={onClick} aria-expanded={open} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left">
-          <span className="w-14 shrink-0 text-sm font-semibold text-foreground-900">{heading ? "" : number}</span>
-          <i className={`${heading ? "ri-heading" : type?.icon ?? "ri-question-line"} shrink-0 text-foreground-400`} title={heading ? "Section heading" : type?.label ?? q.type} aria-label={heading ? "Section heading" : type?.label ?? q.type} />
-          <span className={`min-w-0 flex-1 truncate text-sm ${heading ? "text-2xs font-bold uppercase tracking-wide text-foreground-700" : content ? "text-foreground-600" : "text-foreground-800"}`}>{showOriginal && original ? original.replace(/<[^>]*>/g, " ") : text}</span>
-          {q.importMeta?.page ? <span className="shrink-0 text-2xs text-foreground-500" title="Page in the imported workbook">p.{q.importMeta.page}</span> : null}
-          {tags.map((t) => <span key={t} className="hidden shrink-0 rounded bg-background-100 px-1.5 py-0.5 text-2xs font-medium text-foreground-600 sm:inline">{t}</span>)}
+          {heading ? null : <span className="w-12 shrink-0 text-sm font-semibold text-foreground-900">{number}</span>}
+          {heading ? null : <i className={`${type?.icon ?? "ri-question-line"} shrink-0 text-foreground-400`} title={type?.label ?? q.type} aria-label={type?.label ?? q.type} />}
+          <span className={`min-w-0 flex-1 truncate ${heading ? "text-2xs font-bold uppercase tracking-wide text-foreground-600" : content ? "text-sm text-foreground-600" : "text-sm text-foreground-800"}`} title={heading ? undefined : lineText(q).slice(0, 400)}>{showOriginal && original ? original.replace(/<[^>]*>/g, " ") : text}</span>
+          {tags.map((t) => <span key={t} className="hidden shrink-0 rounded bg-background-100 px-1.5 py-0.5 text-2xs font-medium text-foreground-600 sm:inline" data-testid="row-chip">{t}</span>)}
+          {optional ? <span className="shrink-0 rounded-full border border-background-300 px-1.5 py-0.5 text-2xs font-medium text-foreground-600" data-testid="row-optional">optional</span> : null}
           {answered ? <i className="ri-key-2-line shrink-0 text-foreground-400" title="Has a model answer" aria-label="Has a model answer" /> : null}
           {edited ? <span className="shrink-0 rounded-full bg-primary-100 px-2 py-0.5 text-2xs font-semibold text-primary-800">Edited</span> : null}
         </button>
-        {actions ? <div className={HOVER_ACTIONS}>{actions}</div> : null}
+        {parts ? (
+          <button type="button" onClick={parts.onToggle} aria-expanded={parts.open} className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-xs font-medium text-foreground-600 hover:bg-background-100" data-testid="row-parts">
+            {parts.label} <i className={parts.open ? "ri-arrow-down-s-line" : "ri-arrow-right-s-line"} aria-hidden="true" />
+          </button>
+        ) : null}
+        {page || actions ? <div className={HOVER_ACTIONS} data-testid="row-hover">{page}{actions}</div> : null}
       </div>
       {edited ? (
         <p className={`px-4 pb-1 text-xs text-foreground-500 ${depth ? "pl-10" : ""}`}>Edited{q.importMeta?.editedByName ? ` by ${q.importMeta.editedByName}` : ""}{q.importMeta?.editedAt ? ` · ${new Date(q.importMeta.editedAt).toLocaleString()}` : ""} · <button type="button" className="cursor-pointer font-semibold text-primary-700 hover:underline" onClick={() => setShowOriginal((v) => !v)}>{showOriginal ? "Show edited" : "Show original"}</button></p>
@@ -148,6 +164,12 @@ export function QuestionTextEditor({ q, keyRow, onLabel, onHtml, onAnswer, highl
   const answerable = !content && q.type !== "declaration" && !(q.children?.length);
   return (
     <div className="space-y-3 border-t border-primary-100 bg-primary-50/40 px-3 pb-3 pt-2 sm:px-4" data-testid="row-editor">
+      {q.importMeta?.page || q.importMeta?.responseAreas?.length ? (
+        <p className="text-xs text-foreground-600" data-testid="row-details">
+          {q.importMeta?.page ? <>Page {q.importMeta.page} of the workbook</> : null}
+          {(q.importMeta?.responseAreas ?? []).map((a, i) => <span key={i}>{q.importMeta?.page || i ? " · " : ""}Answered with {a.kind === "calc" ? "a calculation box" : "an upload"}: <span className="text-foreground-800">{a.text.length > 90 ? `${a.text.slice(0, 89)}…` : a.text}</span>{a.page ? ` (p.${a.page})` : ""}</span>)}
+        </p>
+      ) : null}
       {content ? (
         readOnly || !onHtml ? <div className="asm-content rounded-lg border border-background-200 bg-white px-3 py-2 text-sm" dangerouslySetInnerHTML={{ __html: String(q.config?.html ?? "") }} />
           : <RichBlockEditor value={String(q.config?.html ?? "")} onChange={onHtml} label="Instruction" />

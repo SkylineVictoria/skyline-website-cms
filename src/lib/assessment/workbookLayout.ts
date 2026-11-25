@@ -44,15 +44,30 @@ export function workbookNumbering(definition: Definition): Map<string, QuestionN
   const map = new Map<string, QuestionNumber>();
   let seq = 0;
   definition.tasks.forEach((task, ti) => {
+    // ASM-BUILDER-COMPACT: in an AI-read task an unprinted question takes the next number of the task that is not printed anywhere in
+    // it (never "1.1" beside a printed Q1.1, never "2.1" again in every section); a parser-read task keeps per-section numbering
+    const printed = new Set(task.sections.flatMap((s) => s.questions).filter((q) => q.importMeta?.via === "ai" && q.importMeta.number).map((q) => String(q.importMeta?.number)));
+    const aiTask = task.sections.some((s) => s.questions.some((q) => q.importMeta?.via === "ai"));
+    let taskN = 0;
+    // the same printed number on several boxes / tables of one question (Q2.1.4 with two tables): 2.1.4, 2.1.4b, 2.1.4c
+    const repeats = new Map<string, number>();
+    const unique = (n: string) => { const c = repeats.get(n) ?? 0; repeats.set(n, c + 1); return c ? `${n}${String.fromCharCode(97 + c)}` : n; };
     for (const s of task.sections) {
       let n = 0;
       const prefix = s.title.match(/^(\d+\.\d+)\b/)?.[1] ?? String(ti + 1);
+      const next = () => {
+        if (!aiTask) return `${prefix}.${++n}`;
+        let c: string;
+        do { c = `${ti + 1}.${++taskN}`; } while (printed.has(c));
+        return c;
+      };
       for (const q of s.questions) {
         if (CONTENT_TYPES.has(q.type)) continue;
         const markable = isMarkable(q);
         // ASM-AI-IMPORT: a question read by the AI keeps the number printed in the workbook
-        const computed = q.type === "declaration" ? "Student declaration" : q.type === "adjustment_record" ? "Trainer / assessor record" : `${prefix}.${++n}`;
-        const number = q.importMeta?.via === "ai" && q.importMeta.number && !["declaration", "adjustment_record"].includes(q.type) ? q.importMeta.number : computed;
+        const hasPrinted = q.importMeta?.via === "ai" && q.importMeta.number && !["declaration", "adjustment_record"].includes(q.type);
+        const computed = q.type === "declaration" ? "Student declaration" : q.type === "adjustment_record" ? "Trainer / assessor record" : hasPrinted ? "" : next();
+        const number = q.importMeta?.via === "ai" && q.importMeta.number && !["declaration", "adjustment_record"].includes(q.type) ? unique(String(q.importMeta.number)) : computed;
         map.set(q.id, { seq: markable ? ++seq : null, number, markable });
       }
     }

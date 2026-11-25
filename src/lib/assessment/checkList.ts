@@ -21,6 +21,8 @@ export const plainText = (html: string) => html.replace(/<[^>]*>/g, " ").replace
 /** The number a question shows: the printed one (AI import), else the workbook numbering, a part letter after its parent's. */
 export function numberOf(f: FlatQuestion, numbers: Map<string, { number: string }>): string {
   const q = f.question;
+  // a top-level question shows the workbook numbering (the printed number, a repeat suffixed: 2.1.4b); a part its own number
+  if (!f.parent && numbers.get(q.id)?.number) return numbers.get(q.id)?.number ?? "";
   if (q.importMeta?.number) return q.importMeta.number;
   if (!f.parent) return numbers.get(q.id)?.number ?? "";
   return `${numbers.get(f.parent.id)?.number ?? ""}${String.fromCharCode(97 + Math.max(0, (f.parent.children ?? []).indexOf(q)))}`;
@@ -28,6 +30,38 @@ export function numberOf(f: FlatQuestion, numbers: Map<string, { number: string 
 
 /** A question's (or an instruction block's) line text. */
 export const lineText = (q: Question) => (q.type === "instruction" || q.type === "content" ? plainText(String(q.config?.html ?? "")) || "Instruction" : q.label);
+
+/* ------------------------------------------------------------------ ASM-BUILDER-COMPACT: what one compact row shows */
+
+/** The row's short title: the first sentence of the question (or block), cut at `max` characters. */
+export function rowTitle(q: Question, max = 90): string {
+  const text = lineText(q).replace(/\s+/g, " ").trim() || (String(q.config?.html ?? "").includes("<img") ? "Picture" : "");
+  const first = /^(.+?[.?!:])(?:\s|$)/.exec(text)?.[1] ?? text;
+  return first.length > max ? `${first.slice(0, max - 1).trimEnd()}…` : first;
+}
+
+/** The small chips of a row: how it is answered (table, upload, calc) and who / when (assessor, conditional). Never "required". */
+export function rowChips(q: Question): string[] {
+  const out: string[] = [];
+  const areas = q.importMeta?.responseAreas ?? [];
+  if (q.type === "table_grid") out.push("table");
+  if (q.type === "file_upload" || q.config?.allowAttachment === true || areas.some((a) => a.kind === "upload")) out.push("upload");
+  if (areas.some((a) => a.kind === "calc")) out.push("calc");
+  if (q.assessorOnly) out.push("assessor");
+  if (q.showIf) out.push("conditional");
+  return [...new Set(out)];
+}
+
+/** Required is the default: only an answerable question that is not required shows a badge ("optional"). */
+export const isOptional = (q: Question) => isAnswerable(q) && q.type !== "declaration" && q.required === false;
+
+/** "6 parts" / "16 rows" for a question with sub-parts or table rows (shown collapsed), else null. */
+export function partsSummary(q: Question): string | null {
+  const kids = q.children?.length ?? 0;
+  if (kids) return `${kids} part${kids === 1 ? "" : "s"}`;
+  const rows = Array.isArray(q.config?.rows) ? (q.config?.rows as unknown[]).length : 0;
+  return q.type === "table_grid" && rows ? `${rows} row${rows === 1 ? "" : "s"}` : null;
+}
 
 /** The flags of an imported item (older imports only have a low confidence with a note). */
 export const flagsOf = (q: Question): string[] => q.importMeta?.flags ?? (q.importMeta?.confidence === "low" ? [q.importMeta.note || "Check this"] : []);

@@ -613,6 +613,16 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await second.getByRole("button").first().click();
     await editor.getByRole("button", { name: "Leave without answer" }).click();
     await expect(second).toContainText("No answer");
+    // ASM-IMPORT-CLASSIFY: two questions with the same number are a blocking row: Publish waits until each is looked at
+    const blocking = list.locator("li").filter({ has: page.getByTestId("blocking-tag") });
+    if (await blocking.count()) {
+      await expect(wizard.getByTestId("blocking-note")).toBeVisible();
+      for (let guard = 0; guard < 10 && await blocking.count(); guard++) {
+        await blocking.first().getByRole("button").first().click();
+        await editor.getByRole("button", { name: "Looks good" }).click();
+      }
+      await expect(wizard.getByTestId("blocking-note")).toHaveCount(0);
+    }
     // Browse all questions: compact rows, edited inline, Edited badge and Show original
     await wizard.getByRole("button", { name: /Browse all \d+ questions/ }).click();
     const browse = wizard.getByTestId("browse-list");
@@ -692,10 +702,11 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await expect.poll(() => sql(`select definition->'source'->>'version' from public.asm_versions where assessment_id = '${aiAssessment}' and status = 'draft'`), { timeout: 15_000 }).toBe("1.2");
     await page.reload();
     await expect(page.getByText(/v2 draft/)).toBeVisible({ timeout: 30_000 });
-    const editedId = await builder.locator("[data-question-line]").filter({ hasText: "(version 2)" }).first().getAttribute("data-question-line");
+    const editedId = await builder.locator("[data-question-line]").filter({ has: page.locator("span[title*=\"(version 2)\"]") }).first().getAttribute("data-question-line");
     const edited = builder.locator(`[data-question-line="${editedId}"]`);
     await expect(edited).toContainText("Edited");
     await edited.getByRole("button", { name: "Show original" }).click();
+    await expect(edited.locator("span[title*=\"(version 2)\"]")).toHaveCount(1); // compact row: the first sentence; the full text in its title
     await expect(edited).not.toContainText("(version 2)");
     await shot("bd-2-edited-show-original", edited);
     await edited.getByRole("button", { name: "Show edited" }).click();
@@ -777,6 +788,103 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     let text = ""; for (let p = 1; p <= doc.numPages; p += 1) text += ((await (await doc.getPage(p)).getTextContent()).items as { str: string }[]).map((x) => x.str).join(" ") + "\n";
     expect(text).toMatch(/Version Number: 1\.2/);
     expect(text.replace(/\s+/g, " ")).toContain("(version 2)");
+  });
+
+  test("ASM-BUILDER-COMPACT: one line per question, ⓘ task instructions, collapsed parts, hover-only actions, 'optional' only", async ({ page }) => {
+    test.setTimeout(120_000);
+    test.skip(!aiAssessment, "needs the AI-imported assessment of the test before");
+    await signInAsAdmin(page, admin.email);
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await page.goto(`/admin/assessments/${aiAssessment}`);
+    const builder = page.getByTestId("builder");
+    await expect(builder.getByTestId("builder-task").first()).toBeVisible({ timeout: 30_000 });
+    // the task header: title, question count; the instructions behind ⓘ, collapsed until clicked
+    const task = builder.getByTestId("builder-task").first();
+    await expect(task.getByTestId("task-count")).toContainText(/\d+ questions?/);
+    await expect(task.getByTestId("task-info-text")).toHaveCount(0);
+    if (await task.getByTestId("task-info").count()) {
+      await task.getByTestId("task-info").click();
+      await expect(task.getByTestId("task-info-text")).toBeVisible();
+      await task.getByTestId("task-info").click();
+      await expect(task.getByTestId("task-info-text")).toHaveCount(0);
+    }
+    await expect(task.getByTestId("task-add")).toBeVisible();
+    // no "required" badge anywhere; "optional" only where a question is not required
+    await expect(builder.getByTestId("row-chip").filter({ hasText: /^required$/ })).toHaveCount(0);
+    const optionalRows = await builder.getByTestId("row-optional").count();
+    const notRequired = Number(sql(`select count(*) from public.asm_versions v, jsonb_path_query(v.definition, '$.tasks[*].sections[*].questions[*] ? (@.required == false && @.type != "instruction" && @.type != "content" && @.type != "declaration")') q where v.assessment_id = '${aiAssessment}' and v.version_no = (select max(version_no) from public.asm_versions where assessment_id = '${aiAssessment}')`));
+    expect(optionalRows).toBe(notRequired);
+    // a question with parts: "n parts ▸", collapsed until clicked
+    const partsToggle = builder.getByTestId("row-parts").first();
+    if (await partsToggle.count()) {
+      const line = builder.locator("li").filter({ has: partsToggle }).first();
+      await expect(partsToggle).toContainText(/\d+ (parts?|rows?)/);
+      await expect(line.getByTestId("row-children").or(line.getByTestId("row-table-rows"))).toHaveCount(0);
+      await partsToggle.click();
+      await expect(line.getByTestId("row-children").or(line.getByTestId("row-table-rows")).first()).toBeVisible();
+    }
+    // the page and the actions show on hover and on keyboard focus only
+    const row = builder.getByTestId("builder-rows").first().locator("[data-question-line]").first();
+    const hover = row.getByTestId("row-hover");
+    await page.mouse.move(0, 0);
+    await expect.poll(() => hover.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
+    await row.hover();
+    await expect.poll(() => hover.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+    await page.mouse.move(0, 0);
+    await hover.locator("button:not([disabled])").first().focus(); // the first row's "Move up" is disabled
+    await expect.poll(() => hover.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+    // one line per question: the full text only when the row is opened
+    const height = await row.evaluate((el) => (el.firstElementChild as HTMLElement).getBoundingClientRect().height);
+    expect(height).toBeLessThan(44);
+  });
+
+  test("ASM-UNIT-CHECK: a workbook for another unit blocks Publish until switched or kept with a reason; the decision is audited", async ({ page }) => {
+    test.setTimeout(300_000);
+    const cpc = sql(`select id from public.cms_courses where code = 'CPC30620'`) || `course-e2e-cpc30620-${RUN}`;
+    sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${cpc}', 'e2e-cpc30620-${RUN}', 'CPC30620', 'Certificate III in Painting and Decorating', 'Published') on conflict (id) do nothing`);
+    const pd = sql(`select id from public.cms_course_units where course_id = '${cpc}' and code = 'CPCCPD2012'`) || `unit-e2e-cpccpd2012-${RUN}`;
+    sql(`insert into public.cms_course_units(id, course_id, code, name) values ('${pd}', '${cpc}', 'CPCCPD2012', 'Use painting and decorating tools') on conflict (id) do nothing`);
+    await signInAsAdmin(page, admin.email);
+    await page.goto("/admin/lms/assessments");
+    await page.getByRole("button", { name: /CPC30620/ }).first().click();
+    await page.getByRole("button", { name: /CPCCPD2012/ }).first().click();
+    await page.getByRole("button", { name: "+ Add assessment" }).click();
+    const wizard = page.getByRole("dialog", { name: "Add assessment" });
+    await wizard.getByLabel(/Read without AI/).check();
+    await wizard.getByTestId("drop-workbook").locator("input[type=file]").setInputFiles(workbook);
+    await expect(wizard.getByTestId("file-workbook")).toContainText("Read", { timeout: 120_000 });
+    const askHeader = wizard.getByTestId("workbook-header-picker");
+    if (await askHeader.count()) await askHeader.getByRole("button", { name: "Use current Skyline logo" }).click();
+    await expect(wizard.getByTestId("go-check")).toBeEnabled({ timeout: 20_000 });
+    await wizard.getByTestId("go-check").click();
+    // on the unit step the admin files it under CPCCPD2012 anyway: the mismatch is shown and blocks
+    await choose(wizard.getByLabel("Qualification"), { value: cpc });
+    await choose(wizard.getByLabel("Unit"), { value: pd });
+    const card = wizard.getByTestId("unit-mismatch");
+    await expect(card).toContainText("This workbook looks like RIICWD525E but you selected CPCCPD2012");
+    await expect(card.getByTestId("unit-switch")).toContainText("Switch to RIICWD525E");
+    await reviewShot(page, "unit-1-mismatch", card);
+    await wizard.getByRole("button", { name: "Continue →" }).click();
+    await expect(wizard.getByTestId("publish")).toBeDisabled();
+    // "Keep" needs a reason
+    await card.getByTestId("unit-keep").click();
+    await card.getByTestId("unit-keep-confirm").click();
+    await expect(card.getByTestId("unit-keep-error")).toContainText("Say why");
+    await expect(wizard.getByTestId("publish")).toBeDisabled();
+    await card.getByTestId("unit-keep-reason").fill("Delivered as part of the painting course this term (lab check)");
+    await card.getByTestId("unit-keep-confirm").click();
+    await expect(wizard.getByTestId("unit-decided")).toContainText("Kept CPCCPD2012");
+    await expect(wizard.getByTestId("publish")).toBeEnabled();
+    await reviewShot(page, "unit-2-kept");
+    await wizard.getByTestId("publish").click();
+    await page.getByRole("button", { name: "Publish", exact: true }).last().click();
+    await expect(wizard.getByTestId("published")).toBeVisible({ timeout: 30_000 });
+    await wizard.getByRole("button", { name: /Open the assessment/ }).click();
+    await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/, { timeout: 30_000 });
+    const id = page.url().match(/assessments\/([0-9a-f-]{36})/)?.[1] ?? "";
+    expect(sql(`select detail->>'decision' || '|' || (detail->>'foundCode') || '|' || (detail->>'selectedCode') || '|' || (actor is not null)::text from public.asm_audit_log where target_id = '${id}' and action = 'import_unit_mismatch'`))
+      .toBe("kept|RIICWD525E|CPCCPD2012|true");
+    expect(sql(`select detail->>'reason' from public.asm_audit_log where target_id = '${id}' and action = 'import_unit_mismatch'`)).toContain("painting course");
   });
 
   test("ASM-AI-IMPORT: forced fallback (Read without AI) uses the standard reader, says so, and is published and assigned", async ({ page }) => {

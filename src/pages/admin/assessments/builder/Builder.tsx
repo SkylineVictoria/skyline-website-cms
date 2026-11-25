@@ -14,9 +14,9 @@ import { Empty } from "@/pages/admin/components/rto/overlay";
 import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
 import RichBlockEditor from "@/components/assessment/RichBlockEditor";
 import { AutoResolvedList, BTN_PRIMARY, BTN_SECONDARY, FIELD, HOVER_ACTIONS, NeedsALook, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
-import { asHtml, autoResolvedRows, checkRows, markReviewed, numberOf, reopenAutoResolved, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
+import { asHtml, autoResolvedRows, checkRows, isOptional, markReviewed, numberOf, partsSummary, reopenAutoResolved, rowChips, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
 import { cloneQuestion, cloneSection, cloneTask, earlierQuestionIds, flattenQuestions, moveItem, newSection, newTask, removeQuestion, updateQuestion } from "@/lib/assessment/definition";
-import { GROUP_LABEL, newQuestion, QUESTION_TYPES, questionType, setQuestionDefaults, withSchema, type TypeGroup } from "@/lib/assessment/registry";
+import { GROUP_LABEL, isAnswerable, newQuestion, QUESTION_TYPES, questionType, setQuestionDefaults, withSchema, type TypeGroup } from "@/lib/assessment/registry";
 import { workbookNumbering } from "@/lib/assessment/workbookLayout";
 import { onRules, ruleNumber, ruleObject } from "@/lib/businessRules";
 import type { Definition, Question, QuestionKey, Section, Task } from "@/lib/assessment/types";
@@ -54,6 +54,8 @@ export interface BuilderProps {
   declarationText?: string;
   /** Who is editing (kept with an edited question: "Edited by … · Show original"). */
   editor?: { id: string | null; name: string | null };
+  /** ASM-BUILDER-COMPACT: inside the Add assessment wizard (Check step): the rows only, without Needs a look / Auto-resolved / the toolbar. */
+  embedded?: boolean;
 }
 
 type Target = { taskId: string; sectionId: string; parentId?: string };
@@ -63,14 +65,10 @@ function IconButton({ icon, label, onClick }: { icon: string; label: string; onC
   return <button type="button" className={ICON_BTN} aria-label={label} title={label} onClick={onClick}><i className={icon} aria-hidden="true" /></button>;
 }
 
-/** The tags of a row: who completes it, whether it is required, whether it takes files. */
+/** The chips of a row (ASM-BUILDER-COMPACT): how it is answered (table, upload, calc), assessor-only, conditional. Never "required". */
 function tagsOf(q: Question): string[] {
-  const type = questionType(q.type);
-  const out: string[] = [];
-  if (q.assessorOnly || type?.assessorOnly) out.push("assessor");
-  if (q.required) out.push("required");
-  if (q.type === "file_upload" || q.config?.allowAttachment === true) out.push("upload");
-  if (q.showIf) out.push("conditional");
+  const out = rowChips(q);
+  if (questionType(q.type)?.assessorOnly && !out.includes("assessor")) out.push("assessor");
   return out;
 }
 
@@ -115,7 +113,7 @@ function HeadLine({ open, onClick, children, actions, className = "" }: { open: 
   );
 }
 
-export default function Builder({ definition, keys, onChange, readOnly, declarationText, editor }: BuilderProps) {
+export default function Builder({ definition, keys, onChange, readOnly, declarationText, editor, embedded }: BuilderProps) {
   const who = editor ?? { id: null, name: null };
   const [open, setOpen] = useState<string | null>(null);
   const [more, setMore] = useState<Record<string, boolean>>({});
@@ -124,6 +122,9 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
   const [previewResponses, setPreviewResponses] = useState<Record<string, unknown>>({});
   const [palette, setPalette] = useState<Target | null>(null);
   const [bankPick, setBankPick] = useState<Target | null>(null);
+  /** Questions whose sub-parts / table rows are shown; tasks whose instructions (ⓘ) are shown. Both collapsed by default. */
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [info, setInfo] = useState<Record<string, boolean>>({});
   const keyBy = useMemo(() => new Map(keys.map((k) => [k.questionId, k])), [keys]);
   const flat = useMemo(() => flattenQuestions(definition), [definition]);
   const numbers = useMemo(() => workbookNumbering(definition), [definition]);
@@ -228,9 +229,14 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
     const f = flatBy.get(q.id);
     const isOpen = open === q.id;
     const kids = questionType(q.type)?.hasChildren;
+    // sub-parts and table rows are collapsed ("6 parts ▸") until the admin opens them
+    const summary = partsSummary(q);
+    const partsOpen = Boolean(expanded[q.id]);
+    const tableRows = q.type === "table_grid" && Array.isArray(q.config?.rows) ? (q.config?.rows as { id: string; label: string }[]) : [];
     return (
       <li key={q.id}>
-        <QuestionLine q={q} number={f ? numberOf(f, numbers) : ""} open={isOpen} depth={depth} tags={tagsOf(q)} answered={Boolean(keyBy.get(q.id)?.modelAnswer)} onClick={() => setOpen(isOpen ? null : q.id)}
+        <QuestionLine q={q} number={f ? numberOf(f, numbers) : ""} open={isOpen} depth={depth} tags={tagsOf(q)} optional={isOptional(q)} answered={Boolean(keyBy.get(q.id)?.modelAnswer)} onClick={() => setOpen(isOpen ? null : q.id)}
+          parts={summary ? { label: summary, open: partsOpen, onToggle: () => setExpanded((m) => ({ ...m, [q.id]: !partsOpen })) } : null}
           actions={readOnly ? undefined : <>
             <UpDown index={i} length={list.length} onMove={(a, b) => moveIn(at, a, b)} />
             <IconButton icon="ri-file-copy-line" label="Duplicate" onClick={() => duplicateIn(at, q)} />
@@ -238,9 +244,14 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
           </>} />
         {isOpen ? rowEditor(q, <>
           <button type="button" className={BTN_SECONDARY} onClick={() => setOpen(null)}>Done</button>
-          {kids && !readOnly ? <button type="button" className={BTN_SECONDARY} onClick={() => setPalette({ ...at, parentId: q.id })}><i className="ri-add-line" aria-hidden="true" />Add sub-question</button> : null}
+          {kids && !readOnly ? <button type="button" className={BTN_SECONDARY} onClick={() => { setExpanded((m) => ({ ...m, [q.id]: true })); setPalette({ ...at, parentId: q.id }); }}><i className="ri-add-line" aria-hidden="true" />Add sub-question</button> : null}
         </>, true) : null}
-        {q.children?.length ? <ul className="divide-y divide-background-100">{questionRows({ ...at, parentId: q.id }, q.children, depth + 1)}</ul> : null}
+        {partsOpen && q.children?.length ? <ul className="divide-y divide-background-100" data-testid="row-children">{questionRows({ ...at, parentId: q.id }, q.children, depth + 1)}</ul> : null}
+        {partsOpen && tableRows.length ? (
+          <ul className="pb-1.5 pl-[5.5rem] pr-4 text-xs text-foreground-700" data-testid="row-table-rows">
+            {tableRows.map((r) => <li key={r.id} className="truncate py-0.5"><i className="ri-subtract-line mr-1 text-foreground-400" aria-hidden="true" />{r.label}</li>)}
+          </ul>
+        ) : null}
       </li>
     );
   });
@@ -248,7 +259,7 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
   const instructionsOpen = open === "instructions";
   return (
     <div className="space-y-4" data-testid="builder">
-      {rows.length ? (
+      {embedded ? null : rows.length ? (
         <NeedsALook rows={rows} done={done} open={open?.startsWith("look:") ? open.slice(5) : null} onToggle={(id) => setOpen(id ? `look:${id}` : null)}
           renderEditor={(r) => {
             const q = flatBy.get(rowQuestionId(r.id))?.question;
@@ -259,9 +270,9 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
             </>, false);
           }} />
       ) : null}
-      <AutoResolvedList rows={autoRows} readOnly={readOnly} onReopen={(id) => { editQ(id, reopenAutoResolved); setOpen(`look:${id}`); }} />
+      {embedded ? null : <AutoResolvedList rows={autoRows} readOnly={readOnly} onReopen={(id) => { editQ(id, reopenAutoResolved); setOpen(`look:${id}`); }} />}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className={`flex flex-wrap items-center justify-between gap-2 ${embedded ? "hidden" : ""}`}>
         <p className="text-sm text-foreground-600">{definition.tasks.length} task{definition.tasks.length === 1 ? "" : "s"} · {flat.filter((f) => !questionType(f.question.type)?.content).length} questions</p>
         <div className="flex flex-wrap gap-2">
           <button type="button" className={BTN_SECONDARY} onClick={() => setPreview(true)}><i className="ri-eye-line" aria-hidden="true" />Preview as the student sees it</button>
@@ -286,17 +297,33 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
 
       {definition.tasks.map((t, ti) => {
         const taskOpen = open === `task:${t.id}`;
+        const count = t.sections.flatMap((s) => s.questions).filter((q) => isAnswerable(q) && q.importMeta?.itemType !== "section_heading").length;
+        const hasInfo = Boolean(t.instructions && t.instructions.replace(/<[^>]*>/g, "").trim());
+        const infoOpen = Boolean(info[t.id]);
+        const lastSection = t.sections[t.sections.length - 1];
         return (
           <section key={t.id} className="overflow-hidden rounded-xl border border-background-200 bg-white" data-testid="builder-task">
-            <HeadLine open={taskOpen} onClick={() => setOpen(taskOpen ? null : `task:${t.id}`)} className="border-b border-background-200 bg-background-50 px-3 py-2.5 sm:px-4"
-              actions={readOnly ? undefined : <div className={HOVER_ACTIONS}>
-                <UpDown index={ti} length={definition.tasks.length} onMove={(a, b) => setDef({ ...definition, tasks: moveItem(definition.tasks, a, b) })} />
-                <IconButton icon="ri-file-copy-line" label="Duplicate task" onClick={() => setDef({ ...definition, tasks: [...definition.tasks.slice(0, ti + 1), cloneTask(t), ...definition.tasks.slice(ti + 1)] })} />
-                <IconButton icon="ri-delete-bin-line" label="Delete task" onClick={() => window.confirm(`Delete task ${ti + 1} "${t.title}" and its questions?`) && setDef({ ...definition, tasks: definition.tasks.filter((x) => x.id !== t.id) })} />
-              </div>}>
+            <HeadLine open={taskOpen} onClick={() => setOpen(taskOpen ? null : `task:${t.id}`)} className="border-b border-background-200 bg-background-50 px-3 py-2 sm:px-4"
+              actions={<>
+                {hasInfo ? <button type="button" className={`${ICON_BTN} ${infoOpen ? "text-primary-700" : ""}`} aria-expanded={infoOpen} aria-label={infoOpen ? "Hide the task instructions" : "Show the task instructions"} title="Task instructions" onClick={() => setInfo((m) => ({ ...m, [t.id]: !infoOpen }))} data-testid="task-info"><i className="ri-information-line" aria-hidden="true" /></button> : null}
+                {readOnly ? null : <>
+                  <div className={HOVER_ACTIONS}>
+                    <UpDown index={ti} length={definition.tasks.length} onMove={(a, b) => setDef({ ...definition, tasks: moveItem(definition.tasks, a, b) })} />
+                    <IconButton icon="ri-file-copy-line" label="Duplicate task" onClick={() => setDef({ ...definition, tasks: [...definition.tasks.slice(0, ti + 1), cloneTask(t), ...definition.tasks.slice(ti + 1)] })} />
+                    <IconButton icon="ri-delete-bin-line" label="Delete task" onClick={() => window.confirm(`Delete task ${ti + 1} "${t.title}" and its questions?`) && setDef({ ...definition, tasks: definition.tasks.filter((x) => x.id !== t.id) })} />
+                  </div>
+                  <Menu label="Add" testId="task-add" items={[
+                    ...(lastSection ? [{ label: "Add question", icon: "ri-question-line", onClick: () => setPalette({ taskId: t.id, sectionId: lastSection.id }) },
+                      { label: "From bank", icon: "ri-archive-line", onClick: () => setBankPick({ taskId: t.id, sectionId: lastSection.id }) }] : []),
+                    { label: "Add section", icon: "ri-layout-row-line", onClick: () => addSectionAfter(t.id, lastSection?.id) },
+                  ]} />
+                </>}
+              </>}>
               <span className="font-heading text-sm font-bold text-foreground-950">Task {ti + 1}</span>
               <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground-800">{t.title || "Untitled"}</span>
+              <span className="shrink-0 text-xs text-foreground-500" data-testid="task-count">{count} question{count === 1 ? "" : "s"}</span>
             </HeadLine>
+            {infoOpen && hasInfo ? <div className="asm-content border-b border-background-200 bg-white px-4 py-2 text-sm text-foreground-700" data-testid="task-info-text" dangerouslySetInnerHTML={{ __html: asHtml(t.instructions ?? "") }} /> : null}
             {taskOpen ? (
               <div className="space-y-3 border-b border-primary-100 bg-primary-50/40 px-3 pb-3 pt-2 sm:px-4">
                 <label className="block"><span className="text-2xs font-bold uppercase tracking-wide text-foreground-600">Task title</span>
@@ -312,22 +339,19 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
               const secOpen = open === `section:${s.id}`;
               return (
                 <div key={s.id} className={si ? "border-t border-background-200" : ""} data-testid="builder-section">
-                  <HeadLine open={secOpen} onClick={() => setOpen(secOpen ? null : `section:${s.id}`)} className="px-3 pb-1 pt-2.5 sm:px-4"
-                    actions={readOnly ? undefined : <>
-                      <div className={HOVER_ACTIONS}>
-                        <UpDown index={si} length={t.sections.length} onMove={(a, b) => patchTask(t.id, { sections: moveItem(t.sections, a, b) })} />
-                        <IconButton icon="ri-file-copy-line" label="Duplicate section" onClick={() => patchTask(t.id, { sections: [...t.sections.slice(0, si + 1), cloneSection(s), ...t.sections.slice(si + 1)] })} />
-                        <IconButton icon="ri-delete-bin-line" label="Delete section" onClick={() => window.confirm(`Delete section "${s.title}" and its questions?`) && patchTask(t.id, { sections: t.sections.filter((x) => x.id !== s.id) })} />
-                      </div>
+                  <HeadLine open={secOpen} onClick={() => setOpen(secOpen ? null : `section:${s.id}`)} className="px-3 pb-0.5 pt-2 sm:px-4"
+                    actions={readOnly ? undefined : <div className={HOVER_ACTIONS}>
+                      <UpDown index={si} length={t.sections.length} onMove={(a, b) => patchTask(t.id, { sections: moveItem(t.sections, a, b) })} />
+                      <IconButton icon="ri-file-copy-line" label="Duplicate section" onClick={() => patchTask(t.id, { sections: [...t.sections.slice(0, si + 1), cloneSection(s), ...t.sections.slice(si + 1)] })} />
+                      <IconButton icon="ri-delete-bin-line" label="Delete section" onClick={() => window.confirm(`Delete section "${s.title}" and its questions?`) && patchTask(t.id, { sections: t.sections.filter((x) => x.id !== s.id) })} />
                       <Menu label="Add" testId="section-add" items={[
                         { label: "Add question", icon: "ri-question-line", onClick: () => setPalette(at) },
                         { label: "From bank", icon: "ri-archive-line", onClick: () => setBankPick(at) },
                         { label: "Add section", icon: "ri-layout-row-line", onClick: () => addSectionAfter(t.id, s.id) },
                       ]} />
-                    </>}>
+                    </div>}>
                     <span className="truncate text-2xs font-bold uppercase tracking-wide text-foreground-600">{s.title || "Untitled section"}</span>
                     {s.showIf ? <i className="ri-git-branch-line text-foreground-400" title="Shown only when its condition is met" aria-label="Conditional" /> : null}
-                    <span className="text-2xs text-foreground-400">{s.questions.length}</span>
                   </HeadLine>
                   {secOpen ? (
                     <div className="mx-3 mb-2 space-y-3 rounded-lg border border-primary-100 bg-primary-50/40 p-3 sm:mx-4">

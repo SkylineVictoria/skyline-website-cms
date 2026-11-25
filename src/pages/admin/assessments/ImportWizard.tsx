@@ -14,6 +14,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import Builder from "./builder/Builder";
 import { AutoResolvedList, BTN_PRIMARY, BTN_SECONDARY, NeedsALook, PdfPreviewDialog, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
 import { autoResolvedNotes, autoResolvedRows, checkRows, editCount, isSectionHeading, markReviewed, numberOf, plainText, reopenAutoResolved, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
 import SearchableSelect from "@/components/ui/SearchableSelect";
@@ -27,7 +28,7 @@ import { blankWorkbookPdf } from "@/lib/assessment/workbookExport";
 import { workbookNumbering } from "@/lib/assessment/workbookLayout";
 import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetterhead";
 import WorkbookHeaderPicker from "@/components/assessment/WorkbookHeaderPicker";
-import { autoTitle, decideFiling, filingCourseId, needsUnitStep, type FilingDecision } from "@/lib/assessment/workbookFiling";
+import { autoTitle, checkUnit, decideFiling, filingCourseId, needsUnitStep, unitDecisionError, type FilingDecision, type UnitDecision } from "@/lib/assessment/workbookFiling";
 import {
   applyGuide, chooseImportPath, definitionFromAi, guideAnswersFromAi, guideAnswersFromParser, mergeParserExtras, prepare, startAiImport, watchImport,
   type GuideApplied, type ImportStatus, type Prepared,
@@ -146,6 +147,11 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   const [units, setUnits] = useState<RtoUnit[]>(pageUnits);
   const [unitsLoading, setUnitsLoading] = useState(false);
   const [decision, setDecision] = useState<FilingDecision | null>(null);
+  // ASM-UNIT-CHECK: the unit the workbook names against the selected unit; a mismatch blocks until switched or kept with a reason
+  const [unitDecision, setUnitDecision] = useState<UnitDecision | null>(null);
+  const [keepOpen, setKeepOpen] = useState(false);
+  const [keepReason, setKeepReason] = useState("");
+  const [keepError, setKeepError] = useState("");
   // check
   const [open, setOpen] = useState<string | null>(null);
   const [done, setDone] = useState<Record<string, DoneHow>>({});
@@ -227,6 +233,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
     const list = await loadUnits(cid);
     const dec = decideFiling({ workbook, page, courses: cs, unitsOfCourse: list.filter((u) => u.id).map((u) => ({ id: u.id as string, code: u.code })) });
     setDecision(dec); setCourseId(dec.courseId); setUnitId(dec.unitId);
+    setUnitDecision(null); setKeepOpen(false); setKeepReason(""); setKeepError("");
     if (dec.courseId && dec.courseId !== cid) await loadUnits(dec.courseId);
     setTitle(autoTitle(d.path === "ai" ? d.status?.result?.title : d.parser?.title, list.find((u) => u.id === dec.unitId) ?? null));
   };
@@ -292,6 +299,58 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   const importChecks = rows.length - answersMissing;
   /** Two questions with the same number: Publish waits until they are resolved. */
   const blockingLeft = rows.filter((r) => r.blocking && !done[r.id]).length;
+
+  /* ---------------- ASM-UNIT-CHECK: the workbook's unit vs the selected unit ---------------- */
+  const foundUnit = { code: definition?.source?.unit?.code ?? null, name: definition?.source?.unit?.name ?? null };
+  const unitChk = checkUnit(foundUnit, { code: chosenUnit?.code ?? null, name: chosenUnit?.name ?? null });
+  // a decision counts for the pair it was made for (choosing another unit afterwards asks again)
+  const decisionHolds = Boolean(unitDecision && (unitDecision.kind === "switched" ? unitChk.status !== "mismatch"
+    : unitDecision.selectedCode === (chosenUnit?.code ?? null) && unitDecision.foundCode === foundUnit.code));
+  const unitBlocked = unitChk.status === "mismatch" && !decisionHolds;
+  const sameCode = (a: string | null | undefined, b: string | null | undefined) => Boolean(a && b && a.trim().toUpperCase() === b.trim().toUpperCase());
+  const switchTo = foundUnit.code ? (units.find((u) => u.id && sameCode(u.code, foundUnit.code)) ?? null) : null;
+  const switchElsewhere = !switchTo && decision?.source === "workbook" && decision.unitId ? decision : null;
+  const doSwitch = async () => {
+    const before = { code: chosenUnit?.code ?? null, name: chosenUnit?.name ?? null };
+    if (switchTo?.id) setUnitId(switchTo.id);
+    else if (switchElsewhere) { setCourseId(switchElsewhere.courseId); await loadUnits(switchElsewhere.courseId); setUnitId(switchElsewhere.unitId); }
+    else return;
+    setUnitDecision({ kind: "switched", reason: "", foundCode: foundUnit.code, foundTitle: foundUnit.name, selectedCode: before.code, selectedTitle: before.name });
+    setKeepOpen(false);
+  };
+  const doKeep = () => {
+    const d: UnitDecision = { kind: "kept", reason: keepReason.trim(), foundCode: foundUnit.code, foundTitle: foundUnit.name, selectedCode: chosenUnit?.code ?? null, selectedTitle: chosenUnit?.name ?? null };
+    const err = unitDecisionError(d);
+    if (err) { setKeepError(err); return; }
+    setUnitDecision(d); setKeepOpen(false); setKeepError("");
+  };
+  const found = foundUnit.code ?? foundUnit.name ?? "";
+  const unitCard: ReactNode = unitBlocked ? (
+    <div role="alert" className="space-y-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900" data-testid="unit-mismatch">
+      <p className="flex items-start gap-2 font-semibold"><i className="ri-error-warning-line mt-0.5" aria-hidden="true" />{unitChk.message}.</p>
+      <p className="text-red-800">{foundUnit.name ? <>The workbook's cover and headers name <strong>{foundUnit.code} {foundUnit.name}</strong>. </> : null}Publishing waits until you choose:</p>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className={BTN_PRIMARY} disabled={!switchTo && !switchElsewhere} onClick={() => void doSwitch()} data-testid="unit-switch" title={!switchTo && !switchElsewhere ? `${found} is not a unit in Skyline yet` : undefined}>Switch to {found}</button>
+        <button type="button" className={BTN_SECONDARY} onClick={() => setKeepOpen((v) => !v)} aria-expanded={keepOpen} data-testid="unit-keep">Keep {chosenUnit?.code}</button>
+      </div>
+      {!switchTo && !switchElsewhere ? <p className="text-xs text-red-800">{found} is not a unit of this qualification in Skyline: add it under Courses first, or keep {chosenUnit?.code} with a reason.</p> : null}
+      {keepOpen ? (
+        <div className="space-y-1.5">
+          <label className="block text-xs font-semibold text-red-900">Why does this workbook belong to {chosenUnit?.code}?
+            <textarea className={`${FIELD} mt-1`} rows={2} value={keepReason} onChange={(e) => { setKeepReason(e.target.value); setKeepError(""); }} aria-label="Reason to keep the selected unit" data-testid="unit-keep-reason" />
+          </label>
+          {keepError ? <p className="text-xs font-semibold text-red-800" data-testid="unit-keep-error">{keepError}</p> : null}
+          <button type="button" className={BTN_SECONDARY} onClick={doKeep} data-testid="unit-keep-confirm">Keep {chosenUnit?.code}</button>
+        </div>
+      ) : null}
+    </div>
+  ) : unitDecision && decisionHolds ? (
+    <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="unit-decided">
+      <i className="ri-information-line mt-0.5" aria-hidden="true" />
+      <span>{unitDecision.kind === "switched" ? <>Switched to <strong>{unitDecision.foundCode}</strong> (was {unitDecision.selectedCode}).</> : <>Kept <strong>{unitDecision.selectedCode}</strong> although the workbook names {unitDecision.foundCode ?? unitDecision.foundTitle}: {unitDecision.reason}</>}
+        {" "}<button type="button" className="cursor-pointer font-semibold underline-offset-2 hover:underline" onClick={() => setUnitDecision(null)}>Change</button></span>
+    </p>
+  ) : null;
   /** Differences resolved by a rule (section heading numbers, answer box labels…): listed under "Auto-resolved" with Reopen. */
   const autoRows = useMemo(() => (definition ? autoResolvedRows(definition, numbers) : []), [definition, numbers]);
   const reopen = (id: string) => { setDefinition((d) => d && updateQuestion(d, id, reopenAutoResolved)); setOpen(id); };
@@ -358,6 +417,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
       const trace = keyList.map((k) => ({ questionId: k.questionId, originalModelAnswer: k.originalModelAnswer ?? null, originalGuidance: k.originalGuidance ?? null, source: k.source ?? "manual", edited: Boolean(k.edited) }));
       if (trace.length) { const t = await supabase.rpc("asm_import_key_trace", { p_assessment: out.id, p_traces: trace }); if (t.error) console.warn("asm_import_key_trace", t.error.message); }
       // the differences the import resolved by a rule (and any the admin reopened) go to the assessment's audit log
+      if (unitDecision && decisionHolds) { const u = await supabase.rpc("asm_import_unit_check", { p_assessment: out.id, p_decision: unitDecision }); if (u.error) console.warn("asm_import_unit_check", u.error.message); }
       const notes = autoResolvedNotes(docDefinition);
       if (notes.length) { const a = await supabase.rpc("asm_import_auto_resolved", { p_assessment: out.id, p_notes: notes }); if (a.error) console.warn("asm_import_auto_resolved", a.error.message); }
       if (publish) {
@@ -392,6 +452,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
         <FileCard kind="guide" doc={guide} onPick={(f) => void pickGuide(f)} onRemove={() => { setGuide(null); setApplied(null); setKeys((k) => k.filter((x) => x.source === "manual" || x.source === "parser")); }} />
       </div>
       {wb?.error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{wb.error}</p> : null}
+      {definition && !busy ? unitCard : null}
       {definition && headerMissing ? <WorkbookHeaderPicker head={letterhead} current={null} title="Choose the workbook header (asked once)" /> : null}
       {guide?.error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">Answer guide: {guide.error}</p> : null}
       {wb ? (
@@ -433,6 +494,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
 
   const unitView = (
     <div className="space-y-4">
+      {unitCard}
       {decision && (decision.mismatch || decision.source !== "workbook" || decision.courseMissing) ? <p role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"><i className="ri-error-warning-line mt-0.5" aria-hidden="true" />{decision.message}</p> : null}
       <p className="text-sm text-foreground-700">{manual ? "Choose the qualification and unit of the new assessment." : <>The workbook is for <strong>{definition?.source?.unit?.code ?? "a unit it does not name"}</strong> {definition?.source?.unit?.name}. Choose where to file it.</>}</p>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -472,21 +534,15 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
       {rows.length ? <NeedsALook rows={rows} done={done} open={open} onToggle={setOpen} renderEditor={(r) => editor(r.id, r.tag)} />
         : <p className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900"><i className="ri-check-double-line mr-1" aria-hidden="true" />Nothing was flagged. Browse the questions if you want to look anyway.</p>}
       {blockingLeft ? <p role="alert" className="text-sm text-red-800" data-testid="blocking-note"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{blockingLeft} numbering clash{blockingLeft === 1 ? "" : "es"} to resolve before publishing.</p> : null}
+      {unitCard}
       <AutoResolvedList rows={autoRows} onReopen={reopen} />
-      <button type="button" className="cursor-pointer text-sm font-semibold text-primary-700 hover:underline" onClick={() => setBrowse((b) => !b)} aria-expanded={browse}>{browse ? "Hide the questions" : `Browse all ${answerable.length} questions ›`}</button>
-      {browse ? (
-        <ul className="divide-y divide-background-200 overflow-hidden rounded-xl border border-background-200 bg-white" data-testid="browse-list">
-          {/* the questions, with the section headings the import found shown as section labels among them */}
-          {flat.filter((f) => isAnswerable(f.question) || isSectionHeading(f.question)).map((f) => {
-            const q = f.question; const id = `browse:${q.id}`; const isOpen = open === id;
-            return (
-              <li key={q.id}>
-                <QuestionLine q={q} number={numberOf(f, numbers)} open={isOpen} onClick={() => setOpen(isOpen ? null : id)} depth={f.parent ? 1 : 0} answered={Boolean(keyOf(q.id)?.modelAnswer)} />
-                {isOpen ? editor(q.id, null) : null}
-              </li>
-            );
-          })}
-        </ul>
+      <button type="button" className="cursor-pointer text-sm font-semibold text-primary-700 hover:underline" onClick={() => setBrowse((b) => !b)} aria-expanded={browse} data-testid="browse-toggle">{browse ? "Hide the questions" : `Browse all ${answerable.length} questions ›`}</button>
+      {/* ASM-BUILDER-COMPACT: the same compact rows as the assessment page's Builder (tasks with ⓘ, sections, collapsed parts) */}
+      {browse && definition ? (
+        <div data-testid="browse-list">
+          <Builder embedded definition={definition} keys={keys} editor={who}
+            onChange={(d, k) => { setDefinition(d); setKeys((k as TraceKey[]).map((x) => ({ ...x, edited: x.edited || (x.source !== undefined && (x.originalModelAnswer ?? "") !== (x.modelAnswer ?? "")) || (x.source === undefined && Boolean(x.modelAnswer)), source: x.source ?? "manual" }))); }} />
+        </div>
       ) : null}
     </div>
   );
@@ -509,7 +565,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
         <button type="button" className={SECONDARY} disabled={!definition || busy} onClick={() => void openPreview()} data-testid="preview-pdf">Preview PDF</button>
         {step === "upload" ? <button type="button" className={PRIMARY} disabled={!canCheck} onClick={goCheck} data-testid="go-check">{rows.length ? `Check ${rows.length} item${rows.length === 1 ? "" : "s"} →` : "Continue →"}</button> : null}
         {step === "unit" ? <button type="button" className={PRIMARY} disabled={!(courseId && unitId) || saving} onClick={() => (manual ? void createEmpty() : setStep("check"))}>{manual ? "Create and open the builder" : "Continue →"}</button> : null}
-        {step === "check" ? <button type="button" className={PRIMARY} disabled={!(courseId && unitId) || saving || blockingLeft > 0} title={blockingLeft ? "Resolve the numbering clashes first" : undefined} onClick={() => setAsk("publish")} data-testid="publish">Publish</button> : null}
+        {step === "check" ? <button type="button" className={PRIMARY} disabled={!(courseId && unitId) || saving || blockingLeft > 0 || unitBlocked} title={unitBlocked ? "Resolve the unit mismatch first" : blockingLeft ? "Resolve the numbering clashes first" : undefined} onClick={() => setAsk("publish")} data-testid="publish">Publish</button> : null}
       </div>
     </div>
   );

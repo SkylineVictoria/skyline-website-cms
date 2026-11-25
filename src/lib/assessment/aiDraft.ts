@@ -3,14 +3,19 @@
  * (pure logic, shared by the Add assessment screen and the Node tests). Text is used exactly as checked; nothing is reworded here.
  * Answers only ever become QuestionKeys (asm_question_keys), never part of the definition.
  */
-import { newId, newQuestion, withSchema, isAnswerable } from "./registry";
+import { attachmentCapable, newId, newQuestion, withSchema, isAnswerable } from "./registry";
 import { flattenQuestions } from "./definition";
 import { workbookNumbering } from "./workbookLayout";
 import type { ImportResult, WbImage } from "./workbookImport";
 import type { Definition, ImportMeta, Question, QuestionKey, Section, Task } from "./types";
 import type { CheckedDocument, CheckedItem, ImportSummary } from "../../../supabase/functions/_shared/asm-import/schema.ts";
 import { normalizeNumber } from "../../../supabase/functions/_shared/asm-import/numbering.ts";
+import { isResponseLabel } from "../../../supabase/functions/_shared/asm-import/classify.ts";
+import { sameHeading } from "../../../supabase/functions/_shared/asm-import/pipeline.ts";
 import { checkDocuments, matchGuide, type DocumentCheck, type GuideAnswer, type MatchOutcome, type MatchQuestion } from "../../../supabase/functions/_shared/asm-import/match.ts";
+
+/** Text to read (an instruction item, not a section heading or a drawing): it goes to the task's instructions. */
+const isReading = (it: CheckedItem) => it.kind === "instruction" && it.itemType !== "section_heading";
 
 export type { CheckedDocument, DocumentCheck, MatchOutcome, GuideAnswer };
 export type ImportKind = "workbook" | "guide";
@@ -37,16 +42,30 @@ export interface ImportStatus {
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-function meta(it: Pick<CheckedItem, "flags" | "text"> & Partial<Pick<CheckedItem, "pages" | "canonical" | "pdfText" | "itemType" | "classification" | "autoResolved" | "blocking">>, number?: string | null): ImportMeta {
+function meta(it: Pick<CheckedItem, "flags" | "text"> & Partial<Pick<CheckedItem, "pages" | "canonical" | "pdfText" | "itemType" | "classification" | "autoResolved" | "blocking" | "responseAreas">>, number?: string | null): ImportMeta {
   return {
     page: it.pages?.[0] ?? null, confidence: it.flags.length ? "low" : "high", ...(it.flags.length ? { note: it.flags.join(" · "), flags: it.flags } : {}),
     number: number ?? it.canonical ?? null, via: "ai", original: it.text, ...(it.pdfText ? { pdfText: it.pdfText } : {}),
     ...(it.itemType ? { itemType: it.itemType } : {}), ...(it.classification ? { classification: it.classification } : {}),
     ...(it.autoResolved?.length ? { autoResolved: it.autoResolved } : {}), ...(it.blocking ? { blocking: true } : {}),
+    ...(it.responseAreas?.length ? { responseAreas: it.responseAreas } : {}),
   };
 }
 
+/**
+ * ASM-BUILDER-COMPACT: the answer areas printed for a question ("Submission of Supporting Evidence…" = upload, "Mathematics
+ * Calculation Box…" = calc) are its response types: the question takes attachments; the areas never become questions.
+ */
+function withResponseAreas(q: Question, it: CheckedItem): Question {
+  if (!it.responseAreas?.length) return q;
+  return withSchema({ ...q, config: { ...(q.config ?? {}), ...(attachmentCapable(q.type) ? { allowAttachment: true } : {}) } });
+}
+
 function questionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImage>): Question {
+  return withResponseAreas(baseQuestionFromItem(it, pictures, used), it);
+}
+
+function baseQuestionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImage>): Question {
   // a section heading ("1. Introduction" of a report template) is a section label, never a question: no answer, no model answer
   if (it.itemType === "section_heading") {
     const q = newQuestion("instruction");
@@ -82,7 +101,11 @@ function questionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImag
   if (it.kind === "table" && it.table && it.table.columns.length) {
     const q = newQuestion("table_grid");
     q.label = it.text || "Complete the table";
-    const columns = it.table.columns.map((label, i) => ({ id: `c${i + 1}`, label: label || `Column ${i + 1}`, kind: "text" }));
+    // a category table ("a. Australian and other relevant Standards | Short answer"): the first column names the rows, the others
+    // are the answer cells (empty or a box label such as "Short answer")
+    const labelled = it.table.columns.length >= 2 && !(it.table.columns[0] ?? "").trim() && it.table.rows.length > 0 && it.table.rows.every((r) => (r[0] ?? "").trim() && r.slice(1).every((c) => !c.trim() || isResponseLabel(c)));
+    const answerCols = labelled ? it.table.columns.slice(1) : it.table.columns;
+    const columns = answerCols.map((label, i) => ({ id: `c${i + 1}`, label: label || (labelled && answerCols.length === 1 ? "Answer" : `Column ${i + 1}`), kind: "text" }));
     const rows = (it.table.rows.length ? it.table.rows : [[""], [""]]).map((r, i) => ({ id: `r${i + 1}`, label: (r[0] ?? "").trim() || String(i + 1) }));
     q.config = { ...(q.config ?? {}), columns, rows, allowAddRows: false };
     q.importMeta = meta(it);
@@ -111,12 +134,27 @@ function questionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImag
 /** The draft definition built from the AI's checked document (text exactly as checked; nothing reworded here). */
 export function definitionFromAi(doc: CheckedDocument, pictures: WbImage[] = []): Definition {
   const used = new Set<WbImage>();
-  const tasks: Task[] = doc.tasks.map((t) => ({
-    id: newId("t"),
-    title: t.number && !t.title.includes(t.number) ? `Task ${t.number}: ${t.title}` : t.title,
-    instructions: t.instructions ?? "",
-    sections: t.sections.map<Section>((s) => ({ id: newId("s"), title: s.title, questions: s.items.map((it) => questionFromItem(it, pictures, used)) })),
-  }));
+  const tasks: Task[] = doc.tasks.map((t) => {
+    // ASM-BUILDER-COMPACT: text to read ("Provide your response to each question in the box below", the role-play brief…) belongs to
+    // its task as instructions (behind the task's ⓘ), not as rows among the questions; the part it came from is kept as a heading
+    const instructions: string[] = t.instructions ? [t.instructions] : [];
+    const sections: Section[] = [];
+    for (const s of t.sections) {
+      const reading = s.items.filter(isReading);
+      if (reading.length) {
+        if (!sameHeading(s.title, t.title)) instructions.push(`<h4>${esc(s.title)}</h4>`);
+        instructions.push(...reading.map((it) => it.text.split(/\n+/).map((l) => `<p>${esc(l)}</p>`).join("")));
+      }
+      const rest = s.items.filter((it) => !isReading(it));
+      if (rest.length) sections.push({ id: newId("s"), title: s.title, questions: rest.map((it) => questionFromItem(it, pictures, used)) });
+    }
+    return {
+      id: newId("t"),
+      title: t.number && !t.title.includes(t.number) ? `Task ${t.number}: ${t.title}` : t.title,
+      instructions: instructions.join(""),
+      sections,
+    };
+  });
   return {
     instructions: "",
     tasks,

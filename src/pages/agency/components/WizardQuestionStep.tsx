@@ -12,7 +12,7 @@ import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
  * surrounding form when Next is pressed, so the phone control keeps its own formatting and validation. The label, input,
  * error line and the emergency contact fields are the shared wizard components (also used by staff onboarding).
  */
-export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0, applicationId }: {
+export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0, applicationId, defaultLoad }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
@@ -28,6 +28,8 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   canAddIntake?: boolean;
   onAddIntake?: () => void;
   intakeReload?: number;
+  /** CoE for an international student (picked to start with on the intake). */
+  defaultLoad?: "coe" | "voe";
   /** The application (USI screen: Verify / find / create the USI with usi-service). */
   applicationId?: string;
 }) {
@@ -104,7 +106,7 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
           <div>
             <Label htmlFor="wizard-preferred_intake">Intake</Label>
             <IntakeSelect id="wizard-preferred_intake" courseId={answers.course ? courseIdOf(answers.course) : null} value={intakeKey(answers.intake_id, answers.preferred_intake, answers.intake_join_date)} error={errors.preferred_intake}
-              className={INPUT} onChange={onIntake} onLoaded={onIntakesLoaded} canAdd={canAddIntake} onAdd={onAddIntake} reloadToken={intakeReload} />
+              className={INPUT} onChange={onIntake} onLoaded={onIntakesLoaded} canAdd={canAddIntake} onAdd={onAddIntake} reloadToken={intakeReload} defaultLoad={defaultLoad} />
             <FieldError text={errors.preferred_intake} />
           </div>
         </div>

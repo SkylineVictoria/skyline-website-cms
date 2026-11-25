@@ -5106,12 +5106,19 @@ test("Residency after the passport (2026-11-25): AU / NZ Domestic (no question, 
   assert.ok(r.residencyAnswered("Australia", "") && r.residencyAnswered("India", "Yes") && r.residencyAnswered("India", "No"));
   assert.ok(!r.residencyAnswered("India", "") && !r.residencyAnswered("", ""), "an unread passport country is asked too");
   assert.equal(r.PR_ANSWER, "au_permanent_resident");
+  assert.equal(r.studentKind("India", "Yes"), "domestic", "PR = domestic");
+  assert.equal(r.studentKind("India", "No"), "international");
+  assert.equal(r.studentKind("Australia", ""), "domestic");
+  assert.equal(r.studentKind("India", ""), "");
+  assert.ok(!r.notPermanentSubclass("189") && !r.notPermanentSubclass("") && r.notPermanentSubclass("500") && r.notPermanentSubclass("Subclass 485"), "PR evidence: 500 / 485 flagged");
   const wizard = read("src/pages/agency/components/ApplicationWizard.tsx"), ui = read("src/pages/agency/components/WizardResidency.tsx");
   assert.ok(ui.includes("Are you an Australian permanent resident?") && !ui.includes("Are you currently in Australia?"), "the in-Australia question is gone");
   assert.ok(wizard.includes('const stepRequired = (item: WizardStep) => (item.id === "visa" ? need !== "none" : Boolean(item.required));'));
   assert.ok(wizard.includes("if (skipStep(ALL_STEPS[next]) && next !== step)"), "the visa step is passed over when not needed");
   assert.ok(wizard.includes("values[PR_ANSWER] = pr;") && !wizard.includes("au_currently_in_australia") && !wizard.includes("VisaDetails"));
   assert.ok(!wizard.includes("issuing_country:"), "issuing_country is saved as before (not written by the wizard)");
+  assert.ok(wizard.includes('defaultLoad={kind === "international" ? "coe" : undefined}') && read("src/pages/agency/components/IntakeSelect.tsx").includes("(defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null)"), "international: CoE chosen to start with");
+  assert.ok(ui.includes("a <strong>domestic</strong> student") && ui.includes("The course is offered as <strong>CoE</strong>"));
 });
 
 test("Full form country of birth (2026-11-25): the same AVETMISS country search as the wizard, in a hidden form input; no copy from citizenship", () => {

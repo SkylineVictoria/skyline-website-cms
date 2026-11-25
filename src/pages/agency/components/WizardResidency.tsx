@@ -38,8 +38,17 @@ export function ResidencyQuestions({ issuingCountry, answers, errors, onChange }
   return (
     <div className="mt-5 space-y-4 rounded-lg border border-background-200 bg-background-100/60 px-4 py-4" data-testid="wizard-residency">
       <YesNo name={PR_ANSWER} label="Are you an Australian permanent resident?" value={pr} error={errors[PR_ANSWER]} onChange={(value) => onChange(PR_ANSWER, value)} />
-      {pr === "Yes" ? <p className="text-xs text-foreground-600">Next, upload the permanent residency visa grant notice as evidence.</p> : null}
-      {pr === "No" ? <p className="text-xs text-foreground-600">No visa upload is needed.</p> : null}
+      {pr === "Yes" ? (
+        <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-900" data-testid="wizard-residency-domestic">
+          <i className="ri-checkbox-circle-line" aria-hidden="true" /> Permanent resident: a <strong>domestic</strong> student. Next, upload the PR visa grant notice;
+          it is read and checked, and SLIT verifies it before approval.
+        </p>
+      ) : null}
+      {pr === "No" ? (
+        <p className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-900" data-testid="wizard-residency-international">
+          <i className="ri-earth-line" aria-hidden="true" /> An <strong>international</strong> student: no visa upload is needed. The course is offered as <strong>CoE</strong>.
+        </p>
+      ) : null}
     </div>
   );
 }

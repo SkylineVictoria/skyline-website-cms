@@ -99,10 +99,12 @@ const LOAD_LABEL = { coe: "CoE", voe: "VoE" } as const;
  * chosen entry (or null); `onLoaded` the list, so the parent can block the step when it is empty. An RTO Manager (`canAdd`) also gets
  * "+ Add new intake…" at the foot of the list and in the no-intakes message (`onAdd`); `reloadToken` re-reads the list after one is added.
  */
-export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, error, disabled, className, canAdd = false, onAdd, reloadToken = 0 }: {
+export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, error, disabled, className, canAdd = false, onAdd, reloadToken = 0, defaultLoad }: {
   id: string; courseId: string | null; value: string; onChange: (intake: OpenIntake | null) => void;
   onLoaded?: (intakes: OpenIntake[]) => void; error?: string; disabled?: boolean; className: string;
   canAdd?: boolean; onAdd?: () => void; reloadToken?: number;
+  /** CoE or VoE chosen to start with (an international student: CoE, owner 2026-11-25); still changeable. */
+  defaultLoad?: "coe" | "voe";
 }) {
   const [pickedLoad, setPickedLoad] = useState<"coe" | "voe" | null>(null);
   const [state, setState] = useState<{ course: string; intakes: OpenIntake[] | null; failed: string }>({ course: "", intakes: null, failed: "" });
@@ -124,8 +126,8 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   // Course first, then CoE or VoE (only asked when the course has both), then the next three starts of that kind.
   const loadsOffered = (["coe", "voe"] as const).filter((l) => intakes.some((i) => !i.fallback && i.studyLoad === l));
   const selected = intakes.find((i) => keyOf(i) === value);
-  // CoE or VoE is always asked (never chosen for the student); a kind with no intake is shown but cannot be picked.
-  const load = pickedLoad ?? selected?.studyLoad ?? null;
+  // CoE or VoE is asked (chosen to start with only for an international student: CoE); a kind with no intake is shown but cannot be picked.
+  const load = pickedLoad ?? selected?.studyLoad ?? (defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null);
   const needsLoad = loadsOffered.length > 0 && !load;
   const shown = (() => {
     if (fallbackOnly(intakes) || loadsOffered.length === 0) return intakes;

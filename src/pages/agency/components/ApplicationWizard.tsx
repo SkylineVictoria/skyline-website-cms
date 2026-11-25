@@ -21,7 +21,7 @@ import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { BORN_IN_PASSPORT_COUNTRY, PASSPORT_COUNTRY_LABEL } from "@/pages/agency/lib/birthCountry";
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
-import { PR_ANSWER, isDomesticPassport, residencyAnswered, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
+import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
 import { AVETMISS_EXTRA_FIELDS, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
@@ -642,7 +642,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         return a.length && p.length && !(a.length === p.length && a.every(token => p.includes(token))) ? [{ filename: doc.filename, name }] : [];
       }) : [];
   const stepHasDoc = (item: WizardStep) => (item.id === "english" && englishAltMet)
-    || (item.id === "visa" ? acceptableVisa.length > 0 : documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1));
+    // PR evidence counts only when its subclass is not a known temporary visa (unreadable: SLIT verifies it).
+    || (item.id === "visa" ? acceptableVisa.some((doc) => need !== "pr" || doc.extraction !== "done" || !notPermanentSubclass(String(doc.extracted?.visa_subclass ?? ""))) : documents.filter((doc) => doc.category === item.category && !isExpiredPassport(doc) && !isOverseasLicence(doc) && !isWrongDocument(doc)).length >= (item.id === "academic" ? Math.max(1, Math.floor(ruleNumber("admissions.academic_minimum_documents", 1))) : 1));
   // The passport's issuing country: the draft's value, else the scanned passport's (owner, 2026-11-25).
   const passportCountry = draftIssuingCountry || documents
     .filter((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && doc.extraction === "done")
@@ -651,6 +652,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // Residency (owner, 2026-11-25): the visa step asks for PR evidence (permanent resident) or is skipped (everyone else).
   const need: VisaNeed = visaNeed(passportCountry, answers[PR_ANSWER] ?? "");
   const residencyDone = residencyAnswered(passportCountry, answers[PR_ANSWER] ?? "");
+  const kind = studentKind(passportCountry, answers[PR_ANSWER] ?? "");
+  // PR evidence checked: a subclass read from the upload that is not a permanent visa is flagged.
+  const temporaryPrVisa = need === "pr" ? acceptableVisa.find((doc) => doc.extraction === "done" && notPermanentSubclass(String(doc.extracted?.visa_subclass ?? ""))) : undefined;
   const skipStep = (item: WizardStep | WizardQuestion | undefined) => item?.id === "visa" && need === "none";
   const stepRequired = (item: WizardStep) => (item.id === "visa" ? need !== "none" : Boolean(item.required));
   /** The step as shown: the visa step reads as PR evidence for a permanent resident. */
@@ -1146,7 +1150,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
                 studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }} />
             ) : (
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
-                onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId} />
+                onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId}
+                defaultLoad={kind === "international" ? "coe" : undefined} />
             )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>
@@ -1202,6 +1207,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         {uploadRejections[current.category] ? <WizardNotice tone="error">{uploadRejections[current.category]}</WizardNotice> : null}
         {readSaveError ? <WizardNotice tone="error">{readSaveError}</WizardNotice> : null}
         {current.id === "english" && englishSaveError ? <WizardNotice tone="error">{englishSaveError}</WizardNotice> : null}
+        {current.id === "visa" && temporaryPrVisa ? <WizardNotice tone="error">Subclass {String(temporaryPrVisa.extracted?.visa_subclass ?? "")} on {temporaryPrVisa.filename} is not a permanent visa. Upload the PR visa grant notice, or go back and answer No to permanent resident.</WizardNotice> : null}
         {current.id === "visa" && visaNamesForReview.length > 0 ? <WizardNotice tone="error">Visa name review needed: {visaNamesForReview.map(item => `${item.filename}: ${item.name}`).join("; ")} differs from passport name {passportName}. Ask SLIT to verify before approval.</WizardNotice> : null}
         {current.id === "visa" && visaDocuments.some(doc => doc.extraction === "done" && visaExpiry(doc).expired) && ruleBool("admissions.visa_reject_expired", true) ? <WizardNotice tone="error">Expired visa evidence cannot satisfy the visa requirement. Upload valid evidence or request SLIT review.</WizardNotice> : null}
         {current.id === "visa" && ruleBool("admissions.visa_vevo_review", false) ? <WizardNotice tone="info">SLIT staff must verify visa status through VEVO. This upload has not been verified with VEVO automatically.</WizardNotice> : null}

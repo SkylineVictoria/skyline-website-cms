@@ -277,9 +277,9 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     </div>)}</div>;
   };
   const unitPanel = draft ? <>
-        <div className={"flex items-start justify-between gap-3 px-4 py-4 " + (embeddedCourseId ? "border-b border-background-200" : "rounded-t-2xl bg-violet-50 dark:bg-violet-950/30")}>
+        <div className={"flex items-start justify-between gap-3 px-4 py-4 " + (embeddedCourseId ? "border-b border-background-200" : "rounded-t-2xl bg-primary-50 dark:bg-primary-950/30")}>
           <div className="flex min-w-0 gap-3">
-            <i className="ri-book-open-line grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-violet-100 text-xl text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+            <i className="ri-book-open-line grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary-100 text-xl text-primary-700 dark:bg-primary-950 dark:text-primary-300" aria-hidden="true" />
             <div className="min-w-0"><h2 className="font-heading text-lg font-bold text-foreground-950">{draft.code}</h2>
               <p className="text-sm text-foreground-700">{draft.name}</p></div>
           </div>
@@ -289,12 +289,12 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         <div role="tablist" className="flex flex-wrap gap-x-4 border-b border-background-200 px-4">
           {workspaceTabs.filter(([id]) => id === "details" || draft.id).map(([id, label]) =>
             <button key={id} type="button" role="tab" aria-selected={activeTab===id} onClick={()=>selectTab(id)}
-              className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (activeTab===id ? "border-violet-700 text-violet-800 dark:text-violet-300" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
+              className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (activeTab===id ? "border-primary-700 text-primary-800 dark:text-primary-300" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{label}</button>)}
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {!embeddedCourseId && activeTab === "details" && draft.id && <div className="mb-4 flex flex-wrap gap-2">
             {([["details", "Unit information"], ["learning", "Learning content"], ["content", "Training.gov.au"]] as const).map(([id, label]) =>
-              <button type="button" key={id} aria-pressed={drawerTab === id} onClick={() => selectTab(id)} className="rounded-lg border border-background-300 px-3 py-1.5 text-sm aria-pressed:border-violet-500 aria-pressed:text-violet-700 dark:aria-pressed:text-violet-300">{label}</button>)}
+              <button type="button" key={id} aria-pressed={drawerTab === id} onClick={() => selectTab(id)} className="rounded-lg border border-background-300 px-3 py-1.5 text-sm aria-pressed:border-primary-500 aria-pressed:text-primary-700 dark:aria-pressed:text-primary-300">{label}</button>)}
           </div>}
           {drawerTab==="content" && draft.id ? <UnitDetail key={draft.id} unitId={draft.id} /> : null}
           {drawerTab==="learning" && draft.id ? <UnitContentPanel key={draft.id} unitId={draft.id} canEdit={canEditContent} initiallyAdding={startContent} /> : null}
@@ -371,11 +371,11 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
     {dialogs}
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-3">
-        <i className="ri-book-open-line grid h-11 w-11 place-items-center rounded-xl bg-violet-100 text-2xl text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
-        <div><h1 className="font-heading text-3xl font-bold text-violet-800 dark:text-violet-300">Units</h1>
+        <i className="ri-book-open-line grid h-11 w-11 place-items-center rounded-xl bg-primary-100 text-2xl text-primary-700 dark:bg-primary-950 dark:text-primary-300" aria-hidden="true" />
+        <div><h1 className="font-heading text-3xl font-bold text-primary-800 dark:text-primary-300">Units</h1>
           <p className="text-sm text-foreground-600">Manage course units, learning materials and assessments.</p></div>
       </div>
-      {canManageResources && <button type="button" className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800"
+      {canManageResources && <button type="button" className="rounded-lg bg-primary-700 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-800"
         onClick={() => setBulk({})}><i className="ri-upload-cloud-2-line mr-2" aria-hidden="true" />AI Bulk Upload</button>}
     </header>
     {loadError}
@@ -383,13 +383,13 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
       <section className="min-w-0 rounded-2xl border border-background-200 bg-background-50 p-3 shadow-sm" aria-label="Courses">
         <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
           <h2 className="font-heading font-bold">Courses <span className="text-sm text-foreground-500">({courses.length})</span></h2>
-          <Link to="/admin/lms/courses" className="text-xs font-semibold text-violet-700 dark:text-violet-300">Manage courses</Link>
+          <Link to="/admin/lms/courses" className="text-xs font-semibold text-primary-700 dark:text-primary-300">Manage courses</Link>
         </div>
         <input aria-label="Search courses" className="mb-3 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" placeholder="Search courses…" value={courseQuery} onChange={event => setCourseQuery(event.target.value)} />
         <div className="max-h-56 space-y-1 overflow-auto xl:max-h-[64vh]">{shownCourses.map(course => <button type="button" key={course.id}
           aria-pressed={courseId === course.id} onClick={() => chooseCourse(course.id)}
-          className={"flex w-full items-start gap-2 rounded-lg px-2.5 py-2.5 text-left " + (courseId === course.id ? "bg-violet-100 text-violet-950 dark:bg-violet-950 dark:text-violet-100" : "hover:bg-background-100")}>
-          <i className="ri-graduation-cap-line shrink-0 rounded-md bg-violet-50 p-1 text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+          className={"flex w-full items-start gap-2 rounded-lg px-2.5 py-2.5 text-left " + (courseId === course.id ? "bg-primary-100 text-primary-950 dark:bg-primary-950 dark:text-primary-100" : "hover:bg-background-100")}>
+          <i className="ri-graduation-cap-line shrink-0 rounded-md bg-primary-50 p-1 text-primary-700 dark:bg-primary-950 dark:text-primary-300" aria-hidden="true" />
           <span className="min-w-0 flex-1"><span className="block text-sm font-bold">{course.code}</span>
             <span className="block break-words text-xs">{course.name}</span></span>
           <i className="ri-arrow-right-s-line" aria-hidden="true" />
@@ -399,23 +399,23 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
       <section className="min-w-0 rounded-2xl border border-background-200 bg-background-50 p-3 shadow-sm" aria-label="Course units">
         <div className="flex min-h-9 flex-wrap items-center justify-between gap-2">
           <h2 className="font-heading font-bold">Units <span className="text-sm text-foreground-500">({rows.filter(row => row.course.id === courseId).length})</span></h2>
-          {canEdit && selectedCourse && <button type="button" onClick={add} className="rounded-lg bg-violet-700 px-2.5 py-1.5 text-xs font-semibold text-white">+ Add unit</button>}
+          {canEdit && selectedCourse && <button type="button" onClick={add} className="rounded-lg bg-primary-700 px-2.5 py-1.5 text-xs font-semibold text-white">+ Add unit</button>}
         </div>
         <input aria-label="Search units" className="mb-3 w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm" placeholder="Search units…" value={query} onChange={event => setQuery(event.target.value)} />
         <label className="mb-2 flex items-center gap-1.5 text-xs text-foreground-600"><input type="checkbox" checked={showDocs} onChange={event => setShowDocs(event.target.checked)} />Show document names</label>
         <div className="max-h-56 space-y-1 overflow-auto xl:max-h-[60vh]">{filtered.map(entry => <div key={entry.unit.id ?? entry.index}><button type="button"
           aria-pressed={selected?.course.id === entry.course.id && selected.index === entry.index} onClick={() => open(entry)}
-          className={"flex w-full items-start gap-2 rounded-lg px-2.5 py-2.5 text-left " + (selected?.course.id === entry.course.id && selected.index === entry.index ? "bg-violet-100 text-violet-950 dark:bg-violet-950 dark:text-violet-100" : "hover:bg-background-100")}>
-          <i className="ri-book-read-line shrink-0 rounded-md bg-violet-50 p-1 text-violet-700 dark:bg-violet-950 dark:text-violet-300" aria-hidden="true" />
+          className={"flex w-full items-start gap-2 rounded-lg px-2.5 py-2.5 text-left " + (selected?.course.id === entry.course.id && selected.index === entry.index ? "bg-primary-100 text-primary-950 dark:bg-primary-950 dark:text-primary-100" : "hover:bg-background-100")}>
+          <i className="ri-book-read-line shrink-0 rounded-md bg-primary-50 p-1 text-primary-700 dark:bg-primary-950 dark:text-primary-300" aria-hidden="true" />
           <span className="min-w-0 flex-1"><span className="block text-sm font-bold">{entry.unit.code}</span>
             <span className="block break-words text-xs">{entry.unit.name}</span></span>
           <i className="ri-arrow-right-s-line" aria-hidden="true" />
         </button>
-          {(showDocs || (entry.unit.id && docs[entry.unit.id]?.pending.length)) && <div className="px-2.5 pb-2 text-xs">{documentSummary(entry)}</div>}
+          {(showDocs || Boolean(entry.unit.id && docs[entry.unit.id]?.pending.length)) && <div className="px-2.5 pb-2 text-xs">{documentSummary(entry)}</div>}
         </div>)}</div>
 
         {!filtered.length && <p className="p-2 text-sm text-foreground-600">{loading ? "Loading units…" : "No units found for this course."}</p>}
-        {canEdit && selectedCourse && <button type="button" onClick={() => setEditingHours(true)} className="mt-3 text-xs font-semibold text-violet-700 dark:text-violet-300">Edit course hours</button>}
+        {canEdit && selectedCourse && <button type="button" onClick={() => setEditingHours(true)} className="mt-3 text-xs font-semibold text-primary-700 dark:text-primary-300">Edit course hours</button>}
       </section>
       <section aria-label="Unit workspace" className="min-w-0 rounded-2xl border border-background-200 bg-background-50 shadow-sm sm:col-span-2 xl:col-span-1">
         {unitPanel ?? <p className="p-10 text-center text-sm text-foreground-600">{loading ? "Loading unit resources…" : "Select a unit to manage its resources."}</p>}

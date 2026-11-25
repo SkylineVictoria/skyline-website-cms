@@ -9,11 +9,12 @@ import SearchableSelect from "@/components/ui/SearchableSelect";
 /** A document saved straight to the unit (Add from documents, no AI reader): a unit_contents file whose title carries its category. */
 type UnitDoc = { id: string; title: string; file_name: string | null; size_bytes: number | null; storage_path: string | null; visible_to_students: boolean };
 
+// One calm card style (owner 2026-11-25: colours did not match); only the icon carries a hint of colour.
 const categoryStyles: Record<Category, { icon: string; tone: string }> = {
-  learning: { icon: "ri-book-open-line", tone: "border-violet-200 bg-violet-50 text-violet-800 dark:border-violet-900 dark:bg-violet-950/40 dark:text-violet-300" },
-  assessment: { icon: "ri-clipboard-line", tone: "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-300" },
-  self_assessment: { icon: "ri-list-check-3", tone: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300" },
-  assessor: { icon: "ri-shield-check-line", tone: "border-orange-200 bg-orange-50 text-orange-900 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300" },
+  learning: { icon: "ri-book-open-line text-primary-700 dark:text-primary-300", tone: "" },
+  assessment: { icon: "ri-clipboard-line text-primary-700 dark:text-primary-300", tone: "" },
+  self_assessment: { icon: "ri-list-check-3 text-primary-700 dark:text-primary-300", tone: "" },
+  assessor: { icon: "ri-shield-check-line text-primary-700 dark:text-primary-300", tone: "" },
 };
 
 function formatBytes(bytes: number) {
@@ -107,18 +108,18 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
   const shownDocs = docsIn(selected);
   const countIn = (category: Category) => (resources?.filter(resource => resource.category === category).length ?? 0) + docsIn(category).length;
   return <section className="space-y-3" aria-label="Unit resources">
-    {canManage && <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-violet-400 bg-violet-50/70 p-4 dark:bg-violet-950/30"
+    {canManage && <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-primary-400 bg-primary-50/70 p-4 dark:bg-primary-950/30"
       onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const files = Array.from(event.dataTransfer.files); if (files.length) onBulk(files); }}>
       <div className="flex items-center gap-3">
-        <i className="ri-upload-cloud-2-line text-3xl text-violet-700 dark:text-violet-300" aria-hidden="true" />
+        <i className="ri-upload-cloud-2-line text-3xl text-primary-700 dark:text-primary-300" aria-hidden="true" />
         <div><h3 className="font-heading font-bold">Upload unit resources</h3>
           <p className="text-sm text-foreground-600">Drop a ZIP package or individual files here.</p>
           {policy && <p className="mt-1 text-xs text-foreground-600">{policy.formats.map(format => format.toUpperCase()).join(", ")} · Up to {policy.max_mib} MiB per file</p>}
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="rounded-lg bg-violet-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => onBulk()}>Upload ZIP package</button>
-        <label className={button + " cursor-pointer border-violet-400 bg-background-50 text-violet-800 focus-within:ring-2 focus-within:ring-violet-500 dark:text-violet-300"}>
+        <button type="button" className="rounded-lg bg-primary-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => onBulk()}>Upload ZIP package</button>
+        <label className={button + " cursor-pointer border-primary-400 bg-background-50 text-primary-800 focus-within:ring-2 focus-within:ring-primary-500 dark:text-primary-300"}>
           + Add files<input className="sr-only" type="file" multiple onChange={event => { const files = Array.from(event.currentTarget.files ?? []); if (files.length) onBulk(files); }} />
         </label>
       </div>
@@ -128,16 +129,16 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
         const { icon, tone } = categoryStyles[category];
         const count = resources || docs ? countIn(category) : undefined;
         return <button type="button" aria-pressed={category === selected} key={category} onClick={() => setSelected(category)}
-          className={`flex min-h-24 flex-col items-start gap-1 rounded-xl border p-3 text-left ${tone} ${category === selected ? "ring-2 ring-inset ring-current" : "hover:shadow-sm"}`}>
+          className={`flex min-h-24 flex-col items-start gap-1 rounded-xl border p-3 text-left text-foreground-900 ${tone} ${category === selected ? "border-primary-500 bg-primary-50 ring-1 ring-inset ring-primary-500 dark:bg-primary-950/40" : "border-background-200 bg-background-50 hover:border-primary-300"}`}>
           <span className="flex w-full items-center justify-between"><i className={icon + " text-xl"} aria-hidden="true" />
             {category === "assessor" && <i className="ri-lock-line" aria-label="Restricted access" />}</span>
           <span className="text-sm font-bold">{categoryLabel(category, policy)}</span>
-          <span className="text-xs">{count !== undefined ? `${count} ${count === 1 ? "file" : "files"}` : "Loading…"}</span>
+          <span className="text-xs text-foreground-500">{count !== undefined ? `${count} ${count === 1 ? "file" : "files"}` : "Loading…"}</span>
         </button>;
       })}
     </div>
     <header className="flex flex-wrap items-center justify-between gap-2 border-t border-background-200 pt-3">
-      <h3 className="font-heading font-bold text-slate-950 dark:text-slate-50"><i className={categoryStyles[selected].icon + " mr-2 text-violet-700 dark:text-violet-300"} aria-hidden="true" />
+      <h3 className="font-heading font-bold text-slate-950 dark:text-slate-50"><i className={categoryStyles[selected].icon + " mr-2 text-primary-700 dark:text-primary-300"} aria-hidden="true" />
         {categoryLabel(selected, policy)}{(shown || docs) && ` (${countIn(selected)})`}</h3>
       {onAddContent && selected === "learning" && <button type="button" className={button} onClick={onAddContent}>+ Add learning content</button>}
     </header>
@@ -190,7 +191,7 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
           return <tr key={resource.id} className="align-top">
             <td className="min-w-32 break-words px-2.5 py-2.5"><p className="font-semibold">{resource.title}</p>
               <p className="text-xs text-foreground-600">{resource.name}{resource.previous_id ? " · Updated version" : ""}</p></td>
-            <td className="px-2.5 py-2.5 text-xs font-semibold text-violet-800 dark:text-violet-300">{resource.name.includes(".") ? resource.name.split(".").at(-1)?.toUpperCase() : "File"}</td>
+            <td className="px-2.5 py-2.5 text-xs font-semibold text-primary-800 dark:text-primary-300">{resource.name.includes(".") ? resource.name.split(".").at(-1)?.toUpperCase() : "File"}</td>
             <td className="whitespace-nowrap px-2.5 py-2.5 text-xs">{formatBytes(resource.bytes)}</td>
             <td className="px-2.5 py-2.5 text-xs">{accessLabels[resource.audience]}</td>
             <td className="px-2.5 py-2.5 text-xs font-semibold">{status}</td>
@@ -207,11 +208,11 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
                   {assessments.map(a => <option value={a.id} key={a.id}>{a.title}</option>)}
                 </SearchableSelect>
                 {resource.assessment_id
-                  ? <Link className="text-violet-800 dark:text-violet-300 underline" to={`/admin/assessments/${resource.assessment_id}`}>Open assessment</Link>
+                  ? <Link className="text-primary-800 dark:text-primary-300 underline" to={`/admin/assessments/${resource.assessment_id}`}>Open assessment</Link>
                   : <button type="button" className={button} disabled={busy} onClick={() => void createAssessment(resource)}>Create assessment draft</button>}
               </>}
             </div>}
-            {publishing?.id === resource.id && <div className="space-y-3 rounded-lg bg-violet-50 dark:bg-violet-950/40 p-3">
+            {publishing?.id === resource.id && <div className="space-y-3 rounded-lg bg-primary-50 dark:bg-primary-950/40 p-3">
               <p>Publish {resource.title} for {accessLabels[resource.audience].toLowerCase()}?</p>
               {resource.audience === "student_staff" && <label className="flex items-center gap-2"><input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)} />
                 I checked this document for assessor-only answers and marking guidance.</label>}

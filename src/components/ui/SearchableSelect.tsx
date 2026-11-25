@@ -140,7 +140,10 @@ const SearchableSelect = forwardRef<HTMLSelectElement, SearchableSelectProps>(fu
     const room = up ? above : below;
     const width = Math.min(Math.max(r.width, options.some((o) => o.description) ? 340 : 240), vw - 16);
     const left = Math.min(Math.max(8, r.left), vw - width - 8);
-    setPos({ left, width, maxH: Math.max(120, Math.min(want, room - 4)), ...(up ? { bottom: vh - r.top + 4 } : { top: r.bottom + 4 }) });
+    // maxH is the list's own height: the search box (48 px) sits above it inside the popup, so it is taken off (it ran off the screen
+    // when the popup opened upwards, 2026-11-25).
+    const search = showSearch ? 48 : 0;
+    setPos({ left, width, maxH: Math.max(96, Math.min(want, room - 4) - search), ...(up ? { bottom: vh - r.top + 4 } : { top: r.bottom + 4 }) });
   }, [showSearch, options]);
 
   const openList = (seed = "") => {

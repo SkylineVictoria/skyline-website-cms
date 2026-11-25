@@ -22,6 +22,7 @@ import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { AVETMISS_EXTRA_FIELDS, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
+import { academicPrefill } from "@/pages/agency/lib/educationLevels";
 import { addressProblems, emailProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 import type { AddressPick } from "@/components/shared/wizard/AddressSearch";
@@ -698,7 +699,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const setAnswer = (name: string, value: string) => {
     touchedRef.current.add(name);
     // A new course clears the intake: intakes belong to one course.
-    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
+    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}),
+      // OSHC changed to No: the own-cover confirmation is ticked (owner 2026-11-25).
+      ...(name === "oshc_require" && value === "No" ? { oshc_self_confirm: "Yes" } : {}) }));
     if (name === "course") {
       setIntakeList(null);
       Object.assign(pendingWizard.current, { courseChoice: value, intakeChoice: "", intakeLabel: "", intakeJoin: "" });
@@ -785,10 +788,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (!next.disability) fill("disability", "No");
       if (!next.employment) fill("employment", "Unemployed - Seeking Part-Time Work - 07");
       if (!next.secondary_enrolled) fill("secondary_enrolled", "No");
-      if (!next.prior_ed && hasAcademic) fill("prior_ed", "Yes");
+      // Owner 2026-11-25: school level and prior qualifications from the academic files already uploaded; English Well by default.
+      const academic = academicPrefill(documentsRef.current);
+      if (!next.school_level && academic.schoolLevel) fill("school_level", academic.schoolLevel);
+      if (!next.prior_ed && academic.priorRows.length) fill("prior_ed", "Yes");
+      else if (!next.prior_ed && academic.readable > 0) fill("prior_ed", "No");
+      else if (!next.prior_ed && hasAcademic) fill("prior_ed", "Yes");
+      if (!parsePriorEducation(next.prior_education ?? "").length && academic.priorRows.length) fill("prior_education", JSON.stringify(academic.priorRows));
+      if (!next.english_proficiency_code) fill("english_proficiency_code", "2");
       if (!next.study_reason) fill("study_reason", "For personal interest or self-development - 09");
       if (!next.rpl) fill("rpl", "No");
       if (!next.oshc_require) fill("oshc_require", "No");
+      // Owner 2026-11-25: with OSHC arranged by the student (No), the "I understand I must arrange my own cover" box starts ticked.
+      if (next.oshc_require === "No" && next.oshc_self_confirm !== "Yes") fill("oshc_self_confirm", "Yes");
       if (!next.hear_about) fill("hear_about", role === "student" ? "" : "Agent");
       if (!next.declaration_name) fill("declaration_name", [next.first_name, next.middle_name, next.last_name].filter(Boolean).join(" "));
       fill("declaration_date", todayIso());

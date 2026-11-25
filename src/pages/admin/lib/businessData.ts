@@ -220,6 +220,12 @@ export const updateStudent = (id: string, input: {
 }, "We could not save this student.");
 
 /** Deletes a student and all of their applications (migration 115); refused when one has an issued CoE / VoE or a registration. */
+/** What a student is linked to, per table (migration 20261125070517), for the delete confirmation. */
+export const studentLinks = (id: string) =>
+  call<{ applications: number; links: { table: string; count: number }[] }>("admin_student_links", { p_student: id }, "We could not read what this student is linked to.");
+/** Deletes the student with everything linked to them, enrolled or not (owner 2026-11-25; migration 20261125070517). */
+export const purgeStudentRecord = (id: string) =>
+  call<{ deleted: boolean; applicationsDeleted?: number; filesQueued?: number }>("admin_student_purge", { p_student: id, p_confirm: "DELETE" }, "We could not delete this student.");
 export const deleteStudentRecord = (id: string) =>
   call<{ deleted: boolean; archived?: boolean; applicationsDeleted?: number; filesQueued?: number }>("admin_student_delete", { p_student: id }, "We could not delete this student.");
 

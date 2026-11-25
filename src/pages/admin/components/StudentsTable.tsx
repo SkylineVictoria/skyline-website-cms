@@ -2,11 +2,11 @@ import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Button, Card, ConfirmDialog } from "@/pages/admin/components/ui";
+import { Button, Card, ConfirmDialog, DangerDialog } from "@/pages/admin/components/ui";
 import { ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { deleteStudentRecord, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PORTAL_ACCESS_LABEL, sendStudentInvitation, setStudentStatus, type EnrolmentStage, type PortalAccess, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
+import { purgeStudentRecord, studentLinks, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PORTAL_ACCESS_LABEL, sendStudentInvitation, setStudentStatus, type EnrolmentStage, type PortalAccess, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
 import EditStudentDialog from "@/pages/admin/components/EditStudentDialog";
 import { deleteApplicationDocument, listApplicationDocuments } from "@/pages/agency/lib/portalApplications";
 import { StatusBadge } from "@/pages/agency/components/PortalUI";
@@ -23,6 +23,15 @@ type SortKey = "student" | "business" | "agent" | "applications" | "studentStatu
 const text = (value: string | null | undefined) => (value ?? "").trim().toLowerCase();
 const studentStatusOf = (row: StudentRow) => row.status ?? "Active";
 const inactiveBusiness = (row: StudentRow) => Boolean(row.businessStatus) && row.businessStatus !== "Active";
+/** Plain names for the tables a student can be linked to (delete confirmation). */
+const LINK_LABELS: Record<string, string> = {
+  intake_enrolments: "intake enrolments", lms_intake_students: "intake places", lms_unit_students: "unit enrolments and results",
+  lms_attendance_marks: "attendance marks", batch_students: "class batch places", course_completions: "certificates",
+  enrollment_student_disabilities: "disability records", enrollment_student_prior_education: "prior education records",
+  student_office365_accounts: "Microsoft 365 mailbox records", comm_conversations: "conversations", sign_requests: "signing requests",
+  rto_placement_overrides: "placement changes", asm_attempts: "assessment attempts", portal_invitations: "portal invitations",
+};
+const linkLabel = (table: string) => LINK_LABELS[table] ?? table.replace(/_/g, " ");
 const ENROLMENT_TONE: Record<string, string> = {
   enrolled: "border-emerald-200 bg-emerald-50 text-emerald-800", deposit_paid: "border-teal-200 bg-teal-50 text-teal-800", offer_accepted: "border-sky-200 bg-sky-50 text-sky-800",
   offer_issued: "border-violet-200 bg-violet-50 text-violet-800", applicant: "border-amber-200 bg-amber-50 text-amber-900", withdrawn: "border-background-300 bg-background-100 text-foreground-600",
@@ -172,44 +181,42 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
   // here first (the document-delete function keeps files of submitted ones); the database then deletes every
   // application with its records and queues any remaining files for removal, then the student.
   const submittedCount = (row: StudentRow) => (row.applicationRows ?? []).filter((application) => application.status !== "draft").length;
+  // Owner 2026-11-25: Delete asks first, listing everything the student is linked to; Yes deletes the student with all of it
+  // (real or test, enrolled or not). Files of their applications are queued for removal by the server.
+  const [deleteAsk, setDeleteAsk] = useState<{ row: StudentRow; items: string[] } | null>(null);
+  const [deleteError, setDeleteError] = useState("");
   const deleteStudent = async (row: StudentRow) => {
-    setBusyId(row.id);
+    setBusyId(row.id); setDeleteError("");
     try {
-      // Draft files are removed in parallel; anything left over is queued by the server.
-      // Real students are archived (owner, 2026-11-25): their files stay. Only test accounts are deleted with their draft files.
-      const isTest = /@blackhole\.postmarkapp\.com$/i.test(row.email ?? "");
-      const editable = isTest ? (row.applicationRows ?? []).filter((a) => a.status === "draft" || a.status === "action_required") : [];
-      await Promise.all(editable.map(async (application) => {
-        const documents = await listApplicationDocuments(application.id).catch(() => []);
-        await Promise.all(documents.map((document) => deleteApplicationDocument({ id: document.id, storagePath: document.storagePath }).catch(() => undefined)));
-      }));
-      const result = await deleteStudentRecord(row.id);
+      const result = await purgeStudentRecord(row.id);
       const count = result.applicationsDeleted ?? row.applications;
-      // Drop the row straight away so the list never shows a deleted student.
       setRows((current) => current.filter((r) => r.id !== row.id));
       setTotal((n) => Math.max(0, n - 1));
-      push(result.archived ? `${row.name || row.email} archived (set Inactive; records kept).` : `${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"}.`);
+      push(`${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"} and everything linked.`);
+      setDeleteAsk(null);
       setReload((n) => n + 1);
     } catch (e) {
-      push(e instanceof Error ? e.message : "We could not delete this student.", "error");
-      setReload((n) => n + 1);
+      setDeleteError(e instanceof Error ? e.message : "We could not delete this student.");
     } finally {
       setBusyId("");
-      setConfirmDelete(null);
     }
   };
 
-  // The browser's own confirm box: it always shows in front of the page, however long the list is.
-  const askDelete = (row: StudentRow) => {
-    const who = row.name || row.email || "this student";
-    const total = row.applications;
-    const submitted = submittedCount(row);
-    const ok = window.confirm(`Delete ${who}?
-
-This permanently deletes the student and ALL ${total} of their application${total === 1 ? "" : "s"}${submitted > 0 ? `, including ${submitted} submitted or processed application${submitted === 1 ? "" : "s"}` : ""}, with their documents, history and messages. This cannot be undone.${submitted > 0 ? "\n\nTo keep the records, set the Student status to Disabled instead." : ""}`);
-    if (!ok) return;
-    setConfirmDelete(row);
-    void deleteStudent(row);
+  const askDelete = async (row: StudentRow) => {
+    setBusyId(row.id);
+    try {
+      const found = await studentLinks(row.id);
+      const items = [`The student ${row.name || row.email || ""}`.trim(),
+        ...(found.applications ? [`${found.applications} application${found.applications === 1 ? "" : "s"}, with their documents and history`] : []),
+        ...found.links.filter((l) => l.table !== "enrollment_applications").map((l) => `${l.count} ${linkLabel(l.table)}`)];
+      setDeleteError("");
+      setConfirmDelete(row);
+      setDeleteAsk({ row, items });
+    } catch (e) {
+      push(e instanceof Error ? e.message : "We could not read what this student is linked to.", "error");
+    } finally {
+      setBusyId("");
+    }
   };
 
   const filtered = Boolean(search || access || enrolment);
@@ -274,7 +281,7 @@ This permanently deletes the student and ALL ${total} of their application${tota
                           ) : !draftsOnly ? <button type="button" disabled={busyId === row.id} onClick={() => setEditing(row)} className="inline-flex items-center gap-1 text-primary-700 hover:underline disabled:opacity-50">
                             <i className="ri-edit-line" aria-hidden="true" /> Edit
                           </button> : null}
-                          <button type="button" disabled={busyId === row.id} onClick={() => askDelete(row)} className="inline-flex items-center gap-1 text-red-700 hover:underline disabled:opacity-50">
+                          <button type="button" disabled={busyId === row.id} onClick={() => void askDelete(row)} className="inline-flex items-center gap-1 text-red-700 hover:underline disabled:opacity-50">
                             <i className="ri-delete-bin-line" aria-hidden="true" /> {busyId === row.id && confirmDelete?.id === row.id ? "Deleting…" : "Delete"}
                           </button>
                         </span>
@@ -379,6 +386,11 @@ This permanently deletes the student and ALL ${total} of their application${tota
         onConfirm={() => { if (!busyId) void runMove(); }}
         onCancel={() => { if (!busyId) setMove(null); }}
       />
+      <DangerDialog open={Boolean(deleteAsk)} title={`Delete ${deleteAsk?.row.name || deleteAsk?.row.email || "this student"}?`}
+        intro="This student has the records below. Do you really want to delete the student and all of them?"
+        items={deleteAsk?.items ?? []} confirmLabel="Yes, delete" busy={Boolean(busyId)} error={deleteError}
+        onConfirm={() => { if (deleteAsk && !busyId) void deleteStudent(deleteAsk.row); }}
+        onCancel={() => { if (!busyId) { setDeleteAsk(null); setConfirmDelete(null); } }} />
       <ConfirmDialog
         open={Boolean(confirmDisable)}
         title={`Disable ${confirmDisable?.name || confirmDisable?.email || "this student"}?`}

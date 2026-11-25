@@ -133,7 +133,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
           {select("employment", "Employment status")}
           {v("language_home") === OTHER_LANGUAGE ? (
             <div>
-              <Label htmlFor="wizard-english_proficiency_code" required>How well does the student speak English?</Label>
+              <Label htmlFor="wizard-english_proficiency_code">How well does the student speak English? (Optional)</Label>
               <SearchableSelect id="wizard-english_proficiency_code" name="english_proficiency_code" value={v("english_proficiency_code")} aria-invalid={Boolean(errors.english_proficiency_code)} className={INPUT}
                 onChange={(e) => onChange("english_proficiency_code", e.target.value)}>
                 <option value="">Select</option>

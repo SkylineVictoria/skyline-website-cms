@@ -11,10 +11,10 @@ type UnitDoc = { id: string; title: string; file_name: string | null; size_bytes
 
 // One calm card style (owner 2026-11-25: colours did not match); only the icon carries a hint of colour.
 const categoryStyles: Record<Category, { icon: string; tone: string }> = {
-  learning: { icon: "ri-book-open-line text-primary-700 dark:text-primary-300", tone: "" },
-  assessment: { icon: "ri-clipboard-line text-primary-700 dark:text-primary-300", tone: "" },
-  self_assessment: { icon: "ri-list-check-3 text-primary-700 dark:text-primary-300", tone: "" },
-  assessor: { icon: "ri-shield-check-line text-primary-700 dark:text-primary-300", tone: "" },
+  learning: { icon: "ri-book-open-line text-foreground-500", tone: "" },
+  assessment: { icon: "ri-clipboard-line text-foreground-500", tone: "" },
+  self_assessment: { icon: "ri-list-check-3 text-foreground-500", tone: "" },
+  assessor: { icon: "ri-shield-check-line text-foreground-500", tone: "" },
 };
 
 function formatBytes(bytes: number) {
@@ -108,7 +108,7 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
   const shownDocs = docsIn(selected);
   const countIn = (category: Category) => (resources?.filter(resource => resource.category === category).length ?? 0) + docsIn(category).length;
   return <section className="space-y-3" aria-label="Unit resources">
-    {canManage && <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-primary-400 bg-primary-50/70 p-4 dark:bg-primary-950/30"
+    {canManage && <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-background-300 bg-background-50 p-4"
       onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); const files = Array.from(event.dataTransfer.files); if (files.length) onBulk(files); }}>
       <div className="flex items-center gap-3">
         <i className="ri-upload-cloud-2-line text-3xl text-primary-700 dark:text-primary-300" aria-hidden="true" />
@@ -118,8 +118,8 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="rounded-lg bg-primary-700 px-3 py-2 text-sm font-semibold text-white" onClick={() => onBulk()}>Upload ZIP package</button>
-        <label className={button + " cursor-pointer border-primary-400 bg-background-50 text-primary-800 focus-within:ring-2 focus-within:ring-primary-500 dark:text-primary-300"}>
+        <button type="button" className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700" onClick={() => onBulk()}>Upload ZIP package</button>
+        <label className={button + " cursor-pointer border-background-300 bg-background-50 text-foreground-800 hover:bg-background-100 focus-within:ring-2 focus-within:ring-primary-500 dark:text-primary-300"}>
           + Add files<input className="sr-only" type="file" multiple onChange={event => { const files = Array.from(event.currentTarget.files ?? []); if (files.length) onBulk(files); }} />
         </label>
       </div>
@@ -129,7 +129,7 @@ export default function UnitResourcesPanel({ courseId, unitId, canManage, canEdi
         const { icon, tone } = categoryStyles[category];
         const count = resources || docs ? countIn(category) : undefined;
         return <button type="button" aria-pressed={category === selected} key={category} onClick={() => setSelected(category)}
-          className={`flex min-h-24 flex-col items-start gap-1 rounded-xl border p-3 text-left text-foreground-900 ${tone} ${category === selected ? "border-primary-500 bg-primary-50 ring-1 ring-inset ring-primary-500 dark:bg-primary-950/40" : "border-background-200 bg-background-50 hover:border-primary-300"}`}>
+          className={`flex min-h-24 flex-col items-start gap-1 rounded-xl border p-3 text-left text-foreground-900 ${tone} ${category === selected ? "border-primary-500 bg-background-50 ring-1 ring-inset ring-primary-500" : "border-background-200 bg-background-50 hover:border-primary-300"}`}>
           <span className="flex w-full items-center justify-between"><i className={icon + " text-xl"} aria-hidden="true" />
             {category === "assessor" && <i className="ri-lock-line" aria-label="Restricted access" />}</span>
           <span className="text-sm font-bold">{categoryLabel(category, policy)}</span>

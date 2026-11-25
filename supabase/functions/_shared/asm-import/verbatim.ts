@@ -141,7 +141,7 @@ export interface VerbatimResult {
   /** The PDF's words around the best place found, for the admin to compare (close / missing). */
   pdfText: string | null;
   /** close / missing: what differs (words the model added, PDF words it left out). */
-  diff: { added: string[]; left: string[] } | null;
+  diff: { added: string[]; left: string[]; leftPieces?: string[][] } | null;
 }
 
 /** Other cells' words allowed between two of the item's words (one line of a table). */
@@ -156,9 +156,9 @@ const opener = (t: Tok) => !t.core && (OPENERS.test(t.raw) || (t.start && /^[-·
 interface Align { at: number[]; split: Map<number, number> }
 
 /** The source words skipped inside the matched stretch, as runs; `ok` when every run is another table cell (not the model's omission). */
-function skipped(align: Align, src: Tok[]): { ok: boolean; omitted: string[] } {
+function skipped(align: Align, src: Tok[]): { ok: boolean; omitted: string[]; pieces: string[][] } {
   const hits = align.at.filter((k) => k >= 0);
-  if (!hits.length) return { ok: false, omitted: [] };
+  if (!hits.length) return { ok: false, omitted: [], pieces: [] };
   const lo = Math.min(...hits); const hi = Math.max(...hits, ...align.split.values());
   const used = new Set([...hits, ...align.split.values()]);
   const tabular = isTable(src, lo, hi);
@@ -178,7 +178,15 @@ function skipped(align: Align, src: Tok[]): { ok: boolean; omitted: string[] } {
     piece.push(k); row.push(k);
   }
   closePiece(); closeRow();
-  return { ok: omitted.size === 0, omitted: [...omitted].sort((a, b) => a - b).map((k) => src[k].raw) };
+  // the left-out words again as pieces (a cell's part of one line), so a whole "Short answer" line can be recognised by the caller
+  const sorted = [...omitted].sort((a, b) => a - b);
+  const pieces: string[][] = [];
+  sorted.forEach((k, i) => {
+    const prev = sorted[i - 1];
+    const joined = prev !== undefined && src[k].line === src[prev].line && !src[k].start && src.slice(prev + 1, k).every((t) => !t.core);
+    if (joined) pieces[pieces.length - 1].push(src[k].raw); else pieces.push([src[k].raw]);
+  });
+  return { ok: omitted.size === 0, omitted: sorted.map((k) => src[k].raw), pieces };
 }
 
 /** Contiguous: the item's words are a run of the source's words. */
@@ -359,11 +367,11 @@ export function checkVerbatim(text: string, pageTexts: string[], opts: { stripNu
   const hits = best.align.at.filter((k) => k >= 0);
   const coverage = best.found / it.length;
   const added = itemToks.filter((_, i) => best.align.at[i] < 0).map((t) => t.raw);
-  const left = skipped(best.align, src).omitted;
+  const { omitted: left, pieces: leftPieces } = skipped(best.align, src);
   const exactWords = coverage === 1 && !added.length;
   return {
     status: coverage >= 0.85 ? "close" : "missing", coverage: exactWords ? 0.99 : coverage, layout: null, text: null,
-    pdfText: spanText(src, Math.min(...hits), Math.max(...hits)), diff: { added, left },
+    pdfText: spanText(src, Math.min(...hits), Math.max(...hits)), diff: { added, left, leftPieces },
   };
 }
 

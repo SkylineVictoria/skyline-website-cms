@@ -17,14 +17,15 @@
  */
 import { normalizeNumber, normalizePart } from "./numbering.ts";
 import { checkVerbatim, compareTokens, core, describeDiff, normText, stripRunningText } from "./verbatim.ts";
+import { classifyByRules, isResponseLabel, RULES_DECIDE, type Classification, type PendingItem } from "./classify.ts";
 import type { AiInput } from "./provider.ts";
 import {
   ITEM_KINDS, OUTLINE_SCHEMA, TASK_KINDS, TASK_SCHEMA,
-  type AiItem, type AiOutline, type AiTaskPart, type CheckedDocument, type CheckedItem, type CheckedPart, type CheckedSection, type CheckedTask, type ImportSummary,
+  type AiItem, type AiOutline, type AiTaskPart, type AutoResolved, type CheckedDocument, type CheckedItem, type CheckedPart, type CheckedSection, type CheckedTask, type ImportSummary,
 } from "./schema.ts";
 
-/** Bumped whenever the reading or the checks change (2: formatting-proof verbatim check, headers removed, pictures, calibrated flags). */
-export const READER_VERSION = 2;
+/** Bumped whenever the reading or the checks change (2: formatting-proof verbatim check, headers removed, pictures, calibrated flags; 3: item types, auto-resolved differences). */
+export const READER_VERSION = 3;
 
 /** One page as the browser read it: its text (lines, cells joined with " | ", [Picture] where a picture is printed). */
 export interface PageText { page: number; text: string; scanned: boolean; pictures?: number }
@@ -144,6 +145,8 @@ function checkItem(it: AiItem, chunk: Chunk, byPage: Map<number, PageText>): Che
   const source = near.map((p) => byPage.get(p)).filter((p): p is PageText => Boolean(p && !p.scanned)).map((p) => p.text);
   const scanned = pages.every((p) => byPage.get(p)?.scanned);
   const tableText = it.kind === "table";
+  const autoResolved: AutoResolved[] = [];
+  const where = pages[0] ?? null;
   // a table's column headings are printed with it: the model gives them as columns, sometimes also in the text, so they are
   // never "left out" of the text, and the text with its headings is the PDF's when the text alone is not
   const check = (raw: string, columns = "") => {
@@ -157,7 +160,27 @@ function checkItem(it: AiItem, chunk: Chunk, byPage: Map<number, PageText>): Che
       else if (r.diff) {
         const heads = new Set(compareTokens(columns).map((t) => t.core).filter(Boolean));
         const left = r.diff.left.filter((w) => !heads.has(core(w)));
-        r = !r.diff.added.length && !left.length ? { ...r, status: "exact", text: null, diff: null } : { ...r, diff: { ...r.diff, left } };
+        const leftPieces = (r.diff.leftPieces ?? []).map((p) => p.filter((w) => !heads.has(core(w)))).filter((p) => p.length);
+        r = !r.diff.added.length && !left.length ? { ...r, status: "exact", text: null, diff: null } : { ...r, diff: { ...r.diff, left, leftPieces } };
+      }
+    }
+    // the only difference is an answer box's label ("Short answer") or a number the PDF prints beside the text: resolved by rule
+    if (r.status !== "exact" && r.diff) {
+      const pieces = r.diff.leftPieces ?? r.diff.left.map((w) => [w]);
+      const ignored: AutoResolved[] = [];
+      const kept = pieces.filter((p) => {
+        const t = p.join(" ");
+        if (isResponseLabel(t)) { ignored.push({ rule: "response_label", text: t, page: where, note: `Ignored "${t}" on page ${where}: an answer box's label (response type), not part of the wording` }); return false; }
+        if (NUMBER_ONLY.test(t)) { ignored.push({ rule: "numbering", text: t, page: where, note: `Ignored "${t}" on page ${where}: a number printed beside the text, not part of the wording` }); return false; }
+        return true;
+      });
+      const added = r.diff.added.join(" ");
+      const addedLabel = added && isResponseLabel(added);
+      if (addedLabel) ignored.push({ rule: "response_label", text: added, page: where, note: `Ignored "${added}" read into the text on page ${where}: an answer box's label, not part of the wording` });
+      if (!kept.length && (!added || addedLabel) && ignored.length) {
+        autoResolved.push(...ignored);
+        const clean = addedLabel ? normText(text.replace(new RegExp(`\\s*${added.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i"), " ")) : text;
+        return { text: clean, status: "exact" as const, pdfText: null, diff: null };
       }
     }
     // the PDF's own words (only formatting differs): the PDF's text is used; a table keeps its text and cells as read. Where the two
@@ -176,13 +199,45 @@ function checkItem(it: AiItem, chunk: Chunk, byPage: Map<number, PageText>): Che
   const confidence = Math.max(0, Math.min(1, Number(it.confidence)));
   const number = it.number ? normText(String(it.number)) : null;
   const canonical = normalizeNumber(number)?.canonical ?? null;
+  const classification = classifyByRules({ kind: it.kind, number, text: main.text || normText(String(it.text ?? "")) });
   return {
     kind: it.kind, number, canonical, text: main.text, parts, pages,
     table: it.table && Array.isArray(it.table.columns) ? { columns: it.table.columns.map((c) => normText(String(c))), rows: (Array.isArray(it.table.rows) ? it.table.rows : []).map((r) => (Array.isArray(r) ? r.map((c) => normText(String(c))) : [])) } : null,
     confidence: Number.isFinite(confidence) ? confidence : 0,
     answer: it.answer ? String(it.answer).trim() : null, lookFor: it.look_for ? String(it.look_for).trim() : null,
-    verbatim: main.status, pdfText: main.pdfText, diff: main.diff, reason: it.reason ? normText(String(it.reason)) : null, scanned, flags: [],
+    verbatim: main.status, pdfText: main.pdfText, diff: main.diff, reason: it.reason ? normText(String(it.reason)) : null, scanned,
+    itemType: classification.type, classification, autoResolved, flags: [],
   };
+}
+
+/** A piece that is only a number ("6.", "Q14", "2.1.3") is numbering, not wording. */
+const NUMBER_ONLY = /^\(?(?:q(?:uestion)?\s*)?\d{1,3}(?:\.\d{1,3})*[a-z]?[.)]?\)?$/i;
+
+/* ------------------------------------------------------------------ the classification's second check (AI), per chunk */
+
+/** The items of a chunk the rules could not decide, with the page lines around each (refs "s<section>i<item>"). */
+export function pendingClassification(sections: CheckedSection[], pages: PageText[]): PendingItem[] {
+  const clean = new Map(stripRunningText(pages).map((p) => [p.page, p.text.split("\n").map((l) => l.replace(/\s*\|\s*/g, " | ").trim()).filter(Boolean)]));
+  const out: PendingItem[] = [];
+  sections.forEach((s, si) => s.items.forEach((it, ii) => {
+    if (!it.classification || it.classification.by !== "rules" || it.classification.confidence >= RULES_DECIDE) return;
+    const page = it.pages[0] ?? 0;
+    const lines = clean.get(page) ?? [];
+    const key = core(it.text).slice(0, 24);
+    const at = lines.findIndex((l) => key && core(l).includes(key));
+    out.push({ ref: `s${si}i${ii}`, kind: it.kind, number: it.number, text: it.text, page, before: at > 0 ? lines.slice(Math.max(0, at - 2), at) : [], after: at >= 0 ? lines.slice(at + 1, at + 3) : [] });
+  }));
+  return out;
+}
+
+/** The AI's answer put on the items; an item it did not answer keeps the rules' guess, marked "default". */
+export function applyClassification(sections: CheckedSection[], answers: Map<string, Classification> | null, failure?: string) {
+  sections.forEach((s, si) => s.items.forEach((it, ii) => {
+    if (!it.classification || it.classification.by !== "rules" || it.classification.confidence >= RULES_DECIDE) return;
+    const got = answers?.get(`s${si}i${ii}`);
+    if (got) { it.classification = got; it.itemType = got.type; return; }
+    it.classification = { ...it.classification, by: "default", reason: `${it.classification.reason}; ${failure ?? "the AI check gave no answer"}` };
+  }));
 }
 
 /**
@@ -194,7 +249,7 @@ function addMissingPictures(sections: CheckedSection[], chunk: Chunk, pages: Pag
     if (p.page < chunk.from || p.page > chunk.to || !p.pictures) continue;
     const placed = sections.flatMap((s) => s.items).filter((i) => i.kind === "drawing" && i.pages.includes(p.page)).length;
     for (let n = placed; n < p.pictures; n++) {
-      const item: CheckedItem = { kind: "drawing", number: null, canonical: null, text: "", parts: [], pages: [p.page], table: null, confidence: 1, answer: null, lookFor: null, verbatim: "empty", pdfText: null, diff: null, reason: null, scanned: false, added: true, flags: [] };
+      const item: CheckedItem = { kind: "drawing", number: null, canonical: null, text: "", parts: [], pages: [p.page], table: null, confidence: 1, answer: null, lookFor: null, verbatim: "empty", pdfText: null, diff: null, reason: null, scanned: false, added: true, itemType: "instruction", classification: { type: "instruction", by: "rules", confidence: 1, reason: "a picture printed on the page" }, autoResolved: [], flags: [] };
       let spot: [number, number] | null = null;
       sections.forEach((s, si) => s.items.forEach((i, ii) => { if ((i.pages[0] ?? 0) <= p.page) spot = [si, ii]; }));
       if (!sections.length) sections.push({ title: "Questions", items: [] });
@@ -226,11 +281,20 @@ export function flagsOf(it: CheckedItem, ctx: { duplicateOf?: CheckedItem | null
     flags.push(`The AI reader was unsure (${Math.round(it.confidence * 100)} %): ${it.reason || `check how this item was read on ${where}`}`);
   }
   if (it.kind === "multipart" && !it.parts.length) flags.push(`Read as a question with parts, but no parts were found: check ${where}`);
-  if (QUESTION_KINDS.has(it.kind) && it.number && /\d/.test(it.number) && !it.canonical) flags.push(`"${it.number}" is not a question number: check the numbering on ${where}`);
-  if (ctx.duplicateOf) flags.push(`Number ${it.canonical} is also used on ${pageList(ctx.duplicateOf.pages)}: check the numbering`);
+  const isQuestion = typeOf(it) === "question";
+  if (isQuestion && QUESTION_KINDS.has(it.kind) && it.number && /\d/.test(it.number) && !it.canonical) flags.push(`"${it.number}" is not a question number: check the numbering on ${where}`);
+  if (ctx.duplicateOf) flags.push(`Number ${it.canonical} is also used for another question on ${pageList(ctx.duplicateOf.pages)}: renumber one of them before publishing`);
   if (it.added) flags.push(`The AI reader did not place the picture on ${where}: it was added after the item before it; check where it sits`);
+  const c = it.classification;
+  if (c?.by === "default" && c.confidence < RULES_DECIDE) flags.push(`Could not tell whether "${it.text}" is a field to fill or a heading (the AI check did not answer): kept as a question; check ${where}`);
+  if (c?.by === "ai" && c.confidence < AI_TYPE_UNSURE) flags.push(`The AI check was unsure whether "${it.text}" is a ${c.type.replace("_", " ")} (${Math.round(c.confidence * 100)} %): ${c.reason}`);
   return [...new Set(flags)];
 }
+
+/** The AI's second check is trusted from this confidence; below it the item is on the list with the AI's reason. */
+export const AI_TYPE_UNSURE = 0.6;
+/** Older imports have no type: every item was a question. */
+export const typeOf = (it: Pick<CheckedItem, "itemType">) => it.itemType ?? "question";
 
 /** b starts on the page a ends on, or the next one. */
 const follows = (a: CheckedItem, b: CheckedItem) => Math.min(...b.pages) - Math.max(...a.pages) <= 1;
@@ -257,8 +321,20 @@ export function assemble(kind: "workbook" | "guide", outline: AiOutline, chunks:
     const drop = new Set<CheckedItem>();
     const dup = new Map<CheckedItem, CheckedItem>();
     const seen = new Map<string, CheckedItem>();
+    const headings: CheckedItem[] = [];
     let before: CheckedItem | null = null;
+    let carry: AutoResolved[] = [];
     for (const s of t.sections) for (const it of s.items) {
+      // an answer box's label read as an item of its own ("Short answer"): not a question; noted on the item it belongs to
+      if (typeOf(it) === "response_label") {
+        drop.add(it);
+        const note: AutoResolved = { rule: "response_label", text: it.text, page: it.pages[0] ?? null, note: `"${it.text}" on page ${it.pages[0] ?? "?"} is an answer box's label (response type): not made a question` };
+        if (before) before.autoResolved = [...(before.autoResolved ?? []), note]; else carry.push(note);
+        continue;
+      }
+      if (carry.length) { it.autoResolved = [...carry, ...(it.autoResolved ?? [])]; carry = []; }
+      // a section heading is never compared with question numbers ("4. Supporting Calculations" beside question 4)
+      if (typeOf(it) === "section_heading") { headings.push(it); before = it; continue; }
       // a question with parts continued on the next pages (often across a chunk): no stem of its own, new part labels
       const host: CheckedItem | null = it.kind === "multipart" ? ((it.canonical ? seen.get(it.canonical) : before) ?? null) : null;
       if (host && host.kind === "multipart" && it.parts.length && (it.verbatim === "empty" || normText(it.text) === normText(host.text)) && follows(host, it)
@@ -269,15 +345,24 @@ export function assemble(kind: "workbook" | "guide", outline: AiOutline, chunks:
         continue;
       }
       before = it;
-      if (!it.canonical || !QUESTION_KINDS.has(it.kind)) continue;
+      // only questions are compared: two questions with the same number far apart is a real clash (blocking)
+      if (!it.canonical || !QUESTION_KINDS.has(it.kind) || typeOf(it) !== "question") continue;
       const first = seen.get(it.canonical);
       if (!first) { seen.set(it.canonical, it); continue; }
       if (it.text && normText(first.text) === normText(it.text)) { drop.add(it); continue; } // read twice (a chunk boundary)
       if (!follows(first, it)) dup.set(it, first); // nearby, it is another table / box of the same question
     }
+    for (const h of headings) {
+      const q = h.canonical ? seen.get(h.canonical) : null;
+      if (q) h.autoResolved = [...(h.autoResolved ?? []), { rule: "heading_number", text: h.number ?? h.canonical ?? "", page: h.pages[0] ?? null,
+        note: `"${h.number} ${h.text}" on page ${h.pages[0] ?? "?"} is a section heading, so its number is not compared with question ${q.number ?? q.canonical} on ${pageList(q.pages)}` }];
+    }
     for (const s of t.sections) {
       s.items = s.items.filter((it) => !drop.has(it));
-      for (const it of s.items) it.flags = flagsOf(it, { duplicateOf: dup.get(it) ?? null });
+      for (const it of s.items) {
+        it.flags = flagsOf(it, { duplicateOf: dup.get(it) ?? null });
+        it.blocking = dup.has(it);
+      }
     }
     t.sections = t.sections.filter((s) => s.items.length);
   }
@@ -293,7 +378,9 @@ export function summarize(tasks: CheckedTask[], scannedPages = 0): ImportSummary
   const items = tasks.flatMap((t) => t.sections.flatMap((s) => s.items));
   return {
     tasks: tasks.length,
-    questions: items.filter((i) => QUESTION_KINDS.has(i.kind)).length,
+    questions: items.filter((i) => QUESTION_KINDS.has(i.kind) && typeOf(i) === "question").length,
+    headings: items.filter((i) => typeOf(i) === "section_heading").length,
+    autoResolved: items.reduce((n, i) => n + (i.autoResolved?.length ?? 0), 0),
     evidence: items.filter((i) => i.kind === "evidence").length,
     drawings: items.filter((i) => i.kind === "drawing").length,
     tables: items.filter((i) => i.kind === "table").length,

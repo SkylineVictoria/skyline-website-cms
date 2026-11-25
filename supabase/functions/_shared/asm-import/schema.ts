@@ -3,6 +3,12 @@
  * Two calls per document: the outline (what the document is, its codes, its tasks and their pages), then one call per task
  * (or per part of a long task): tasks -> sections -> items. Pure data, shared by the worker, the browser and the tests.
  */
+import type { Classification, ItemType } from "./classify.ts";
+export type { Classification, ItemType };
+
+/** A difference the checks resolved by a rule: which rule, the text it ignored, and a sentence for the admin / audit log. */
+export interface AutoResolved { rule: "response_label" | "numbering" | "heading_number"; text: string; note: string; page: number | null }
+
 export const ITEM_KINDS = ["instruction", "question", "multipart", "table", "evidence", "drawing", "declaration"] as const;
 export type ItemKind = typeof ITEM_KINDS[number];
 export const TASK_KINDS = ["written", "project", "practical", "observation", "other"] as const;
@@ -117,6 +123,14 @@ export interface CheckedItem {
   scanned?: boolean;
   /** A picture the AI reader did not place, added by the checks where it is printed. */
   added?: boolean;
+  /** What the item is (classify.ts): question | section_heading | instruction | response_label. Older imports: undefined = question. */
+  itemType?: ItemType;
+  /** How the type was decided (rules / the AI's second check), with its confidence and reason. */
+  classification?: Classification | null;
+  /** Differences the checks resolved by a rule (not on the list; shown under "Auto-resolved" with Reopen; written to the audit log). */
+  autoResolved?: AutoResolved[];
+  /** A flag that must be resolved before publishing (two questions with the same number). */
+  blocking?: boolean;
   /** Reasons this item is on the "Check this" list (empty = looks good); worked out when the document is put together. */
   flags: string[];
 }
@@ -125,6 +139,8 @@ export interface CheckedTask { number: string | null; title: string; kind: strin
 
 export interface ImportSummary {
   tasks: number; questions: number; evidence: number; drawings: number; tables: number; flagged: number; answers: number; scannedPages: number;
+  /** Section headings (not questions) and differences resolved by a rule (reader 3). */
+  headings?: number; autoResolved?: number;
 }
 export interface CheckedDocument {
   kind: "workbook" | "guide";

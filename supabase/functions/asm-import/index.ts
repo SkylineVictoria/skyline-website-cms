@@ -12,7 +12,8 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
 import { isServiceCaller } from "../_shared/service-role.ts";
 import { AiError, costUsd, createProvider, type AiUsage, type StructuredProvider } from "../_shared/asm-import/provider.ts";
-import { assemble, checkChunk, cleanOutline, mockAnswer, outlineRequest, planChunks, READER_VERSION, summarize, taskRequest, type Chunk, type PageText } from "../_shared/asm-import/pipeline.ts";
+import { applyClassification, assemble, checkChunk, cleanOutline, mockAnswer, outlineRequest, pendingClassification, planChunks, READER_VERSION, summarize, taskRequest, type Chunk, type PageText } from "../_shared/asm-import/pipeline.ts";
+import { classifyRequest, mockClassifyAnswer, readClassification } from "../_shared/asm-import/classify.ts";
 import type { AiOutline, AiTaskPart, CheckedSection } from "../_shared/asm-import/schema.ts";
 import { MAPPABLE_KINDS, mappingRequest, mockMappingAnswer, resolveSuggestions, type MappingCriterion, type MappingQuestion } from "../_shared/asm-import/mapping.ts";
 
@@ -28,7 +29,7 @@ function provider(): StructuredProvider {
     model: Deno.env.get("EF_ASM_IMPORT_MODEL") || Deno.env.get("OPENAI_DOCUMENT_MODEL") || "",
     apiKey: Deno.env.get("OPENAI_API_KEY") ?? "",
     baseUrl: Deno.env.get("OPENAI_BASE_URL") ?? undefined,
-    mock: (r) => (r.name === "asm_mapping" ? mockMappingAnswer(r) : mockAnswer(r)),
+    mock: (r) => (r.name === "asm_mapping" ? mockMappingAnswer(r) : r.name === "asm_classify" ? mockClassifyAnswer(r) : mockAnswer(r)),
   });
 }
 
@@ -116,6 +117,18 @@ async function step(db: SupabaseClient, job: Job): Promise<boolean> {
       const scannedHere = pages.filter((p) => p.scanned && p.page >= chunk.from && p.page <= chunk.to).map((p) => p.page);
       const out = await ai.generate(taskRequest(job.kind, job.outline, chunk, pages, await imagesOf(db, job, scannedHere)));
       results[job.next_chunk] = checkChunk(out.data as AiTaskPart, chunk, pages);
+      // the items the rules could not classify (a short line: a field to fill or a heading?) go to the AI in one small call
+      const pending = pendingClassification(results[job.next_chunk] ?? [], pages);
+      if (pending.length) {
+        try {
+          const c = await ai.generate(classifyRequest(pending));
+          addUsage(job, c.usage);
+          applyClassification(results[job.next_chunk] ?? [], readClassification(c.data));
+        } catch (e) {
+          const u = (e as { usage?: AiUsage }).usage; if (u) addUsage(job, u);
+          applyClassification(results[job.next_chunk] ?? [], null, "the AI check failed");
+        }
+      }
       job.next_chunk += 1;
       const partial = assemble(job.kind, job.outline, plan, results, { provider: ai.id, model: ai.model, scannedPages: job.scanned_pages?.length ?? 0 });
       const nextTask = plan[job.next_chunk]?.task;

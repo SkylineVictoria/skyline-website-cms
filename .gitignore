@@ -78,7 +78,7 @@ backups/
 /Offer_Letter_Template_Blank.pdf
 /*.pdf
 # the AI reader's recorded answers for a workbook at the root (regression input of test:assessment-registry; workbook text)
-/*.ai-answers.json
+/*.ai-answers*.json
 
 # Environment files (the .env.example placeholders stay tracked)
 *.env

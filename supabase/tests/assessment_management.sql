@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(405);
+select plan(413);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -819,6 +819,21 @@ select throws_ok($$select count(*) from public.asm_mapping_suggestions$$, '42501
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select throws_ok(format($$select public.asm_mapping_suggestions_list('%s')$$, pg_temp.v('assessment')), '42501', null, 'MAP a trainer cannot list suggestions');
 select pg_temp.as_postgres();
+
+-- ASM-IMPORT-CLASSIFY (2026-11-25): auto-resolved import differences are written to the assessment's audit log
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is(public.asm_import_auto_resolved(pg_temp.v('assessment')::uuid, '[{"questionId":"q_h4","rule":"heading_number","text":"4.","note":"\"4. Supporting Calculations\" on page 66 is a section heading","page":66,"reopened":false},{"questionId":"q_ap","rule":"response_label","text":"Short answer","note":"Ignored \"Short answer\" on page 67","page":67,"reopened":true},{"questionId":"x","rule":"made_up","text":"x","note":"x","page":1}]'::jsonb)->>'logged', '2', 'AUTO an admin logs the auto-resolved notes (an unknown rule is skipped)');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.asm_audit_log where target_type = 'assessment' and target_id = pg_temp.s('assessment') and action = 'import_auto_resolved' and detail->>'rule' = 'heading_number' and detail->>'text' = '4.' and (detail->>'page')::int = 66), 1, 'AUTO the note keeps its rule, the ignored text and the page');
+select is((select count(*)::int from public.asm_audit_log where target_id = pg_temp.s('assessment') and action = 'import_auto_resolve_reopened' and detail->>'rule' = 'response_label'), 1, 'AUTO a reopened note is logged as reopened');
+select ok((select actor is not null from public.asm_audit_log where target_id = pg_temp.s('assessment') and action = 'import_auto_resolved' limit 1), 'AUTO the admin who imported is the actor');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select throws_ok(format($$select public.asm_import_auto_resolved('%s', '[]')$$, pg_temp.v('assessment')), '42501', null, 'AUTO a student cannot write import notes');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select throws_ok($$select public.asm_import_auto_resolved(gen_random_uuid(), '[]')$$, 'P0002', null, 'AUTO an unknown assessment is refused');
+select throws_ok(format($$select public.asm_import_auto_resolved('%s', '{"a":1}')$$, pg_temp.v('assessment')), '22023', null, 'AUTO notes must be a list');
+select pg_temp.as_postgres();
+select ok(not has_function_privilege('anon', 'public.asm_import_auto_resolved(uuid,jsonb)', 'execute'), 'AUTO anonymous callers cannot write import notes');
 
 select * from finish();
 rollback;

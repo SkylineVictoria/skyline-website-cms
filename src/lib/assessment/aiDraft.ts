@@ -28,6 +28,8 @@ export interface ImportStatus {
   provider: string | null;
   model: string | null;
   cached: boolean;
+  /** The reader version that read it (part of the cache key; older results are read again). */
+  readerVersion?: number;
   result: CheckedDocument | null;
 }
 
@@ -51,7 +53,9 @@ function questionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImag
       ? `${imgs.map((p) => `<figure><img src="${p.src}" alt="${esc(it.text || "Drawing")}" /></figure>`).join("")}${it.text ? `<p><em>${esc(it.text)}</em></p>` : ""}`
       : it.text.split(/\n+/).map((l) => `<p>${esc(l)}</p>`).join("");
     q.config = { html: body, attachments: [] };
-    q.importMeta = meta(it, null);
+    // a drawing the reader found where the workbook's pictures could not be drawn in this browser: say so, and where
+    const noPicture = it.kind === "drawing" && !imgs.length ? [`No picture found on page ${it.pages.join(", ")}: add the drawing from the PDF`] : [];
+    q.importMeta = meta({ ...it, flags: [...it.flags, ...noPicture] }, null);
     return withSchema(q);
   }
   if (it.kind === "declaration") {
@@ -81,7 +85,8 @@ function questionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImag
     q.children = it.parts.map((p) => {
       const c = newQuestion("short_answer");
       c.label = p.text || p.label;
-      const flags = p.verbatim === "close" ? ["Wording differs slightly from the PDF"] : p.verbatim === "missing" ? ["Text not found in the PDF"] : p.verbatim === "scanned" ? ["Read from a scanned page"] : [];
+      const flags = p.verbatim === "close" || p.verbatim === "missing" ? [p.diff || (p.verbatim === "close" ? "Wording differs from the PDF" : "Text not found in the PDF")]
+        : p.verbatim === "scanned" ? ["Read from a scanned page: check the text against the page"] : [];
       c.importMeta = { page: it.pages[0] ?? null, confidence: flags.length ? "low" : "high", ...(flags.length ? { flags, note: flags.join(" · ") } : {}), number: it.canonical ? `${normalizeNumber(it.canonical)?.base ?? it.canonical}${p.part}` : p.part, via: "ai", original: c.label, ...(p.pdfText ? { pdfText: p.pdfText } : {}) };
       return withSchema(c);
     });
@@ -201,11 +206,13 @@ export function mergeParserExtras(ai: Definition, parser: Definition, taskPages:
     if (f.parent || !PARSER_ONLY.has(q.type)) continue;
     if (q.type !== "observation_checklist" && have.has(q.type)) continue; // one declaration / one adjustment record
     const page = q.importMeta?.page ?? null;
-    const ti = page == null ? -1 : taskPages.findIndex((t) => page >= t.firstPage && page <= t.lastPage);
+    // the task whose pages hold it, else the task it follows (a declaration or record printed after a task's pages belongs to it)
+    let ti = page == null ? -1 : taskPages.findIndex((t) => page >= t.firstPage && page <= t.lastPage);
+    if (ti < 0 && page != null) ti = taskPages.reduce((found, t, i) => (t.firstPage <= page ? i : found), page < (taskPages[0]?.firstPage ?? 0) ? 0 : -1);
     const task = out.tasks[ti >= 0 ? ti : out.tasks.length - 1];
     if (!task) continue;
     if (!task.sections.length) task.sections.push({ id: newId("s"), title: task.title, questions: [] });
-    const flags = ti >= 0 ? [] : ["Added from the standard reader: check where it belongs"];
+    const flags = ti >= 0 ? [] : ["Added from the standard reader without a page: check which task it belongs to"];
     const copy: Question = { ...structuredClone(q), importMeta: { ...(q.importMeta ?? { confidence: "high" }), via: "parser", ...(flags.length ? { flags, confidence: "low" as const, note: flags[0] } : {}) } };
     task.sections[task.sections.length - 1].questions.push(copy);
   }

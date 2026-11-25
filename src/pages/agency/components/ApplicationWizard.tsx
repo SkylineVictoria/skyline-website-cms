@@ -687,7 +687,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   };
 
   /**
-   * Next on a document step. After the passport: saves the residency answers (au_permanent_resident, currently_in_australia;
+   * Next on a document step. After the passport: saves the residency answers (au_permanent_resident, au_currently_in_australia;
    * blank for an Australian / New Zealand passport) and holds_visa No when no visa is needed. On the visa step of a student in
    * Australia: checks and saves the visa subclass, grant number and expiry.
    */

@@ -5110,6 +5110,7 @@ test("Residency after the passport (2026-11-25): AU / NZ Domestic (no visa), PR 
   assert.deepEqual(Object.keys(r.visaDetailProblems("50", "", "", "2026-11-25")).sort(), ["visa_grant_number", "visa_stay_until", "visa_subclass"]);
   assert.match(r.visaDetailProblems("500", "X", "2026-01-01", "2026-11-25").visa_stay_until, /expired/);
   assert.equal(r.PR_ANSWER, "au_permanent_resident");
+  assert.equal(r.IN_AUSTRALIA_ANSWER, "au_currently_in_australia", "au_ prefix: routed to the student record");
   const wizard = read("src/pages/agency/components/ApplicationWizard.tsx"), ui = read("src/pages/agency/components/WizardResidency.tsx");
   assert.ok(ui.includes("Are you an Australian permanent resident?") && ui.includes("Are you currently in Australia?"));
   assert.ok(wizard.includes('const stepRequired = (item: WizardStep) => (item.id === "visa" ? need !== "none" : Boolean(item.required));'));

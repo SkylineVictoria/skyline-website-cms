@@ -2,11 +2,11 @@
  * Residency questions after the passport scan (owner, 2026-11-25). An Australian or New Zealand passport makes the student
  * Domestic (no residency questions, no visa step). Anyone else is asked "Are you an Australian permanent resident?"
  * (values.au_permanent_resident): Yes asks for PR evidence (a visa grant notice, category Visa); No asks "Are you currently in
- * Australia?" (values.currently_in_australia): Yes needs the visa copy and its subclass, grant number and expiry; No needs no visa
+ * Australia?" (values.au_currently_in_australia): Yes needs the visa copy and its subclass, grant number and expiry; No needs no visa
  * yet (offshore: the CoE is issued first). The database derives residency_status from issuing_country and au_permanent_resident.
  */
 export const PR_ANSWER = "au_permanent_resident";
-export const IN_AUSTRALIA_ANSWER = "currently_in_australia";
+export const IN_AUSTRALIA_ANSWER = "au_currently_in_australia";
 
 /** What the visa step asks for: nothing (skipped), PR evidence, or the student visa copy with its details. */
 export type VisaNeed = "none" | "pr" | "visa";

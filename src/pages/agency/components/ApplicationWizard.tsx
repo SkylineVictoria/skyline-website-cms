@@ -875,6 +875,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // AVETMISS-UI: English proficiency when another language is spoken at home, disability types, prior qualifications.
       const otherLanguage = String(answers.language_home ?? "") === OTHER_LANGUAGE;
       if (otherLanguage && !filled("english_proficiency_code")) errors.english_proficiency_code = "Choose how well the student speaks English.";
+      if (filled("disability") === "Yes" && !parseCodeList(filled("disability_types")).length) errors.disability_types = "Choose at least one disability type.";
 
       const priorRows = parsePriorEducation(filled("prior_education")).filter((r) => r.code || r.recognition || r.name.trim());
       if (filled("prior_ed") === "Yes" && priorEducationProblem(priorRows)) errors.prior_education = priorEducationProblem(priorRows);

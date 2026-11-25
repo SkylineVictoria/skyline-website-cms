@@ -9,7 +9,7 @@ import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 import { OTHER_LANGUAGE } from "@/pages/agency/lib/wizardConfig";
-import { DisabilityTypesInput, PriorEducationInput } from "@/pages/admin/components/avetmiss/AvetmissInputs";
+import { PriorEducationInput } from "@/pages/admin/components/avetmiss/AvetmissInputs";
 import { parseCodeList, parsePriorEducation, serializeCodeList, serializePriorEducation } from "@/pages/admin/components/avetmiss/avetmissValues";
 
 const PERSONAL_LABELS: Record<string, string> = {
@@ -40,7 +40,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   version?: number;
 }) {
   const v = (name: string) => answers[name] ?? "";
-  const { codes } = useAvetmissCodes();
+  const { codes, error: codesError } = useAvetmissCodes();
   // One page, one time (owner, 2026-11-23): what the passport (or the student record) already filled was shown on the document
   // step, so Personal details asks only for what is still missing and does not show the rest again.
   const [prefilled, setPrefilled] = useState<Set<string>>(new Set());
@@ -144,11 +144,19 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
           ) : null}
           {radios("disability", "Do you consider yourself to have a disability, impairment or long-term condition?")}
           {v("disability") === "Yes" ? (
-            <fieldset>
-              <legend className={LABEL}>Which types of disability? (Optional)</legend>
-              <DisabilityTypesInput codes={codes} value={parseCodeList(v("disability_types"))} idPrefix="wizard-disability" onChange={(next) => onChange("disability_types", serializeCodeList(next))} />
+            <div>
+              {/* Owner 2026-11-25: AVETMISS needs at least one disability type when the answer is Yes; every type from the
+                  AVETMISS list (avetmiss_codes disability_type), more than one may be picked. */}
+              <Label htmlFor="wizard-disability_types" required>Which types of disability? (choose all that apply)</Label>
+              {codesError ? <p className="text-sm text-red-700">The disability list did not load: {codesError}</p> : (
+                <SearchableSelect id="wizard-disability_types" name="disability_types" multiple value={parseCodeList(v("disability_types"))}
+                  aria-invalid={Boolean(errors.disability_types)} className={INPUT}
+                  onChange={(e) => onChange("disability_types", serializeCodeList(Array.from(e.target.selectedOptions, (o) => o.value).filter(Boolean)))}>
+                  {avetmissOptions(codes, "disability_type").map((o) => <option key={o.code} value={o.code}>{`${o.label} - ${o.code}`}</option>)}
+                </SearchableSelect>
+              )}
               <FieldError text={errors.disability_types} />
-            </fieldset>
+            </div>
           ) : null}
           {radios("secondary_enrolled", "Is the student still enrolled in secondary (high) school?")}
           {select("school_level", "Highest completed school level")}

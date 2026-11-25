@@ -22,7 +22,7 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 /** Briefs, tables, drawings and the task's own instructions: shown in the Reference drawer, never inline above the questions. */
 export function referenceItems(task: Task, taskNo: number): ReferenceItem[] {
   const out: ReferenceItem[] = [];
-  if (task.instructions?.trim()) out.push({ id: `${task.id}:instructions`, title: `Task ${taskNo} instructions`, html: `<p>${esc(task.instructions).replace(/\n+/g, "</p><p>")}</p>`, page: null, hasPicture: false, hasTable: false });
+  if (task.instructions?.trim()) out.push({ id: `${task.id}:instructions`, title: `Task ${taskNo} instructions`, html: /^\s*</.test(task.instructions) ? task.instructions : `<p>${esc(task.instructions).replace(/\n+/g, "</p><p>")}</p>`, page: null, hasPicture: false, hasTable: false });
   for (const q of task.sections.flatMap((s) => s.questions)) {
     if (isAnswerable(q)) continue;
     const html = String(q.config?.html ?? "");

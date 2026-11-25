@@ -93,7 +93,7 @@ export default function AssessmentRenderer(props: RendererProps) {
         const numbers = numbering(task, taskIndex);
         return (
           <div key={task.id} className="space-y-5">
-            <div><h2 className="font-heading text-lg font-bold text-foreground-950">Task {taskIndex + 1}: {task.title}</h2>{task.instructions ? <p className="mt-1 whitespace-pre-wrap text-sm text-foreground-700">{task.instructions}</p> : null}</div>
+            <div><h2 className="font-heading text-lg font-bold text-foreground-950">Task {taskIndex + 1}: {task.title}</h2>{task.instructions ? (/^\s*</.test(task.instructions) ? <div className="asm-content mt-1 text-sm text-foreground-700" dangerouslySetInnerHTML={{ __html: sanitize(task.instructions) }} /> : <p className="mt-1 whitespace-pre-wrap text-sm text-foreground-700">{task.instructions}</p>) : null}</div>
             {task.sections.map((s) => renderSection(task, taskIndex, s, numbers))}
           </div>
         );

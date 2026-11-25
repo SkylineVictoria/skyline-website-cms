@@ -19,16 +19,19 @@ export default function NewAssessmentDialog({ courseId = "", unitId = "", course
   onClose: () => void;
   onSaved: (assessmentId: string) => void;
 }) {
-  const [courses, setCourses] = useState<RtoCourse[] | null>(givenCourses ?? null);
+  // The page's list when it has one; while the page's list is still empty (opened before it arrived), the dialog loads its own,
+  // so the Qualification list is never left empty.
+  const [loaded, setLoaded] = useState<RtoCourse[] | null>(null);
+  const courses = givenCourses?.length ? givenCourses : loaded;
   const [units, setUnits] = useState<RtoUnit[] | null>(givenUnits ?? (courseId ? null : []));
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (courses) return;
+    if (givenCourses?.length || loaded) return;
     let live = true;
-    rto<RtoCourse[]>("course_list").then((c) => { if (live) setCourses(c); }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "The courses could not be loaded."); });
+    rto<RtoCourse[]>("course_list").then((c) => { if (live) setLoaded(c); }).catch((e) => { if (live) setError(e instanceof Error ? e.message : "The courses could not be loaded."); });
     return () => { live = false; };
-  }, [courses]);
+  }, [givenCourses, loaded]);
   useEffect(() => {
     if (units || !courseId) return;
     let live = true;

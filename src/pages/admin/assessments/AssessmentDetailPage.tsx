@@ -11,6 +11,11 @@ import type { Definition, QuestionKey, UnitMapping } from "@/lib/assessment/type
 import { asmAdmin, attemptsRange, downloadJson, type AssessmentDetail } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail } from "@/pages/admin/lib/rto";
 import Builder from "./builder/Builder";
+import { PdfPreviewDialog } from "@/components/assessment/CheckList";
+import { publishedBase, withNextVersion } from "@/lib/assessment/checkList";
+import { blankWorkbookPdf } from "@/lib/assessment/workbookExport";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { bumpVersion } from "../../../../supabase/functions/_shared/asm-import/match.ts";
 import AssignmentsPanel from "./panels/AssignmentsPanel";
 import AttemptDrawer from "./panels/AttemptDrawer";
 import MappingPanel from "./panels/MappingPanel";
@@ -39,12 +44,18 @@ export default function AssessmentDetailPage() {
   const [confirmPublish, setConfirmPublish] = useState(false);
   const [units, setUnits] = useState<{ id: string; code: string; name: string }[]>([]);
   const timer = useRef<number | null>(null);
+  const [preview, setPreview] = useState<{ bytes: Uint8Array | null; error: string } | null>(null);
+  const { user } = useAuth();
+  /** A published version opened for editing moves its printed version on once, with the first change (see publishedBase). */
+  const pendingBump = useRef(false);
 
   const load = useCallback(async () => {
     try {
       const d = await asmAdmin<AssessmentDetail>("assessment_get", { id });
       setDetail(d); setError("");
-      if (d.editing) { setDefinition(d.editing.definition); setKeys(d.editing.keys); setMappings(d.editing.mappings); setSavedAt(d.editing.updatedAt); }
+      const fromPublished = d.editing?.status === "published";
+      pendingBump.current = fromPublished;
+      if (d.editing) { setDefinition(fromPublished ? publishedBase(d.editing.definition) : d.editing.definition); setKeys(d.editing.keys); setMappings(d.editing.mappings); setSavedAt(d.editing.updatedAt); }
       else { setDefinition({ tasks: [] }); setKeys([]); setMappings([]); }
       setDirty(false);
       rto<CourseDetail>("course_get", { courseId: d.courseId }).then((c) => setUnits(c.units.filter((u) => u.isActive).map((u) => ({ id: u.id ?? "", code: u.code, name: u.name })))).catch(() => undefined);
@@ -67,7 +78,9 @@ export default function AssessmentDetailPage() {
   }, [detail, savedAt, draftIsPublished, load]);
 
   // Autosave 1.2 s after the last change (the database refuses a stale save, so two editors cannot overwrite each other silently).
-  const onBuilderChange = (def: Definition, k: QuestionKey[]) => {
+  const onBuilderChange = (changed: Definition, k: QuestionKey[]) => {
+    const def = pendingBump.current ? withNextVersion(changed, bumpVersion) : changed;
+    pendingBump.current = false;
     setDefinition(def); setKeys(k); setDirty(true);
     if (timer.current) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => void save(def, k, mappings), 1200);
@@ -87,6 +100,15 @@ export default function AssessmentDetailPage() {
     setConfirmPublish(false);
   };
 
+  const previewPdf = async () => {
+    if (!detail || !definition) return;
+    setPreview({ bytes: null, error: "" });
+    const versionNo = detail.editing ? detail.editing.versionNo + (draftIsPublished && dirty ? 1 : 0) : 1;
+    const doc = { ...definition, source: { ...(definition.source ?? {}), version: definition.source?.version ?? String(versionNo) } };
+    try { setPreview({ bytes: await blankWorkbookPdf(doc, detail.title), error: "" }); }
+    catch (e) { setPreview({ bytes: null, error: e instanceof Error ? e.message : "The PDF could not be made." }); }
+  };
+
   if (error && !detail) return <ErrorNote text={error} />;
   if (!detail || !definition) return <SkeletonLines lines={8} />;
   const current = detail.versions.find((v) => v.id === detail.currentVersionId);
@@ -98,22 +120,28 @@ export default function AssessmentDetailPage() {
         actions={<>
           <span className="text-xs text-foreground-500" role="status">{saving ? "Saving…" : dirty ? "Unsaved changes" : savedAt ? `Saved ${fmtDateTime(savedAt)}` : ""}</span>
           <Button variant="outline" icon="ri-arrow-left-line" onClick={() => navigate("/admin/assessments")}>All assessments</Button>
+          <Button variant="outline" icon="ri-file-pdf-2-line" onClick={() => void previewPdf()} data-testid="preview-pdf">Preview PDF</Button>
           {editable ? <Button icon="ri-upload-2-line" disabled={!detail.editing || detail.editing.status !== "draft" || problems.length > 0} title={problems[0]?.message} onClick={() => setConfirmPublish(true)}>Publish v{detail.editing?.versionNo ?? 1}</Button> : null}
         </>} />
       {error ? <div className="mb-3"><ErrorNote text={error} /></div> : null}
       {problems.length ? <p className="mb-3 text-sm text-primary-700">{problems[0].message}</p> : null}
       <SectionTabs tabs={TABS} active={tab} onChange={(t) => setParams({ tab: t })} />
-      {tab === "builder" ? (draftIsPublished ? <div className="mb-3 rounded-md border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-700">Version {detail.editing?.versionNo} is published and frozen. Your first change opens version {(detail.editing?.versionNo ?? 0) + 1} as a draft; students keep the version they started on.</div> : null) : null}
-      {tab === "builder" ? <Builder definition={definition} keys={keys} onChange={onBuilderChange} readOnly={!editable} declarationText={String(detail.effectiveSettings.declaration_text ?? "")} /> : null}
-      {tab === "mapping" ? <MappingPanel definition={definition} unitId={detail.unitId} versionId={detail.editing?.versionId ?? null} elements={detail.elements} mappings={mappings} onChange={onMappingsChange} onElementsChanged={() => void load()} readOnly={!editable} /> : null}
+      {tab === "builder" && draftIsPublished && editable ? <p className="mb-3 flex items-start gap-2 rounded-xl border border-background-200 bg-white px-4 py-2.5 text-sm text-foreground-700" data-testid="published-note"><i className="ri-lock-line mt-0.5 text-foreground-500" aria-hidden="true" /><span>Version {detail.editing?.versionNo} is published. Your first change starts version {(detail.editing?.versionNo ?? 0) + 1} as a draft; students already in an attempt stay on version {detail.editing?.versionNo}.</span></p> : null}
+      {tab === "builder" ? <Builder definition={definition} keys={keys} onChange={onBuilderChange} readOnly={!editable} declarationText={String(detail.effectiveSettings.declaration_text ?? "")} editor={{ id: user?.id ?? null, name: user?.name ?? null }} /> : null}
+      {tab === "mapping" ? <MappingPanel assessmentId={detail.id} definition={definition} unitId={detail.unitId} unitCode={units.find((u) => u.id === detail.unitId)?.code ?? null} elements={detail.elements} mappings={mappings} onChange={onMappingsChange} onElementsChanged={() => void load()} readOnly={!editable} /> : null}
       {tab === "assignments" ? <AssignmentsPanel assessmentId={detail.id} courseId={detail.courseId} assignments={detail.assignments} canAssign={canAssign} onChanged={() => void load()} onOpenAttempt={setAttempt} /> : null}
       {tab === "versions" ? <VersionsPanel detail={detail} onChanged={() => void load()} /> : null}
       {tab === "settings" ? <SettingsPanel detail={detail} units={units} onChanged={() => void load()} /> : null}
+      {preview ? <PdfPreviewDialog preview={preview} title={`Preview PDF · ${detail.title}`} fileName={`${(detail.code || detail.title).replace(/[^A-Za-z0-9-]+/g, "_")}.pdf`} onClose={() => setPreview(null)} /> : null}
       {attempt ? <AttemptDrawer attemptId={attempt} onClose={() => setAttempt(null)} onChanged={() => void load()} /> : null}
       <ConfirmDialog open={confirmPublish} title={`Publish version ${detail.editing?.versionNo ?? 1}?`} confirmLabel="Publish" message="A published version is frozen: its questions never change. Edits after publishing create the next version; students on this version keep it." onCancel={() => setConfirmPublish(false)} onConfirm={() => void publish()} />
     </div>
   );
 }
+
+const SMALL_BTN = "inline-flex cursor-pointer items-center gap-1 rounded-md border border-background-300 bg-white px-2 py-1 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700";
+const CARD = "overflow-hidden rounded-xl border border-background-200 bg-white";
+const CARD_HEAD = "border-b border-background-200 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-900";
 
 function VersionsPanel({ detail, onChanged }: { detail: AssessmentDetail; onChanged: () => void }) {
   const { push } = useToast();
@@ -123,16 +151,21 @@ function VersionsPanel({ detail, onChanged }: { detail: AssessmentDetail; onChan
   return (
     <div className="space-y-3">
       {error ? <ErrorNote text={error} /> : null}
-      <ul className="divide-y divide-background-100 rounded-md border border-background-200">{detail.versions.map((v) => (
-        <li key={v.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
-          <span className="font-medium text-foreground-900">Version {v.versionNo}</span>
-          <Badge tone={v.status === "published" ? "success" : v.status === "draft" ? "accent" : "muted"}>{v.status}</Badge>
-          <span className="min-w-0 flex-1 truncate text-xs text-foreground-600">{v.publishedAt ? `published ${fmtDateTime(v.publishedAt)}` : `created ${fmtDateTime(v.createdAt)}`} · {v.assignments} assignment{v.assignments === 1 ? "" : "s"} · {v.attempts} attempt{v.attempts === 1 ? "" : "s"}{v.checksum ? ` · ${v.checksum.slice(0, 12)}…` : ""}</span>
-          <Button size="sm" variant="outline" icon="ri-download-2-line" onClick={() => void exportJson(v.id)}>Export JSON</Button>
-          {v.status === "published" ? <Button size="sm" variant="ghost" onClick={() => window.confirm(`Retire version ${v.versionNo}? Its open assignments close; attempts keep their history.`) && void act("version_retire", { versionId: v.id }, "Version retired.")}>Retire</Button> : null}
-          {v.status === "draft" && v.versionNo > 1 ? <Button size="sm" variant="ghost" onClick={() => window.confirm("Discard this draft? The published version stays.") && void act("draft_discard", { assessmentId: detail.id }, "Draft discarded.")}>Discard draft</Button> : null}
-        </li>))}</ul>
-      <p className="text-xs text-foreground-600">Import: Master Data › Assessments › New assessment › "From a JSON export". Attempts are always bound to the version they started on.</p>
+      <section className={CARD}>
+        <p className={CARD_HEAD}>Versions</p>
+        <ul className="divide-y divide-background-100" data-testid="versions-list">{detail.versions.map((v) => (
+          <li key={v.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm">
+            <span className="w-20 shrink-0 font-semibold text-foreground-900">Version {v.versionNo}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold ${v.status === "published" ? "bg-green-100 text-green-900" : v.status === "draft" ? "bg-amber-100 text-amber-900" : "bg-background-100 text-foreground-600"}`}>{v.status === "published" ? "Published" : v.status === "draft" ? "Draft" : "Retired"}</span>
+            <span className="min-w-0 flex-1 truncate text-xs text-foreground-600">{v.publishedAt ? `published ${fmtDateTime(v.publishedAt)}` : `created ${fmtDateTime(v.createdAt)}`} · {v.assignments} assignment{v.assignments === 1 ? "" : "s"} · {v.attempts} attempt{v.attempts === 1 ? "" : "s"}</span>
+            <span className="flex shrink-0 items-center gap-1">
+              <button type="button" className={SMALL_BTN} onClick={() => void exportJson(v.id)}><i className="ri-download-2-line" aria-hidden="true" />Export JSON</button>
+              {v.status === "published" ? <button type="button" className={SMALL_BTN} onClick={() => window.confirm(`Retire version ${v.versionNo}? Its open assignments close; attempts keep their history.`) && void act("version_retire", { versionId: v.id }, "Version retired.")}>Retire</button> : null}
+              {v.status === "draft" && v.versionNo > 1 ? <button type="button" className={SMALL_BTN} onClick={() => window.confirm("Discard this draft? The published version stays.") && void act("draft_discard", { assessmentId: detail.id }, "Draft discarded.")}>Discard draft</button> : null}
+            </span>
+          </li>))}</ul>
+      </section>
+      <p className="text-xs text-foreground-600">Students already in an attempt stay on the version they started. Import: Master Data › Assessments › New assessment › "From a JSON export"; the workbook PDF is the page's Preview PDF.</p>
     </div>
   );
 }
@@ -156,24 +189,27 @@ function SettingsPanel({ detail, units, onChanged }: { detail: AssessmentDetail;
   const archive = async () => { try { await asmAdmin("assessment_archive", { id: detail.id }); push("Archived."); onChanged(); } catch (e) { setError(e instanceof Error ? e.message : "Not archived."); } };
   const eff = detail.effectiveSettings;
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="max-w-3xl space-y-4" data-testid="settings-panel">
       {error ? <ErrorNote text={error} /> : null}
-      <div className="grid gap-3 sm:grid-cols-2">
+      <section className={CARD}>
+      <p className={CARD_HEAD}>Assessment</p>
+      <div className="grid gap-3 p-4 sm:grid-cols-2">
         <Field label="Title" required><TextInput value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         <Field label="Code"><TextInput value={code} onChange={(e) => setCode(e.target.value)} /></Field>
         <div className="sm:col-span-2"><Field label="Description (shown to students)"><TextArea rows={3} value={description} onChange={(e) => setDescription(e.target.value)} /></Field></div>
-        <Field label="Unit of competency"><Select value={unitId} onChange={(e) => setUnitId(e.target.value)}><option value="">(none)</option>{units.map((u) => <option key={u.id} value={u.id}>{u.code} {u.name}</option>)}</Select></Field>
+        <Field label="Unit of competency"><Select value={unitId} searchPlaceholder="Search units…" noMatchText="No units match" onChange={(e) => setUnitId(e.target.value)}><option value="">(none)</option>{units.map((u) => <option key={u.id} value={u.id}>{u.code} {u.name}</option>)}</Select></Field>
         <div className="flex items-end"><Toggle label="Also usable as a template" checked={isTemplate} onChange={setIsTemplate} /></div>
       </div>
-      <div className="rounded-md border border-background-200 p-3">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-foreground-500">Overrides of the institution's rules (blank = institution default)</p>
-        <div className="grid gap-3 sm:grid-cols-3">
+      </section>
+      <section className={CARD}>
+        <p className={CARD_HEAD}>Overrides of the institution's rules <span className="font-normal text-foreground-500">· blank = institution default</span></p>
+        <div className="grid gap-3 p-4 sm:grid-cols-3">
           <Field label={`Maximum attempts (default ${String(eff.max_attempts)})`}><TextInput type="number" min={attemptsRange().minimum} max={attemptsRange().maximum} value={maxAttempts} onChange={(e) => setMaxAttempts(e.target.value)} /></Field>
           <Field label={`Reassessment window, days (default ${String(eff.reassessment_days)})`}><TextInput type="number" min={1} max={90} value={days} onChange={(e) => setDays(e.target.value)} /></Field>
           <Field label={`Late submissions (default ${String(eff.late_submission)})`}><Select value={late} onChange={(e) => setLate(e.target.value)}><option value="">(default)</option><option value="allow">Allow (flagged late)</option><option value="block">Block after the late date</option></Select></Field>
         </div>
-      </div>
-      <div className="flex flex-wrap gap-2"><Button icon="ri-save-line" onClick={() => void save()}>Save</Button>{!detail.archivedAt ? <Button variant="ghost" icon="ri-archive-line" onClick={() => window.confirm("Archive this assessment? Open assignments must be closed first.") && void archive()}>Archive</Button> : <Badge tone="muted">Archived</Badge>}</div>
+      </section>
+      <div className="flex flex-wrap gap-2"><Button icon="ri-save-line" onClick={() => void save()}>Save</Button>{!detail.archivedAt ? <Button variant="outline" icon="ri-archive-line" onClick={() => window.confirm("Archive this assessment? Open assignments must be closed first.") && void archive()}>Archive</Button> : <Badge tone="muted">Archived</Badge>}</div>
       <p className="text-xs text-foreground-500"><Link className="underline" to="/admin/assessments?tab=settings">Institution settings</Link> hold the declaration wording, instructions, evidence limits and the rollup rule.</p>
     </div>
   );

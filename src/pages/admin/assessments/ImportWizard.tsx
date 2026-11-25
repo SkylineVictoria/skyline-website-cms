@@ -13,7 +13,8 @@
  * Answers only ever go to asm_question_keys (assessors), never into the definition.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import PdfPages from "@/components/signing/PdfPages";
+import { BTN_PRIMARY, BTN_SECONDARY, NeedsALook, PdfPreviewDialog, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
+import { checkRows, editCount, markReviewed, numberOf, plainText, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import { flattenQuestions, updateQuestion } from "@/lib/assessment/definition";
@@ -51,14 +52,11 @@ interface DocState {
   parser: ImportResult | null;
 }
 type TraceKey = QuestionKey & { originalModelAnswer?: string | null; originalGuidance?: string | null; source?: "ai" | "parser" | "content_match" | "manual"; edited?: boolean };
-interface CheckRow { id: string; number: string; label: string; reason: string; tag: "Answer missing" | "Import check" | "Answer check"; parentId: string | null }
 type DoneHow = "Looks good" | "Edited" | "No answer";
 
 const PRIMARY = "inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50";
 const SECONDARY = "inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-background-300 bg-white px-4 py-2.5 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-50";
 const FIELD = "w-full rounded-lg border border-background-300 bg-white px-3 py-2 text-sm text-foreground-900 focus:border-primary-400 focus:outline-none";
-const plain = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
-const short = (s: string, n = 90) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 function StepPills({ steps, current }: { steps: { id: StepId; label: string }[]; current: StepId }) {
   const at = steps.findIndex((s) => s.id === current);
@@ -151,7 +149,6 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   const [open, setOpen] = useState<string | null>(null);
   const [done, setDone] = useState<Record<string, DoneHow>>({});
   const [browse, setBrowse] = useState(false);
-  const [showOriginal, setShowOriginal] = useState<Record<string, boolean>>({});
   // publish
   const [ask, setAsk] = useState<null | "discard" | "publish">(null);
   const [title, setTitle] = useState("");
@@ -281,54 +278,35 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   const listKey = `${wb?.file.name ?? ""}|${wb?.status?.id ?? ""}|${wb?.path ?? ""}|${guide?.status?.id ?? guide?.file.name ?? ""}|${applied ? "g" : ""}`;
   const computedRows: CheckRow[] = useMemo(() => {
     if (!definition) return [];
-    const out: CheckRow[] = [];
-    for (const f of flat) {
-      const q = f.question;
-      const num = q.importMeta?.number ?? numbers.get(q.id)?.number ?? (f.parent ? `${numbers.get(f.parent.id)?.number ?? ""}${String.fromCharCode(97 + Math.max(0, (f.parent.children ?? []).indexOf(q)))}` : "");
-      const label = q.type === "instruction" ? plain(String(q.config?.html ?? "")) || "Instruction" : q.label;
-      const flags = q.importMeta?.flags ?? (q.importMeta?.confidence === "low" && q.importMeta.note ? [q.importMeta.note] : []);
-      if (flags.length && !q.importMeta?.reviewedAt) out.push({ id: q.id, number: num, label, reason: flags[0], tag: "Import check", parentId: f.parent?.id ?? null });
-      if (!f.parent && applied && !applied.check.block && isAnswerable(q) && !["declaration", "adjustment_record", "observation_checklist", "file_upload"].includes(q.type)) {
-        if (!hasAnswer(q)) out.push({ id: `${q.id}#answer`, number: num, label, reason: "No answer found in the guide", tag: "Answer missing", parentId: null });
-        else if (applied.review.has(q.id)) out.push({ id: `${q.id}#answer`, number: num, label, reason: applied.review.get(q.id) ?? "Check the answer", tag: "Answer check", parentId: null });
-      }
-    }
-    return out;
+    return checkRows(definition, numbers, applied && !applied.check.block ? { hasAnswer, review: applied.review } : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [definition, applied, keys, flat, numbers]);
+  }, [definition, applied, keys, numbers]);
   const rows: CheckRow[] = useMemo(() => {
     if (listed.current.key !== listKey) listed.current = { key: listKey, rows: [] };
-    const seen = new Map(listed.current.rows.map((r) => [r.id, r]));
-    const fresh = new Map(computedRows.map((r) => [r.id, r]));
-    const merged = listed.current.rows.map((r) => fresh.get(r.id) ?? r);
-    for (const r of computedRows) if (!seen.has(r.id)) merged.push(r);
-    listed.current.rows = merged;
-    return merged;
+    listed.current.rows = stableRows(listed.current.rows, computedRows);
+    return listed.current.rows;
   }, [computedRows, listKey]);
   const left = rows.filter((r) => !done[r.id]).length;
   const answersMissing = rows.filter((r) => r.tag === "Answer missing").length;
   const importChecks = rows.length - answersMissing;
 
   /* ---------------- editing ---------------- */
-  const questionId = (rowId: string) => rowId.replace(/#answer$/, "");
-  const editLabel = (id: string, text: string) => setDefinition((d) => d && updateQuestion(d, id, (q) => {
-    const original = q.importMeta?.original ?? q.label;
-    const changed = text !== original;
-    return { ...q, label: text, importMeta: { ...(q.importMeta ?? { confidence: "high" }), original, editedAt: changed ? new Date().toISOString() : null, editedBy: changed ? user?.id ?? null : null, editedByName: changed ? user?.name ?? null : null } };
-  }));
+  const who = { id: user?.id ?? null, name: user?.name ?? null };
+  const editLabel = (id: string, text: string) => setDefinition((d) => d && updateQuestion(d, id, (q) => withLabelEdit(q, text, who)));
+  const editHtml = (id: string, html: string) => setDefinition((d) => d && updateQuestion(d, id, (q) => withHtmlEdit(q, html, who)));
   const editAnswer = (id: string, text: string) => setKeys((list) => {
     const k = list.find((x) => x.questionId === id);
     if (!k) return [...list, { questionId: id, modelAnswer: text, originalModelAnswer: null, originalGuidance: null, source: "manual", edited: true }];
     return list.map((x) => (x.questionId === id ? { ...x, modelAnswer: text, edited: (x.originalModelAnswer ?? "") !== text || x.source === "manual" } : x));
   });
-  const markReviewed = (id: string) => setDefinition((d) => d && updateQuestion(d, id, (q) => ({ ...q, importMeta: { ...(q.importMeta ?? { confidence: "high" }), reviewedAt: new Date().toISOString() } })));
+  const markRowReviewed = (id: string) => setDefinition((d) => d && updateQuestion(d, id, markReviewed));
   const finishRow = (row: CheckRow, how: DoneHow) => {
-    if (row.tag === "Import check") markReviewed(row.id);
+    if (row.tag === "Import check") markRowReviewed(row.id);
     setDone((m) => ({ ...m, [row.id]: how }));
     const next = rows.find((r) => r.id !== row.id && !done[r.id]);
     setOpen(next?.id ?? null);
   };
-  const edits = useMemo(() => flat.filter((f) => f.question.importMeta?.editedAt).length + keys.filter((k) => k.edited).length, [flat, keys]);
+  const edits = useMemo(() => (definition ? editCount(definition, keys) : 0), [definition, keys]);
 
   /* ---------------- preview / publish ---------------- */
   const docDefinition = useMemo<Definition | null>(() => {
@@ -465,87 +443,32 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   );
 
   const editor = (rowId: string, tag: CheckRow["tag"] | null) => {
-    const id = questionId(rowId);
+    const id = rowQuestionId(rowId);
     const q = flat.find((f) => f.question.id === id)?.question;
     if (!q) return null;
-    const k = keyOf(id);
-    const isText = q.type !== "instruction";
     const row = rows.find((r) => r.id === rowId) ?? null;
     return (
-      <div className="space-y-3 border-t border-primary-100 bg-primary-50/40 px-3 pb-3 pt-2 sm:px-4" data-testid="row-editor">
-        {isText ? (
-          <label className="block">
-            <span className="text-2xs font-bold uppercase tracking-wide text-foreground-600">Question</span>
-            <textarea className={`${FIELD} mt-1`} rows={3} value={q.label} onChange={(e) => editLabel(q.id, e.target.value)} aria-label="Question text" />
-          </label>
-        ) : <p className="rounded-lg border border-background-200 bg-white px-3 py-2 text-sm text-foreground-800">{plain(String(q.config?.html ?? "")) || "A picture from the workbook"}{/<img\b/.test(String(q.config?.html ?? "")) ? <span className="ml-1 text-xs text-foreground-500">(with its drawing)</span> : null}</p>}
-        {q.importMeta?.pdfText && q.importMeta.pdfText !== q.label ? (
-          <div className="rounded-lg border border-background-200 bg-white px-3 py-2 text-sm">
-            <p className="text-2xs font-bold uppercase tracking-wide text-foreground-500">The PDF says</p>
-            <p className="mt-0.5 text-foreground-800">{q.importMeta.pdfText}</p>
-            <button type="button" className="mt-1 cursor-pointer text-xs font-semibold text-primary-700 hover:underline" onClick={() => editLabel(q.id, q.importMeta?.pdfText ?? q.label)}>Use the PDF wording</button>
-          </div>
-        ) : null}
-        {isText && q.type !== "declaration" && !(q.children?.length) ? (
-          <label className="block">
-            <span className="text-2xs font-bold uppercase tracking-wide text-foreground-600">What the trainer should look for</span>
-            <textarea className={`${FIELD} mt-1 ${tag === "Answer missing" ? "border-primary-400" : ""}`} rows={3} placeholder="Type or paste the model answer…" value={k?.modelAnswer ?? ""} onChange={(e) => editAnswer(q.id, e.target.value)} aria-label="Model answer" />
-            {k?.assessorGuidance ? <span className="mt-1 block text-xs text-foreground-600">Benchmark from the guide: {k.assessorGuidance}</span> : null}
-          </label>
-        ) : null}
-        {row ? (
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className={PRIMARY.replace("px-4 py-2.5", "px-3 py-2")} onClick={() => finishRow(row, q.importMeta?.editedAt || keyOf(q.id)?.edited ? "Edited" : row.tag === "Answer missing" && !keyOf(q.id)?.modelAnswer ? "No answer" : "Looks good")}>Save &amp; next</button>
-            {row.tag === "Answer missing" ? <button type="button" className={SECONDARY.replace("px-4 py-2.5", "px-3 py-2")} onClick={() => finishRow(row, "No answer")}>Leave without answer</button>
-              : <button type="button" className={SECONDARY.replace("px-4 py-2.5", "px-3 py-2")} onClick={() => finishRow(row, "Looks good")}>Looks good</button>}
-          </div>
-        ) : <button type="button" className={SECONDARY.replace("px-4 py-2.5", "px-3 py-1.5")} onClick={() => setOpen(null)}>Done</button>}
-      </div>
+      <QuestionTextEditor q={q} keyRow={keyOf(id)} onLabel={(t) => editLabel(q.id, t)} onHtml={(h) => editHtml(q.id, h)} onAnswer={(t) => editAnswer(q.id, t)} highlightAnswer={tag === "Answer missing"}
+        actions={row ? <>
+          <button type="button" className={BTN_PRIMARY} onClick={() => finishRow(row, q.importMeta?.editedAt || keyOf(q.id)?.edited ? "Edited" : row.tag === "Answer missing" && !keyOf(q.id)?.modelAnswer ? "No answer" : "Looks good")}>Save &amp; next</button>
+          {row.tag === "Answer missing" ? <button type="button" className={BTN_SECONDARY} onClick={() => finishRow(row, "No answer")}>Leave without answer</button>
+            : <button type="button" className={BTN_SECONDARY} onClick={() => finishRow(row, "Looks good")}>Looks good</button>}
+        </> : <button type="button" className={BTN_SECONDARY} onClick={() => setOpen(null)}>Done</button>} />
     );
   };
 
   const checkView = (
     <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold text-foreground-900">Needs a look <span className="font-normal text-foreground-500">· {left} of {rows.length} left</span></p>
-        <div className="h-1.5 w-28 overflow-hidden rounded-full bg-background-200 sm:w-40" aria-hidden="true"><div className="h-full rounded-full bg-green-600 transition-all" style={{ width: `${rows.length ? Math.round(100 * (rows.length - left) / rows.length) : 100}%` }} /></div>
-      </div>
-      {rows.length ? (
-        <ul className="divide-y divide-background-200 overflow-hidden rounded-xl border border-background-200 bg-white" data-testid="check-list">
-          {rows.map((r) => {
-            const how = done[r.id];
-            const isOpen = open === r.id;
-            return (
-              <li key={r.id} className={isOpen ? "bg-primary-50/30" : ""}>
-                <button type="button" onClick={() => setOpen(isOpen ? null : r.id)} aria-expanded={isOpen} className="flex w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left sm:px-4">
-                  {how ? <i className="ri-check-line text-green-700" aria-hidden="true" /> : <span className={`h-3.5 w-3.5 shrink-0 rounded-full border-2 ${isOpen ? "border-primary-600 bg-primary-600" : "border-background-400"}`} aria-hidden="true" />}
-                  <span className="w-12 shrink-0 text-sm font-semibold text-foreground-900">{r.number || "–"}</span>
-                  <span className={`min-w-0 flex-1 truncate text-sm ${how ? "text-foreground-500 line-through" : "text-foreground-800"}`}>{r.reason}{!isOpen ? <span className="ml-2 hidden text-foreground-500 sm:inline">{short(r.label, 60)}</span> : null}</span>
-                  {how ? <span className="shrink-0 text-xs text-foreground-500">{how}</span>
-                    : <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold ${r.tag === "Answer missing" ? "bg-amber-100 text-amber-900" : r.tag === "Answer check" ? "bg-sky-100 text-sky-900" : "bg-indigo-100 text-indigo-900"}`}>{r.tag}</span>}
-                </button>
-                {isOpen ? editor(r.id, r.tag) : null}
-              </li>
-            );
-          })}
-        </ul>
-      ) : <p className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900"><i className="ri-check-double-line mr-1" aria-hidden="true" />Nothing was flagged. Browse the questions if you want to look anyway.</p>}
+      {rows.length ? <NeedsALook rows={rows} done={done} open={open} onToggle={setOpen} renderEditor={(r) => editor(r.id, r.tag)} />
+        : <p className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900"><i className="ri-check-double-line mr-1" aria-hidden="true" />Nothing was flagged. Browse the questions if you want to look anyway.</p>}
       <button type="button" className="cursor-pointer text-sm font-semibold text-primary-700 hover:underline" onClick={() => setBrowse((b) => !b)} aria-expanded={browse}>{browse ? "Hide the questions" : `Browse all ${answerable.length} questions ›`}</button>
       {browse ? (
         <ul className="divide-y divide-background-200 overflow-hidden rounded-xl border border-background-200 bg-white" data-testid="browse-list">
           {flat.filter((f) => isAnswerable(f.question)).map((f) => {
             const q = f.question; const id = `browse:${q.id}`; const isOpen = open === id;
-            const num = q.importMeta?.number ?? numbers.get(q.id)?.number ?? (f.parent ? `${numbers.get(f.parent.id)?.number ?? ""}${String.fromCharCode(97 + Math.max(0, (f.parent.children ?? []).indexOf(q)))}` : "");
-            const edited = Boolean(q.importMeta?.editedAt);
             return (
               <li key={q.id}>
-                <button type="button" onClick={() => setOpen(isOpen ? null : id)} aria-expanded={isOpen} className={`flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left sm:px-4 ${f.parent ? "pl-8 sm:pl-10" : ""}`}>
-                  <span className="w-14 shrink-0 text-sm font-semibold text-foreground-900">{num}</span>
-                  <span className="min-w-0 flex-1 truncate text-sm text-foreground-800">{showOriginal[q.id] && q.importMeta?.original ? q.importMeta.original : q.label}</span>
-                  {keyOf(q.id)?.modelAnswer ? <i className="ri-key-2-line text-foreground-400" title="Has a model answer" aria-label="Has a model answer" /> : null}
-                  {edited ? <span className="shrink-0 rounded-full bg-primary-100 px-2 py-0.5 text-2xs font-semibold text-primary-800">Edited</span> : null}
-                </button>
-                {edited ? <p className="px-4 pb-1 text-xs text-foreground-500">Edited{q.importMeta?.editedByName ? ` by ${q.importMeta.editedByName}` : ""}{q.importMeta?.editedAt ? ` · ${new Date(q.importMeta.editedAt).toLocaleString()}` : ""} · <button type="button" className="cursor-pointer font-semibold text-primary-700 hover:underline" onClick={() => setShowOriginal((m) => ({ ...m, [q.id]: !m[q.id] }))}>{showOriginal[q.id] ? "Show edited" : "Show original"}</button></p> : null}
+                <QuestionLine q={q} number={numberOf(f, numbers)} open={isOpen} onClick={() => setOpen(isOpen ? null : id)} depth={f.parent ? 1 : 0} answered={Boolean(keyOf(q.id)?.modelAnswer)} />
                 {isOpen ? editor(q.id, null) : null}
               </li>
             );
@@ -596,19 +519,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
         {footer}
       </div>
 
-      {preview ? (
-        <div className="fixed inset-0 z-[90] flex items-stretch justify-center bg-foreground-950/60 sm:p-6" role="dialog" aria-modal="true" aria-label="Preview PDF">
-          <div className="flex w-full max-w-4xl flex-col bg-background-100 sm:rounded-2xl">
-            <div className="flex items-center justify-between border-b border-background-200 bg-white px-4 py-3 sm:rounded-t-2xl">
-              <p className="font-heading text-sm font-semibold text-foreground-950">Preview PDF{docDefinition?.source?.version ? ` · version ${docDefinition.source.version}` : ""}</p>
-              <button type="button" className="cursor-pointer rounded-md p-1 text-foreground-500 hover:bg-background-100" onClick={() => setPreview(null)} aria-label="Close the preview"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 sm:p-5">
-              {preview.error ? <p role="alert" className="text-sm text-red-700">{preview.error}</p> : preview.busy || !preview.bytes ? <p role="status" className="p-6 text-center text-sm text-foreground-600"><i className="ri-loader-4-line mr-1.5 animate-spin" aria-hidden="true" />Making the workbook PDF…</p> : <PdfPages source={preview.bytes} maxWidth={820} />}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {preview ? <PdfPreviewDialog preview={preview} title={`Preview PDF${docDefinition?.source?.version ? ` · version ${docDefinition.source.version}` : ""}`} onClose={() => setPreview(null)} /> : null}
       {ask === "discard" ? <ConfirmDialog title="Discard this import?" confirmLabel="Discard" tone="danger" body="Nothing has been saved. The questions and your edits are lost." onClose={() => setAsk(null)} onConfirm={() => { setAsk(null); onClose(); }} /> : null}
       {ask === "publish" ? (
         <ConfirmDialog title="Publish this assessment?" confirmLabel="Publish"

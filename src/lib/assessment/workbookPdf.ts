@@ -456,7 +456,7 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
   for (const [ti, task] of definition.tasks.entries()) {
     L.newPage();
     L.heading(taskHeading(task, ti), 14);
-    if (task.instructions) L.text(task.instructions, { size: 8.5, color: GREY });
+    if (task.instructions) { if (/^\s*</.test(task.instructions)) await L.content(task.instructions); else L.text(task.instructions, { size: 8.5, color: GREY }); }
     for (const s of task.sections) {
       // the blank workbook keeps the briefs; a marked export prints only what was answered
       const qs = s.questions.filter((q) => input.blank || !CONTENT_TYPES.has(q.type));

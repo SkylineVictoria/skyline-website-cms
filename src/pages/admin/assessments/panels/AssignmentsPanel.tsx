@@ -29,18 +29,24 @@ export default function AssignmentsPanel({ assessmentId, courseId, assignments, 
   const [open, setOpen] = useState<AssignmentRow | null>(null);
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-foreground-700">Assign the published version to intakes. Students come from the intake's enrolments, assessors from its trainers.</p>
-        <Button size="sm" icon="ri-send-plane-line" disabled={!canAssign} title={canAssign ? "" : "Publish a version first"} onClick={() => setCreating(true)}>Assign to intakes</Button>
-      </div>
-      {assignments.length === 0 ? <Empty icon="ri-group-line" title="Not assigned yet" text="Once published, assign the assessment to one or more intakes with a due date." /> : (
-        <ul className="divide-y divide-background-100 rounded-md border border-background-200">{assignments.map((a) => (
-          <li key={a.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
-            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(a)}><span className="block font-medium text-foreground-900">{a.intake || a.batchName}</span><span className="block text-xs text-foreground-600">v{a.versionNo} · due {fmtDateTime(a.dueAt)}{a.lateUntil ? ` · late until ${fmtDateTime(a.lateUntil)}` : ""} · {a.eligibleCount} student{a.eligibleCount === 1 ? "" : "s"}</span></button>
-            <Badge tone={a.status === "open" ? "success" : a.status === "cancelled" ? "warn" : "muted"}>{a.status}</Badge>
-            <Link to={`/admin/lms/intakes#${a.intakeId || a.batchId}`} className="text-xs text-foreground-600 hover:text-primary-700">Intake page</Link>
-          </li>))}</ul>
-      )}
+      <section className="overflow-hidden rounded-xl border border-background-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-background-200 bg-background-50 px-4 py-2.5">
+          <p className="text-sm font-semibold text-foreground-900">Assignments <span className="font-normal text-foreground-500">· students come from the intake's enrolments, assessors from its trainers</span></p>
+          <Button size="sm" icon="ri-send-plane-line" disabled={!canAssign} title={canAssign ? "" : "Publish a version first"} onClick={() => setCreating(true)}>Assign to intakes</Button>
+        </div>
+        {assignments.length === 0 ? <div className="p-4"><Empty icon="ri-group-line" title="Not assigned yet" text="Once published, assign the assessment to one or more intakes with a due date." /></div> : (
+          <ul className="divide-y divide-background-100" data-testid="assignments-list">{assignments.map((a) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-sm hover:bg-background-50">
+              <button type="button" className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 text-left" onClick={() => setOpen(a)}>
+                <span className="min-w-0 flex-1 truncate font-semibold text-foreground-900">{a.intake || a.batchName}</span>
+                <span className="hidden shrink-0 text-xs text-foreground-600 sm:inline">v{a.versionNo} · due {fmtDateTime(a.dueAt)}{a.lateUntil ? ` · late until ${fmtDateTime(a.lateUntil)}` : ""}</span>
+                <span className="shrink-0 text-xs text-foreground-600">{a.eligibleCount} student{a.eligibleCount === 1 ? "" : "s"}</span>
+              </button>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold ${a.status === "open" ? "bg-green-100 text-green-900" : a.status === "cancelled" ? "bg-amber-100 text-amber-900" : "bg-background-100 text-foreground-600"}`}>{a.status === "open" ? "Open" : a.status === "cancelled" ? "Cancelled" : "Closed"}</span>
+              <Link to={`/admin/lms/intakes#${a.intakeId || a.batchId}`} className="shrink-0 text-xs font-semibold text-primary-700 hover:underline">Intake page</Link>
+            </li>))}</ul>
+        )}
+      </section>
       {creating ? <CreateDrawer assessmentId={assessmentId} courseId={courseId} onClose={() => setCreating(false)} onDone={() => { setCreating(false); onChanged(); push("Assigned."); }} /> : null}
       {open ? <AssignmentDrawer assignment={open} onClose={() => setOpen(null)} onChanged={() => { onChanged(); }} onOpenAttempt={onOpenAttempt} /> : null}
     </div>
@@ -78,8 +84,8 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
     <Drawer open title="Assign to intakes" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || (!useMaster && !dueAt) || missingMaster} onClick={() => void submit()}>Assign</Button></>}>
       <div className="space-y-4">
         <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Intakes on this course</span>
-          {batches.length === 0 ? <p className="text-sm text-foreground-600">No intakes on this course yet (Courses › Intakes).</p> : <ul className="grid gap-1 sm:grid-cols-2">{batches.map((b) => <li key={b.id}><label className="flex items-center gap-2 rounded-md border border-background-200 px-2 py-1.5 text-sm"><input type="checkbox" checked={picked.includes(b.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, b.id] : picked.filter((x) => x !== b.id))} /><span className="min-w-0 flex-1 truncate">{b.name}</span><span className="text-xs text-foreground-500">{b.students}</span></label></li>)}</ul>}</div>
-        <div className="rounded-md border border-background-200 bg-background-50 p-3" data-testid="assignment-master-window">
+          {batches.length === 0 ? <p className="text-sm text-foreground-600">No intakes on this course yet (Courses › Intakes).</p> : <ul className="grid gap-1 sm:grid-cols-2">{batches.map((b) => <li key={b.id}><label className="flex cursor-pointer items-center gap-2 rounded-lg border border-background-200 bg-white px-2.5 py-1.5 text-sm hover:border-primary-300"><input type="checkbox" checked={picked.includes(b.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, b.id] : picked.filter((x) => x !== b.id))} /><span className="min-w-0 flex-1 truncate">{b.name}</span><span className="text-xs text-foreground-500">{b.students}</span></label></li>)}</ul>}</div>
+        <div className="rounded-xl border border-background-200 bg-white p-3" data-testid="assignment-master-window">
           <label className="flex items-center gap-2 text-sm font-medium text-foreground-900"><input type="checkbox" checked={useMaster} onChange={(e) => setUseMaster(e.target.checked)} /> Use the Master unit dates (opens on the unit's start, due at the end of its last day)</label>
           {picked.length ? <ul className="mt-2 space-y-0.5 text-xs text-foreground-700">{picked.map((id) => <li key={id}><span className="font-medium">{batches.find((b) => b.id === id)?.name ?? "Intake"}:</span> {id in windows ? windowText(windows[id]) : "Loading…"}</li>)}</ul> : <p className="mt-1 text-xs text-foreground-600">Pick intakes to see their Master window.</p>}
           {missingMaster ? <p className="mt-1 text-xs text-red-700">An intake has no Master dates for this unit: untick to type the dates.</p> : null}
@@ -128,7 +134,7 @@ export function AssignmentDrawer({ assignment: a, onClose, onChanged, onOpenAtte
         <div>
           <span className="mb-1.5 block text-label font-medium text-foreground-800">Students</span>
           {students === null ? <p className="text-sm text-foreground-600">Loading…</p> : students.length === 0 ? <p className="text-sm text-foreground-600">No active students in this intake.</p> : (
-            <ul className="divide-y divide-background-100 rounded-md border border-background-200">{students.map((s) => (
+            <ul className="divide-y divide-background-100 overflow-hidden rounded-xl border border-background-200 bg-white">{students.map((s) => (
               <li key={s.studentId} className={`px-3 py-2 text-sm ${s.excluded ? "opacity-60" : ""}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <Link to={`/admin/students/${s.studentId}`} className="min-w-0 flex-1 truncate font-medium text-foreground-900 hover:text-primary-700">{s.name}</Link>

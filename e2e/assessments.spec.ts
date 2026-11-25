@@ -118,6 +118,14 @@ async function signOffAndRelease(page: Page, feedback: string, shotName?: string
   await expect(page.getByText(/Results released/)).toBeVisible({ timeout: 30_000 });
 }
 
+/** ASM-BUILDER: a section's "+ Add" menu > Add question, a type from the palette, then the question text in the row editor. */
+async function addQuestion(page: Page, type: string, text: string): Promise<void> {
+  await page.getByTestId("section-add").first().click();
+  await page.getByRole("menuitem", { name: "Add question" }).click();
+  await page.getByTestId(`palette-${type}`).click();
+  await page.getByTestId("row-editor").getByLabel("Question text").fill(text);
+}
+
 async function signInStaff(page: Page, email: string, path: string): Promise<void> {
   await signOutEverywhere(page);
   await signInThroughTheForm(page, email);
@@ -176,12 +184,8 @@ test("the admin builds, publishes and assigns an assessment in the browser", asy
   assessmentUrl = page.url().replace(/\?.*$/, "");
 
   // Builder: the wizard made Task 1; a short answer and a single choice go into it.
-  await page.getByRole("button", { name: "Add question" }).first().click();
-  await page.getByRole("button", { name: /Short answer/ }).click();
-  await page.getByLabel("Question *").fill("Name two items of PPE and say what each protects.");
-  await page.getByRole("button", { name: "Add question" }).first().click();
-  await page.getByRole("button", { name: /^Single choice/ }).click();
-  await page.getByLabel("Question *").fill("Which comes first?");
+  await addQuestion(page, "short_answer", "Name two items of PPE and say what each protects.");
+  await addQuestion(page, "single_choice", "Which comes first?");
   await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole("button", { name: /^Publish v1/ }).click();
@@ -250,9 +254,7 @@ test("the admin publishes version 2 while the student's attempt stays on version
   await page.goto(assessmentUrl);
   await expect(page.getByText(/Version 1 is published/)).toBeVisible();
   // the first change to a published version starts draft v2 (D-06)
-  await page.getByRole("button", { name: "Add question" }).first().click();
-  await page.getByRole("button", { name: /Short answer/ }).click();
-  await page.getByLabel("Question *").fill("Version 2 only: describe one hazard you removed.");
+  await addQuestion(page, "short_answer", "Version 2 only: describe one hazard you removed.");
   await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: /^Publish v2/ }).click();
   await page.getByRole("button", { name: "Publish", exact: true }).click();
@@ -339,7 +341,7 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
   const workbook = [process.env.ASM_WORKBOOK, `${process.env.USERPROFILE ?? process.env.HOME}/Downloads/DNT_RII50520_RIICWD525E_Select Pavement surfacing.pdf`].find((p) => p && existsSync(p)) ?? "";
   let wbStudent: { email: string; student: string };
   let wbTrainer: { email: string };
-  let wbIntake = ""; let wbAssessment = "";
+  let wbIntake = ""; let wbAssessment = ""; let aiAssessment = "";
   const PDFS = process.env.E2E_SHOTS_DIR ?? os.tmpdir();
 
   test.beforeAll(async () => {
@@ -622,10 +624,145 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await wizard.getByRole("button", { name: /Open the assessment/ }).click();
     await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/, { timeout: 30_000 });
     const id = page.url().match(/assessments\/([0-9a-f-]{36})/)?.[1] ?? "";
+    aiAssessment = id;
     expect(sql(`select definition->'source'->>'version' from public.asm_versions where assessment_id = '${id}' and status = 'published'`)).toBe("1.1");
     expect(sql(`select (definition::text ~ 'edited in the lab') and (definition::text ~ '"original"') and (definition::text !~ 'sample answer for question') from public.asm_versions where assessment_id = '${id}'`)).toBe("t");
     expect(sql(`select count(*) > 15 from public.asm_question_keys k join public.asm_versions v on v.id = k.version_id where v.assessment_id = '${id}' and k.source = 'ai'`)).toBe("t");
     expect(sql(`select count(*) from public.asm_question_keys k join public.asm_versions v on v.id = k.version_id where v.assessment_id = '${id}' and k.edited_by is not null and k.model_answer ~ 'within 5 %'`)).toBe("1");
+  });
+
+  test("ASM-BUILDER: the assessment page in the wizard's design: fix a flagged item, edit the published version, load the unit from training.gov.au, confirm AI mappings, publish v2, export the PDF", async ({ page }) => {
+    test.setTimeout(300_000);
+    test.skip(!aiAssessment, "needs the AI-imported assessment of the test before");
+    const shot = async (name: string, target?: ReturnType<Page["locator"]>) => {
+      const dir = process.env.E2E_SHOTS_DIR; if (!dir) return;
+      if (target) await target.evaluate((el) => el.scrollIntoView({ block: "start" }));
+      await page.waitForTimeout(250);
+      await page.screenshot({ path: path.join(dir, `${name}.png`) });
+    };
+    const unit = sql(`select unit_id from public.asm_assessments where id = '${aiAssessment}'`);
+    // the unit's requirements come from training.gov.au: the lab seeds the cache (no call to training.gov.au), with a requirement
+    // worded like one of the questions so the lab's stand-in reader has something to suggest
+    const label = sql(`select q->>'label' from public.asm_versions v, jsonb_path_query(v.definition, '$.tasks[*].sections[*].questions[*] ? (@.type == "long_answer" || @.type == "short_answer")') q where v.assessment_id = '${aiAssessment}' and v.status = 'published' and length(q->>'label') > 30 limit 1`);
+    expect(label.length).toBeGreaterThan(30);
+    const details = JSON.stringify({ elements: [
+      { kind: "element", code: "1", text: "Prepare for pavement surfacing" },
+      { kind: "performance_criterion", code: "1.1", text: "Work instructions and specifications are obtained and confirmed", parent: "1" },
+      { kind: "element", code: "2", text: "Select the surfacing" },
+      { kind: "performance_criterion", code: "2.1", text: "Surfacing options are assessed against the design requirements", parent: "2" },
+      { kind: "knowledge_evidence", code: "", text: label },
+      { kind: "assessment_condition", code: "", text: "Skills are demonstrated in a workplace or simulated environment" },
+    ] }).replace(/'/g, "''");
+    sql(`insert into public.tga_unit_content(code, details, fetched_at) values ('RIICWD525E', '${details}'::jsonb, now()) on conflict (code) do update set details = excluded.details, fetched_at = now()`);
+    sql(`update public.asm_unit_elements set is_active = false where unit_id = '${unit}'`);
+    sql(`delete from public.asm_mapping_suggestions where assessment_id = '${aiAssessment}'`);
+
+    await signInAsAdmin(page, admin.email);
+    await page.setViewportSize({ width: 1440, height: 1100 });
+    await page.goto(`/admin/assessments/${aiAssessment}`);
+    const builder = page.getByTestId("builder");
+    await expect(builder).toBeVisible();
+    await expect(page.getByTestId("published-note")).toContainText("Version 1 is published");
+    // compact one-line rows grouped by task and section; no raw HTML box anywhere; no empty side panel
+    await expect(builder.getByTestId("builder-task").first()).toBeVisible();
+    await expect(builder.getByTestId("builder-rows").first().locator("[data-question-line]").first()).toBeVisible();
+    await expect(page.getByText("Select a task, section or question")).toHaveCount(0);
+    await shot("bd-1-builder");
+
+    // edit the published version: the first change starts draft v2 (1.1 -> 1.2), with "Edited" and Show original
+    const row = builder.locator("[data-question-line]").filter({ hasText: label.slice(0, 25) }).first();
+    await row.getByRole("button").first().click();
+    const editor = builder.getByTestId("row-editor");
+    await editor.getByLabel("Question text").fill(`${label} (version 2)`);
+    await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => sql(`select definition->'source'->>'version' from public.asm_versions where assessment_id = '${aiAssessment}' and status = 'draft'`), { timeout: 15_000 }).toBe("1.2");
+    await page.reload();
+    await expect(page.getByText(/v2 draft/)).toBeVisible({ timeout: 30_000 });
+    const editedId = await builder.locator("[data-question-line]").filter({ hasText: "(version 2)" }).first().getAttribute("data-question-line");
+    const edited = builder.locator(`[data-question-line="${editedId}"]`);
+    await expect(edited).toContainText("Edited");
+    await edited.getByRole("button", { name: "Show original" }).click();
+    await expect(edited).not.toContainText("(version 2)");
+    await shot("bd-2-edited-show-original", edited);
+    await edited.getByRole("button", { name: "Show edited" }).click();
+
+    // "Needs a look": an item still flagged (made so in the draft for the walkthrough), Save & next strikes it through
+    type Q = { id: string; type: string; importMeta?: Record<string, unknown> };
+    const draft = JSON.parse(sql(`select definition::text from public.asm_versions where assessment_id = '${aiAssessment}' and status = 'draft'`)) as { tasks: { sections: { questions: Q[] }[] }[] };
+    const all = draft.tasks.flatMap((t) => t.sections.flatMap((s) => s.questions));
+    for (const q of all) if (q.importMeta) q.importMeta.reviewedAt = new Date().toISOString(); // the import's own flags were looked at
+    const target = all.find((q) => q.type === "long_answer" || q.type === "short_answer") as Q;
+    target.importMeta = { ...(target.importMeta ?? { confidence: "high" }), confidence: "low", flags: ["Text cut off in the lab"] };
+    delete target.importMeta.reviewedAt;
+    sql(`update public.asm_versions set definition = '${JSON.stringify(draft).replace(/'/g, "''")}'::jsonb where assessment_id = '${aiAssessment}' and status = 'draft'`);
+    await page.reload();
+    const look = page.getByTestId("needs-a-look");
+    await expect(look).toContainText("Text cut off in the lab", { timeout: 30_000 });
+    await expect(look).toContainText("1 of 1 left");
+    await look.getByTestId("check-list").locator("li").first().getByRole("button").first().click();
+    await shot("bd-3-needs-a-look-open", look);
+    await look.getByRole("button", { name: "Save & next" }).click();
+    await expect(look).toContainText("0 of 1 left");
+    await expect(look.locator(".line-through").first()).toBeVisible();
+    await expect.poll(() => sql(`select count(*) from public.asm_versions v, jsonb_path_query(v.definition, '$.tasks[*].sections[*].questions[*]') q where v.assessment_id = '${aiAssessment}' and v.status = 'draft' and q->>'id' = '${target.id}' and q#>>'{importMeta,reviewedAt}' is not null`), { timeout: 15_000 }).toBe("1");
+
+    // instructions in the rich-text editor (no HTML), the "+ Add" menu, More options
+    await builder.getByRole("button", { name: /Instructions shown before task 1/ }).click();
+    await expect(builder.locator("[contenteditable=true]").first()).toBeVisible();
+    await expect(page.locator("textarea").filter({ hasText: /<p>|<\/?strong>/ })).toHaveCount(0);
+    await builder.getByRole("button", { name: /Instructions shown before task 1/ }).click();
+    await builder.getByTestId("section-add").first().click();
+    await expect(page.getByRole("menu")).toContainText("From bank");
+    await shot("bd-4-add-menu");
+    await page.keyboard.press("Escape");
+    await edited.getByRole("button").first().click();
+    await builder.getByRole("button", { name: /More options/ }).click();
+    await expect(builder.getByLabel("Question type")).toBeVisible();
+    await shot("bd-5-more-options", builder.getByTestId("row-editor"));
+    await builder.getByRole("button", { name: "Done" }).first().click();
+
+    // Unit mapping: the requirements load from training.gov.au by themselves; gaps first; AI suggestions to confirm
+    await page.getByRole("button", { name: "Unit mapping" }).click();
+    await expect(page.getByTestId("tga-note")).toContainText("Loaded from training.gov.au: 6 added", { timeout: 30_000 });
+    await expect(page.getByTestId("coverage")).toContainText("0 of 4 requirements covered");
+    await expect(page.getByTestId("coverage-gaps").locator("li")).toHaveCount(4);
+    expect(sql(`select count(*) from public.asm_unit_elements e join public.asm_unit_elements p on p.id = e.parent_id where e.unit_id = '${unit}' and e.is_active and e.kind = 'performance_criterion'`)).toBe("2");
+    await shot("bd-6-mapping-loaded");
+    await page.getByTestId("ai-suggest").click();
+    const suggestion = page.getByTestId("suggestion-row").first();
+    await expect(suggestion).toBeVisible({ timeout: 60_000 });
+    expect(sql(`select count(*) from public.asm_unit_mappings m join public.asm_versions v on v.id = m.version_id where v.assessment_id = '${aiAssessment}' and v.status = 'draft'`)).toBe("0");
+    await shot("bd-7-ai-suggestions", page.getByTestId("ai-mapping"));
+    await suggestion.getByRole("button", { name: /^Confirm/ }).click();
+    await expect(suggestion).toContainText("Confirmed by");
+    await expect(page.getByTestId("coverage")).toContainText("1 of 4 requirements covered");
+    await expect.poll(() => sql(`select count(*) from public.asm_mapping_suggestions where assessment_id = '${aiAssessment}' and state = 'confirmed' and decided_by is not null`)).toBe("1");
+    await expect.poll(() => sql(`select count(*) from public.asm_unit_mappings m join public.asm_versions v on v.id = m.version_id where v.assessment_id = '${aiAssessment}' and v.status = 'draft'`), { timeout: 15_000 }).toBe("1");
+    await shot("bd-8-confirmed", page.getByTestId("coverage"));
+    // "Refresh from training.gov.au" asks training.gov.au itself (not clicked in the lab: no live calls); merging twice adds
+    // nothing (test:assessment-registry "tga merge")
+    await expect(page.getByTestId("tga-refresh")).toBeEnabled();
+    expect(sql(`select count(*) from public.asm_unit_elements where unit_id = '${unit}' and is_active`)).toBe("6");
+
+    // publish v2: students already in an attempt stay on v1
+    await page.getByRole("button", { name: /^Publish v2/ }).click();
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await expect(page.getByText(/published v2/)).toBeVisible({ timeout: 15_000 });
+    expect(sql(`select string_agg(version_no || ':' || status || ':' || coalesce(definition->'source'->>'version', ''), ',' order by version_no) from public.asm_versions where assessment_id = '${aiAssessment}'`)).toBe("1:published:1.1,2:published:1.2");
+
+    // Preview PDF in the page header, downloaded: the footer prints version 1.2 and the edited text
+    await page.getByTestId("preview-pdf").click();
+    const dialog = page.getByRole("dialog", { name: "Preview PDF" });
+    await expect(dialog.getByTestId("download-pdf")).toBeVisible({ timeout: 60_000 });
+    await shot("bd-9-preview-pdf");
+    const [download] = await Promise.all([page.waitForEvent("download"), dialog.getByTestId("download-pdf").click()]);
+    const file = path.join(PDFS, "asm-builder-v2.pdf");
+    await download.saveAs(file);
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), verbosity: 0 }).promise;
+    let text = ""; for (let p = 1; p <= doc.numPages; p += 1) text += ((await (await doc.getPage(p)).getTextContent()).items as { str: string }[]).map((x) => x.str).join(" ") + "\n";
+    expect(text).toMatch(/Version Number: 1\.2/);
+    expect(text.replace(/\s+/g, " ")).toContain("(version 2)");
   });
 
   test("ASM-AI-IMPORT: forced fallback (Read without AI) uses the standard reader, says so, and is published and assigned", async ({ page }) => {

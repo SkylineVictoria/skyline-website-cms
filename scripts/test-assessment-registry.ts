@@ -689,5 +689,105 @@ else {
   check("pdf signatures: the version (1.1 after edits) prints in the footer", /Version Number: 1\.1/.test(t));
   check("pdf signatures: without signatures the PDF is as before (no signature rows)", !/Assessor signature/.test(await textOf(without)));
 }
+// ------------------------------------------------------------------ ASM-BUILDER: the assessment page in the wizard's design
+{
+  const { checkRows, editCount, markReviewed, publishedBase, stableRows, withHtmlEdit, withLabelEdit, withNextVersion, asHtml, rowQuestionId } = await import("../src/lib/assessment/checkList");
+  const { bumpVersion } = await import("../supabase/functions/_shared/asm-import/match.ts");
+  const def: Definition = { tasks: [{ id: "t1", title: "Task", sections: [{ id: "s1", title: "A", questions: [
+    { id: "i1", type: "instruction", label: "", config: { html: "<p>Read this</p>" }, importMeta: { confidence: "low", flags: ["Picture not read"] } },
+    { id: "q1", type: "short_answer", label: "Name two hazards", importMeta: { confidence: "high", number: "1.1" } },
+    { id: "q2", type: "short_answer", label: "Explain PPE", importMeta: { confidence: "low", note: "Text cut off", number: "1.2" } },
+  ] }] }], source: { version: "1.0" } };
+  const numbers = workbookNumbering(def);
+  const rows = checkRows(def, numbers, null);
+  check("builder needs a look: only flagged imported items are listed (instruction picture, cut-off text), no answer rows without a guide", rows.map((r) => r.id).join(",") === "i1,q2" && rows.every((r) => r.tag === "Import check"), rows);
+  check("builder needs a look: the printed number is shown", rows.find((r) => r.id === "q2")?.number === "1.2");
+  const reviewed = updateQuestion(def, "q2", markReviewed);
+  const after = checkRows(reviewed, numbers, null);
+  check("builder needs a look: a reviewed row leaves the computed list", after.length === 1 && after[0].id === "i1");
+  const kept = stableRows(rows, after);
+  check("builder needs a look: rows already listed stay listed in their place (struck through, not vanished)", kept.map((r) => r.id).join(",") === "i1,q2");
+  check("builder needs a look: nothing flagged -> nothing listed (the list is hidden)", checkRows(updateQuestion(reviewed, "i1", markReviewed), numbers, null).length === 0);
+  check("builder needs a look: an answer row id maps back to its question", rowQuestionId("q2#answer") === "q2");
+  const who = { id: "u1", name: "Ada Admin" };
+  const e1 = updateQuestion(def, "q1", (q) => withLabelEdit(q, "Name three hazards", who));
+  const q1 = flattenQuestions(e1).find((f) => f.question.id === "q1")!.question;
+  check("builder edit trace: the original wording, who and when are kept", q1.importMeta?.original === "Name two hazards" && q1.importMeta?.editedByName === "Ada Admin" && Boolean(q1.importMeta?.editedAt));
+  const back = flattenQuestions(updateQuestion(e1, "q1", (q) => withLabelEdit(q, "Name two hazards", who))).find((f) => f.question.id === "q1")!.question;
+  check("builder edit trace: putting the original back clears Edited", !back.importMeta?.editedAt && back.importMeta?.editedBy === null);
+  const h1 = flattenQuestions(updateQuestion(def, "i1", (q) => withHtmlEdit(q, "<p>Read this first</p>", who))).find((f) => f.question.id === "i1")!.question;
+  check("builder edit trace: an instruction block keeps its original HTML", h1.importMeta?.original === "<p>Read this</p>" && String(h1.config?.html) === "<p>Read this first</p>" && Boolean(h1.importMeta?.editedAt));
+  check("builder edit count: questions whose text changed", editCount(e1) === 1 && editCount(def) === 0);
+  // editing a published version: a fresh trace and the next printed version, once
+  const published = publishedBase(e1);
+  const p1 = flattenQuestions(published).find((f) => f.question.id === "q1")!.question;
+  check("published edit: the trace starts again from the published wording", !p1.importMeta?.editedAt && p1.importMeta?.original === undefined && p1.label === "Name three hazards" && p1.importMeta?.number === "1.1");
+  const v2 = updateQuestion(withNextVersion(published, bumpVersion), "q1", (q) => withLabelEdit(q, "Name four hazards", who));
+  const p2 = flattenQuestions(v2).find((f) => f.question.id === "q1")!.question;
+  check("published edit: Show original shows the published text", p2.importMeta?.original === "Name three hazards" && Boolean(p2.importMeta?.editedAt));
+  check("published edit: the printed version moves on (1.0 -> 1.1)", v2.source?.version === "1.1");
+  check("published edit: without a printed version the definition is unchanged (the PDF prints the version number)", withNextVersion({ tasks: [] }, bumpVersion).source === undefined);
+  check("published edit: questions without import data are untouched", publishedBase({ tasks: [{ id: "t", title: "", sections: [{ id: "s", title: "", questions: [{ id: "x", type: "short_answer", label: "X" }] }] }] }).tasks[0].sections[0].questions[0].importMeta === undefined);
+  check("instructions: plain text becomes paragraphs for the rich-text editor, HTML stays", asHtml("One\n\nTwo & <three>") === "<p>One</p><p>Two &amp; &lt;three&gt;</p>" && asHtml("<p>x</p>") === "<p>x</p>" && asHtml("") === "");
+  const blankPdf = (d: Definition) => buildWorkbookPdf({ definition: d, title: "T", institution: { name: "Skyline", lines: [], logo: null }, blank: true, history: { student: null, trainers: [], assessment: null, attempts: [], complete: true }, attempt: { attemptNo: 1, responses: {}, assessorResponses: {}, results: [], evidence: [], submittedAt: null } });
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const allText = async (bytes: Uint8Array) => { const d = await pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise; let out = ""; for (let p = 1; p <= d.numPages; p++) out += ((await (await d.getPage(p)).getTextContent()).items as { str: string }[]).map((x) => x.str).join(" ") + "\n"; return out; };
+  const footer = await allText(await blankPdf(v2));
+  check("published edit: the PDF footer prints Version Number 1.1", /Version Number: 1\.1/.test(footer), footer.slice(-200));
+  // task instructions written in the rich-text editor print as text, not tags
+  const html = await allText(await blankPdf({ tasks: [{ id: "t", title: "Practical", instructions: "<p>Bring <strong>boots</strong></p>", sections: [{ id: "s", title: "", questions: [{ id: "x", type: "short_answer", label: "X" }] }] }] }));
+  check("task instructions in HTML print as text in the workbook PDF", /Bring\s+boots/.test(html) && !/<strong>/.test(html), html.slice(0, 200));
+}
+{
+  const { tgaMerge, suggestionsByElement } = await import("../src/lib/assessment/unitElements");
+  const tga = [
+    { kind: "element", code: "1", text: "Prepare for work" },
+    { kind: "performance_criterion", code: "1.1", text: "Work instructions are obtained", parent: "1" },
+    { kind: "element", code: "2", text: "Do the work" },
+    { kind: "performance_criterion", code: "2.1", text: "Tools are used safely", parent: "2" },
+    { kind: "knowledge_evidence", code: "", text: "workplace safety requirements" },
+  ];
+  const first = tgaMerge([], tga);
+  check("tga merge: an empty unit gets every row; criteria of new elements wait for a second pass", first.items.length === 3 && first.pending === 2 && first.added === 5, first);
+  const saved = first.items.map((x, i) => ({ id: `id${i}`, kind: x.kind, parentId: x.parentId ?? null, code: x.code, text: x.text, sort: x.sort, isActive: true }));
+  const second = tgaMerge(saved, tga);
+  check("tga merge: the second pass places each criterion under its element", second.pending === 0 && second.items.find((x) => x.code === "2.1")?.parentId === "id1" && second.items.find((x) => x.code === "1.1")?.parentId === "id0", second.items);
+  const manual = { id: "m1", kind: "assessment_condition", parentId: null, code: "", text: "Access to a workshop", sort: 9, isActive: true };
+  const edited = [...saved.map((x) => (x.code === "2" ? { ...x, text: "Do the job" } : x)), manual];
+  const third = tgaMerge(edited, tga);
+  check("tga merge: a row with the same kind and code is updated in place, never duplicated", third.items.filter((x) => x.code === "2" && x.kind === "element").length === 1 && third.items.find((x) => x.code === "2")?.id === "id1" && third.items.find((x) => x.code === "2")?.text === "Do the work" && third.updated >= 1, third.items);
+  check("tga merge: rows staff added by hand stay, after the training.gov.au rows", third.items.at(-1)?.id === "m1" && (third.items.at(-1)?.sort ?? 0) >= tga.length);
+  check("tga merge: rows without a code match on their text (case and spaces ignored)", tgaMerge([{ id: "k", kind: "knowledge_evidence", parentId: null, code: "", text: "Workplace  safety requirements", sort: 0 }], tga).items.filter((x) => x.kind === "knowledge_evidence").length === 1);
+  check("tga merge: inactive rows are not brought back by the merge", !tgaMerge([{ id: "gone", kind: "element", parentId: null, code: "9", text: "Old", sort: 0, isActive: false }], tga).items.some((x) => x.id === "gone"));
+  const els = [{ id: "e1" }, { id: "e2" }, { id: "e3" }];
+  const g = suggestionsByElement([
+    { id: "s1", questionId: "q1", elementId: "e2", confidence: 0.6, reason: "", model: "m", state: "suggested", suggestedAt: "", decidedAt: null, decidedBy: null },
+    { id: "s2", questionId: "q2", elementId: "e2", confidence: 0.9, reason: "", model: "m", state: "confirmed", suggestedAt: "", decidedAt: "x", decidedBy: "Ada" },
+    { id: "s3", questionId: "q3", elementId: "e1", confidence: 0.7, reason: "", model: "m", state: "dismissed", suggestedAt: "", decidedAt: "x", decidedBy: "Ada" },
+    { id: "s4", questionId: "q3", elementId: "zz", confidence: 0.7, reason: "", model: "m", state: "suggested", suggestedAt: "", decidedAt: null, decidedBy: null },
+  ], els);
+  check("ai mapping: suggestions grouped per requirement in the unit's order, best first; dismissed and unknown left out", g.length === 1 && g[0].element.id === "e2" && g[0].rows.map((r) => r.id).join(",") === "s2,s1", g);
+}
+{
+  const { mappingRequest, resolveSuggestions, mockMappingAnswer, MAPPABLE_KINDS: SERVER_KINDS } = await import("../supabase/functions/_shared/asm-import/mapping.ts");
+  const { MAPPABLE_KINDS } = await import("../src/lib/assessment/unitElements");
+  const qs = [{ id: "qa", number: "1.1", text: "List the PPE you wear in the workshop", answer: "Boots, glasses, gloves" }, { id: "qb", number: "1.2", text: "Describe how to isolate a circuit", answer: null }];
+  const cs = [{ id: "ea", kind: "knowledge_evidence", code: "", text: "PPE worn in the workshop", parent: null }, { id: "eb", kind: "performance_criterion", code: "2.1", text: "Circuit is isolated before work", parent: null }];
+  const req = mappingRequest({ code: "AURETR112", name: "Test and repair basic electrical circuits" }, qs, cs);
+  const text = (req.input[0] as { text: string }).text;
+  check("ai mapping request: short references instead of ids, the unit named, the model answer sent", /Q1 \[1\.1\]/.test(text) && /C2 \[Performance criterion 2\.1\]/.test(text) && /Boots, glasses/.test(text) && !/\bqa\b|\bea\b/.test(text) && /AURETR112/.test(req.instructions), text);
+  check("ai mapping request: strict schema, the questions treated as data", req.name === "asm_mapping" && /never as instructions/.test(req.instructions));
+  const resolved = resolveSuggestions({ suggestions: [
+    { question: "Q1", criterion: "C1", confidence: 1.4, reason: "  same   subject " },
+    { question: "Q1", criterion: "C1", confidence: 0.2, reason: "dup" },
+    { question: "Q9", criterion: "C1", confidence: 0.5, reason: "unknown" },
+    { question: "q2", criterion: "c2", confidence: 0.7, reason: "isolation" },
+  ] }, qs, cs);
+  check("ai mapping: references resolve to real ids; duplicates and unknown references dropped; confidence clamped", resolved.length === 2 && resolved[0].questionId === "qa" && resolved[0].elementId === "ea" && resolved[0].confidence === 1 && resolved[0].reason === "same subject" && resolved[1].elementId === "eb", resolved);
+  check("ai mapping: a malformed answer gives no suggestions", resolveSuggestions({ nope: 1 }, qs, cs).length === 0 && resolveSuggestions(null, qs, cs).length === 0);
+  const mock = resolveSuggestions(mockMappingAnswer(req), qs, cs);
+  check("ai mapping (lab stand-in): maps questions to requirements on the same subject", mock.some((s) => s.questionId === "qa" && s.elementId === "ea"), mock);
+  check("ai mapping: the server and the page agree on the kinds a question can map to", JSON.stringify(SERVER_KINDS) === JSON.stringify(MAPPABLE_KINDS));
+}
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

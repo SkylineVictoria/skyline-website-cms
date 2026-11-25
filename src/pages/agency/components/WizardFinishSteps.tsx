@@ -44,12 +44,13 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   // One page, one time (owner, 2026-11-23): what the passport (or the student record) already filled was shown on the document
   // step, so Personal details asks only for what is still missing and does not show the rest again.
   const [prefilled, setPrefilled] = useState<Set<string>>(new Set());
+  const [reviewPersonal, setReviewPersonal] = useState(false);
   useEffect(() => {
     setPrefilled(new Set(PERSONAL_FIELDS.filter((name) => String(answers[name] ?? "").trim())));
     // Captured when the screen opens or the answers are refilled from the draft, not on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, question.id]);
-  const ask = (name: string) => !prefilled.has(name) || Boolean(errors[name]) || !String(answers[name] ?? "").trim();
+  const ask = (name: string) => reviewPersonal || !prefilled.has(name) || Boolean(errors[name]) || !String(answers[name] ?? "").trim();
   const text = (name: string, label: string, props: { required?: boolean; placeholder?: string; maxLength?: number; upper?: boolean; type?: string } = {}) => (
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={v(name)} error={errors[name]} required={props.required ?? true} maxLength={props.maxLength ?? 200}
       placeholder={props.placeholder} upper={props.upper} type={props.type} onChange={(value) => onChange(name, value)} />
@@ -105,18 +106,24 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
 
       {question.id === "personal" ? (
         <div className="space-y-4">
+          {prefilled.size > 0 ? (
+            <button type="button" className="text-sm font-semibold text-primary-700 underline"
+              onClick={() => setReviewPersonal((show) => !show)} aria-expanded={reviewPersonal}>
+              {reviewPersonal ? "Hide prefilled details" : "Review and edit prefilled details"}
+            </button>
+          ) : null}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {ask("title") ? select("title", "Title") : null}
             {ask("gender") ? radios("gender", "Gender") : null}
             {ask("first_name") ? text("first_name", "Given name") : null}
-            {ask("middle_name") && !prefilled.size ? text("middle_name", "Middle name", { required: false }) : null}
+            {ask("middle_name") && (reviewPersonal || !prefilled.size) ? text("middle_name", "Middle name", { required: false }) : null}
             {ask("last_name") ? text("last_name", "Surname") : null}
             {ask("dob") ? text("dob", "Date of birth", { type: "date" }) : null}
-            {ask("email") ? text("email", "Email", { type: "email" }) : null}
+            {(!prefilled.has("email") || errors.email) ? text("email", "Email", { type: "email" }) : null}
             {ask("nationality") ? select("nationality", "Nationality") : null}
             {ask("citizenship") ? select("citizenship", "Country of citizenship") : null}
             {governmentSelect("birth_country", "Country of birth", "country")}
-            {ask("place_of_birth") && !prefilled.size ? text("place_of_birth", "Town / city of birth", { required: false, placeholder: "As on the passport" }) : null}
+            {ask("place_of_birth") && (reviewPersonal || !prefilled.size) ? text("place_of_birth", "Town / city of birth", { required: false, placeholder: "As on the passport" }) : null}
             {ask("passport_number") ? text("passport_number", "Passport number", { upper: true, maxLength: 20 }) : null}
             {ask("passport_expiry") ? text("passport_expiry", "Passport expiry date", { type: "date" }) : null}
           </div>

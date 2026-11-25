@@ -147,9 +147,11 @@ const isOverseasLicence = (doc: WizardDoc) =>
 /** WIZARD-FULL: the answers the new screens hold, and the ones the wizard fills itself on Submit (as the full form did). */
 const FINISH_FIELDS = Object.values(FINISH_SCREEN_FIELDS).flat();
 const SCREEN_OF_FIELD = new Map(Object.entries(FINISH_SCREEN_FIELDS).flatMap(([screen, names]) => names.map((name) => [name, screen] as const)));
+for (const name of AVETMISS_EXTRA_FIELDS) SCREEN_OF_FIELD.set(name, "identifier");
 const OTHER_SCREENS: Record<string, string> = {
   language_home: "language", language_other: "language", has_usi: "usi", usi_number: "usi", ec_name: "emergency", ec_phone: "emergency", ec_in_au: "emergency",
-  courses_of_interest: "course", preferred_intake: "course",
+  courses_of_interest: "course", preferred_intake: "course", ec_relationship: "emergency",
+  passport_copy: "passport", english_upload: "english", academic_upload: "academic", visa_copy: "visa",
 };
 const USI_CONSENT_TEXT = "I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.";
 const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -206,6 +208,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState("");
+  const [submissionNeedsCorrection, setSubmissionNeedsCorrection] = useState(false);
   // Set when an uploaded passport was read as expired and removed; cleared by the next passport upload.
   const [expiredPassport, setExpiredPassport] = useState<{ filename: string; date: string; error?: string } | null>(null);
   const [rejectedLicence, setRejectedLicence] = useState<{ filename: string; error?: string } | null>(null);
@@ -241,7 +244,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [savingEnglish, setSavingEnglish] = useState(false);
   // WIZARD-FULL: answers typed on the new screens are never replaced by values read later from the draft.
   const touchedRef = useRef(new Set<string>());
-  /** AVETMISS-UI: the application's student, for copying the AVETMISS answers to the student's tables. */
   const { codes } = useAvetmissCodes();
   const [submittedRef, setSubmittedRef] = useState("");
   // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
@@ -310,7 +312,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           return;
         }
         const stored = await listApplicationDocuments(applicationId);
-        if (active) setDocuments(wizardDocs(stored));
+        const docs = wizardDocs(stored);
+        if (active) setDocuments(docs);
         // What the answer screens start from: answers already given (on this application or the student's record).
         const values = (application.data.values ?? {}) as Record<string, unknown>;
         const pick = (name: string) => (typeof values[name] === "string" ? String(values[name]) : "");
@@ -319,12 +322,17 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           const saved = (application.data.wizard ?? {}) as { activeStep?: string; completedSteps?: string[]; courseChoice?: string; intakeChoice?: string; intakeLabel?: string; intakeJoin?: string; englishChoice?: string; studyChoice?: AusStudyAnswer; cambridgeChoice?: AusStudyAnswer };
           const last = ALL_STEPS.findIndex((item) => item.id === saved.activeStep);
           completedSteps.current = new Set(Array.isArray(saved.completedSteps) ? saved.completedSteps : []);
+          const pathway = pick("english_pathway") || saved.englishChoice;
           if (last >= 0) {
-            const docs = wizardDocs(stored);
-            const missing = WIZARD_STEPS.findIndex((item, index) => index < last && item.required && !docs.some((doc) => doc.category === item.category));
+            const alternatives = englishAlternatives();
+            const englishEvidence = (alternatives.cambridge && pathway === ENGLISH_PATHWAY.cambridge)
+              || (alternatives.ausStudy && pathway === ENGLISH_PATHWAY.ausStudy
+                && docs.some((doc) => doc.category === AUS_STUDY_STEP?.category && !isWrongDocument(doc)));
+            const missing = WIZARD_STEPS.findIndex((item, index) => index < last && item.required
+              && !(item.id === "english" && englishEvidence)
+              && !docs.some((doc) => doc.category === item.category && !isWrongDocument(doc) && !isExpiredPassport(doc)));
             setStep(missing >= 0 ? missing : last);
           }
-          const pathway = saved.englishChoice || pick("english_pathway");
           if (pathway === ENGLISH_PATHWAY.ausStudy) { setEnglishAlt(true); setAusStudy("Yes"); }
           else if (pathway === ENGLISH_PATHWAY.cambridge) { setEnglishAlt(true); setAusStudy("No"); setCambridge("Yes"); }
           if (saved.studyChoice) { setEnglishAlt(true); setAusStudy(saved.studyChoice); }
@@ -553,6 +561,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (completingRef.current) return;
     completingRef.current = true;
     setFinishError("");
+    setSubmissionNeedsCorrection(false);
     try {
       await flushApplicationEdits(applicationId);
       const application = await getApplication(applicationId, false);
@@ -568,13 +577,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // "Required field missing: title" and the like: say which screen holds it, so the agent can go straight there.
       const field = message.match(/:\s*([a-z_]+)\s*$/)?.[1] ?? "";
       const screen = SCREEN_OF_FIELD.get(field) ?? OTHER_SCREENS[field] ?? "";
-      const at = screen ? WIZARD_QUESTIONS.findIndex((item) => item.id === screen) : -1;
-      setFinishError(at >= 0 ? `${message}. Fix it on "${WIZARD_QUESTIONS[at].title}", then submit again.` : message);
-      if (at >= 0) setStep(DOC_STEPS + at);
+      const at = screen ? ALL_STEPS.findIndex((item) => item.id === screen) : -1;
+      setFinishError(at >= 0 ? `${message}. Fix it on "${ALL_STEPS[at].title}", then return to Submit.` : message);
+      if (at >= 0) {
+        setSubmissionNeedsCorrection(true);
+        setAnswerErrors({ [field]: message });
+        pendingWizard.current.activeStep = ALL_STEPS[at].id;
+        void persist();
+        setStep(at);
+      }
       setFinishing(false);
       completingRef.current = false;
     }
-  }, [applicationId, role]);
+  }, [applicationId, persist, role]);
 
   const busy = pending.some((item) => !item.error) || documents.some((doc) => isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
   useEffect(() => {
@@ -639,7 +654,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     const bounded = Math.max(0, Math.min(index, LAST_STEP));
     if (completed && ALL_STEPS[step]) completedSteps.current.add(ALL_STEPS[step].id);
     const missing = bounded > step ? firstMissingBefore(bounded) : -1;
-    const next = missing >= 0 ? missing : bounded;
+    // Stage shortcuts can revisit completed screens, but must stop at the first unanswered screen.
+    const incomplete = bounded > step ? ALL_STEPS.findIndex((item, index) =>
+      index >= Math.max(step, DOC_STEPS) && index < bounded && !completedSteps.current.has(item.id)) : -1;
+    const next = missing >= 0 ? missing : incomplete >= 0 ? incomplete : bounded;
     pendingWizard.current = { ...pendingWizard.current, activeStep: ALL_STEPS[next]?.id, completedSteps: [...completedSteps.current] };
     if (await persist()) setStep(next);
   };
@@ -976,6 +994,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   const nextFromQuestion = async () => {
     if (!question || !(await saveAnswers(question))) return;
+    setFinishError("");
     if (step === LAST_STEP) setFinishing(true);
     else await goTo(step + 1, true);
   };
@@ -1295,7 +1314,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
           {finishError ? (
             <div className="border-t border-background-200 px-5 py-3 md:px-6">
-              <PortalError message={finishError} onRetry={() => setFinishing(true)} />
+              <PortalError message={finishError} onRetry={isLast && !submissionNeedsCorrection ? () => setFinishing(true) : undefined} />
             </div>
           ) : null}
 

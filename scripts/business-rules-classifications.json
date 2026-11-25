@@ -753,5 +753,14 @@
       "d4ffc068d123d787f8add0a6cb263d8f17b0f31802749abb6198782ff34eff3c",
       "ea7a4ab51cf7e005eaadb70debacf50854029c85ab3167386441c06f88c5c584"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "personal-detail-review-visibility",
+    "reason": "The review toggle reveals the existing optional middle name and place of birth inputs.",
+    "fingerprints": [
+      "044e856263a0335dc12da1586f086d3fb9001e209034e14b24ed0c7b8fe5205c",
+      "243782032fd0b8f583d013e56c64167a1921d9895520602d0b7078347497f1ec"
+    ]
   }
 ]

@@ -1,6 +1,6 @@
 /**
  * ASM-WORKBOOK item 6: the workbook's results sheet on screen. One table per task (Attempt 1-3 at least: Satisfactory / Not
- * Satisfactory, date, assessor, feedback), then the overall result per attempt. Read-only: the marks are made in MarkingView.
+ * Satisfactory, date, assessor, feedback), then the overall result per attempt. Read-only: the marks are made on the marking desk (src/pages/staff/MarkingPage.tsx).
  */
 import { buildResultsSheet, SHEET_LABEL, type AttemptHistory, type SheetCell } from "@/lib/assessment/resultsSheet";
 import { fmtDate } from "@/lib/assessment/api";

@@ -5,6 +5,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { Badge, Button, SectionTabs } from "@/pages/admin/components/ui";
 import CalendarView from "@/components/assessment/CalendarView";
 import ProgressList, { type Progress } from "@/components/assessment/ProgressList";
+import SavedSignatureCard from "@/components/assessment/SavedSignatureCard";
 import { asmTrainer, fmtDateTime, STATE_LABEL } from "@/lib/assessment/api";
 import type { AssignmentRow, PendingRow } from "@/pages/admin/lib/assessments";
 
@@ -44,6 +45,7 @@ export default function StaffAssessmentsPage() {
           <h1 className="font-heading text-2xl font-bold text-foreground-950">Assessments</h1>
           <div className="flex gap-2"><Link to="/staff" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-4 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100"><i className="ri-arrow-left-line" aria-hidden="true" />My HR</Link></div>
         </div>
+        <div className="mt-4"><SavedSignatureCard /></div>
         {error ? <p role="alert" className="mt-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
         {me === undefined ? <p className="mt-4 text-sm text-foreground-600" role="status">Loading…</p> : null}
         {me && !me.staffId ? <p className="mt-4 text-sm text-foreground-700">There is no active staff record for this login, so there is nothing to assess.</p> : null}

@@ -92,9 +92,11 @@ export default function SearchPick({
   }, [q, open, search, resetKey, searchWhenEmpty, retry]);
 
   useEffect(() => {
+    // Listen from the next tick: the click that made this box appear (e.g. picking the business above) is still on its way
+    // to the document and would otherwise count as a click outside, closing the list that openOnMount just opened.
     const onDown = (e: MouseEvent) => { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    const timer = window.setTimeout(() => document.addEventListener("mousedown", onDown), 0);
+    return () => { window.clearTimeout(timer); document.removeEventListener("mousedown", onDown); };
   }, []);
 
   const typed = q.trim();

@@ -221,7 +221,7 @@ export const updateStudent = (id: string, input: {
 
 /** Deletes a student and all of their applications (migration 115); refused when one has an issued CoE / VoE or a registration. */
 export const deleteStudentRecord = (id: string) =>
-  call<{ deleted: boolean; applicationsDeleted?: number; filesQueued?: number }>("admin_student_delete", { p_student: id }, "We could not delete this student.");
+  call<{ deleted: boolean; archived?: boolean; applicationsDeleted?: number; filesQueued?: number }>("admin_student_delete", { p_student: id }, "We could not delete this student.");
 
 export const listBusinesses = (f: { search?: string; status?: string; limit: number; offset: number }) =>
   call<{ total: number; counts: ListCounts; rows: BusinessRow[] }>("admin_business_list", {

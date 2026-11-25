@@ -176,7 +176,9 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
     setBusyId(row.id);
     try {
       // Draft files are removed in parallel; anything left over is queued by the server.
-      const editable = (row.applicationRows ?? []).filter((a) => a.status === "draft" || a.status === "action_required");
+      // Real students are archived (owner, 2026-11-25): their files stay. Only test accounts are deleted with their draft files.
+      const isTest = /@blackhole\.postmarkapp\.com$/i.test(row.email ?? "");
+      const editable = isTest ? (row.applicationRows ?? []).filter((a) => a.status === "draft" || a.status === "action_required") : [];
       await Promise.all(editable.map(async (application) => {
         const documents = await listApplicationDocuments(application.id).catch(() => []);
         await Promise.all(documents.map((document) => deleteApplicationDocument({ id: document.id, storagePath: document.storagePath }).catch(() => undefined)));
@@ -186,7 +188,7 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
       // Drop the row straight away so the list never shows a deleted student.
       setRows((current) => current.filter((r) => r.id !== row.id));
       setTotal((n) => Math.max(0, n - 1));
-      push(`${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"}.`);
+      push(result.archived ? `${row.name || row.email} archived (set Inactive; records kept).` : `${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"}.`);
       setReload((n) => n + 1);
     } catch (e) {
       push(e instanceof Error ? e.message : "We could not delete this student.", "error");

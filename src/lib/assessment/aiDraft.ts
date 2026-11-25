@@ -37,14 +37,23 @@ export interface ImportStatus {
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-function meta(it: { pages?: number[]; flags: string[]; canonical?: string | null; text: string; pdfText?: string | null }, number?: string | null): ImportMeta {
+function meta(it: Pick<CheckedItem, "flags" | "text"> & Partial<Pick<CheckedItem, "pages" | "canonical" | "pdfText" | "itemType" | "classification" | "autoResolved" | "blocking">>, number?: string | null): ImportMeta {
   return {
     page: it.pages?.[0] ?? null, confidence: it.flags.length ? "low" : "high", ...(it.flags.length ? { note: it.flags.join(" · "), flags: it.flags } : {}),
     number: number ?? it.canonical ?? null, via: "ai", original: it.text, ...(it.pdfText ? { pdfText: it.pdfText } : {}),
+    ...(it.itemType ? { itemType: it.itemType } : {}), ...(it.classification ? { classification: it.classification } : {}),
+    ...(it.autoResolved?.length ? { autoResolved: it.autoResolved } : {}), ...(it.blocking ? { blocking: true } : {}),
   };
 }
 
 function questionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImage>): Question {
+  // a section heading ("1. Introduction" of a report template) is a section label, never a question: no answer, no model answer
+  if (it.itemType === "section_heading") {
+    const q = newQuestion("instruction");
+    q.config = { html: `<h4>${esc([it.number, it.text].filter(Boolean).join(" "))}</h4>`, attachments: [] };
+    q.importMeta = meta(it, it.number ?? null);
+    return withSchema(q);
+  }
   if (it.kind === "instruction" || it.kind === "drawing") {
     const q = newQuestion("instruction");
     const imgs = it.kind === "drawing" ? pictures.filter((p) => !used.has(p) && it.pages.includes(p.page)).slice(0, 3) : [];

@@ -1201,6 +1201,7 @@ async function asmImport() {
   check("asm-import: usage is logged on the job (calls counted)", Number(st?.usage?.calls) >= 2, JSON.stringify(st?.usage));
   const resultItems = (st?.result?.tasks ?? []).flatMap((t) => t.sections.flatMap((s) => s.items));
   check("asm-import: both pictures (pages 44 and 75) are drawings in the result, marked in the uploaded page text", st?.summary?.drawings === 2 && resultItems.filter((i) => i.kind === "drawing").map((i) => i.pages[0]).join(",") === "44,75" && pages.reduce((n, p) => n + p.pictures, 0) === 2, JSON.stringify(st?.summary));
+  check("asm-import: every item comes back typed (question / section_heading / instruction), with how it was decided", resultItems.length > 0 && resultItems.every((i) => ["question", "section_heading", "instruction"].includes(i.itemType) && ["rules", "ai", "default"].includes(i.classification?.by)) && typeof st?.summary?.headings === "number", JSON.stringify(resultItems.find((i) => !i.itemType) ?? st?.summary).slice(0, 160));
   check(`asm-import: the job records the reader version that read it (${READER_VERSION})`, st?.readerVersion === READER_VERSION && psql(`select reader_version from public.asm_import_jobs where id = '${id}';`) === String(READER_VERSION), String(st?.readerVersion));
   // 2. the same file again: the finished job comes back, nothing new is made
   const jobs = () => psql(`select count(*) from public.asm_import_jobs where sha256 = '${sha256}';`);

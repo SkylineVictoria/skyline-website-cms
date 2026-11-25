@@ -969,7 +969,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (!(await persist())) return false;
       await saveWizardDraft(applicationId, { values, ...patch });
       // AVETMISS-UI: copied to the student's AVETMISS tables when this user may write them (best effort; an agent's stays pending).
-      if ((target.id === "identifier" || target.id === "language") && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
+      if ((target.id === "identifier" || target.id === "language" || target.id === "personal") && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
       return true;
     } catch (error) {
       setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");

@@ -12,7 +12,7 @@
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
 import { isServiceCaller } from "../_shared/service-role.ts";
 import { AiError, costUsd, createProvider, type AiUsage, type StructuredProvider } from "../_shared/asm-import/provider.ts";
-import { assemble, checkChunk, cleanOutline, mockAnswer, outlineRequest, planChunks, summarize, taskRequest, type Chunk, type PageText } from "../_shared/asm-import/pipeline.ts";
+import { assemble, checkChunk, cleanOutline, mockAnswer, outlineRequest, planChunks, READER_VERSION, summarize, taskRequest, type Chunk, type PageText } from "../_shared/asm-import/pipeline.ts";
 import type { AiOutline, AiTaskPart, CheckedSection } from "../_shared/asm-import/schema.ts";
 import { MAPPABLE_KINDS, mappingRequest, mockMappingAnswer, resolveSuggestions, type MappingCriterion, type MappingQuestion } from "../_shared/asm-import/mapping.ts";
 
@@ -45,9 +45,10 @@ const b64 = (bytes: Uint8Array) => { let out = ""; for (let i = 0; i < bytes.len
 async function pagesOf(db: SupabaseClient, job: Job): Promise<PageText[]> {
   const got = await db.storage.from(BUCKET).download(`${job.id}/pages.json`);
   if (got.error || !got.data) throw new AiError("The page text of the upload could not be read.", "config", false);
-  const raw = JSON.parse(await got.data.text()) as { page: number; text: string; scanned?: boolean }[];
+  const raw = JSON.parse(await got.data.text()) as { page: number; text: string; scanned?: boolean; pictures?: number }[];
   if (!Array.isArray(raw) || !raw.length) throw new AiError("The upload has no pages.", "config", false);
-  return raw.map((p) => ({ page: Number(p.page), text: String(p.text ?? "").slice(0, 40_000), scanned: Boolean(p.scanned) })).filter((p) => Number.isInteger(p.page) && p.page > 0);
+  return raw.map((p) => ({ page: Number(p.page), text: String(p.text ?? "").slice(0, 40_000), scanned: Boolean(p.scanned), pictures: Math.max(0, Math.min(20, Math.floor(Number(p.pictures) || 0))) }))
+    .filter((p) => Number.isInteger(p.page) && p.page > 0);
 }
 
 async function imagesOf(db: SupabaseClient, job: Job, pages: number[]): Promise<Map<number, string>> {
@@ -124,7 +125,8 @@ async function step(db: SupabaseClient, job: Job): Promise<boolean> {
       return true;
     }
     const doc = assemble(job.kind, job.outline, plan, results, { provider: job.provider ?? ai.id, model: job.model ?? ai.model, scannedPages: job.scanned_pages?.length ?? 0 });
-    await save({ state: "done", result: doc, summary: { ...doc.summary, unit: doc.unit?.code ?? null, version: doc.version }, progress: { label: "Done", done: plan.length + 2, total: plan.length + 2 },
+    // the reader version that produced this result: the cache answers it only to a browser asking for the same version
+    await save({ state: "done", reader_version: READER_VERSION, result: doc, summary: { ...doc.summary, unit: doc.unit?.code ?? null, version: doc.version }, progress: { label: "Done", done: plan.length + 2, total: plan.length + 2 },
       lease: null, lease_until: null, finished_at: new Date().toISOString(), error: null });
     return false;
   } catch (e) {

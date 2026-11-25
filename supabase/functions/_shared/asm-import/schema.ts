@@ -88,7 +88,11 @@ export const TASK_SCHEMA = {
 
 /* ------------------------------------------------------------- after the checks (what the browser receives) */
 
-export interface CheckedPart { label: string; part: string; text: string; answer: string | null; verbatim: VerbatimStatus; pdfText: string | null }
+export interface CheckedPart {
+  label: string; part: string; text: string; answer: string | null; verbatim: VerbatimStatus; pdfText: string | null;
+  /** close / missing: what differs, in words the admin can act on. */
+  diff?: string | null;
+}
 export type VerbatimStatus = "exact" | "close" | "missing" | "empty" | "scanned";
 export interface CheckedItem {
   kind: ItemKind;
@@ -105,7 +109,15 @@ export interface CheckedItem {
   verbatim: VerbatimStatus;
   /** The closest PDF wording when the text is not the PDF's word for word. */
   pdfText: string | null;
-  /** Reasons this item is on the "Check this" list (empty = looks good). */
+  /** close / missing: what differs (words added / left out), in words the admin can act on. */
+  diff?: string | null;
+  /** The model's own reason for a low confidence (kept to explain a flag). */
+  reason?: string | null;
+  /** Every page of the item is a scan (no text layer). */
+  scanned?: boolean;
+  /** A picture the AI reader did not place, added by the checks where it is printed. */
+  added?: boolean;
+  /** Reasons this item is on the "Check this" list (empty = looks good); worked out when the document is put together. */
   flags: string[];
 }
 export interface CheckedSection { title: string; items: CheckedItem[] }

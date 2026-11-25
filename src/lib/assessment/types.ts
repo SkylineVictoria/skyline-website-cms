@@ -84,8 +84,10 @@ export interface ImportMeta {
   editedAt?: string | null;
   /** The admin looked at a flagged item and left it as it is. */
   reviewedAt?: string | null;
-  /** ASM-IMPORT-CLASSIFY: what the import found the item to be (question | section_heading | instruction | response_label). */
-  itemType?: "question" | "section_heading" | "instruction" | "response_label";
+  /** ASM-IMPORT-CLASSIFY: what the import found the item to be (question | section_heading | instruction | response_label | table_row). */
+  itemType?: "question" | "section_heading" | "instruction" | "response_label" | "table_row";
+  /** ASM-BUILDER-COMPACT: answer areas printed for this question (upload / calc boxes): its response types, shown as chips. */
+  responseAreas?: { kind: "upload" | "calc"; text: string; page: number | null }[];
   /** How that was decided (rules / the AI's second check), its confidence and reason. */
   classification?: { type: string; by: "rules" | "ai" | "default"; confidence: number; reason: string } | null;
   /** Differences resolved by a rule (rule, the ignored text, a sentence); listed under "Auto-resolved" and written to the audit log. */

@@ -135,6 +135,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const { user } = useAuth();
   const [query, setQuery] = useState("");
   const [openModule, setOpenModule] = useState<string | null>(null);
+  const [followed, setFollowed] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ identity: string; rows: AdminMenuItem[] } | null>(null);
   const [failed, setFailed] = useState(false);
@@ -148,6 +149,7 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
     setResult(null);
     setQuery("");
     setOpenModule(null);
+    setFollowed(null);
     void (async () => {
       try {
         // rule-policy: security menu-read Uses the existing permission-filtered menu query.
@@ -171,7 +173,11 @@ export default function AdminMenu({ close, collapsed = false }: { close: () => v
   const terms = collapsed ? [] : query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   const matches = terms.length ? destinations([...dashboardEntries, ...modules.map((item) => item.id === "staff" ? { ...item, label: "HRMS / Staff" } : item), ...footer]).filter(({ entry, trail }) =>
     terms.every((term) => `${entry.label} ${trail}`.toLowerCase().includes(term))) : [];
-  const open = () => { setQuery(""); setOpenModule(null); close(); };
+  // Owner 2026-11-25: clicking a page keeps its menu group open (it used to fold away after every click).
+  const open = () => { setQuery(""); close(); };
+  const { pathname, search } = useLocation();
+  const currentModule = menu.find((entry) => entry.children?.length && isCurrent(entry, pathname, search))?.id ?? null;
+  if (currentModule && currentModule !== followed) { setFollowed(currentModule); setOpenModule(currentModule); }
 
   return (
     <>

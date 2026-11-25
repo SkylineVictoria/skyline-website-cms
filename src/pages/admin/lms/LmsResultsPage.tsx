@@ -32,8 +32,8 @@ const day = (value: string | null) => (value ? new Date(`${value}T00:00:00`).toL
 /** A database or RPC error in plain words. */
 function friendly(message: string): string {
   if (/lms_unit_students_withdrawal_date/.test(message)) return "A withdrawn outcome needs an actual end date.";
-  // The lms_unit_students_permanent trigger refuses every update (allocations are permanent), outcome columns included.
-  if (/allocations are permanent/i.test(message)) return "Results cannot be saved yet: the database locks unit enrolments against any change. An administrator must allow outcome updates first.";
+  // The lms_unit_students_permanent trigger keeps the allocation (intake, unit, student, planned dates) fixed; results may change.
+  if (/allocations are permanent/i.test(message)) return "This change would alter the student's intake or planned dates, which are permanent. Only results can be changed.";
   if (/lms_unit_students_delivery_mode_identifier_check/.test(message)) return "The delivery flags must be three Y / N values.";
   if (/outcome_code_check/.test(message)) return "That outcome is not a valid AVETMISS outcome.";
   if (/predominant_delivery_mode_check/.test(message)) return "That delivery mode is not a valid AVETMISS code.";

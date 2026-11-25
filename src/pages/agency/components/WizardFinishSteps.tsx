@@ -7,6 +7,10 @@ import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel a
 import { DECLARATION_TERMS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
+import { OTHER_LANGUAGE } from "@/pages/agency/lib/wizardConfig";
+import { DisabilityTypesInput, PriorEducationInput } from "@/pages/admin/components/avetmiss/AvetmissInputs";
+import { parseCodeList, parsePriorEducation, serializeCodeList, serializePriorEducation } from "@/pages/admin/components/avetmiss/avetmissValues";
 
 const PERSONAL_LABELS: Record<string, string> = {
   title: "Title", gender: "Gender", first_name: "Given name", middle_name: "Middle name", last_name: "Surname", dob: "Date of birth",
@@ -36,6 +40,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   version?: number;
 }) {
   const v = (name: string) => answers[name] ?? "";
+  const { codes } = useAvetmissCodes();
   // One page, one time (owner, 2026-11-23): what the passport (or the student record) already filled was shown on the document
   // step, so Personal details asks only for what is still missing and does not show the rest again.
   const [prefilled, setPrefilled] = useState<Set<string>>(new Set());
@@ -126,10 +131,36 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
         <div className="space-y-5">
           {radios("atsi", "Is the student of Aboriginal or Torres Strait Islander origin?")}
           {select("employment", "Employment status")}
+          {v("language_home") === OTHER_LANGUAGE ? (
+            <div>
+              <Label htmlFor="wizard-english_proficiency_code" required>How well does the student speak English?</Label>
+              <SearchableSelect id="wizard-english_proficiency_code" name="english_proficiency_code" value={v("english_proficiency_code")} aria-invalid={Boolean(errors.english_proficiency_code)} className={INPUT}
+                onChange={(e) => onChange("english_proficiency_code", e.target.value)}>
+                <option value="">Select</option>
+                {avetmissOptions(codes, "english_proficiency", v("english_proficiency_code")).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+              </SearchableSelect>
+              <FieldError text={errors.english_proficiency_code} />
+            </div>
+          ) : null}
           {radios("disability", "Does the student have a disability that may affect their participation in the course?")}
+          {v("disability") === "Yes" ? (
+            <fieldset>
+              <legend className={LABEL}>Which types of disability? <span className="text-primary-600">*</span></legend>
+              <DisabilityTypesInput codes={codes} value={parseCodeList(v("disability_types"))} idPrefix="wizard-disability" onChange={(next) => onChange("disability_types", serializeCodeList(next))} />
+              <FieldError text={errors.disability_types} />
+            </fieldset>
+          ) : null}
           {radios("secondary_enrolled", "Is the student still enrolled in secondary (high) school?")}
           {select("school_level", "Highest completed school level")}
           {radios("prior_ed", "Has the student successfully completed any prior education?")}
+          {v("prior_ed") === "Yes" ? (
+            <fieldset>
+              <legend className={LABEL}>Prior qualifications completed <span className="text-primary-600">*</span></legend>
+              <PriorEducationInput codes={codes} rows={(() => { const rows = parsePriorEducation(v("prior_education")); return rows.length ? rows : [{ code: "", recognition: "", name: "" }]; })()}
+                onChange={(next) => onChange("prior_education", serializePriorEducation(next))} />
+              <FieldError text={errors.prior_education} />
+            </fieldset>
+          ) : null}
         </div>
       ) : null}
 

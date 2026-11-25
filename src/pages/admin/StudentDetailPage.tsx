@@ -19,6 +19,8 @@ import ReAddToIntake from "@/pages/admin/components/ReAddToIntake";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import { getStudent, sendStudentInvitation, studentLoginLabel, type StudentDetail } from "@/pages/admin/lib/businessData";
 import { formatDate } from "@/pages/agency/lib/portalData";
+import StudentAvetmissPanel from "@/pages/admin/components/avetmiss/StudentAvetmissPanel";
+import { supabase } from "@/pages/admin/lib/supabase";
 
 /** Agencies > Students > {name}: every application this student has, across statuses. */
 export default function StudentDetailPage() {
@@ -31,6 +33,14 @@ export default function StudentDetailPage() {
   const [studyKey, setStudyKey] = useState(0);
   const [inviting, setInviting] = useState(false);
   const [reload, setReload] = useState(0);
+  // AVETMISS-UI: the permanent student number (assigned once by the database, never editable) next to the name.
+  const [studentNumber, setStudentNumber] = useState("");
+  useEffect(() => {
+    let active = true;
+    void supabase.from("enrollment_students").select("student_number").eq("id", id).maybeSingle()
+      .then(({ data }) => { if (active) setStudentNumber(String((data as { student_number?: string | null } | null)?.student_number ?? "")); });
+    return () => { active = false; };
+  }, [id]);
 
   useEffect(() => {
     let active = true;
@@ -77,7 +87,7 @@ export default function StudentDetailPage() {
         <Link to={`/admin/businesses/${student.business.id}`} className="hover:text-foreground-900">{student.business.name}</Link><span aria-hidden="true">/</span>
         <span className="text-foreground-900">Student</span>
       </nav>
-      <PageHeader title={student.name || "Unnamed student"} titleSuffix={<><span className="ml-2 inline-block align-middle"><MessagePersonButton kind="student" refId={student.id} name={student.name} size="sm" /></span></>}
+      <PageHeader title={student.name || "Unnamed student"} titleSuffix={<>{studentNumber ? <span className="ml-2 inline-block rounded border border-background-300 bg-background-100 px-2 py-0.5 align-middle font-mono text-xs font-medium text-foreground-700" title="Student number (permanent)" data-testid="student-number">{studentNumber}</span> : null}<span className="ml-2 inline-block align-middle"><MessagePersonButton kind="student" refId={student.id} name={student.name} size="sm" /></span></>}
         description={`Student of ${student.business.name}${student.agent ? `, looked after by ${student.agent.name}` : ""}${student.selfEnrolled ? ", enrolled themselves from the website" : ""}. Sign-in: ${studentLoginLabel(student.login)}.`}
         actions={onlyDrafts || student.login?.status === "active" ? undefined : (
           <Button icon="ri-mail-send-line" disabled={inviting || !student.email} onClick={() => void invite()}>
@@ -120,6 +130,7 @@ export default function StudentDetailPage() {
       {/* Re-add to intake (20261123191517): after a course was deleted and created again, or to join another intake. */}
       <div className="mt-4 flex justify-end"><ReAddToIntake studentId={id} onDone={() => setStudyKey((k) => k + 1)} /></div>
       <div className="mt-2"><StudentStudyPanel key={studyKey} studentId={id} /></div>
+      <div className="mt-4"><StudentAvetmissPanel studentId={id} /></div>
       <div className="mt-4"><StudentTimelinePanel studentId={id} /></div>
       <div className="mt-4"><Card className="p-5"><h2 className="mb-2 font-heading text-base font-semibold text-foreground-900">Attendance</h2><AttendanceSummary studentId={id} /></Card></div>
       <div className="mt-4"><StudentProgressPanel studentId={id} /></div>

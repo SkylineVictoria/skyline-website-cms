@@ -19,7 +19,9 @@ import {
 import { detailRequired, portalSections, staffCourseLabel } from "@/pages/agency/lib/portalSections";
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
-import { CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { AVETMISS_EXTRA_FIELDS, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
+import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
 import { addressProblems, emailProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 import type { AddressPick } from "@/components/shared/wizard/AddressSearch";
@@ -239,6 +241,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [savingEnglish, setSavingEnglish] = useState(false);
   // WIZARD-FULL: answers typed on the new screens are never replaced by values read later from the draft.
   const touchedRef = useRef(new Set<string>());
+  /** AVETMISS-UI: the application's student, for copying the AVETMISS answers to the student's tables. */
+  const studentIdRef = useRef<string | null>(null);
   const [submittedRef, setSubmittedRef] = useState("");
   // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
   const [hydrated, setHydrated] = useState(0);
@@ -756,6 +760,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       const next = { ...prev };
       const fill = (name: string, value: string) => { if (!touchedRef.current.has(name)) next[name] = value; };
       for (const name of FINISH_FIELDS) fill(name, stored(name));
+      // AVETMISS-UI: the extra AVETMISS answers are strings (codes, a comma list, JSON rows).
+      for (const name of AVETMISS_EXTRA_FIELDS) fill(name, typeof values[name] === "string" ? String(values[name]) : "");
+      if (!next.language_home && typeof values.language_home === "string") next.language_home = String(values.language_home);
+      studentIdRef.current = application.studentId;
       // Nothing typed twice: what the student record already has (the name and email given when the student was added)
       // fills the boxes the passport did not.
       const fullName = application.studentName.trim().replace(/\s+/g, " ");
@@ -861,6 +869,15 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         if (!optionsOf(name).includes(filled(name))) errors[name] = labels[name];
         values[name] = filled(name);
       }
+      // AVETMISS-UI: English proficiency when another language is spoken at home, disability types, prior qualifications.
+      const otherLanguage = String(answers.language_home ?? "") === OTHER_LANGUAGE;
+      if (otherLanguage && !filled("english_proficiency_code")) errors.english_proficiency_code = "Choose how well the student speaks English.";
+      if (filled("disability") === "Yes" && !parseCodeList(filled("disability_types")).length) errors.disability_types = "Choose at least one type.";
+      const priorRows = parsePriorEducation(filled("prior_education")).filter((r) => r.code || r.recognition || r.name.trim());
+      if (filled("prior_ed") === "Yes" && priorEducationProblem(priorRows)) errors.prior_education = priorEducationProblem(priorRows);
+      values.english_proficiency_code = otherLanguage ? filled("english_proficiency_code") : "";
+      values.disability_types = filled("disability") === "Yes" ? filled("disability_types") : "";
+      values.prior_education = filled("prior_ed") === "Yes" ? JSON.stringify(priorRows) : "";
     } else if (target.id === "study") {
       for (const [name, message] of [["study_reason", "Choose the main reason."], ["rpl", "Choose Yes or No."], ["oshc_require", "Choose an answer."], ["hear_about", "Choose how the student heard about SLIT."]] as const) {
         if (!optionsOf(name).includes(filled(name))) errors[name] = message;
@@ -935,7 +952,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       await flushApplicationEdits(applicationId);
       if (!(await persist())) return false;
       await saveWizardDraft(applicationId, { values, ...patch });
-
+      // AVETMISS-UI: copied to the student's AVETMISS tables when this user may write them (best effort; an agent's stays pending).
+      if (target.id === "identifier" && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
       return true;
     } catch (error) {
       setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");

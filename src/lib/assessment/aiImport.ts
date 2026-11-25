@@ -108,6 +108,14 @@ export async function startAiImport(kind: ImportKind, p: Prepared, opts: { force
   return queued.data as ImportStatus;
 }
 
+/** The caller's imports of the last day (Assessments › Library offers Resume). */
+export interface RecentImport { id: string; kind: ImportKind; state: ImportStatus["state"]; fileName: string; pages: number; progress: ImportStatus["progress"]; error: string | null; createdAt: string; finishedAt: string | null }
+export async function recentImports(): Promise<RecentImport[]> {
+  const { data, error } = await supabase.rpc("asm_import_recent");
+  if (error) throw rpcError(error, "The imports could not be listed.");
+  return (data as RecentImport[]) ?? [];
+}
+
 export async function importStatus(id: string): Promise<ImportStatus> {
   const { data, error } = await supabase.rpc("asm_import_status", { p_id: id });
   if (error) throw rpcError(error, "The import status could not be read.");

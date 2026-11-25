@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 export type ReadingPhase = "uploading" | "queued" | "processing";
 
@@ -14,13 +14,20 @@ const MESSAGES =["Good things take a few seconds ✨", "You won’t regret the w
  * friendly line and a thin progress bar. The stages follow the real states (uploading, queued, being read); within a state they
  * move on with time, since the reader reports no finer progress. With reduced motion there is no sweep, only the text changes.
  */
-export default function DocumentReadingState({ filename, file, phase, uploadProgress }: {
+export default function DocumentReadingState({ filename, file, phase, uploadProgress, stages, stage: givenStage, percent: givenPercent, messages, footer }: {
   filename: string;
   /** The picked file, when this browser still has it: an image is shown as the thumbnail. */
   file?: File | null;
   phase: ReadingPhase;
   /** 0 to 1 while uploading, when the uploader reports it. */
   uploadProgress?: number;
+  /** A reader that reports real progress (the assessment import): its own stage names, the current stage and percent. */
+  stages?: readonly string[];
+  stage?: number;
+  percent?: number;
+  messages?: readonly string[];
+  /** Lines under the progress bar (time estimate, what happens if the screen is closed). */
+  footer?: ReactNode;
 }) {
   const [since] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());
@@ -60,11 +67,13 @@ export default function DocumentReadingState({ filename, file, phase, uploadProg
 
   const elapsed = now - since;
   const timed = elapsed < 4000 ? 1 : elapsed < 10000 ? 2 : 3;
-  const stage = phase === "uploading" ? 0 : phase === "queued" ? Math.max(1, Math.min(timed, 2)) : Math.max(2, timed);
-  const percent = phase === "uploading"
+  const list: readonly string[] = stages ?? STAGES;
+  const stage = givenStage ?? (phase === "uploading" ? 0 : phase === "queued" ? Math.max(1, Math.min(timed, 2)) : Math.max(2, timed));
+  const percent = givenPercent ?? (phase === "uploading"
     ? Math.round(5 + 20 * (typeof uploadProgress === "number" ? uploadProgress : 1 - Math.exp(-elapsed / 3000)))
-    : Math.min(95, Math.round(25 + 70 * (1 - Math.exp(-elapsed / 15000))));
-  const message = MESSAGES[Math.floor(elapsed / 3000) % MESSAGES.length];
+    : Math.min(95, Math.round(25 + 70 * (1 - Math.exp(-elapsed / 15000)))));
+  const lines: readonly string[] = messages ?? MESSAGES;
+  const message = lines[Math.floor(elapsed / 3000) % lines.length];
 
   return (
     <div className="fade-in overflow-hidden rounded-lg border border-background-200 bg-background-50 p-3" data-testid="document-reading">
@@ -83,7 +92,7 @@ export default function DocumentReadingState({ filename, file, phase, uploadProg
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground-900" title={filename}>{filename}</p>
           <ol className="mt-1 space-y-0.5" aria-label="Progress">
-            {STAGES.map((label, index) => (
+            {list.map((label, index) => (
               <li key={label} className={`flex items-center gap-1.5 text-xs transition-colors duration-200 ${index < stage ? "text-foreground-600" : index === stage ? "font-medium text-foreground-900" : "text-foreground-400"}`}>
                 {index < stage ? (
                   <i className="ri-check-line text-sm leading-none text-emerald-700" aria-hidden="true" />
@@ -102,7 +111,8 @@ export default function DocumentReadingState({ filename, file, phase, uploadProg
       <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-background-200" role="progressbar" aria-label={`Reading ${filename}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
         <div className="h-full rounded-full bg-primary-500 transition-[width] duration-500 ease-out" style={{ width: `${percent}%` }} />
       </div>
-      <span className="sr-only" role="status">{STAGES[stage]}</span>
+      {footer ? <div className="mt-2 space-y-0.5 text-xs text-foreground-600">{footer}</div> : null}
+      <span className="sr-only" role="status">{list[Math.min(stage, list.length - 1)]}</span>
     </div>
   );
 }

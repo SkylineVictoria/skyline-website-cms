@@ -16,7 +16,7 @@ import { buildWorkbookPdf, questionOutcome } from "../src/lib/assessment/workboo
 import { forbiddenKey, schemaCheck, validateDefinition, validateResponses } from "../src/lib/assessment/validate";
 import { buildFromLines, definitionText, imageRegionsFromPdf, linesFromDocxHtml, linesFromPdf, type PdfDocLike, type PdfOps } from "../src/lib/assessment/workbookImport";
 import { autoTitle, decideFiling, filingCourseId, needsUnitStep } from "../src/lib/assessment/workbookFiling";
-import { adjustmentLayout, detailRows, titleSubline, htmlToBlocks, INFO_HEADING, workbookDetails, workbookNumbering } from "../src/lib/assessment/workbookLayout";
+import { adjustmentLayout, detailRows, titleSubline, htmlToBlocks, INFO_HEADING, workbookDetails, workbookNumbering, OCCASION_TITLE } from "../src/lib/assessment/workbookLayout";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 let passed = 0; let failed = 0;
@@ -716,7 +716,8 @@ else {
     const rows = checkRows(draft, workbookNumbering(draft));
     for (const r of rows) console.log(`    wizard row ${r.number || "-"}: ${r.reason}`);
     check("RIICWD525E: the wizard shows at most 5 import checks, each with a specific reason", rows.length <= 5 && rows.every((r) => !generic.test(r.reason)), rows.map((r) => r.reason));
-    check("RIICWD525E: both drawings carry their picture in the draft", flattenQuestions(draft).filter((f) => /<img/.test(String(f.question.config?.html ?? ""))).length === 2);
+    // ASM-OVERVIEW: a drawing is supporting material of its task (with its pages), no longer a block among the questions
+    check("RIICWD525E: both drawings carry their picture in the draft", draft.tasks.flatMap((t) => t.materials ?? []).filter((m) => m.kind === "drawing" && /<img/.test(m.html)).length + flattenQuestions(draft).filter((f) => /<img/.test(String(f.question.config?.html ?? ""))).length === 2);
   }
 }
 // ------------------------------------------------------------------ ASM-IMPORT-CLASSIFY (2026-11-25): item types, auto-resolved differences
@@ -912,16 +913,21 @@ else {
     const label = (x: Question) => `${nums.get(x.id)?.number ?? "-"}`;
     console.log(`  RIICWD525E compact draft: task 1 sections [${t1.sections.map((s) => s.title).join(" | ")}], numbers ${t1qs.map(label).join(", ")}; task 2 ${draft.tasks[1]?.sections.length} sections`);
     check("E: Task 1 is a single group of questions (the repeated header merged, the instruction-only parts moved to the task's ⓘ)", t1.sections.length === 1 && /Assessment Task 1/i.test(t1.sections[0].title) && /Provide your response to each question in the box below/.test(t1.instructions), t1.sections.map((s) => s.title));
-    check("E: Task 1 numbering is clean and printed: 1.1, 1.2, 1.3, 1.4, 1.5, 6 and the declaration", t1qs.map(label).join(",") === "1.1,1.2,1.3,1.4,1.5,6,Student declaration", t1qs.map(label));
-    const dupes = draft.tasks.map((t) => { const seen = new Map<string, number>(); for (const x of t.sections.flatMap((s) => s.questions)) { const n = nums.get(x.id)?.number; if (n && isAnswerable(x)) seen.set(n, (seen.get(n) ?? 0) + 1); } return [...seen].filter(([, c]) => c > 1).map(([n]) => n); });
-    check("E: no duplicate question numbers in any task", dupes.every((d) => d.length === 0), dupes);
+    // ASM-OVERVIEW: "Q6" (provide references) is the reference list, a requirement of the task, never a numbered question
+    check("E: Task 1 numbering is clean and printed: 1.1-1.5, then the reference list and the declaration (requirements)", t1qs.map(label).join(",") === "1.1,1.2,1.3,1.4,1.5,Reference list,Student declaration", t1qs.map(label));
+    // an occasion ("Occasion 2") numbers its activities within it: numbers are unique per task, the occasions counted apart
+    const dupes = draft.tasks.map((t) => { const seen = new Map<string, number>(); for (const s of t.sections) for (const x of s.questions) { const n = nums.get(x.id)?.number; const k = OCCASION_TITLE.test(s.title) ? `${s.title}|${n}` : n; if (n && k && isAnswerable(x)) seen.set(k, (seen.get(k) ?? 0) + 1); } return [...seen].filter(([, c]) => c > 1).map(([n]) => n); });
+    check("E: no duplicate question numbers in any task (or within an occasion)", dupes.every((d) => d.length === 0), dupes);
     check("E: the upload / calculation boxes take no number: they are response types (upload, calc) of Q1.1", !flattenQuestions(draft).some((f) => /^(Submission of Supporting Evidence|Mathematics Calculation Box)/.test(f.question.label)) && JSON.stringify(rowChips(t1qs[0])) === "[\"upload\",\"calc\"]" && t1qs[0].config?.allowAttachment === true, rowChips(t1qs[0]));
     const q12 = t1qs[1];
     const rows = (q12.config?.rows as { label: string }[] | undefined) ?? [];
     check("E: 2k-2p are table rows of Q1.2 (16 categories a-p, answered per row), not questions of their own", q12.type === "table_grid" && rows.length === 16 && rows[10].label === "k. Selection approval" && rows[15].label === "p. Workplace recording and reporting" && !flattenQuestions(draft).some((f) => f.question !== q12 && /^Selection approval$|^Statutory compliance$/.test(f.question.label)), rows.map((r) => r.label));
     check("E: the category table answers in one 'Answer' column (the first column names the rows)", JSON.stringify((q12.config?.columns as { label: string }[]).map((c) => c.label)) === "[\"Answer\"]");
-    const t2nums = draft.tasks[1].sections.flatMap((s) => s.questions).filter((x) => isAnswerable(x)).map(label);
-    check("E: task 2 uses the specific printed numbers (2.1.1 … 2.2.10), unprinted uploads numbered without clashes", t2nums.includes("2.1.1") && t2nums.includes("2.2.10") && !t2nums.includes("1") && new Set(t2nums).size === t2nums.length, t2nums.join(","));
+    const occ = draft.tasks[1].sections.filter((s) => OCCASION_TITLE.test(s.title));
+    const occNums = occ.map((s) => s.questions.filter((x) => x.role === "activity").map(label).join(","));
+    // ASM-OVERVIEW: each occasion numbers its activities within it (Occasion 1: 2.1-2.9, Occasion 2: 2.1-2.10); the response
+    // templates no activity names (printed 2.1.10, 2.1.11) stay in Occasion 1, named, not numbered
+    check("E: task 2 activities numbered within each occasion (2.1-2.9, then 2.1-2.10); unmatched templates named, in Occasion 1", occ.length === 2 && occNums[0] === "2.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9" && occNums[1] === "2.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9,2.10" && occ[0].questions.filter((x) => x.role === "template").map(label).join("|") === "Record Log and Clarification Response Summary|Validation Summary Report", [occNums, occ[0].questions.filter((x) => x.role === "template").map(label)]);
     check("E: Needs a look stays empty for this workbook", checkRows(draft, nums).length === 0, checkRows(draft, nums).map((r) => r.reason));
   }
 }
@@ -948,12 +954,14 @@ else {
   const def = definitionFromAi(doc, [{ page: 5, x: 0, top: 500, bottom: 300, width: 200, height: 200, src: "data:image/jpeg;base64,QQ==" }]);
   const qs = def.tasks[0].sections[0].questions;
   check("ai draft: text to read (an instruction item) goes to the task's instructions, not among the questions", /Answer in your own words, 50-150 words each\./.test(def.tasks[0].instructions) && !qs.some((q) => /Answer in your own words/.test(String(q.config?.html ?? ""))), def.tasks[0].instructions);
-  check("ai draft: item kinds become question types (instruction, long answer, parts, table, upload, drawing)", qs.map((q) => q.type).join(",") === "long_answer,case_study,table_grid,file_upload,instruction,instruction", qs.map((q) => q.type));
+  // ASM-OVERVIEW: a drawing with its picture is supporting material of the task; one without a picture stays a flagged block
+  check("ai draft: item kinds become question types (long answer, parts, table, upload; a drawing without a picture a block)", qs.map((q) => q.type).join(",") === "long_answer,case_study,table_grid,file_upload,instruction", qs.map((q) => q.type));
   check("ai draft: text kept word for word, printed number kept, original stored for traceability", qs[0].label === doc.tasks[0].sections[0].items[1].text && qs[0].importMeta?.number === "1.1" && qs[0].importMeta?.original === qs[0].label && qs[0].importMeta?.via === "ai");
   check("ai draft: parts are child questions numbered 1.2a / 1.2b; the reworded part is flagged with the PDF wording", qs[1].children?.map((c) => c.importMeta?.number).join(",") === "1.2a,1.2b" && Boolean(qs[1].children?.[1].importMeta?.flags?.length) && qs[1].children?.[1].importMeta?.pdfText === "Parallel circuits");
   check("ai draft: the table keeps its columns and rows", JSON.stringify((qs[2].config?.columns as { label: string }[]).map((c) => c.label)) === "[\"Load\",\"Voltage\"]" && (qs[2].config?.rows as unknown[]).length === 2);
-  check("ai draft: the drawing carries the workbook's picture from its page, not flagged", /<img src="data:image\/jpeg/.test(String(qs[4].config?.html)) && !qs[4].importMeta?.flags?.length, qs[4].importMeta);
-  check("ai draft: a drawing with no picture on its page is flagged with what to do", !/<img/.test(String(qs[5].config?.html)) && qs[5].importMeta?.flags?.[0] === "No picture found on page 9: add the drawing from the PDF", qs[5].importMeta?.flags);
+  const drawing = def.tasks[0].materials?.find((m) => m.kind === "drawing");
+  check("ai draft: the drawing carries the workbook's picture from its page, as the task's material (with its page)", /<img src="data:image\/jpeg/.test(String(drawing?.html)) && drawing?.pages.join() === "5" && drawing?.title === "Wiring diagram of the test circuit", drawing);
+  check("ai draft: a drawing with no picture on its page is flagged with what to do", !/<img/.test(String(qs[4].config?.html)) && qs[4].importMeta?.flags?.[0] === "No picture found on page 9: add the drawing from the PDF", qs[4].importMeta?.flags);
   check("ai draft: no answer or guidance in the definition", forbiddenKey(def) === null && def.source?.unit?.code === "AURETR112" && def.source?.version === "1.0");
   check("ai draft: the PDF export numbers questions as printed", workbookNumbering(def).get(qs[0].id)?.number === "1.1");
   const mq = matchQuestions(def);
@@ -1149,6 +1157,78 @@ else {
   const mock = resolveSuggestions(mockMappingAnswer(req), qs, cs);
   check("ai mapping (lab stand-in): maps questions to requirements on the same subject", mock.some((s) => s.questionId === "qa" && s.elementId === "ea"), mock);
   check("ai mapping: the server and the page agree on the kinds a question can map to", JSON.stringify(SERVER_KINDS) === JSON.stringify(MAPPABLE_KINDS));
+}
+// ------------------------------------------------------------------ ASM-OVERVIEW: the assessment Overview and the waiting screen
+{
+  const { definitionFromAi, leadingTitle, paragraphHeading, importStage, IMPORT_STAGES, COMPACT_LAYOUT } = await import("../src/lib/assessment/aiDraft");
+  const { overviewOf, firstSentence, displayTaskTitle, instructionsSummary, issuesOf, auditExcerpt } = await import("../src/lib/assessment/overview");
+  const { taskReadingHtml } = await import("../src/lib/assessment/definition");
+  const { referenceItems } = await import("../src/lib/assessment/studentFlow");
+  check("overview: an activity's title is the title-case words before its description", leadingTitle("Identify and Assess Risks Conduct a risk assessment for the pavement surfacing project.") === "Identify and Assess Risks" && leadingTitle("Review Site and Supporting Documents Access, review and summarise relevant documentation") === "Review Site and Supporting Documents" && leadingTitle("Prepare Surfacing Selection Plan Document the full selection process") === "Prepare Surfacing Selection Plan" && leadingTitle("Determine traffic category based on traffic count") === null);
+  check("overview: paragraph headings ('Assessment Instructions (How?)', 'Candidate Role:'), not sentence starts", paragraphHeading("Assessment Instructions (How?) Read the theoretical component")?.heading === "Assessment Instructions (How?)" && paragraphHeading("Candidate Role: Pavement Design Technician")?.heading === "Candidate Role" && paragraphHeading("Candidates must interpret this brief to: Evaluate pavement surfacing options") === null);
+  check("overview: first sentence, task title without the workbook's 'Assessment Task - 2 -' prefix", firstSentence("Outline the policies. Then more.") === "Outline the policies." && displayTaskTitle("Task Assessment Task - 2: Assessment Task 2 - Project (Includes a role-play)") === "Project (Includes a role-play)" && displayTaskTitle("Assessment Task - 1 - Written Assessment") === "Written Assessment");
+  const st = (state: "queued" | "running" | "done", label: string, done: number, total = 5) => importStage({ state, progress: { label, done, total } });
+  check("waiting screen: four stages, from the job's real progress (queued, outline, task chunks, finishing, done)", IMPORT_STAGES.length === 4 && st("queued", "Starting", 0, 1).stage === 0 && st("running", "Reading task 1 of 2", 1).stage === 1 && st("running", "Reading task 2 of 2", 3).stage === 2 && st("running", "Finishing", 4).stage === 3 && st("done", "Done", 5).stage === 4);
+  check("waiting screen: the percentage only moves forward with the job", [0, 1, 2, 3, 4].map((d) => st("running", d === 4 ? "Finishing" : "Reading", d).percent).every((p, i, a) => i === 0 || p >= a[i - 1]));
+  const fx4 = [process.env.ASM_AI_ANSWERS_4, workbookPath ? workbookPath.replace(/\.pdf$/i, ".ai-answers-4.json") : null, "DNT_RII50520_RIICWD525E_Select Pavement surfacing.ai-answers-4.json"].find((p) => p && existsSync(p));
+  if (!fx4) console.log("SKIP - RIICWD525E Overview (the reader-4 result .ai-answers-4.json not found)");
+  else {
+    const rd = (JSON.parse(readFileSync(fx4, "utf8")) as { result: import("../src/lib/assessment/aiDraft").CheckedDocument }).result;
+    const pics = [44, 75].map((page) => ({ page, x: 0, top: 0, bottom: 0, width: 10, height: 10, src: `data:image/jpeg;base64,UElD${page}` }));
+    const def = definitionFromAi(rd, pics);
+    def.tasks[0].sections[0].questions.push(withSchema({ ...newQuestion("declaration"), label: "Student declaration" }));
+    const numbers = workbookNumbering(def);
+    const ov = overviewOf(def, numbers);
+    const [t1, t2] = ov.tasks;
+    type Row = Extract<(typeof t1)["rows"][number], { kind: "item" }>;
+    const items = (t: typeof t1) => t.rows.filter((r): r is Row => r.kind === "item");
+    console.log(`  RIICWD525E Overview: counts ${JSON.stringify(ov.counts)}; task 1 "${t1.title}" ${t1.count}; task 2 "${t2.title}" ${t2.count}; attached "${t2.attached}"`);
+    check("D: the Overview layout is stamped (source.layout 2): compact, no re-import hint", def.source?.layout === COMPACT_LAYOUT && ov.compact && !ov.reimportHint);
+    check("D: two task cards: Written Assessment (5 questions · 3 hrs) and Project (activities · 4 hrs)", ov.tasks.length === 2 && t1.title === "Written Assessment" && t1.count === "5 questions · 3 hrs" && t2.title === "Project (Includes a role-play)" && t2.count === "19 activities · 2 templates · 4 hrs", [t1.title, t1.count, t2.title, t2.count]);
+    check("D: Task 1 questions are 1.1-1.5, nothing else numbered (no 'Q6', no hard-copy note row)", items(t1).map((r) => r.number).join(",") === "1.1,1.2,1.3,1.4,1.5" && !items(t1).some((r) => /hard copy/i.test(r.full)), items(t1).map((r) => r.number));
+    check("D: the hard-copy note belongs to the upload box: Q1.1 shows upload and calc", items(t1)[0].chips.map((c) => c.kind).join(",") === "upload,calc" && /hard copy/i.test(items(t1)[0].question.importMeta?.responseAreas?.[0]?.note ?? ""), items(t1)[0].chips);
+    const q12 = items(t1)[1];
+    check("D: Q1.2 opens to 16 rows a-p in a grid (k = Selection approval)", q12.detail?.kind === "grid" && q12.detail.items.length === 16 && q12.detail.items[10].marker === "k" && q12.detail.items[10].text === "Selection approval" && q12.detail.items[15].marker === "p", q12.detail);
+    check("D: Q1.4 shows '9 parts' and opens to them", items(t1)[3].chips.some((c) => c.label === "9 parts") && items(t1)[3].detail?.kind === "grid" && items(t1)[3].detail?.items.length === 9);
+    check("D: Task 1 'Also required: Reference list · Student declaration'", t1.alsoRequired.map((r) => r.text).join(" · ") === "Reference list · Student declaration", t1.alsoRequired);
+    check("D: Task 1 learner instructions = one block: '7 sections · method, how, when, specifications, context, resources, evidence'", t1.instructions?.summary.startsWith("7 sections · method, how, when, specifications, context, resources, evidence") === true && (def.tasks[0].instructionPages ?? []).includes(8), t1.instructions?.summary);
+    const acts = items(t2).filter((r) => r.question.role === "activity");
+    const occ1 = acts.slice(0, 9);
+    check("D: Task 2 Occasion 1: 9 activities numbered 2.1-2.9, each with its deliverable as a chip", occ1.map((r) => r.number).join(",") === "2.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9" && occ1.every((r) => r.chips.some((c) => c.kind === "deliverable")) && occ1[2].text === "Identify and Assess Risks" && occ1[2].chips[0].label === "Completed Risk Assessment Worksheet", occ1.map((r) => `${r.number} ${r.text}`));
+    const plan = occ1[7];
+    const planFields = plan.detail?.kind === "template" ? plan.detail.items : [];
+    check("D: the Surfacing Selection Plan is ONE row: 'template · 12 fields', opening to its fields", plan.text === "Prepare Surfacing Selection Plan" && plan.chips.some((c) => c.label === "template · 12 fields") && planFields.filter((i) => i.kind === "field").length === 12 && ["Project", "Prepared by", "Approved by", "Date", "1. Introduction", "5. Risk Considerations"].every((f) => planFields.some((i) => i.text === f)), planFields);
+    check("D: the empty parts 6. and 7. of the plan (no text read) are flagged, not silently blank", (plan.question.children ?? []).filter((c) => c.importMeta?.flags?.length).length === 2 && issuesOf(def, numbers).total >= 2);
+    check("D: the Stakeholder Feedback Record & Approval Log is one template row too (4 fields)", occ1[8].chips.some((c) => c.label === "template · 4 fields"));
+    type Label = Extract<(typeof t1)["rows"][number], { kind: "label" }>;
+    const groups = t2.rows.filter((r): r is Label => r.kind === "label" && Boolean(r.group));
+    const occ2 = acts.slice(9);
+    check("D: Task 2 activities grouped 'Activities · Occasion 1' (open) and 'Activities · Occasion 2' (collapsed, 'Second observation of the same project')", groups.map((g) => g.text).join("|") === "Activities · Occasion 1|Activities · Occasion 2" && groups[0].group?.collapsed === false && groups[1].group?.collapsed === true && groups[1].group?.note === "Second observation of the same project", groups.map((g) => [g.text, g.group?.note, g.group?.collapsed]));
+    check("D: Occasion 2 keeps its 10 activities, numbered within the group 2.1-2.10 (the 10th: Provide Implementation Clarification)", acts.length === 19 && occ2.map((r) => r.number).join(",") === "2.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9,2.10" && occ2[9].text === "Provide Implementation Clarification" && occ2.every((r) => r.group === groups[1].group?.id), occ2.map((r) => `${r.number} ${r.text}`));
+    check("D: Occasion 2 lists how it differs: 10 activities, what it adds, what it leaves out", groups[1].group?.differences[0] === "10 activities (the first occasion has 9)" && /Also asks for: .*Clarification Summary Memo/.test(groups[1].group?.differences[1] ?? "") && /Not asked again: Document Review Checklist; Surfacing Selection Plan Document/.test(groups[1].group?.differences[2] ?? ""), groups[1].group?.differences);
+    const tplLabel = t2.rows.findIndex((r) => r.kind === "label" && r.text === "Response templates");
+    const loose = items(t2).filter((r) => r.question.role === "template");
+    check("D: the unmatched templates (printed 2.1.10, 2.1.11) are listed under Occasion 1 as 'Response templates', without numbers", tplLabel > 0 && loose.map((r) => r.text).join("|") === "Record Log and Clarification Response Summary|Validation Summary Report" && loose.every((r) => r.number === null && r.group === groups[0].group?.id) && t2.rows.indexOf(loose[0]) > tplLabel && t2.rows.indexOf(groups[1]) > t2.rows.indexOf(loose[1]), loose.map((r) => [r.number, r.text]));
+    check("D: Task 2 general steps (10), and the uploads it accepts: graphs · calculations · additional work", t2.steps?.length === 10 && t2.uploadsAccepted.join(" · ") === "graphs · calculations · additional work" && t2.alsoRequired.map((r) => r.text).join() === "Reference list");
+    const kinds = t2.materials.map((m) => `${m.kind}:${m.pages.join("-")}`).join(" ");
+    check("D: supporting material with page ranges: case study, the two drawings (44-45, 75), the role-play brief (51-52)", kinds === "case_study:33-34 drawing:44-45 role_play:51-52 drawing:75" && t2.attached.startsWith("Case study, 2 drawings and role-play brief attached"), [kinds, t2.attached]);
+    const brief = t2.materials.find((m) => m.kind === "role_play")?.html ?? "";
+    check("D: the role-play brief opens to its headings with text (Candidate role, Stakeholder role, Scenario, Timing, Your task, Assessment focus)", ["Candidate Role", "Stakeholder Role", "Scenario", "Timing", "Your Task as Candidate", "Assessment Focus"].every((h) => new RegExp(`<h4>${h}`).test(brief)), brief.slice(0, 300));
+    check("D: counts in the strip come from the item roles (2 tasks, 7 questions incl. 2 templates, 19 activities)", ov.counts.tasks === 2 && ov.counts.questions === 7 && ov.counts.activities === 19 && ov.counts.uploads >= 4, ov.counts);
+    check("D: the learner still reads everything: steps and materials in the task's reading text and the Reference drawer", /General task steps/.test(taskReadingHtml(def.tasks[1])) && /Role-Play Brief/.test(taskReadingHtml(def.tasks[1])) && referenceItems(def.tasks[1], 2).filter((r) => r.hasPicture).length === 2);
+    check("D: no assessor data in the Overview layout; the definition validates", forbiddenKey(def) === null && validateDefinition(def).length === 0, validateDefinition(def));
+    // an older import (no layout 2) still renders: the plain list of the task's items, and the hint to re-import
+    const old = structuredClone(def); delete old.source!.layout;
+    const legacy = overviewOf(old, workbookNumbering(old));
+    check("D: an older AI import renders with the fallback list and 'Re-import to get the compact view'", !legacy.compact && legacy.reimportHint && legacy.tasks.length === 2 && legacy.tasks[0].rows.length > 0);
+    check("D: a hand-built assessment (no import) has no re-import hint", !overviewOf({ tasks: [{ id: "t", title: "Task 1", sections: [{ id: "s", title: "S", questions: [withSchema({ ...newQuestion("long_answer"), label: "Explain." })] }] }] }, new Map()).reimportHint);
+    check("D: instruction summaries count the paragraph headings", instructionsSummary("<h4>Assessment Instructions (How?)</h4><p>x</p><h4>Required resources.</h4><p>y</p>").summary === "2 sections · how, resources");
+    // A2 audit: before / after are capped at 4000 characters; an edit at the end of a long block must still be in the row
+    const long = "Read the instructions carefully. ".repeat(200);
+    const ex = auditExcerpt(long, `${long}Bring a calculator.`);
+    check("A2: a long block's audit keeps the changed part (an edit at the end is not cut away), each side at most 4000 characters", ex.after.includes("Bring a calculator.") && !ex.before.includes("Bring a calculator.") && ex.before.startsWith("…") && ex.after.length <= 4000 && ex.before.length <= 4000, [ex.before.length, ex.after.slice(-60)]);
+    check("A2: a short block's audit keeps both texts whole", JSON.stringify(auditExcerpt("old text", "new text")) === JSON.stringify({ before: "old text", after: "new text" }));
+  }
 }
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

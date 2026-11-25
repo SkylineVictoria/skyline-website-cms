@@ -5,6 +5,16 @@ export const emptyDefinition = (): Definition => ({ instructions: "", tasks: [] 
 export const newTask = (title = "New task"): Task => ({ id: newId("t"), title, instructions: "", sections: [{ id: newId("s"), title: "Section 1", questions: [] }] });
 export const newSection = (title = "New section"): Section => ({ id: newId("s"), title, questions: [] });
 
+const escText = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const htmlOf = (text: string) => (/^\s*</.test(text) || !text.trim() ? text : `<p>${escText(text).split(/\n{2,}/).join("</p><p>")}</p>`);
+/** ASM-OVERVIEW: a task's general steps as a numbered list (learner view, PDF). */
+export const taskStepsHtml = (task: Task) => (task.steps?.length ? `<ol>${task.steps.map((s) => `<li>${escText(s.text.replace(/^\d+\.\s*/, ""))}</li>`).join("")}</ol>` : "");
+/** Everything a learner reads for a task: the instructions, the general steps, then each supporting material under its title. */
+export function taskReadingHtml(task: Task): string {
+  const steps = taskStepsHtml(task);
+  return [htmlOf(task.instructions ?? ""), steps ? `<h4>General task steps</h4>${steps}` : "", ...(task.materials ?? []).map((m) => `<h4>${escText(m.title)}</h4>${m.html}`)].filter(Boolean).join("");
+}
+
 export interface FlatQuestion { task: Task; section: Section; question: Question; parent: Question | null; depth: number; number: string }
 
 /** Every question in reading order with its numbering (1.1, 1.2, 1.2a …), children included. */

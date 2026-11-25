@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(420);
+select plan(434);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -847,5 +847,42 @@ select is((select detail->>'reason' from public.asm_audit_log where target_id = 
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
 select throws_ok(format($$select public.asm_import_unit_check('%s', '{"kind":"switched"}')$$, pg_temp.v('assessment')), '42501', null, 'UNIT a student cannot record a unit decision');
 select pg_temp.as_postgres();
+-- ASM-OVERVIEW (2026-11-25): a block edited in the Overview's drawer is saved like the Builder's autosave and audited in the same
+-- transaction; a published version is never changed (the next draft is made); a running import of the same file is reattached
+create temp table ov_before as
+ select v.version_no, md5(v.definition::text) as h from public.asm_versions v where v.assessment_id = pg_temp.v('assessment')::uuid and v.status = 'published';
+create temp table ov_def as
+ select jsonb_set(v.definition, '{tasks,0,instructions}', to_jsonb('<p>Bring a calculator (overview edit).</p>'::text)) as d
+ from public.asm_versions v where v.assessment_id = pg_temp.v('assessment')::uuid order by v.version_no desc limit 1;
+grant select on ov_before, ov_def to authenticated;
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((public.asm_overview_save(pg_temp.v('assessment')::uuid, jsonb_build_object('definition', (select d from ov_def), 'block',
+  jsonb_build_object('kind', 'instructions', 'id', 't1', 'label', 'Task 1 learner instructions', 'before', 'old text', 'after', 'Bring a calculator (overview edit).'))))->>'ok', 'true', 'OV an admin saves a block from the Overview');
+select throws_ok(format($$select public.asm_overview_save('%s', jsonb_build_object('definition', '{"tasks":[]}'::jsonb, 'block', '{"kind":"everything"}'::jsonb))$$, pg_temp.v('assessment')), '22023', 'Unknown block kind', 'OV an unknown block kind is refused');
+select is((public.asm_overview_save(pg_temp.v('assessment')::uuid, '{"definition":{"tasks":"no"},"block":{"kind":"question","id":"q","before":"a","after":"b"}}'::jsonb))->>'ok', 'false', 'OV a definition the validator refuses is not saved');
+select pg_temp.as_postgres();
+select is((select count(*)::int from ov_before b join public.asm_versions v on v.assessment_id = pg_temp.v('assessment')::uuid and v.version_no = b.version_no and md5(v.definition::text) = b.h), (select count(*)::int from ov_before), 'OV every published version is unchanged');
+select ok(exists (select 1 from public.asm_versions where assessment_id = pg_temp.v('assessment')::uuid and status = 'draft' and definition::text ~ 'overview edit'), 'OV the draft carries the edit');
+select is((select count(*)::int from public.asm_audit_log where action = 'overview_edit' and detail->>'assessmentId' = pg_temp.s('assessment') and detail->>'block' = 'instructions'
+  and detail->>'before' = 'old text' and detail->>'after' ~ 'overview edit' and (detail->>'versionNo')::int = (select version_no from public.asm_versions where assessment_id = pg_temp.v('assessment')::uuid and status = 'draft') and actor is not null), 1, 'OV one audit row: who, the block, before / after, the version');
+select is((select count(*)::int from public.asm_audit_log where action = 'overview_edit' and detail->>'assessmentId' = pg_temp.s('assessment')), 1, 'OV a refused save is not logged');
+select is((select count(*)::int from public.asm_attempts t join public.asm_versions v on v.id = t.version_id where v.assessment_id = pg_temp.v('assessment')::uuid and v.definition::text ~ 'overview edit'), 0, 'OV attempts stay on the version they began with');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select throws_ok(format($$select public.asm_overview_save('%s', '{"block":{"kind":"question"}}')$$, pg_temp.v('assessment')), '42501', null, 'OV a student cannot edit');
+select pg_temp.as_postgres();
+select ok(not has_function_privilege('anon', 'public.asm_overview_save(uuid,jsonb)', 'execute'), 'OV anonymous callers cannot edit');
+
+-- the same file still being read: the running job is returned (never read twice); Force starts another; the admin's recent list
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+create temp table ov_job as select (public.asm_import_start('workbook', repeat('c', 64), 'ov.pdf', 10, 2, '{}', false, 4))->>'id' as id;
+select pg_temp.as_postgres();
+update public.asm_import_jobs set state = 'running' where id = (select id from ov_job)::uuid;
+grant select on ov_job to authenticated;
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((public.asm_import_start('workbook', repeat('c', 64), 'ov.pdf', 10, 2, '{}', false, 4))->>'id', (select id from ov_job), 'IMPORT the running job of the same file is reattached');
+select isnt((public.asm_import_start('workbook', repeat('c', 64), 'ov.pdf', 10, 2, '{}', true, 4))->>'id', (select id from ov_job), 'IMPORT Force starts a new job');
+select ok(public.asm_import_recent() @> jsonb_build_array(jsonb_build_object('id', (select id from ov_job), 'state', 'running', 'fileName', 'ov.pdf')), 'IMPORT the admin''s recent imports list the running job (no result body)');
+select pg_temp.as_postgres();
+select ok(not has_function_privilege('anon', 'public.asm_import_recent()', 'execute'), 'IMPORT anonymous callers cannot list imports');
 select * from finish();
 rollback;

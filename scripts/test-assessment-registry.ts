@@ -633,5 +633,61 @@ else {
     check("fallback path: the parser's own keys become guide answers (assessor version input)", Array.isArray(guideAnswersFromParser(fb)));
   }
 }
+// ------------------------------------------------------------------ ASM-AI-IMPORT stages 3-4: the student's progress, reference, the unit outcome
+{
+  const { studentQuestions, referenceItems, isAnswered, taskProgress, unitOutcome, taskOutcomeFromMarks } = await import("../src/lib/assessment/studentFlow");
+  const task: Task = { id: "t1", title: "Written", instructions: "Answer in your own words, 50-150 words each.", sections: [{ id: "s1", title: "Questions", questions: [
+    { id: "i1", type: "instruction", label: "", config: { html: "<figure><img src=\"data:image/jpeg;base64,QQ==\" /></figure><p><em>Wiring diagram</em></p>" }, importMeta: { page: 44, confidence: "high" } },
+    { id: "q1", type: "long_answer", label: "Explain Ohm's law", required: true },
+    { id: "q2", type: "case_study", label: "Describe each", children: [{ id: "q2a", type: "short_answer", label: "Series" }, { id: "q2b", type: "short_answer", label: "Parallel" }] },
+    { id: "q3", type: "file_upload", label: "Upload a photo" },
+    { id: "q4", type: "observation_checklist", label: "Observed by the assessor", assessorOnly: true },
+    { id: "q5", type: "declaration", label: "Student declaration" },
+  ] }] };
+  check("student flow: the student answers questions, parts and uploads; never the assessor checklist or the declaration", studentQuestions(task).map((q) => q.id).join(",") === "q1,q2,q3");
+  const refs = referenceItems(task, 1);
+  check("student flow: the task instructions and the drawing go to the Reference drawer (title, page)", refs.length === 2 && refs[0].title === "Task 1 instructions" && refs[1].hasPicture && refs[1].title === "Wiring diagram" && refs[1].page === 44, refs.map((r) => [r.title, r.page]));
+  const ev = [{ id: "e1", questionId: "q3", groupIndex: null, byAssessor: false, path: "p", fileName: "photo.jpg", mime: "image/jpeg", bytes: 10, createdAt: "" }];
+  check("student flow: a question with parts is answered only when every part is", !isAnswered(task.sections[0].questions[2], { q2: { q2a: "one path" } }) && isAnswered(task.sections[0].questions[2], { q2: { q2a: "one path", q2b: "two paths" } }));
+  check("student flow: an upload counts once a file is there; blank rich text is not an answer", isAnswered(task.sections[0].questions[3], {}, ev) && !isAnswered(task.sections[0].questions[1], { q1: "<p> </p>" }));
+  check("student flow: 2 of 3 answered", JSON.stringify(taskProgress(task, { q1: "Current equals voltage over resistance", q2: { q2a: "x" } }, ev)) === JSON.stringify({ answered: 2, total: 3 }));
+  const tasks = [{ id: "t1" }, { id: "t2" }];
+  check("unit outcome: every task Satisfactory -> Competent", unitOutcome(tasks, { t1: "S", t2: "S" }) === "C");
+  check("unit outcome: any task Not Satisfactory -> Not Yet Competent", unitOutcome(tasks, { t1: "S", t2: "NYS" }) === "NYC" && unitOutcome(tasks, { t1: "NYS", t2: "NYS" }) === "NYC");
+  check("unit outcome: a task not decided yet -> no outcome", unitOutcome(tasks, { t1: "S" }) === null && unitOutcome(tasks, { t1: "NYS" }) === null && unitOutcome([], {}) === null);
+  check("task outcome from the marks: all S -> S, any NS -> NYS, unmarked -> none", taskOutcomeFromMarks(["a", "b"], { a: "S", b: "S" }) === "S" && taskOutcomeFromMarks(["a", "b"], { a: "S", b: "NYS" }) === "NYS" && taskOutcomeFromMarks(["a", "b"], { a: "S" }) === null);
+}
+// ------------------------------------------------------------------ ASM-AI-IMPORT stage 5: signatures stamped on the workbook PDF
+{
+  // a real 600 x 200 PNG, as the signing pad makes it (drawn with @napi-rs/canvas)
+  const { createCanvas } = await import("@napi-rs/canvas");
+  const pad = (stroke: number) => { const c = createCanvas(600, 200); const g = c.getContext("2d"); g.strokeStyle = "#0d1a4d"; g.lineWidth = 3; g.beginPath(); g.moveTo(40, 150); g.lineTo(200 + stroke, 40); g.lineTo(380, 160); g.stroke(); return c.toBuffer("image/png").toString("base64"); };
+  const def: Definition = { instructions: "", tasks: [{ id: "t1", title: "Written", sections: [{ id: "s1", title: "Questions", questions: [
+    { id: "q1", type: "long_answer", label: "Explain Ohm's law", required: true, markingMode: "criteria" },
+    { id: "d1", type: "declaration", label: "Student declaration", config: { text: "I declare this work is my own." } },
+  ] }] }], source: { unit: { code: "AURETR112", name: "Test and repair basic electrical circuits" }, version: "1.1" } };
+  const attemptRow = (no: number, outcome: "S" | "NYS") => ({ id: `a${no}`, attemptNo: no, state: (no === 2 ? "final" : "returned") as "final" | "returned", submittedAt: `2026-11-2${no}T01:00:00Z`, returnedAt: `2026-11-2${no}T05:00:00Z`, finalisedAt: no === 2 ? "2026-11-22T05:00:00Z" : null, outcome, overallFeedback: "", assessor: "Wendy Workbook", tasks: [{ taskId: "t1", outcome, feedback: `Feedback ${no}`, signedAt: `2026-11-2${no}T05:00:00Z`, assessor: "Wendy Workbook" }] });
+  const sigRows = [
+    { kind: "student_declaration" as const, attemptNo: 1, signerName: "Sam Student", signaturePng: pad(0), signedAt: "2026-11-20T23:00:00Z" },
+    { kind: "assessor_signoff" as const, attemptNo: 1, signerName: "Wendy Workbook", signaturePng: pad(20), signedAt: "2026-11-21T05:00:00Z" },
+    { kind: "student_acknowledgement" as const, attemptNo: 1, signerName: "Sam Student", signaturePng: pad(40), signedAt: "2026-11-21T07:00:00Z" },
+    { kind: "student_declaration" as const, attemptNo: 2, signerName: "Sam Student", signaturePng: pad(60), signedAt: "2026-11-21T23:00:00Z" },
+    { kind: "assessor_signoff" as const, attemptNo: 2, signerName: "Wendy Workbook", signaturePng: pad(80), signedAt: "2026-11-22T05:00:00Z" },
+  ];
+  const base = { definition: def, title: "AURETR112", maxAttempts: 3, institution: { name: "Skyline Institute of Technology", lines: [], logo: null },
+    history: { student: { id: "s", ref: "SK00000039", name: "Sam Student" }, trainers: ["Wendy Workbook"], assessment: null, attempts: [attemptRow(1, "NYS"), attemptRow(2, "S")], complete: true },
+    attempt: { attemptNo: 2, responses: { q1: "Current equals voltage over resistance.", d1: { agreed: true, signature: "Sam Student" } }, assessorResponses: {}, results: [], evidence: [], submittedAt: "2026-11-22T01:00:00Z" } };
+  const withSigs = await buildWorkbookPdf({ ...base, signatures: sigRows });
+  const without = await buildWorkbookPdf(base);
+  const textOf = async (bytes: Uint8Array) => { const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs"); const d = await pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise; const out: string[] = []; for (let p = 1; p <= d.numPages; p++) out.push(((await (await d.getPage(p)).getTextContent()).items as { str: string }[]).map((x) => x.str).join(" ").replace(/\s+/g, " ")); return out.join("\n"); };
+  const t = await textOf(withSigs);
+  const images = (Buffer.from(withSigs).toString("latin1").match(/\/Subtype\s*\/Image/g) ?? []).length;
+  check("pdf signatures: the five signature pictures are embedded (declarations, sign-offs, acknowledgement)", images >= 5, images);
+  check("pdf signatures: the student declaration page prints the signer and the date it was signed", /Student Signature Sam Student · 22\/11\/2026/.test(t), t.match(/Student Signature[^\n]{0,60}/)?.[0]);
+  check("pdf signatures: each results sheet has an assessor signature and a student acknowledgement row per attempt", /Assessor signature Wendy Workbook · 21\/11\/2026 Wendy Workbook · 22\/11\/2026/.test(t) && /Student acknowledgement Sam Student · 21\/11\/2026/.test(t), t.match(/Assessor signature[^\n]{0,120}/)?.[0]);
+  check("pdf signatures: the assessment summary carries the assessor's signature and name, and the date signed", /Assessor Signature Wendy Workbook · 22\/11\/2026/.test(t) && /Trainer\/Assessor Wendy Workbook/.test(t));
+  check("pdf signatures: the version (1.1 after edits) prints in the footer", /Version Number: 1\.1/.test(t));
+  check("pdf signatures: without signatures the PDF is as before (no signature rows)", !/Assessor signature/.test(await textOf(without)));
+}
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

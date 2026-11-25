@@ -48,7 +48,14 @@ export interface WorkbookPdfInput {
    * instruction blocks (briefs, drawings, tables) are printed too, and no attempt line. A marked export leaves them out.
    */
   blank?: boolean;
+  /**
+   * ASM-AI-IMPORT stage 5: the signatures of this student's attempts (asm_signatures): the student's declaration, the assessor's
+   * sign-off and the student's acknowledgement, stamped where the workbook expects them; later attempts fill further columns.
+   */
+  signatures?: PdfSignature[];
 }
+
+export interface PdfSignature { kind: "student_declaration" | "assessor_signoff" | "student_acknowledgement"; attemptNo?: number; signerName: string; signaturePng: string | null; signedAt: string }
 
 const W = 595.28; const H = 841.89; const M = 42;
 const HEADER_BOTTOM = H - 104; const FOOTER_TOP = 46;
@@ -56,7 +63,10 @@ const INK = rgb(0.1, 0.11, 0.13); const GREY = rgb(0.42, 0.45, 0.5); const LINE 
 const BAR = rgb(0.86, 0.89, 0.94);
 const SIZE = 9.5; const LEAD = 12.6; const PAD = 5;
 
-type Cell = string | { ticks: [string, boolean][] };
+type SigCell = { sig: PDFImage | null; text: string };
+type Cell = string | { ticks: [string, boolean][] } | SigCell;
+const isSig = (c: Cell): c is SigCell => typeof c !== "string" && "sig" in c;
+const SIG_H = 30;
 
 class Layout {
   pages: PDFPage[] = [];
@@ -245,16 +255,26 @@ class Layout {
     const widths = fractions.map((f) => f * total);
     const tickWidth = (c: { ticks: [string, boolean][] }) => c.ticks.reduce((n, [label]) => n + 21 + this.width(this.clean(label), 8.5), 0) - 10;
     // tick boxes that do not fit side by side in their cell are stacked
-    const stacked = (c: Cell, ci: number) => typeof c !== "string" && tickWidth(c) > widths[ci] - 2 * PAD;
+    const stacked = (c: Cell, ci: number) => typeof c !== "string" && !isSig(c) && tickWidth(c) > widths[ci] - 2 * PAD;
     const draw = (cells: Cell[], head: boolean) => {
-      const wrapped = cells.map((c, ci) => (typeof c === "string" ? this.wrap(c, widths[ci] - 2 * PAD, 8.5, head || (o.labelColumn === true && ci === 0)) : null));
-      const h = Math.max(...wrapped.map((w, ci) => (w ? w.length : stacked(cells[ci], ci) ? (cells[ci] as { ticks: unknown[] }).ticks.length : 1))) * 11 + 2 * PAD;
+      const wrapped = cells.map((c, ci) => (typeof c === "string" ? this.wrap(c, widths[ci] - 2 * PAD, 8.5, head || (o.labelColumn === true && ci === 0)) : isSig(c) ? this.wrap(c.text, widths[ci] - 2 * PAD, 7.5) : null));
+      const lineCount = (ci: number) => { const c = cells[ci]; const w = wrapped[ci]; if (isSig(c)) return 0; return w ? w.length : stacked(c, ci) ? (c as { ticks: unknown[] }).ticks.length : 1; };
+      const sigHeight = Math.max(0, ...cells.map((c, ci) => (isSig(c) ? (c.sig ? SIG_H + 2 : 0) + (wrapped[ci]?.length ?? 0) * 9.5 : 0)));
+      const h = Math.max(Math.max(...cells.map((_, ci) => lineCount(ci))) * 11, sigHeight) + 2 * PAD;
       if (this.y - h < FOOTER_TOP + 8) { this.newPage(); if (header && !head) draw(header, true); }
       let cx = x0;
       cells.forEach((c, ci) => {
         this.page.drawRectangle({ x: cx, y: this.y - h, width: widths[ci], height: h, borderColor: LINE, borderWidth: 0.6, color: head || (o.labelColumn && ci === 0) ? SHADE : undefined });
         const lines = wrapped[ci];
-        if (lines) lines.forEach((l, k) => this.page.drawText(l, { x: cx + PAD, y: this.y - PAD - 8.5 - k * 11 + 1.5, size: 8.5, font: head || (o.labelColumn && ci === 0) ? this.bold : this.font, color: INK }));
+        if (isSig(c)) {
+          let top = this.y - PAD;
+          if (c.sig) {
+            const scale = Math.min((widths[ci] - 2 * PAD) / c.sig.width, SIG_H / c.sig.height);
+            this.page.drawImage(c.sig, { x: cx + PAD, y: top - c.sig.height * scale, width: c.sig.width * scale, height: c.sig.height * scale });
+            top -= SIG_H + 2;
+          }
+          (lines ?? []).forEach((l, k) => this.page.drawText(l, { x: cx + PAD, y: top - 7.5 - k * 9.5 + 1.5, size: 7.5, font: this.font, color: GREY }));
+        } else if (lines) lines.forEach((l, k) => this.page.drawText(l, { x: cx + PAD, y: this.y - PAD - 8.5 - k * 11 + 1.5, size: 8.5, font: head || (o.labelColumn && ci === 0) ? this.bold : this.font, color: INK }));
         else if (typeof c !== "string") {
           if (stacked(c, ci)) c.ticks.forEach((t, k) => this.ticks([t], cx + PAD, this.y - PAD - k * 11));
           else this.ticks(c.ticks, cx + PAD, this.y - PAD);
@@ -331,6 +351,16 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
   pdf.setTitle(`${input.title}${history.student?.name ? ` – ${history.student.name}` : ""}`);
   pdf.setProducer("Skyline ERP"); pdf.setCreator("Skyline ERP");
   const L = new Layout(pdf, await pdf.embedFont(StandardFonts.Helvetica), await pdf.embedFont(StandardFonts.HelveticaBold), input);
+  // ASM-AI-IMPORT stage 5: every signature picture embedded once
+  const sigs = input.signatures ?? [];
+  const sigImages = new Map<PdfSignature, PDFImage | null>();
+  for (const sg of sigs) {
+    let img: PDFImage | null = null;
+    if (sg.signaturePng) { try { img = await pdf.embedPng(Uint8Array.from(atob(sg.signaturePng), (c) => c.charCodeAt(0))); } catch { img = null; } }
+    sigImages.set(sg, img);
+  }
+  const sigOf = (kind: PdfSignature["kind"], attemptNo: number) => sigs.find((x) => x.kind === kind && (x.attemptNo ?? attempt.attemptNo) === attemptNo) ?? null;
+  const sigCell = (sg: PdfSignature | null): Cell => (sg ? { sig: sigImages.get(sg) ?? null, text: `${sg.signerName} · ${date(sg.signedAt)}` } : "");
   await L.init();
 
   /* ---- ASM-COVER: the "STUDENT WORKBOOK" page, then the details page (page 1) */
@@ -396,7 +426,8 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
       if (text) L.text(text, { size: 8.5 });
       L.gap(3);
       const name = val.signature || str(attempt.declaration?.signature);
-      L.table(null, [["Student Name", name], ["Student Signature", name ? `${name} (typed)` : ""], ["Date", date(attempt.submittedAt)], ["Agreed", { ticks: [["I agree to this declaration", Boolean(val.agreed ?? attempt.declaration?.agreed)]] }]], [0.3, 0.7], { labelColumn: true });
+      const signed = sigOf("student_declaration", attempt.attemptNo);
+      L.table(null, [["Student Name", signed?.signerName ?? name], ["Student Signature", signed ? sigCell(signed) : name ? `${name} (typed)` : ""], ["Date", date(signed?.signedAt ?? attempt.submittedAt)], ["Agreed", { ticks: [["I agree to this declaration", Boolean(signed || (val.agreed ?? attempt.declaration?.agreed))]] }]], [0.3, 0.7], { labelColumn: true });
     } else if (q.type === "case_study" || q.type === "repeating_group") {
       const scenario = cfg(q, "scenario", "");
       if (scenario && scenario !== q.label) L.text(scenario, { size: 8.5, color: GREY });
@@ -448,21 +479,22 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
     // the task's results sheet
     const row = sheet.rows[ti];
     L.heading(`Assessment Task - ${ti + 1} - Results Sheet`, 12);
-    L.table(["", ...row.cells.map((c) => ordinal(c.attemptNo))], resultRows(row.cells, date), [0.2, ...row.cells.map(() => 0.8 / row.cells.length)], { labelColumn: true });
+    L.table(["", ...row.cells.map((c) => ordinal(c.attemptNo))], resultRows(row.cells, date, sigs.length ? (no, kind) => sigCell(sigOf(kind, no)) : null), [0.2, ...row.cells.map(() => 0.8 / row.cells.length)], { labelColumn: true });
   }
 
   /* ---- overall outcome and declarations */
   L.newPage();
   L.heading("Assessment outcome", 14);
-  L.table(["", ...sheet.overall.map((c) => ordinal(c.attemptNo))], resultRows(sheet.overall, date), [0.2, ...sheet.overall.map(() => 0.8 / sheet.overall.length)], { labelColumn: true });
+  L.table(["", ...sheet.overall.map((c) => ordinal(c.attemptNo))], resultRows(sheet.overall, date, sigs.length ? (no, kind) => sigCell(sigOf(kind, no)) : null), [0.2, ...sheet.overall.map(() => 0.8 / sheet.overall.length)], { labelColumn: true });
   const decided = [...history.attempts].reverse().find((a) => a.state === "returned" || a.state === "final");
   L.text("Student overall Feedback:", { bold: true });
   L.box(decided?.overallFeedback ?? "", 3);
   L.table(null, [
     ["Student Name", history.student?.name ?? ""],
-    ["Student Declaration", attempt.declaration?.signature ? `Signed (typed) by ${str(attempt.declaration.signature)} on ${date(attempt.submittedAt)}` : ""],
-    ["Trainer/Assessor", decided?.assessor ?? history.trainers.join(", ")],
-    ["Date", date(decided?.finalisedAt ?? decided?.returnedAt)],
+    ["Student Declaration", sigOf("student_declaration", attempt.attemptNo) ? sigCell(sigOf("student_declaration", attempt.attemptNo)) : attempt.declaration?.signature ? `Signed (typed) by ${str(attempt.declaration.signature)} on ${date(attempt.submittedAt)}` : ""],
+    ["Trainer/Assessor", sigOf("assessor_signoff", decided?.attemptNo ?? attempt.attemptNo)?.signerName ?? decided?.assessor ?? history.trainers.join(", ")],
+    ...(sigs.length ? [["Assessor Signature", sigCell(sigOf("assessor_signoff", decided?.attemptNo ?? attempt.attemptNo))] as Cell[], ["Student Acknowledgement", sigCell(sigOf("student_acknowledgement", decided?.attemptNo ?? attempt.attemptNo))] as Cell[]] : []),
+    ["Date", date(sigOf("assessor_signoff", decided?.attemptNo ?? attempt.attemptNo)?.signedAt ?? decided?.finalisedAt ?? decided?.returnedAt)],
   ], [0.3, 0.7], { labelColumn: true });
 
   /* ---- footers, now that the page count is known; the cover is not numbered (as the master workbook: "Page 1" follows it) */
@@ -480,11 +512,15 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
 }
 
 const ordinal = (n: number) => (n === 1 ? "First attempt" : n === 2 ? "Second attempt" : n === 3 ? "Third attempt" : `Attempt ${n}`);
-function resultRows(cells: SheetCell[], date: (iso: string | null) => string): Cell[][] {
+function resultRows(cells: SheetCell[], date: (iso: string | null) => string, sign: ((attemptNo: number, kind: PdfSignature["kind"]) => Cell) | null = null): Cell[][] {
   return [
     ["Outcome", ...cells.map((c): Cell => ({ ticks: [["Satisfactory", c.decided && c.result === "S"], ["Not Satisfactory", c.decided && c.result === "NS"]] }))],
     ["Date", ...cells.map((c) => (c.decided ? date(c.date) : ""))],
     ["Assessor", ...cells.map((c) => (c.decided ? c.assessor ?? "" : ""))],
     ["Feedback", ...cells.map((c) => (c.decided ? c.feedback : ""))],
+    ...(sign ? [
+      ["Assessor signature", ...cells.map((c) => (c.decided ? sign(c.attemptNo, "assessor_signoff") : ""))],
+      ["Student acknowledgement", ...cells.map((c) => (c.decided ? sign(c.attemptNo, "student_acknowledgement") : ""))],
+    ] : []),
   ];
 }

@@ -3,7 +3,7 @@ import { Badge, Button, TextInput } from "@/pages/admin/components/ui";
 import { Drawer } from "@/pages/admin/components/rto/shared";
 import { useToast } from "@/pages/admin/components/toastContext";
 import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
-import { evidenceUrl, fmtDateTime, OUTCOME_LABEL, STATE_LABEL } from "@/lib/assessment/api";
+import { asmSignatures, evidenceUrl, fmtDateTime, OUTCOME_LABEL, STATE_LABEL } from "@/lib/assessment/api";
 import type { Attempt, Definition, EvidenceFile } from "@/lib/assessment/types";
 import { asmAdmin } from "@/pages/admin/lib/assessments";
 import ResultsSheet from "@/components/assessment/ResultsSheet";
@@ -30,7 +30,7 @@ export default function AttemptDrawer({ attemptId, onClose, onChanged }: { attem
   const exportPdf = async () => {
     if (!attempt || !definition || !history) return;
     setExporting(true);
-    try { await downloadWorkbookPdf({ definition, attempt, history, title: history.assessment?.title || definition.source?.unit?.name || "Assessment" }); }
+    try { await downloadWorkbookPdf({ definition, attempt, history, title: history.assessment?.title || definition.source?.unit?.name || "Assessment", signatures: await asmSignatures(attempt.id) }); }
     catch (e) { setError(e instanceof Error ? `The PDF was not made: ${e.message}` : "The PDF was not made."); }
     finally { setExporting(false); }
   };

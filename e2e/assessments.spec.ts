@@ -29,6 +29,95 @@ function enrol(intakeId: string, studentId: string): void {
   sql(`begin; select set_config('rto.carry_over_planning', 'on', true); insert into public.intake_enrolments(intake_id, student_id, study_reason_code) values ('${intakeId}', '${studentId}', '01'); commit;`);
 }
 
+/** Draws a short signature on the signing pad (ASM-AI-IMPORT stage 3). */
+async function drawSignature(page: Page, scope: ReturnType<Page["locator"]> | Page = page): Promise<void> {
+  const pad = scope.getByTestId("signature-pad").first();
+  await pad.scrollIntoViewIfNeeded();
+  const box = await pad.boundingBox();
+  if (!box) throw new Error("no signature pad");
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.6);
+  await page.mouse.down();
+  for (const [x, y] of [[0.3, 0.3], [0.4, 0.7], [0.5, 0.35], [0.65, 0.65], [0.8, 0.4]]) await page.mouse.move(box.x + box.width * x, box.y + box.height * y, { steps: 4 });
+  await page.mouse.up();
+}
+/** Before you start: tick the declaration, sign, Start Task 1 (skipped when this attempt is already signed). */
+async function startWithDeclaration(page: Page): Promise<void> {
+  const before = page.getByTestId("before-you-start");
+  await Promise.race([before.waitFor({ timeout: 20_000 }), page.getByTestId("task-page").waitFor({ timeout: 20_000 })]).catch(() => undefined);
+  if (!(await before.isVisible())) return;
+  await page.getByTestId("declare").check();
+  const saved = page.getByText("Your saved signature");
+  if (!(await saved.isVisible().catch(() => false))) await drawSignature(page);
+  await page.getByTestId("start-task").click();
+  await expect(page.getByTestId("task-page")).toBeVisible({ timeout: 20_000 });
+}
+/** Answers every visible field of the open task page (text, dates, numbers, first radio of each group, check boxes). */
+async function answerTaskPage(page: Page, tag: string): Promise<void> {
+  const form = page.locator("[data-testid=task-page] [data-question]");
+  for (const box of await form.locator("textarea:visible").all()) if (!(await box.inputValue())) await box.fill(`${tag} answer`);
+  for (const box of await form.locator("input[type=text]:visible, input:not([type]):visible").all()) if (!(await box.inputValue())) await box.fill(tag);
+  for (const box of await form.locator("input[type=date]:visible").all()) await box.fill("2026-11-20");
+  for (const box of await form.locator("input[type=number]:visible").all()) if (!(await box.inputValue())) await box.fill("1");
+  const seen = new Set<string>();
+  for (const radio of await form.locator("input[type=radio]:visible").all()) { const name = (await radio.getAttribute("name")) ?? ""; if (!seen.has(name)) { seen.add(name); await radio.check(); } }
+  for (const box of await form.locator("input[type=checkbox]:visible").all()) await box.check();
+  const more = page.getByRole("button", { name: /^\+ \d+ more parts/ });
+  for (let k = 0; k < 50 && (await more.count()); k += 1) await more.first().click();
+  for (const box of await form.locator("input:not([type]):visible, input[type=text]:visible").all()) if (!(await box.inputValue())) await box.fill(tag);
+}
+/** Every task answered page by page, then Review & submit -> Submit; returns the receipt number. */
+async function answerAllAndSubmit(page: Page, tag: string): Promise<string> {
+  for (let i = 0; i < 20; i += 1) {
+    await answerTaskPage(page, tag);
+    await page.waitForTimeout(1200); // autosave
+    const next = page.getByTestId("next");
+    const label = (await next.textContent()) ?? "";
+    await next.click();
+    if (/Review/.test(label)) break;
+  }
+  await expect(page.getByTestId("review-submit")).toBeVisible();
+  await page.getByTestId("submit").click();
+  const receipt = page.getByText(/receipt ASM-\d{4}-\d{6}/i).first();
+  await expect(receipt).toBeVisible({ timeout: 20_000 });
+  return ((await receipt.textContent()) ?? "").match(/ASM-\d{4}-\d{6}/)?.[0] ?? "";
+}
+
+/**
+ * The marking desk (ASM-AI-IMPORT stage 4): marks every question, the first by keyboard (S / N), the rest with the large buttons;
+ * `notSatisfactory(eyebrow)` says which questions get N (eyebrow "Task 2 · Question 2.1.1"). Assessor checklists are ticked.
+ */
+async function markOnDesk(page: Page, notSatisfactory: (eyebrow: string) => boolean = () => false, shotName?: string): Promise<void> {
+  await expect(page.getByTestId("marking-desk")).toBeVisible({ timeout: 30_000 });
+  for (let i = 0; i < 300; i += 1) {
+    const counter = (await page.getByTestId("marked-count").textContent()) ?? "";
+    const m = /(\d+) of (\d+) marked/.exec(counter);
+    if (m && m[1] === m[2]) break;
+    for (const r of await page.getByLabel("Observed", { exact: true }).all()) if (!(await r.isChecked())) await r.check();
+    const eyebrow = (await page.locator("[data-testid=marking-desk] [data-question] p").first().textContent()) ?? "";
+    const no = notSatisfactory(eyebrow);
+    if (i === 0) {
+      await page.getByTestId("model-answer").locator("summary").click();
+      if (shotName && process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, `${shotName}.png`) });
+      await page.locator("body").click({ position: { x: 5, y: 5 } });
+      await page.keyboard.press(no ? "n" : "s");
+    } else await page.getByTestId(no ? "mark-n" : "mark-s").click();
+    await expect(page.getByTestId("marked-count")).not.toHaveText(counter, { timeout: 10_000 });
+  }
+  await expect(page.getByTestId("finish-sign-off")).toBeEnabled();
+  await page.getByTestId("finish-sign-off").click();
+  await expect(page.getByTestId("sign-off")).toBeVisible();
+}
+/** The sign-off: feedback per task, the assessor declaration and signature, Sign & release results. */
+async function signOffAndRelease(page: Page, feedback: string, shotName?: string): Promise<void> {
+  for (const box of await page.getByTestId("results-sheet-task").locator("textarea").all()) await box.fill(feedback);
+  await page.getByTestId("assessor-declare").check();
+  const saved = page.getByTestId("assessor-declaration").getByText("Your saved signature");
+  if (!(await saved.isVisible().catch(() => false))) await drawSignature(page, page.getByTestId("assessor-declaration"));
+  if (shotName && process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, `${shotName}.png`), fullPage: true });
+  await page.getByTestId("sign-release").click();
+  await expect(page.getByText(/Results released/)).toBeVisible({ timeout: 30_000 });
+}
+
 async function signInStaff(page: Page, email: string, path: string): Promise<void> {
   await signOutEverywhere(page);
   await signInThroughTheForm(page, email);
@@ -100,10 +189,10 @@ test("the admin builds, publishes and assigns an assessment in the browser", asy
   await expect(page.getByText(/published v1/)).toBeVisible({ timeout: 10_000 });
 
   await page.getByRole("button", { name: "Assignments" }).click();
-  await page.getByRole("button", { name: "Assign to batches" }).click();
-  await page.getByLabel(/G1 · /).check();
+  await page.getByRole("button", { name: "Assign to intakes" }).click();
+  await page.getByRole("dialog", { name: "Assign to intakes" }).locator("label").filter({ hasText: /^G1/ }).locator("input[type=checkbox]").check();
   await page.getByRole("button", { name: "Assign", exact: true }).click();
-  await expect(page.getByText(/G1 · .*due/)).toBeVisible({ timeout: 10_000 });
+  await expect.poll(() => sql(`select count(*) from public.asm_assignments a join public.asm_assessments s on s.id = a.assessment_id where s.course_id = '${courseId}'`), { timeout: 15_000 }).toBe("1");
   expect(sql(`select count(*) from public.asm_assignments a join public.asm_assessments s on s.id = a.assessment_id where s.course_id = '${courseId}'`)).toBe("1");
 });
 
@@ -112,14 +201,12 @@ test("the student completes and submits it with the declaration and gets a recei
   await expect(page.getByRole("heading", { name: "My assessments" })).toBeVisible();
   await page.getByRole("button", { name: "Start" }).click();
   await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
-  await page.locator("[data-question] textarea").first().fill("Gloves protect the hands and glasses protect the eyes.");
+  // ASM-AI-IMPORT stage 3: Before you start (declaration + signature), one task a page, Review & submit
+  await startWithDeclaration(page);
+  await page.locator("[data-question] textarea, [data-question] input:not([type]), [data-question] input[type=text]").first().fill("Gloves protect the hands and glasses protect the eyes.");
   await page.locator("[data-question] input[type=radio]").first().check();
-  await expect(page.getByText("Everything required is answered")).toBeVisible({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Submit assessment" }).click();
-  await page.getByLabel(/I have read and agree/).check();
-  await page.getByLabel(/Type your full name/).fill("E2E Student");
-  await page.getByRole("button", { name: "Submit", exact: true }).click();
-  await expect(page.getByText(/Receipt ASM-\d{4}-\d{6}/)).toBeVisible({ timeout: 15_000 });
+  await answerAllAndSubmit(page, "E2E");
+  expect(sql(`select string_agg(kind || ':' || signer_role || ':' || method || ':' || (login ? 'userId')::text, ',') from public.asm_attempt_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.student_id = '${student.student}'`)).toBe("student_declaration:student:drawn:true");
   expect(sql(`select state from public.asm_attempts where student_id = '${student.student}'`)).toBe("submitted");
   expect(sql(`select count(*) from public.asm_notifications n join auth.users u on u.id = n.recipient_auth_user where u.email = '${student.email}' and n.event = 'submitted'`)).toBe("1");
 });
@@ -129,14 +216,12 @@ test("the trainer marks it Satisfactory and records the unit outcome", async ({ 
   await expect(page.getByRole("heading", { name: "Assessments" })).toBeVisible();
   await page.getByRole("button", { name: "Mark", exact: true }).first().click();
   await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
-  await expect(page.getByText("Model answer").or(page.getByText("Auto-check suggests"))).toBeVisible();
-  // Every "Satisfactory" pick in order: the criterion, the two questions, the task, then the decision.
-  const picks = page.getByRole("button", { name: "Satisfactory", exact: true });
-  const n = await picks.count();
-  for (let i = 0; i < n; i += 1) await picks.nth(i).click();
-  await page.getByRole("button", { name: "Return as Satisfactory" }).click();
-  await expect(page.getByText("Returned as Satisfactory.")).toBeVisible({ timeout: 15_000 });
+  // ASM-AI-IMPORT stage 4: the marking desk, then Sign off and release results
+  await markOnDesk(page);
+  await expect(page.getByTestId("assessment-summary")).toContainText("Competent (C)");
+  await signOffAndRelease(page, "Clear and complete.");
   expect(sql(`select state || '/' || outcome from public.asm_attempts where student_id = '${student.student}'`)).toBe("final/S");
+  expect(sql(`select string_agg(kind || ':' || signer_role, ',' order by kind) from public.asm_attempt_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.student_id = '${student.student}'`)).toBe("assessor_signoff:assessor,student_declaration:student");
 
   await page.getByRole("button", { name: "Record unit outcome" }).click();
   await page.getByLabel(/I declare that I have conducted/).check();
@@ -192,7 +277,8 @@ test("a trainer of another batch is refused", async ({ page }) => {
 test("reassessment: the admin reopens, the student resubmits, the trainer returns it Not Yet Satisfactory, a further attempt opens and the student acknowledges", async ({ page }) => {
   await signInAsAdmin(page, admin.email);
   await page.goto(`${assessmentUrl}?tab=assignments`);
-  await page.getByRole("button", { name: /G1 · / }).first().click();
+  await page.getByRole("button", { name: "Assignments", exact: true }).click();
+  await page.getByRole("button", { name: /v1 · due/ }).first().click();
   await page.getByRole("button", { name: /^Attempt 1: / }).click();
   await page.getByPlaceholder("Reason (recorded in the audit log)").fill("Resubmission agreed with the student");
   await page.getByRole("button", { name: "Reopen for the student" }).click();
@@ -205,26 +291,20 @@ test("reassessment: the admin reopens, the student resubmits, the trainer return
   await expect(page.getByText(/Attempt 2 in progress/)).toBeVisible();
   await page.getByRole("button", { name: "Open" }).click();
   await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
-  await expect(page.locator("[data-question]")).toHaveCount(2);
-  await page.locator("[data-question] textarea").first().fill("Gloves and glasses; resubmitted.");
+  await startWithDeclaration(page); // a further attempt is signed again
+  await expect(page.locator("[data-testid=task-page] [data-question]")).toHaveCount(2);
+  await page.locator("[data-question] textarea, [data-question] input:not([type]), [data-question] input[type=text]").first().fill("Gloves and glasses; resubmitted.");
   await page.locator("[data-question] input[type=radio]").first().check();
-  await expect(page.getByText("Everything required is answered")).toBeVisible({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Submit assessment" }).click();
-  await page.getByLabel(/I have read and agree/).check();
-  await page.getByLabel(/Type your full name/).fill("E2E Student");
-  await page.getByRole("button", { name: "Submit", exact: true }).click();
-  await expect(page.getByText(/Receipt ASM-\d{4}-\d{6}/)).toBeVisible({ timeout: 15_000 });
+  await answerAllAndSubmit(page, "Resubmitted");
 
   // the trainer returns attempt 2 Not Yet Satisfactory: attempt 3 opens inside the reassessment window
   await signInStaff(page, trainer.email, "/staff/assessments");
   await page.getByRole("button", { name: "Mark", exact: true }).first().click();
   await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
-  await expect(page.getByText("Model answer").or(page.getByText("Auto-check suggests"))).toBeVisible();
-  const picks = page.getByRole("button", { name: "Not yet satisfactory", exact: true });
-  const n = await picks.count();
-  for (let i = 0; i < n; i += 1) await picks.nth(i).click();
-  await page.getByRole("button", { name: "Return for reassessment" }).click();
-  await expect(page.getByText(/a reassessment attempt is open for the student/)).toBeVisible({ timeout: 15_000 });
+  await markOnDesk(page, () => true);
+  await expect(page.getByTestId("assessment-summary")).toContainText("Not Yet Competent (NYC)");
+  await signOffAndRelease(page, "Not yet: name the PPE.");
+  await expect(page.getByText(/A reassessment attempt is open for the student/)).toBeVisible();
   expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${student.student}'`)).toBe("1:final:S,2:returned:NYS,3:draft:-");
   expect(sql(`select (due_at > now() + interval '4 days')::text from public.asm_attempts where student_id = '${student.student}' and attempt_no = 3`)).toBe("true");
 
@@ -232,10 +312,18 @@ test("reassessment: the admin reopens, the student resubmits, the trainer return
   await signInStaff(page, student.email, "/agency/assessments");
   // attempt 1 (Satisfactory) and attempt 2 (Not Yet Satisfactory) both wait for the student
   await expect(page.getByText(/Results to acknowledge \(2\)/)).toBeVisible();
-  await page.getByRole("button", { name: "I have read this result" }).last().click();
-  await expect(page.getByText(/Results to acknowledge \(1\)/)).toBeVisible({ timeout: 15_000 });
-  await page.getByRole("button", { name: "I have read this result" }).click();
+  // each result is read and signed on its results page (ASM-AI-IMPORT stage 3)
+  for (const left of [1, 0]) {
+    await page.getByRole("button", { name: "Read and sign" }).last().click();
+    await expect(page.getByTestId("student-results")).toBeVisible({ timeout: 20_000 });
+    await drawSignature(page, page.getByTestId("acknowledge"));
+    await page.getByRole("button", { name: "Sign to acknowledge" }).click();
+    await expect(page.getByText(/You acknowledged the feedback on/)).toBeVisible({ timeout: 15_000 });
+    await page.goto("/agency/assessments");
+    if (left) await expect(page.getByText(new RegExp(`Results to acknowledge \\(${left}\\)`))).toBeVisible({ timeout: 15_000 });
+  }
   await expect(page.getByText(/Results to acknowledge/)).toHaveCount(0, { timeout: 15_000 });
+  expect(sql(`select count(*) from public.asm_attempt_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.student_id = '${student.student}' and s.kind = 'student_acknowledgement'`)).toBe("2");
   await expect(page.getByText(/Attempt 3 in progress/)).toBeVisible();
   expect(sql(`select (acknowledged_at is not null)::text from public.asm_attempts where student_id = '${student.student}' and attempt_no = 2`)).toBe("true");
 });
@@ -275,32 +363,6 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     sql(`insert into hr.staff_roles(profile_id, role, granted_by) values ('${profile}', 'trainer', '${auth}')`);
     wbTrainer = { email: t.email };
   });
-
-  /** Answers every visible field of the current task (text, dates, numbers, first radio of each group, the declaration). */
-  async function answerVisible(page: Page, tag: string): Promise<void> {
-    const form = page.locator("[data-question]");
-    for (const box of await form.locator("textarea:visible").all()) if (!(await box.inputValue())) await box.fill(`${tag} answer`);
-    for (const box of await form.locator("input[type=text]:visible, input:not([type]):visible").all()) if (!(await box.inputValue())) await box.fill(`${tag}`);
-    for (const box of await form.locator("input[type=date]:visible").all()) await box.fill("2026-11-20");
-    for (const box of await form.locator("input[type=number]:visible").all()) if (!(await box.inputValue())) await box.fill("1");
-    const seen = new Set<string>();
-    for (const radio of await form.locator("input[type=radio]:visible").all()) { const name = (await radio.getAttribute("name")) ?? ""; if (!seen.has(name)) { seen.add(name); await radio.check(); } }
-    for (const box of await form.locator("input[type=checkbox]:visible").all()) await box.check();
-  }
-
-  /** Every task of the open attempt answered, then submitted with the declaration. */
-  async function answerAndSubmit(page: Page, tag: string): Promise<void> {
-    const tabs = page.getByRole("button", { name: /^Task \d/ });
-    const count = Math.max(1, await tabs.count());
-    for (let i = 0; i < count; i += 1) { if (await tabs.count()) await tabs.nth(i).click(); await answerVisible(page, tag); }
-    await expect(page.getByText("Everything required is answered")).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Submit assessment" }).click();
-    await page.getByLabel(/I have read and agree/).last().check();
-    await page.getByLabel(/Type your full name/).last().fill("Wanda Student");
-    await page.getByRole("button", { name: "Submit", exact: true }).click();
-    await expect(page.getByText(/Receipt ASM-\d{4}-\d{6}/)).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Done" }).click();
-  }
 
   /** Clicks Export as workbook PDF and returns the text of the downloaded file (pdf.js), saved next to the screenshots. */
   async function exportPdf(page: Page, button: ReturnType<Page["getByRole"]>, name: string): Promise<{ text: string; pages: number; file: string }> {
@@ -423,10 +485,9 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     const wizard = page.getByRole("dialog", { name: "Add assessment" });
     await wizard.getByTestId("start-empty").click();
     const qual = wizard.getByRole("combobox", { name: "Qualification" });
-    await qual.click();
+    await expect(async () => { if (!(await list.isVisible())) await qual.click(); await expect(list).toBeVisible({ timeout: 2_000 }); }).toPass({ timeout: 20_000 });
     await page.getByRole("searchbox", { name: "Search the options" }).fill("RII50520");
     await page.keyboard.press("Enter");
-    await qual.click();
     await qual.click();
     await expect(list).toBeVisible();
     await reviewShot(page, "dd-2-wizard-qualification-in-dialog", qual);
@@ -443,19 +504,12 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await page.keyboard.press("ArrowDown");
     await expect(list).toBeVisible();
     await expect(list.getByRole("option").first()).toBeVisible();
-    await page.getByRole("searchbox", { name: "Search the options" }).fill("RIICWD525E");
-    await page.keyboard.press("Enter");
+    await list.getByRole("option", { name: /RIICWD525E/ }).first().click();
     await expect(unit).toContainText("RIICWD525E");
-    await wizard.getByRole("button", { name: "Close" }).click();
-    await page.getByRole("button", { name: "Discard", exact: true }).click();
+    await wizard.getByRole("button", { name: "Close" }).click(); // nothing uploaded: closes without asking
+    await expect(wizard).toHaveCount(0);
 
-    // other pages that had native selects
-    await page.goto("/admin/assessments?tab=settings");
-    const who = page.getByRole("combobox", { name: "Who may mark and sign off" });
-    await who.click();
-    await expect(list.getByRole("option")).toHaveCount(2);
-    await reviewShot(page, "dd-6-assessment-settings", who);
-    await page.keyboard.press("Escape");
+    // other pages that had native selects (Assessments › Settings follows the Business Rules since batch 3: read-only there)
 
     await page.goto("/admin/integrations/logs");
     const severity = page.getByRole("combobox", { name: /Severity/ });
@@ -612,21 +666,37 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await signInStaff(page, wbStudent.email, "/agency/assessments");
     await page.getByRole("button", { name: "Start" }).first().click();
     await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
-    await expect(page.getByTestId("before-you-start")).toContainText("Plagiarism");
-    await expect(page.getByTestId("before-you-start")).toContainText("Assessment appeals process");
     await expect(page.getByTestId("assessment-details")).toContainText("RIICWD525E");
     await expect(page.getByTestId("assessment-details")).toContainText("Select Pavement surfacing");
     await expect(page.getByTestId("assessment-details")).toContainText("RII50520");
-    await expect(page.getByTestId("assessment-details")).not.toContainText("Filled in for each student");
+    await expect(page.getByTestId("assessment-details")).toContainText("Filled in for you");
     await expect(page.getByText(/already has an open attempt/)).toHaveCount(0); // ASM-OPEN-RACE: a double load opens the same attempt
     await expect(page.getByTestId("assessment-details")).toContainText("Wendy Workbook");
-    await shot(page, "wb-06-student-before-you-start");
-    await page.getByRole("button", { name: /I have read this – start the assessment/ }).click();
-    await page.getByRole("button", { name: /^Task 2/ }).click();
-    await page.locator("[data-attachments] input[type=file]").first().setInputFiles({ name: "risk-worksheet.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF") });
+    await page.getByRole("button", { name: /Read the full instructions and rules/ }).click();
+    await expect(page.getByRole("dialog", { name: "Instructions and rules" })).toContainText("Plagiarism");
+    await reviewShot(page, "st-0-instructions-drawer");
+    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByTestId("declare").check();
+    await drawSignature(page);
+    await reviewShot(page, "st-1-before-you-start");
+    await page.getByTestId("start-task").click();
+    await expect(page.getByTestId("task-page")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("task-rail-item").first()).toContainText(/\d+ of \d+ answered/);
+    await page.getByTestId("task-rail-item").nth(1).click();
+    await page.locator("[data-testid=task-page] [data-question] input[type=file]").first().setInputFiles({ name: "risk-worksheet.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF") });
     await expect(page.getByText("risk-worksheet.pdf").first()).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: /^Task 1/ }).click();
-    await answerAndSubmit(page, "Attempt one");
+    await expect(page.getByTestId("reference-item").first()).toBeVisible();
+    await reviewShot(page, "st-2-task-page-with-reference");
+    await page.getByTestId("task-rail-item").first().click();
+    await answerTaskPage(page, "Attempt one");
+    await expect(page.getByTestId("autosave")).toContainText(/Saved/, { timeout: 15_000 });
+    await reviewShot(page, "st-3-task-1-answered");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(400);
+    if (process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, "st-3b-task-phone.png"), fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await answerAllAndSubmit(page, "Attempt one");
+    await reviewShot(page, "st-5-submitted");
     await shot(page, "wb-07-student-submitted");
     expect(sql(`select state from public.asm_attempts where student_id = '${wbStudent.student}'`)).toBe("submitted");
     expect(sql(`select count(*) from public.asm_evidence_files f join public.asm_attempts a on a.id = f.attempt_id where a.student_id = '${wbStudent.student}'`)).toBe("1");
@@ -637,8 +707,8 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await signInStaff(page, wbTrainer.email, "/staff/assessments");
     await page.getByRole("button", { name: "Mark", exact: true }).first().click();
     await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
-    await page.getByLabel("Observed", { exact: true }).first().waitFor({ timeout: 30_000 }); // the marking view has loaded
-    for (const r of await page.getByLabel("Observed", { exact: true }).all()) await r.check();
+    await markOnDesk(page, (eyebrow) => /Task 2 · Question 2\.1\.1$/.test(eyebrow.trim()), "tr-1-marking-desk");
+    await page.getByRole("button", { name: "Record a reasonable adjustment" }).click();
     const ra = page.locator("[data-adjustment]");
     await ra.locator("input[type=radio]").first().check();
     await ra.getByLabel("Verbal assessment").check();
@@ -647,18 +717,10 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await ra.locator("input[type=text], input:not([type])").last().fill("Wendy Workbook");
     await ra.locator("input[type=date]").fill("2026-11-21");
     await ra.locator("input[type=checkbox]").last().check();
-    const picks = page.getByRole("button", { name: "Satisfactory", exact: true });
-    const n = await picks.count();
-    for (let i = 0; i < n; i += 1) if (await picks.nth(i).isEnabled()) await picks.nth(i).click();
-    // task 2 and the decision: Not Satisfactory
-    const taskPicks = page.locator("button[name^='task-']").filter({ hasText: "Not yet satisfactory" });
-    await taskPicks.last().click();
-    await page.locator("button[name='decision']").filter({ hasText: "Not yet satisfactory" }).click();
-    await shot(page, "wb-08-trainer-marking");
-    await page.getByRole("button", { name: "Return for reassessment" }).click();
-    await expect(page.getByText(/a reassessment attempt is open for the student/)).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByTestId("results-sheet")).toContainText("Not Satisfactory");
-    await shot(page, "wb-09-trainer-results-sheet");
+    await expect(page.getByTestId("assessment-summary")).toContainText("Not Yet Competent (NYC)");
+    await signOffAndRelease(page, "Task feedback from the sign-off.", "tr-2-sign-off");
+    await expect(page.getByTestId("results-sheet-task").nth(1)).toContainText("Not satisfactory");
+    await reviewShot(page, "tr-3-released");
     const pdf = await exportPdf(page, page.getByRole("button", { name: "Export as workbook PDF" }), "wb-attempt1-trainer.pdf");
     expect(pdf.text).toContain("Unit Code: RIICWD525E");
     // ASM-COVER: the export starts with the STUDENT WORKBOOK cover, filled in for this student; numbering starts after it
@@ -682,25 +744,23 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await signInStaff(page, wbStudent.email, "/agency/assessments");
     await page.getByRole("button", { name: /^(Open|Start|Continue)/ }).first().click();
     await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
-    const start = page.getByRole("button", { name: /I have read this – start the assessment/ });
-    if (await start.isVisible()) await start.click();
-    await answerAndSubmit(page, "Attempt two");
+    await startWithDeclaration(page);
+    await answerAllAndSubmit(page, "Attempt two");
 
     await signInStaff(page, wbTrainer.email, "/staff/assessments");
     await page.getByRole("button", { name: "Mark", exact: true }).first().click();
     await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
-    await page.getByLabel("Observed", { exact: true }).first().waitFor({ timeout: 30_000 }); // the marking view has loaded
-    for (const r of await page.getByLabel("Observed", { exact: true }).all()) await r.check();
+    await markOnDesk(page);
+    await page.getByRole("button", { name: "Record a reasonable adjustment" }).click();
     const ra = page.locator("[data-adjustment]");
     await ra.locator("input[type=radio]").last().check(); // No adjustment this time
     await ra.locator("input[type=text], input:not([type])").last().fill("Wendy Workbook");
-    const picks = page.getByRole("button", { name: "Satisfactory", exact: true });
-    const n = await picks.count();
-    for (let i = 0; i < n; i += 1) if (await picks.nth(i).isEnabled()) await picks.nth(i).click();
-    await page.getByRole("button", { name: "Return as Satisfactory" }).click();
-    await expect(page.getByText("Returned as Satisfactory.")).toBeVisible({ timeout: 20_000 });
-    await shot(page, "wb-10-trainer-second-attempt");
+    await expect(page.getByTestId("assessment-summary")).toContainText("Competent (C)");
+    await signOffAndRelease(page, "Well done on the second attempt.");
     const pdf = await exportPdf(page, page.getByRole("button", { name: "Export as workbook PDF" }), "wb-attempt2-trainer.pdf");
+    // ASM-AI-IMPORT stage 5: the signatures are stamped (declaration, the assessor per attempt on each results sheet, the summary)
+    expect(pdf.text).toMatch(/Assessor signature Wendy Workbook · \d{2}\/\d{2}\/\d{4} Wendy Workbook · \d{2}\/\d{2}\/\d{4}/);
+    expect(pdf.text).toMatch(/Student Signature E2E Student · /);
     expect(pdf.text).toMatch(/First attempt Second attempt Third attempt/);
     expect(pdf.text).toContain("Wendy Workbook");
     expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${wbStudent.student}'`)).toBe("1:returned:NYS,2:final:S");
@@ -709,10 +769,17 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await signInStaff(page, wbStudent.email, "/agency/assessments");
     await page.getByRole("button", { name: "Open", exact: true }).first().click();
     await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
-    await expect(page.getByTestId("results-sheet")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("student-results")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("task-result")).toHaveCount(2);
+    await drawSignature(page, page.getByTestId("acknowledge"));
+    await reviewShot(page, "st-6-results-acknowledge");
+    await page.getByRole("button", { name: "Sign to acknowledge" }).click();
+    await expect(page.getByText(/You acknowledged the feedback on/)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole("button", { name: "Export as workbook PDF" })).toHaveCount(1);
     await shot(page, "wb-11-student-results");
     const own = await exportPdf(page, page.getByRole("button", { name: "Export as workbook PDF" }), "wb-attempt2-student.pdf");
+    expect(own.text).toMatch(/Student Acknowledgement E2E Student · \d{2}\/\d{2}\/\d{4}/);
+    expect(own.text).toMatch(/Assessor Signature Wendy Workbook · /);
     expect(own.text).toContain("Student Full Name");
     expect(own.text).toContain("Assessment Task - 1 - Results Sheet");
   });

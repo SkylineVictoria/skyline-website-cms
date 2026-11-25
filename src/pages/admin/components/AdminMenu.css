@@ -190,3 +190,9 @@
 .admin-nav-brand { padding-block: 1.2rem; }
 .admin-nav-children .admin-nav-item { min-height: 2.15rem; font-weight: 450; }
 .admin-nav-item[aria-current="page"] { font-weight: 650; }
+
+/* Owner 2026-11-25: an expanded menu must not shrink. Sub-items keep the full text size and wrap instead of being cut off,
+   and deeper levels indent less so the names keep their width. */
+.admin-nav-children .admin-nav-item { font-size: .8125rem; }
+.admin-nav-children .admin-nav-label { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.3; }
+.admin-nav-children .admin-nav-children { margin-left: .55rem; padding-left: .25rem; }

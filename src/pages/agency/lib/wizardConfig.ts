@@ -41,6 +41,18 @@ export const WIZARD_STEPS: WizardStep[] = [
     skipLabel: "Continue without passport",
     required: true,
   },
+  // Right after the passport (owner, 2026-11-25): the PR evidence follows the residency question asked under the passport.
+  {
+    id: "visa",
+    title: "Australian visa",
+    short: "Visa",
+    subtitle: "Required. Upload the visa grant notice or VEVO record.",
+    icon: "ri-passport-line",
+    category: "Visa",
+    noun: "visa",
+    skipLabel: "Continue without visa",
+    required: true,
+  },
   {
     id: "english",
     title: "English-language evidence",
@@ -62,17 +74,6 @@ export const WIZARD_STEPS: WizardStep[] = [
     noun: "academic transcript",
     skipLabel: "Continue without academic results",
     multiple: true,
-    required: true,
-  },
-  {
-    id: "visa",
-    title: "Australian visa",
-    short: "Visa",
-    subtitle: "Required. Upload the visa grant notice or VEVO record.",
-    icon: "ri-passport-line",
-    category: "Visa",
-    noun: "visa",
-    skipLabel: "Continue without visa",
     required: true,
   },
   {

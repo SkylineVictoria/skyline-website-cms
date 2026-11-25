@@ -5118,6 +5118,8 @@ test("Residency after the passport (2026-11-25): AU / NZ Domestic (no question, 
   assert.ok(wizard.includes("values[PR_ANSWER] = pr;") && !wizard.includes("au_currently_in_australia") && !wizard.includes("VisaDetails"));
   assert.ok(!wizard.includes("issuing_country:"), "issuing_country is saved as before (not written by the wizard)");
   assert.ok(wizard.includes('defaultLoad={kind === "international" ? "coe" : undefined}') && read("src/pages/agency/components/IntakeSelect.tsx").includes("(defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null)"), "international: CoE chosen to start with");
+  const steps = read("src/pages/agency/lib/wizardConfig.ts").split("export const WIZARD_STEPS")[1].split("];")[0];
+  assert.deepEqual([...steps.matchAll(/\n    id: "(\w+)"/g)].map((m) => m[1]).slice(0, 2), ["passport", "visa"], "the visa screen follows the passport");
   assert.ok(ui.includes("a <strong>domestic</strong> student") && ui.includes("The course is offered as <strong>CoE</strong>"));
 });
 

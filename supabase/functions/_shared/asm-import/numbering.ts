@@ -22,6 +22,12 @@ const PREFIX = /^(?:section|activity|question|questions|ques|qn|item|task|no|q)\
 /** The canonical number of a raw label, or null when it is not a number. */
 export function normalizeNumber(raw: string | null | undefined): QNumber | null {
   if (raw == null) return null;
+  // two numbers printed side by side ("Q12 | Q2.2.1", "Q3 / Q2.1.3"): the most specific one (most levels) is the question's number
+  const alternatives = String(raw).split(/\s+[|/]\s+|\s*\|\s*/).filter((x) => x.trim());
+  if (alternatives.length > 1) {
+    const found = alternatives.map((a) => normalizeNumber(a)).filter((n): n is QNumber => Boolean(n));
+    return found.sort((a, b) => b.base.split(".").length - a.base.split(".").length)[0] ?? null;
+  }
   let s = String(raw).normalize("NFKC").trim().replace(/[\u2010-\u2015\u2212]/g, "-");
   for (let i = 0; i < 3; i++) s = s.replace(PREFIX, "");
   s = s.replace(/\s+/g, "").replace(/[)\].:,;]+$/, "").replace(/^[([]+/, "");

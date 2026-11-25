@@ -13,6 +13,7 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { buildFromLines, imageRegionsFromPdf, linesFromPdf, type ImportResult, type PdfDocLike, type PdfOps, type WbImage } from "./workbookImport";
 import { pageTextsFromPdf, type PageTextOut } from "./pageText";
+import { READER_VERSION } from "../../../supabase/functions/_shared/asm-import/pipeline.ts";
 
 import type { ImportKind, ImportStatus } from "./aiDraft";
 export * from "./aiDraft";
@@ -67,14 +68,17 @@ export async function prepare(file: File, renderRegions: (doc: unknown, regions:
   const doc = await pdf.getDocument({ data: bytes.slice() }).promise;
   try {
     const sha256 = await sha256Hex(bytes);
-    const pages = await pageTextsFromPdf(doc as unknown as PdfDocLike);
+    // the pictures first: the page text marks where each one is printed, so the AI reader places a drawing for it
+    let regions: Omit<WbImage, "src">[] = [];
+    try { regions = await imageRegionsFromPdf(doc, pdf.OPS as unknown as PdfOps); } catch { regions = []; }
+    const pages = await pageTextsFromPdf(doc as unknown as PdfDocLike, regions);
     const scannedImages = new Map<number, Blob>();
     for (const p of pages.filter((x) => x.scanned).slice(0, 40)) {
       const jpeg = await renderPageJpeg(doc, p.page);
       if (jpeg) scannedImages.set(p.page, jpeg); else p.scanned = false; // a blank page: nothing to read
     }
     let images: WbImage[] = [];
-    try { images = await renderRegions(doc, await imageRegionsFromPdf(doc, pdf.OPS as unknown as PdfOps)); } catch { images = []; }
+    try { images = regions.length ? await renderRegions(doc, regions) : []; } catch { images = []; }
     const { lines, version } = await linesFromPdf(doc as unknown as PdfDocLike);
     const parser = buildFromLines(lines, { fileName: file.name, images, version });
     return { file, bytes, sha256, pages, scannedImages, parser, images };
@@ -86,7 +90,8 @@ const rpcError = (e: { message?: string } | null, fallback: string) => new Error
 /** Starts (or finds) the AI import of a prepared file. */
 export async function startAiImport(kind: ImportKind, p: Prepared, opts: { force?: boolean } = {}): Promise<ImportStatus> {
   const scanned = p.pages.filter((x) => x.scanned).map((x) => x.page);
-  const { data, error } = await supabase.rpc("asm_import_start", { p_kind: kind, p_sha256: p.sha256, p_file_name: p.file.name, p_bytes: p.bytes.byteLength, p_pages: p.pages.length, p_scanned: scanned, p_force: Boolean(opts.force) });
+  // the reader version is part of the cache key: a file read by an older reader is read again with the current logic
+  const { data, error } = await supabase.rpc("asm_import_start", { p_kind: kind, p_sha256: p.sha256, p_file_name: p.file.name, p_bytes: p.bytes.byteLength, p_pages: p.pages.length, p_scanned: scanned, p_force: Boolean(opts.force), p_reader: READER_VERSION });
   if (error) throw rpcError(error, "The AI import could not start.");
   const job = data as ImportStatus;
   if (job.state !== "uploading") return job;

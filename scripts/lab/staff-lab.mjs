@@ -1157,17 +1157,20 @@ async function asmImport() {
   const { createJiti } = await import("jiti");
   const jiti = createJiti(import.meta.url);
   const { pageTextsFromPdf } = await jiti.import(path.join(REPO, "src/lib/assessment/pageText.ts"));
+  const { imageRegionsFromPdf } = await jiti.import(path.join(REPO, "src/lib/assessment/workbookImport.ts"));
+  const { READER_VERSION } = await jiti.import(path.join(REPO, "supabase/functions/_shared/asm-import/pipeline.ts"));
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const bytes = new Uint8Array(fs.readFileSync(workbook));
   const doc = await pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise;
-  const pages = await pageTextsFromPdf(doc);
+  // as the browser does: the pictures first, marked in the page text
+  const pages = await pageTextsFromPdf(doc, await imageRegionsFromPdf(doc, pdfjs.OPS));
   const sha256 = nodeCrypto.createHash("sha256").update(bytes).digest("hex");
   const rpc = async (fn, args, token = jwt) => {
     const res = await fetch(`${lab.apiUrl}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(args) });
     return { status: res.status, body: await res.json().catch(() => null) };
   };
   const upload = async (id, name, body, type, token = jwt) => (await fetch(`${lab.apiUrl}/storage/v1/object/asm-imports/${id}/${name}`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${token}`, "content-type": type }, body })).status;
-  const startArgs = (force, sha = sha256, size = bytes.byteLength) => ({ p_kind: "workbook", p_sha256: sha, p_file_name: path.basename(workbook), p_bytes: size, p_pages: pages.length, p_scanned: [], p_force: force });
+  const startArgs = (force, sha = sha256, size = bytes.byteLength, reader = READER_VERSION) => ({ p_kind: "workbook", p_sha256: sha, p_file_name: path.basename(workbook), p_bytes: size, p_pages: pages.length, p_scanned: [], p_force: force, p_reader: reader });
   psql(`delete from public.asm_import_jobs where sha256 = '${sha256}';`);
 
   // 1. start -> upload -> queue -> the dispatcher wakes asm-import, which reads it one step at a time
@@ -1194,13 +1197,23 @@ async function asmImport() {
   console.log(`  summary: ${JSON.stringify(st?.summary)} in ${Math.round(ms / 1000)} s`);
   check("asm-import: the worker finished the job step by step with live progress (outline, each task chunk, done)", st?.state === "done" && st?.progress?.total >= 4 && st?.progress?.done === st?.progress?.total && Number(st?.usage?.calls) === st?.progress?.total - 1, `${st?.state} ${st?.error ?? ""}`);
   check("asm-import: the result names RIICWD525E version 1.0, provider mock, its questions checked verbatim", st?.result?.unit?.code === "RIICWD525E" && st?.result?.version === "1.0" && st?.provider === "mock"
-    && (st?.result?.tasks ?? []).flatMap((t) => t.sections.flatMap((s) => s.items)).every((it) => it.verbatim === "exact"), JSON.stringify(st?.result?.unit));
+    && (st?.result?.tasks ?? []).flatMap((t) => t.sections.flatMap((s) => s.items)).every((it) => it.verbatim === "exact" || (it.kind === "drawing" && it.verbatim === "empty")), JSON.stringify(st?.result?.unit));
   check("asm-import: usage is logged on the job (calls counted)", Number(st?.usage?.calls) >= 2, JSON.stringify(st?.usage));
+  const resultItems = (st?.result?.tasks ?? []).flatMap((t) => t.sections.flatMap((s) => s.items));
+  check("asm-import: both pictures (pages 44 and 75) are drawings in the result, marked in the uploaded page text", st?.summary?.drawings === 2 && resultItems.filter((i) => i.kind === "drawing").map((i) => i.pages[0]).join(",") === "44,75" && pages.reduce((n, p) => n + p.pictures, 0) === 2, JSON.stringify(st?.summary));
+  check(`asm-import: the job records the reader version that read it (${READER_VERSION})`, st?.readerVersion === READER_VERSION && psql(`select reader_version from public.asm_import_jobs where id = '${id}';`) === String(READER_VERSION), String(st?.readerVersion));
   // 2. the same file again: the finished job comes back, nothing new is made
   const jobs = () => psql(`select count(*) from public.asm_import_jobs where sha256 = '${sha256}';`);
   const before = jobs();
   const again = await rpc("asm_import_start", startArgs(false));
   check("asm-import: the same file again is answered from the cache (same job, done, no new job, no cost)", again.body?.cached === true && again.body?.id === id && again.body?.state === "done" && jobs() === before);
+  // a result read by an older reader is never answered from the cache: the file is read again with the current logic
+  psql(`update public.asm_import_jobs set reader_version = 1 where id = '${id}';`);
+  const stale = await rpc("asm_import_start", startArgs(false));
+  check("asm-import: a file read by an older reader version is read again (new job, not cached)", stale.body?.cached === false && stale.body?.id !== id && stale.body?.state === "uploading", JSON.stringify(stale.body).slice(0, 160));
+  const oldBrowser = await rpc("asm_import_start", { ...startArgs(false), p_reader: undefined });
+  check("asm-import: a browser that sends no reader version (before this release) gets the version-1 result, as before", oldBrowser.body?.cached === true && oldBrowser.body?.id === id, JSON.stringify(oldBrowser.body).slice(0, 160));
+  psql(`delete from public.asm_import_jobs where id = '${stale.body?.id}'; update public.asm_import_jobs set reader_version = ${READER_VERSION} where id = '${id}';`);
   // 3. a failure: the uploaded bytes do not match the fingerprint -> failed with the reason (the browser then uses the standard reader)
   const fake = "0".repeat(64);
   psql(`delete from public.asm_import_jobs where sha256 = '${fake}';`);

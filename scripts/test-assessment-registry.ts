@@ -451,17 +451,23 @@ else {
   const raw: AiTaskPart = { title: "Task 1", number: "1", instructions: null, sections: [{ title: "Written questions", items: [
     { kind: "question", number: "Q1.1", text: "Explain Ohm's law and how it is used to find the current in a simple circuit.", parts: [], table: null, pages: [4], confidence: 0.95, reason: null, answer: null, look_for: null },
     { kind: "question", number: "Question 1.2", text: "Describe the protective equipment you need when cutting concrete.", parts: [], table: null, pages: [4], confidence: 0.9, reason: null, answer: null, look_for: null },
-    { kind: "evidence", number: "2.1", text: "Upload a photo of the completed test bench setup.", parts: [], table: null, pages: [5], confidence: 0.6, reason: "Question type guessed", answer: null, look_for: null },
+    { kind: "evidence", number: "2.1", text: "Upload a photo of the completed test bench setup.", parts: [], table: null, pages: [5], confidence: 0.4, reason: "Question type guessed", answer: null, look_for: null },
     { kind: "drawing", number: null, text: "Figure 3 Wiring diagram of the test circuit", parts: [], table: null, pages: [5], confidence: 0.9, reason: null, answer: null, look_for: null },
     { kind: "question", number: "2.2", text: "Record the readings shown on the meter.", parts: [], table: null, pages: [6], confidence: 0.9, reason: null, answer: null, look_for: null },
+    { kind: "evidence", number: "2.3", text: "Upload a photo of the completed test bench setup.", parts: [], table: null, pages: [5], confidence: 0.62, reason: "Kind guessed", answer: null, look_for: null },
+    { kind: "question", number: "2.4", text: "Describe the test bench you would build for a motor.", parts: [], table: null, pages: [5], confidence: 0.62, reason: "Text hard to read", answer: null, look_for: null },
   ] }] };
-  const checked = checkChunk(raw, { task: 0, from: 4, to: 6 }, pages)[0].items;
+  const oneTask = { document_kind: "workbook", title: null, qualification_code: null, qualification_name: null, unit_code: null, unit_name: null, version: null, tasks: [{ number: "1", title: "Task 1", kind: "written", first_page: 4, last_page: 6 }] } as AiOutline;
+  const checkedDoc = assemble("workbook", oneTask, [{ task: 0, from: 4, to: 6 }], [checkChunk(raw, { task: 0, from: 4, to: 6 }, pages)], { provider: "test", model: "fixture", scannedPages: 1 });
+  const checked = checkedDoc.tasks[0].sections[0].items;
   check("ai check: numbers normalised (Q1.1 -> 1.1, Question 1.2 -> 1.2)", checked[0].canonical === "1.1" && checked[1].canonical === "1.2");
   check("ai check: a verbatim question has no flags", checked[0].verbatim === "exact" && checked[0].flags.length === 0, checked[0]);
-  check("ai check: the reworded question goes on Check this with the PDF's wording", checked[1].flags.some((f) => /PDF/.test(f)) && Boolean(checked[1].pdfText), checked[1]);
-  check("ai check: low confidence carries the model's reason", checked[2].flags.includes("Question type guessed"), checked[2].flags);
-  check("ai check: a drawing is flagged to check its placement", checked[3].flags.includes("Drawing found, check its placement"));
-  check("ai check: every item from a scanned page is flagged", checked[4].verbatim === "scanned" && checked[4].flags.includes("Read from a scanned page"));
+  check("ai check: the reworded question goes on Check this with the PDF's wording and what differs", checked[1].flags.some((f) => /^Wording differs from the PDF on page 4 \(not in the PDF: .*protective.*\)/.test(f) || /^Text not found in the PDF on page 4/.test(f)) && Boolean(checked[1].pdfText), checked[1].flags);
+  check("ai check: below 50 % confidence the model's reason is on the list, with the confidence", checked[2].flags.some((f) => f === "The AI reader was unsure (40 %): Question type guessed"), checked[2].flags);
+  check("ai check: a drawing is not flagged just for being a drawing", checked[3].flags.length === 0, checked[3].flags);
+  check("ai check: every item from a scanned page is flagged, with the page", checked[4].verbatim === "scanned" && checked[4].flags.some((f) => /^Read from a scanned page 6/.test(f)), checked[4].flags);
+  check("ai check: confidence 62 % with the text found in the PDF -> not flagged (calibrated threshold)", checked[5].flags.length === 0, checked[5].flags);
+  check("ai check: confidence 62 % with the text NOT found in the PDF -> flagged with the model's reason", checked[6].flags.some((f) => f === "The AI reader was unsure (62 %): Text hard to read"), checked[6].flags);
 
   // the outline: codes must be printed; ranges inside the document; overlaps cut; no tasks -> one
   const docPages = [{ page: 1, text: "Unit Code | AURETR112 Qualification | AUR30620 Version 1.0", scanned: false }, { page: 2, text: "Task 1", scanned: false }, { page: 3, text: "Task 2", scanned: false }];
@@ -567,6 +573,149 @@ else {
     check("ai match: a synthetic answer guide numbered from RIICWD525E matches every question by number", sm.matched === questions.length && sm.keys.every((k) => k.via === "number"), [sm.matched, questions.length]);
   }
 }
+// ------------------------------------------------------------------ ASM-AI-IMPORT reader 2 (2026-11-25): formatting is never a difference
+{
+  const { checkVerbatim, stripRunningText, compareTokens, stripLeadingNumber } = await import("../supabase/functions/_shared/asm-import/verbatim.ts");
+  const { normalizeNumber } = await import("../supabase/functions/_shared/asm-import/numbering.ts");
+  const { checkChunk, assemble, flagsOf, READER_VERSION } = await import("../supabase/functions/_shared/asm-import/pipeline.ts");
+  type AiOutline = import("../supabase/functions/_shared/asm-import/schema.ts").AiOutline;
+  type AiItem = import("../supabase/functions/_shared/asm-import/schema.ts").AiItem;
+  const v = (item: string, page: string | string[]) => checkVerbatim(item, Array.isArray(page) ? page : [page]);
+  const same = (item: string, page: string | string[]) => v(item, page).status === "exact";
+
+  // each normalisation case on its own
+  check("norm: curly / straight quotes are the same", same("Explain the \"site\" plan's scope.", "Explain the “site” plan’s scope."));
+  check("norm: en / em dashes, minus and hyphen are the same", same("Do a pre-start check - daily.", "Do a pre–start check — daily."));
+  check("norm: bullets (• · ▪ ) are not words", same("• Read the workbook • Conduct research", "· Read the workbook\n Conduct research") && same("Read the workbook Conduct research", "▪ Read the workbook ▪ Conduct research"));
+  check("norm: ligatures ﬁ ﬂ read as fi fl", same("final floor finish", "ﬁnal ﬂoor ﬁnish"));
+  check("norm: a non-breaking space is a space", same("approx. 650 m2 of surface", "approx. 650 m2 of surface"));
+  check("norm: soft hyphens and zero-width characters are invisible", same("intermodal facilities", "inter­modal facil​ities"));
+  check("norm: a word hyphenated over a line break is joined (role-\\nplays = role-plays; inter-\\nmodal = intermodal)", same("including role-plays (if applicable)", "including role-\nplays (if applicable)") && same("design of intermodal facilities", "design of inter-\nmodal facilities") && same("role-plays", "role- plays"));
+  check("norm: a path broken after a slash is joined (MATLAB/ AUTOCAD/)", same("GeoGebra/MATLAB/AUTOCAD/ Handwritten", "GeoGebra/MATLAB/\nAUTOCAD/ Handwritten"));
+  check("norm: case and punctuation the model added or dropped are not differences; the PDF's text is used", (() => { const r = v("Relevant Plans and Sketch Drawing. Drawing ID: CP-002.", "Relevant Plans and Sketch Drawing\nDrawing ID: CP-002"); return r.status === "exact" && r.text === "Relevant Plans and Sketch Drawing Drawing ID: CP-002"; })(), v("Relevant Plans and Sketch Drawing. Drawing ID: CP-002.", "Relevant Plans and Sketch Drawing\nDrawing ID: CP-002"));
+  check("norm: the item number is left out on both sides (1.2, a., Q3, (iv))", same("1.2 Describe the PPE needed.", "Q1.2 | Describe the PPE needed.") && same("a. Describe the PPE needed.", "(a) Describe the PPE needed.") && same("Q3 Describe the PPE needed.", "3. Describe the PPE needed.") && stripLeadingNumber("(iv) Name it") === "Name it" && stripLeadingNumber("Question 2.1: Name it") === "Name it");
+  check("norm: the number is not stripped from text that starts with a word (A new site...)", stripLeadingNumber("A new site plan") === "A new site plan" && stripLeadingNumber("e.g. a plan") === "e.g. a plan");
+  check("norm: compare tokens keep the PDF's raw words", compareTokens("role-\nplays (What?)").map((t) => `${t.raw}:${t.core}`).join(" ") === "role-plays:roleplays (What?):what");
+
+  // running headers / footers, including a question that crosses a page break
+  const header = "Level 8, 310 King Street\nMelbourne VIC – 3000\nRTO: 45989 CRICOS: 04114B";
+  const footer = (n: number) => `Version Number: 1.0 | Unit Code: RIICWD525E | Page ${n} of 102`;
+  const book = [1, 2, 3, 4, 5].map((n) => ({ page: n, scanned: false, text: `${header}\nQ${n + 10} | Q2.1.${n} | Satisfactory\nBody text of page ${n}.\n${n === 3 ? "Provide your answer solutions to the" : "Write your answer below."}\n${footer(n)}` }));
+  book[3].text = `${header}\nfollowing questions using your own words.\nQ14 | Q2.1.4 | Satisfactory\n${footer(4)}`;
+  const stripped = stripRunningText(book);
+  check("headers: the address block and the Version / Unit / Page footer are removed from every page", stripped.every((p) => !/King Street|CRICOS|Version Number|Page \d of/.test(p.text)), stripped.map((p) => p.text));
+  check("headers: a question's table heading at the top of every page (Q11 | Q2.1.1 | Satisfactory, Q12 | Q2.1.2 …) stays", stripped.filter((p) => /Q2\.1\.\d \| Satisfactory/.test(p.text)).length === 5, stripped.map((p) => p.text));
+  const crossing = "Provide your answer solutions to the following questions using your own words.";
+  check("headers: a question crossing a page break is found once the header / footer is gone (and not before)", v(crossing, [stripped[2].text, stripped[3].text]).status === "exact" && v(crossing, [book[2].text, book[3].text]).status !== "exact", [v(crossing, [book[2].text, book[3].text]).status]);
+
+  // table cells read line by line
+  const twoCol = "Assessment description | This assessment task is a written task that includes a set of questions for which you are\n(What?)\nrequired to provide written answer solutions.";
+  const col = v("Assessment description (What?) This assessment task is a written task that includes a set of questions for which you are required to provide written answer solutions.", twoCol);
+  check("columns: a label cell's second line printed among the next cell's lines is the PDF's text (reflowed), not a mismatch", col.status === "exact" && col.text === "Assessment description (What?) This assessment task is a written task that includes a set of questions for which you are required to provide written answer solutions.", col);
+  const threeCol = "Conduct Site and Risk | Analyse site survey, identify | Site Condition Evaluation\nAssessment | hazards (e.g., drainage, | Report\npoor subgrade), complete a\nbasic risk assessment.";
+  check("columns: a three-column row (activity | description | evidence) gives each cell's words in reading order", same("Conduct Site and Risk Assessment Analyse site survey, identify hazards (e.g., drainage, poor subgrade), complete a basic risk assessment.", threeCol));
+  const where = v("Assessment context (Where and in what condition?) Assessment is conducted in a safe environment in the training room, where you are required to answer.", "Assessment context | Assessment is conducted in a safe\nenvironment in the training room, where you\n(Where and in what condition?)\nare required to answer.");
+  check("columns: a word in two cells goes to the right one (the label's 'Where', the text's 'where')", where.status === "exact" && where.text === "Assessment context (Where and in what condition?) Assessment is conducted in a safe environment in the training room, where you are required to answer.", where.text);
+  const amp = v("Prepare Pavement Type Comparison Table & Selection Report", "Prepare Pavement | Pavement Type Comparison\nType Comparison | Table & Selection Report");
+  check("rebuild: signs between the PDF's words (& + -) are kept in the PDF's text", amp.status === "exact" && /Table & Selection Report/.test(amp.text ?? ""), amp.text);
+  check("norm: a bullet glyph with no Unicode (NUL) or a symbol-font glyph is not a word", (() => { const r = v("This task may be completed in: a workplace or a simulated workplace", "This task may be completed in:\n\u0000 a workplace or\n a simulated workplace"); return r.status === "exact" && r.text === "This task may be completed in: a workplace or a simulated workplace"; })());
+  check("columns: a table heading split mid-word over two lines (Conseque / nce) is found",same("Identified Hazard | Potential Risk | Consequence | Likelihood", "Identified | Potential | Conseque | Likelihood\nHazard | Risk | nce"));
+
+  // real differences are still reported, with what differs
+  const para = "To gather evidence of your ability to apply knowledge consistently to select pavement surfacing in civil construction.";
+  const changed = v("To gather evidence of your ability to apply knowledge consistently to choose pavement surfacing in civil construction.", para);
+  check("diff: a changed word -> close, the model's word named as not in the PDF and the PDF's word as left out", changed.status === "close" && changed.diff?.added.join(" ") === "choose" && changed.diff?.left.join(" ") === "select", changed);
+  const dropped = v("To gather evidence of your ability to apply knowledge in civil construction.", para);
+  check("diff: text left out in the middle of a paragraph is not accepted (no table there) and is named", dropped.status !== "exact" && dropped.diff?.left.join(" ") === "consistently to select pavement surfacing", dropped);
+  const added = v("To gather evidence of your ability to apply knowledge consistently to select pavement surfacing in civil construction and road works.", para);
+  check("diff: text the model added is named", added.status === "close" && added.diff?.added.join(" ") === "and road works.", added);
+  check("diff: text that is not on the page at all -> missing", v("List three hazards of working at heights on a scaffold.", para).status === "missing");
+
+  // numbers
+  check("numbers: two printed side by side (Q12 | Q2.2.1, Q3 / Q2.1.3) -> the most specific one", normalizeNumber("Q12 | Q2.2.1")?.canonical === "2.2.1" && normalizeNumber("Q3 / Q2.1.3")?.canonical === "2.1.3");
+  const base = { kind: "question" as const, canonical: null, text: "x", parts: [], table: null, pages: [22], confidence: 0.95, answer: null, lookFor: null, verbatim: "exact" as const, pdfText: null, flags: [] };
+  check("numbers: a heading in the number field (References) is not flagged; a broken number with digits is", flagsOf({ ...base, number: "References" }).length === 0 && flagsOf({ ...base, number: "1..2x?" })[0] === "\"1..2x?\" is not a question number: check the numbering on page 22");
+
+  // assemble: continuation across a chunk, several tables of one question, repeated assembly does not pile flags up
+  const pagesX = [
+    { page: 14, scanned: false, text: "Q1.2 | Name the layers of a flexible pavement:\na. Wearing course" },
+    { page: 15, scanned: false, text: "b. Base course" },
+    { page: 16, scanned: false, text: "c. Subbase\nd. Subgrade" },
+    { page: 17, scanned: false, text: "Q3 | Hazard | Risk\nControl | Owner" },
+    { page: 30, scanned: false, text: "Q1.2 | Name the layers again" },
+  ];
+  const it = (o: Partial<AiItem>): AiItem => ({ kind: "question", number: null, text: "", parts: [], table: null, pages: [14], confidence: 0.95, reason: null, answer: null, look_for: null, ...o });
+  const c1 = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Written", items: [
+    it({ kind: "multipart", number: "Q1.2", text: "Name the layers of a flexible pavement:", parts: [{ label: "a.", text: "Wearing course", answer: null }, { label: "b.", text: "Base course", answer: null }], pages: [14, 15] }),
+  ] }] }, { task: 0, from: 14, to: 15 }, pagesX);
+  const c2 = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Written (continued)", items: [
+    it({ kind: "multipart", number: "Q1.2", text: "", parts: [{ label: "c.", text: "Subbase", answer: null }, { label: "d.", text: "Subgrade", answer: null }], pages: [16], confidence: 0.62, reason: "The parent question stem is not shown on these pages" }),
+    it({ kind: "table", number: "Q3", text: "Hazard | Risk", table: { columns: ["Hazard", "Risk"], rows: [] }, pages: [17] }),
+    it({ kind: "table", number: "Q3", text: "Control | Owner", table: { columns: ["Control", "Owner"], rows: [] }, pages: [17] }),
+    it({ kind: "question", number: "Q1.2", text: "Name the layers again", pages: [30] }),
+  ] }] }, { task: 0, from: 16, to: 30 }, pagesX);
+  const outlineX = { document_kind: "workbook", title: null, qualification_code: null, qualification_name: null, unit_code: null, unit_name: null, version: null, tasks: [{ number: "1", title: "T", kind: "written", first_page: 14, last_page: 30 }] } as AiOutline;
+  const chunksX = [{ task: 0, from: 14, to: 15 }, { task: 0, from: 16, to: 30 }];
+  const saved = JSON.stringify([c1, c2]);
+  const a1 = assemble("workbook", outlineX, chunksX, [c1, null], { provider: "t", model: "t", scannedPages: 0 });
+  const ax = assemble("workbook", outlineX, chunksX, [c1, c2], { provider: "t", model: "t", scannedPages: 0 });
+  const ay = assemble("workbook", outlineX, chunksX, [c1, c2], { provider: "t", model: "t", scannedPages: 0 });
+  const itemsX = ax.tasks[0].sections.flatMap((s) => s.items);
+  check("assemble: a question with parts continued in the next chunk is joined back up (a-d, pages 14-16), its low-confidence stem doubt gone", itemsX[0].parts.map((p) => p.part).join("") === "abcd" && itemsX[0].pages.join(",") === "14,15,16" && itemsX[0].flags.length === 0 && !itemsX.some((i, k) => k > 0 && i.kind === "multipart"), itemsX.map((i) => [i.number, i.parts.length, i.flags]));
+  check("assemble: two tables of the same question on the same page are not 'number appears twice'", itemsX.filter((i) => i.canonical === "3").every((i) => i.flags.length === 0), itemsX.filter((i) => i.canonical === "3").map((i) => i.flags));
+  check("assemble: the same number far away is flagged once, naming the other page", itemsX.find((i) => i.pages[0] === 30)?.flags.join("|") === "Number 1.2 is also used on pages 14, 15, 16: check the numbering", itemsX.find((i) => i.pages[0] === 30)?.flags);
+  check("assemble: putting the document together again (after every chunk) neither changes the saved chunks nor repeats a flag", JSON.stringify([c1, c2]) === saved && JSON.stringify(ax) === JSON.stringify(ay) && a1.summary.flagged === 0);
+
+  // pictures: the browser marks them, the checks add one the model did not place
+  const pp = [{ page: 44, scanned: false, pictures: 1, text: "5. Relevant Plans\n[Picture]\nSite Location Plan - shows alignment and access" }, { page: 45, scanned: false, pictures: 0, text: "Next page" }];
+  const withPic = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Plans", items: [it({ kind: "instruction", text: "Relevant Plans Site Location Plan - shows alignment and access", pages: [44] }), it({ kind: "instruction", text: "Next page", pages: [45] })] }] }, { task: 0, from: 44, to: 45 }, pp);
+  const picItems = withPic[0].items;
+  check("pictures: a picture the model did not place becomes a drawing after the last item printed on its page", picItems.map((i) => i.kind).join(",") === "instruction,drawing,instruction" && picItems[1].pages[0] === 44 && picItems[1].added === true, picItems.map((i) => [i.kind, i.pages]));
+  const placedPic = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Plans", items: [it({ kind: "drawing", text: "", pages: [44] })] }] }, { task: 0, from: 44, to: 45 }, pp);
+  check("pictures: a picture the model placed is not added twice", placedPic[0].items.filter((i) => i.kind === "drawing").length === 1);
+  check("pictures: the [Picture] marker is not a word of the page (it never makes text 'not found')", same("Relevant Plans Site Location Plan - shows alignment and access", stripRunningText(pp)[0].text));
+  check("reader version: 2 (part of the cache key)", READER_VERSION === 2);
+
+  // RIICWD525E: the live AI reader's answers (asm_import_jobs 59772736, 2026-11-25), rebuilt from the job, through the new checks
+  const answersPath = [process.env.ASM_AI_ANSWERS, workbookPath ? workbookPath.replace(/\.pdf$/i, ".ai-answers.json") : null].find((p) => p && existsSync(p));
+  if (!workbookPath || !answersPath) console.log("SKIP - RIICWD525E AI answers regression (workbook or its .ai-answers.json not found; set ASM_WORKBOOK / ASM_AI_ANSWERS)");
+  else {
+    const { pageTextsFromPdf } = await import("../src/lib/assessment/pageText");
+    const { definitionFromAi, mergeParserExtras } = await import("../src/lib/assessment/aiDraft");
+    const { checkRows } = await import("../src/lib/assessment/checkList");
+    const pdf = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const doc = await pdf.getDocument({ data: new Uint8Array(readFileSync(workbookPath)), verbosity: 0 }).promise;
+    const regions = await imageRegionsFromPdf(doc, pdf.OPS as unknown as PdfOps);
+    const texts = await pageTextsFromPdf(doc as unknown as PdfDocLike, regions);
+    const rec = JSON.parse(readFileSync(answersPath, "utf8")) as { outline: AiOutline; plan: { task: number; from: number; to: number }[]; answers: import("../supabase/functions/_shared/asm-import/schema.ts").AiTaskPart[] };
+    const t0 = Date.now();
+    const results = rec.plan.map((c, k) => checkChunk(rec.answers[k], c, texts));
+    const ms = Date.now() - t0;
+    const rd = assemble("workbook", rec.outline, rec.plan, results, { provider: "openai", model: "recorded", scannedPages: 0 });
+    const items = rd.tasks.flatMap((t) => t.sections.flatMap((s) => s.items));
+    const flagged = items.filter((i) => i.flags.length);
+    console.log(`  RIICWD525E recorded AI answers, reader ${READER_VERSION}: ${JSON.stringify(rd.summary)} (checks ${ms} ms)`);
+    for (const f of flagged) console.log(`    flag p${f.pages.join(",")} ${f.kind} ${f.number ?? ""}: ${f.flags.join(" | ")}`);
+    check("RIICWD525E: pictures on pages 44 and 75 marked in the page text", texts[43].pictures === 1 && texts[74].pictures === 1 && texts.reduce((n, p) => n + p.pictures, 0) === 2, regions.map((r) => r.page));
+    check("RIICWD525E: 2 drawings (pages 44 and 75)", rd.summary.drawings === 2 && items.filter((i) => i.kind === "drawing").map((i) => i.pages[0]).join(",") === "44,75", items.filter((i) => i.kind === "drawing").map((i) => i.pages));
+    check("RIICWD525E: at most 5 items flagged (was 48 AI items + 3 standard-reader extras)", rd.summary.flagged <= 5, rd.summary.flagged);
+    const generic = /^(Wording differs slightly from the PDF|Text not found in the PDF|Low confidence|Number appears twice|Unusual question number|Evidence item without a clear title|Table may be split across pages|Drawing found, check its placement|Check this)$/;
+    check("RIICWD525E: every flag says what to check (no generic or type-only flags)", flagged.every((i) => i.flags.every((f) => !generic.test(f) && f.length > 30)), flagged.map((i) => i.flags));
+    check("RIICWD525E: every instruction / question text is the PDF's own (exact) except the flagged ones", items.filter((i) => !i.flags.length).every((i) => ["exact", "empty"].includes(i.verbatim) && i.parts.every((p) => ["exact", "empty"].includes(p.verbatim))), items.filter((i) => !i.flags.length && i.verbatim !== "exact" && i.verbatim !== "empty").map((i) => [i.pages, i.verbatim]));
+    check("RIICWD525E: no text is used that the PDF does not print (the label cell kept with its line: 'Assessment description (What?)')", items.some((i) => i.text.startsWith("Assessment description (What?) This assessment task")), items.filter((i) => /^Assessment description/.test(i.text)).map((i) => i.text.slice(0, 80)));
+    check("RIICWD525E: Q1.2 is one question with parts a-p (the chunk boundary at page 16 joined)", items.filter((i) => i.canonical === "1.2").length === 1 && items.find((i) => i.canonical === "1.2")?.parts.length === 16, items.filter((i) => i.canonical === "1.2").map((i) => i.parts.length));
+    check("RIICWD525E: checks run inside the Edge Function's CPU budget (under 1.5 s for the whole document here)", ms < 1500, ms);
+    // the wizard's list: the AI draft plus the standard reader's extras, as ImportWizard counts its "import checks"
+    const { lines, version } = await linesFromPdf(doc as unknown as PdfDocLike);
+    const pictures = regions.map((r) => ({ ...r, src: `data:image/jpeg;base64,UElD${r.page}` }));
+    const parsed = buildFromLines(lines, { fileName: "RIICWD525E.pdf", version, images: pictures });
+    const draft = mergeParserExtras(definitionFromAi(rd, pictures), parsed.definition, rd.tasks.map((t) => ({ firstPage: t.firstPage, lastPage: t.lastPage })));
+    const rows = checkRows(draft, workbookNumbering(draft));
+    for (const r of rows) console.log(`    wizard row ${r.number || "-"}: ${r.reason}`);
+    check("RIICWD525E: the wizard shows at most 5 import checks, each with a specific reason", rows.length <= 5 && rows.every((r) => !generic.test(r.reason)), rows.map((r) => r.reason));
+    check("RIICWD525E: both drawings carry their picture in the draft", flattenQuestions(draft).filter((f) => /<img/.test(String(f.question.config?.html ?? ""))).length === 2);
+  }
+}
 // ------------------------------------------------------------------ ASM-AI-IMPORT stage 2: the draft, the guide, the reader used
 {
   const { definitionFromAi, applyGuide, chooseImportPath, matchQuestions, guideAnswersFromAi, guideAnswersFromParser } = await import("../src/lib/assessment/aiDraft");
@@ -583,16 +732,18 @@ else {
         { label: "a", part: "a", text: "Series circuit", answer: null, verbatim: "exact", pdfText: null }, { label: "b", part: "b", text: "Parallel circuit", answer: null, verbatim: "close", pdfText: "Parallel circuits" }] }),
       item({ kind: "table", number: "1.3", canonical: "1.3", text: "Record your readings.", table: { columns: ["Load", "Voltage"], rows: [["Lamp 1", ""], ["Lamp 2", ""]] }, flags: ["Table may be split across pages"] }),
       item({ kind: "evidence", number: "1.4", canonical: "1.4", text: "Upload a photo of the completed test bench." }),
-      item({ kind: "drawing", text: "Wiring diagram of the test circuit", pages: [5], flags: ["Drawing found, check its placement"] }),
+      item({ kind: "drawing", text: "Wiring diagram of the test circuit", pages: [5] }),
+      item({ kind: "drawing", text: "Site plan", pages: [9] }),
     ] }] }],
   };
   const def = definitionFromAi(doc, [{ page: 5, x: 0, top: 500, bottom: 300, width: 200, height: 200, src: "data:image/jpeg;base64,QQ==" }]);
   const qs = def.tasks[0].sections[0].questions;
-  check("ai draft: item kinds become question types (instruction, long answer, parts, table, upload, drawing)", qs.map((q) => q.type).join(",") === "instruction,long_answer,case_study,table_grid,file_upload,instruction", qs.map((q) => q.type));
+  check("ai draft: item kinds become question types (instruction, long answer, parts, table, upload, drawing)", qs.map((q) => q.type).join(",") === "instruction,long_answer,case_study,table_grid,file_upload,instruction,instruction", qs.map((q) => q.type));
   check("ai draft: text kept word for word, printed number kept, original stored for traceability", qs[1].label === doc.tasks[0].sections[0].items[1].text && qs[1].importMeta?.number === "1.1" && qs[1].importMeta?.original === qs[1].label && qs[1].importMeta?.via === "ai");
   check("ai draft: parts are child questions numbered 1.2a / 1.2b; the reworded part is flagged with the PDF wording", qs[2].children?.map((c) => c.importMeta?.number).join(",") === "1.2a,1.2b" && Boolean(qs[2].children?.[1].importMeta?.flags?.length) && qs[2].children?.[1].importMeta?.pdfText === "Parallel circuits");
   check("ai draft: the table keeps its columns and rows", JSON.stringify((qs[3].config?.columns as { label: string }[]).map((c) => c.label)) === "[\"Load\",\"Voltage\"]" && (qs[3].config?.rows as unknown[]).length === 2);
-  check("ai draft: the drawing carries the workbook's picture from its page and is flagged", /<img src="data:image\/jpeg/.test(String(qs[5].config?.html)) && qs[5].importMeta?.flags?.[0] === "Drawing found, check its placement");
+  check("ai draft: the drawing carries the workbook's picture from its page, not flagged", /<img src="data:image\/jpeg/.test(String(qs[5].config?.html)) && !qs[5].importMeta?.flags?.length, qs[5].importMeta);
+  check("ai draft: a drawing with no picture on its page is flagged with what to do", !/<img/.test(String(qs[6].config?.html)) && qs[6].importMeta?.flags?.[0] === "No picture found on page 9: add the drawing from the PDF", qs[6].importMeta?.flags);
   check("ai draft: no answer or guidance in the definition", forbiddenKey(def) === null && def.source?.unit?.code === "AURETR112" && def.source?.version === "1.0");
   check("ai draft: the PDF export numbers questions as printed", workbookNumbering(def).get(qs[1].id)?.number === "1.1");
   const mq = matchQuestions(def);

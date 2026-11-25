@@ -34,7 +34,8 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   // AVETMISS-LANGUAGES (owner 2026-11-25): the home language is chosen from the ASCL list (avetmiss_codes 'language'); the code is
   // saved as language_code and the name as language_other. Until that list is in the database the old text box stays.
   const { codes } = useAvetmissCodes();
-  const languages = avetmissOptions(codes, "language", answers.language_code).filter((o) => o.code !== ENGLISH_LANGUAGE_CODE);
+  const languages = avetmissOptions(codes, "language", answers.language_code).filter((o) => o.code !== ENGLISH_LANGUAGE_CODE)
+    .sort((a, b) => a.label.localeCompare(b.label));
   const text = (name: string, label: string, props: { placeholder?: string; maxLength?: number; upper?: boolean } = {}) => (
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={answers[name] ?? ""} error={errors[name]} maxLength={props.maxLength ?? 200}
       placeholder={props.placeholder} upper={props.upper} onChange={(value) => onChange(name, value)} />

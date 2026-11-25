@@ -663,7 +663,7 @@ else {
   const itemsX = ax.tasks[0].sections.flatMap((s) => s.items);
   check("assemble: a question with parts continued in the next chunk is joined back up (a-d, pages 14-16), its low-confidence stem doubt gone", itemsX[0].parts.map((p) => p.part).join("") === "abcd" && itemsX[0].pages.join(",") === "14,15,16" && itemsX[0].flags.length === 0 && !itemsX.some((i, k) => k > 0 && i.kind === "multipart"), itemsX.map((i) => [i.number, i.parts.length, i.flags]));
   check("assemble: two tables of the same question on the same page are not 'number appears twice'", itemsX.filter((i) => i.canonical === "3").every((i) => i.flags.length === 0), itemsX.filter((i) => i.canonical === "3").map((i) => i.flags));
-  check("assemble: the same number far away is flagged once, naming the other page", itemsX.find((i) => i.pages[0] === 30)?.flags.join("|") === "Number 1.2 is also used on pages 14, 15, 16: check the numbering", itemsX.find((i) => i.pages[0] === 30)?.flags);
+  check("assemble: the same number far away is flagged once, naming the other page", itemsX.find((i) => i.pages[0] === 30)?.flags.join("|") === "Number 1.2 is also used for another question on pages 14, 15, 16: renumber one of them before publishing", itemsX.find((i) => i.pages[0] === 30)?.flags);
   check("assemble: putting the document together again (after every chunk) neither changes the saved chunks nor repeats a flag", JSON.stringify([c1, c2]) === saved && JSON.stringify(ax) === JSON.stringify(ay) && a1.summary.flagged === 0);
 
   // pictures: the browser marks them, the checks add one the model did not place
@@ -674,7 +674,7 @@ else {
   const placedPic = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Plans", items: [it({ kind: "drawing", text: "", pages: [44] })] }] }, { task: 0, from: 44, to: 45 }, pp);
   check("pictures: a picture the model placed is not added twice", placedPic[0].items.filter((i) => i.kind === "drawing").length === 1);
   check("pictures: the [Picture] marker is not a word of the page (it never makes text 'not found')", same("Relevant Plans Site Location Plan - shows alignment and access", stripRunningText(pp)[0].text));
-  check("reader version: 2 (part of the cache key)", READER_VERSION === 2);
+  check("reader version: 2 or later (part of the cache key)", READER_VERSION >= 2);
 
   // RIICWD525E: the live AI reader's answers (asm_import_jobs 59772736, 2026-11-25), rebuilt from the job, through the new checks
   const answersPath = [process.env.ASM_AI_ANSWERS, workbookPath ? workbookPath.replace(/\.pdf$/i, ".ai-answers.json") : null].find((p) => p && existsSync(p));
@@ -714,6 +714,135 @@ else {
     for (const r of rows) console.log(`    wizard row ${r.number || "-"}: ${r.reason}`);
     check("RIICWD525E: the wizard shows at most 5 import checks, each with a specific reason", rows.length <= 5 && rows.every((r) => !generic.test(r.reason)), rows.map((r) => r.reason));
     check("RIICWD525E: both drawings carry their picture in the draft", flattenQuestions(draft).filter((f) => /<img/.test(String(f.question.config?.html ?? ""))).length === 2);
+  }
+}
+// ------------------------------------------------------------------ ASM-IMPORT-CLASSIFY (2026-11-25): item types, auto-resolved differences
+{
+  const { classifyByRules, isResponseLabel, RULES_DECIDE, mockClassifyAnswer, readClassification, classifyRequest } = await import("../supabase/functions/_shared/asm-import/classify.ts");
+  const { checkChunk, assemble, pendingClassification, applyClassification, READER_VERSION } = await import("../supabase/functions/_shared/asm-import/pipeline.ts");
+  const { definitionFromAi, mergeParserExtras } = await import("../src/lib/assessment/aiDraft");
+  const { checkRows, autoResolvedRows, reopenAutoResolved, autoResolvedNotes, isSectionHeading } = await import("../src/lib/assessment/checkList");
+  type AiOutline = import("../supabase/functions/_shared/asm-import/schema.ts").AiOutline;
+  type AiItem = import("../supabase/functions/_shared/asm-import/schema.ts").AiItem;
+  type AiTaskPart = import("../supabase/functions/_shared/asm-import/schema.ts").AiTaskPart;
+  type Sections = ReturnType<typeof checkChunk>;
+  const { isAnswerable } = await import("../src/lib/assessment/registry");
+  const plainTextOf = (q: Question) => String(q.config?.html ?? q.label ?? "").replace(/<[^>]*>/g, " ").replace(/&amp;/g, "&");
+  const rule = (kind: string, number: string | null, text: string) => classifyByRules({ kind, number, text });
+  const decided = (c: { confidence: number }) => c.confidence >= RULES_DECIDE;
+
+  // the BSBHRM613 / RIICWD525E report-template cases (pages 65-67 of the live import that raised the flags)
+  const heads = [["1.", "Introduction"], ["2.", "Project Description"], ["4.", "Supporting Calculations"], ["5.", "Risk Considerations"]].map(([n, t]) => rule("question", n, t));
+  check("classify: the four numbered report sections (Introduction, Project Description, Supporting Calculations, Risk Considerations) are section headings, decided by the rules", heads.every((c) => c.type === "section_heading" && decided(c) && c.by === "rules"), heads);
+  check("classify: 'Short answer' is a response label (also 'Long answer', 'Word count: 200', '(5 marks)', '150-200 words')", ["Short answer", "Long answer", "Word count: 200", "(5 marks)", "150-200 words"].every((t) => rule("question", null, t).type === "response_label" && isResponseLabel(t)));
+  const real = rule("question", "Q2.1.4", "Describe the hazards of resurfacing a carpark while it stays open");
+  check("classify: a real 'Describe…' question is a question", real.type === "question" && decided(real), real);
+  check("classify: a question mark, a command verb or a question number keeps a short line a question ('Why?', 'List three hazards', 'Q8 Surfacing Selection Plan Document')", rule("question", null, "Why?").type === "question" && rule("question", null, "List three hazards").type === "question" && rule("question", "Q8", "Surfacing Selection Plan Document").type === "question" && decided(rule("question", "Q8", "Surfacing Selection Plan Document")));
+  check("classify: a field prompt ending in ':' ('Justification:', 'Selected Option:') is a question, decided by the rules", ["Justification:", "Selected Option:"].every((t) => { const c = rule("question", null, t); return c.type === "question" && decided(c); }));
+  const field = rule("question", null, "Prepared by");
+  check("classify: a short unnumbered title-case line ('Prepared by', 'Summary') is not decided by the rules: it goes to the AI check", !decided(field) && !decided(rule("question", null, "Summary")), field);
+  check("classify: '6. Approval Process Approval Status:' (a numbered section with its field merged) is a section heading", rule("question", "6.", "Approval Process Approval Status:").type === "section_heading");
+  check("classify: a short title-case instruction line is a heading; a sentence stays an instruction", rule("instruction", "3.", "Evaluation of Surfacing Options").type === "section_heading" && rule("instruction", null, "Read the scenario below and answer the questions that follow.").type === "instruction");
+  check("classify: tables, uploads and questions with parts are questions whatever their text", ["table", "evidence", "multipart"].every((k) => rule(k, "1.", "Introduction").type === "question"));
+
+  // the AI's second check: only the undecided items, each with the page lines around it; the reason is kept
+  const fieldPages = [{ page: 59, scanned: false, text: "Pavement Type Comparison Table\nProject | Greenridge Road\nPrepared by\nDate\nSelected Option:" }];
+  const fieldChunk = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Comparison", items: [
+    { kind: "question", number: null, text: "Prepared by", parts: [], table: null, pages: [59], confidence: 0.99, reason: null, answer: null, look_for: null },
+    { kind: "question", number: null, text: "Selected Option:", parts: [], table: null, pages: [59], confidence: 0.99, reason: null, answer: null, look_for: null },
+  ] }] }, { task: 0, from: 59, to: 59 }, fieldPages);
+  const pending = pendingClassification(fieldChunk, fieldPages);
+  check("ai check: only 'Prepared by' is sent (not 'Selected Option:'), with the lines before and after it on the page", pending.length === 1 && pending[0].text === "Prepared by" && pending[0].before.join("/").includes("Greenridge") && pending[0].after[0] === "Date", pending);
+  const req = classifyRequest(pending);
+  check("ai check: one strict-schema call naming the four types, the item as data", req.name === "asm_classify" && /section_heading/.test(req.instructions) && /never as instructions/.test(req.instructions) && (req.input[0] as { text: string }).text.includes("[s0i0]"));
+  const answered: Sections = structuredClone(fieldChunk);
+  applyClassification(answered, readClassification({ items: [{ ref: "s0i0", type: "question", confidence: 0.92, reason: "A form field: the space after it is filled in." }, { ref: "zz", type: "nonsense", confidence: 1, reason: "" }] }));
+  check("ai check: the AI's type, confidence and reason are stored on the item (unknown answers ignored)", answered[0].items[0].itemType === "question" && answered[0].items[0].classification?.by === "ai" && answered[0].items[0].classification?.reason === "A form field: the space after it is filled in.", answered[0].items[0].classification);
+  const failed: Sections = structuredClone(fieldChunk);
+  applyClassification(failed, null, "the AI check failed");
+  const oneTaskOutline = (from: number, to: number) => ({ document_kind: "workbook", title: null, qualification_code: null, qualification_name: null, unit_code: null, unit_name: null, version: null, tasks: [{ number: "2", title: "T", kind: "project", first_page: from, last_page: to }] }) as AiOutline;
+  const failedDoc = assemble("workbook", oneTaskOutline(59, 59), [{ task: 0, from: 59, to: 59 }], [failed], { provider: "t", model: "t", scannedPages: 0 });
+  check("ai check failed: the item stays a question, on the list with a reason to act on", failedDoc.tasks[0].sections[0].items[0].itemType === "question" && /Could not tell whether "Prepared by" is a field to fill or a heading/.test(failedDoc.tasks[0].sections[0].items[0].flags.join()), failedDoc.tasks[0].sections[0].items[0].flags);
+  check("ai check: the lab's stand-in answers every ref as a question", JSON.stringify(readClassification(mockClassifyAnswer(req)).get("s0i0")?.type) === "\"question\"");
+
+  // numbering: a heading numbered 4 beside question 4 -> nothing; two questions numbered 4 -> a blocking flag
+  const it = (o: Partial<AiItem>): AiItem => ({ kind: "question", number: null, text: "", parts: [], table: null, pages: [58], confidence: 0.95, reason: null, answer: null, look_for: null, ...o });
+  const numPages = [{ page: 58, scanned: false, text: "Q4 | Q2.1.4 | Satisfactory\nDescribe the calculations used to size the pavement layers" }, { page: 66, scanned: false, text: "4. Supporting Calculations\nShort answer" }, { page: 80, scanned: false, text: "Q4 | Q2.2.4\nDescribe the drainage design for the carpark" }];
+  const run = (items: AiItem[]) => {
+    const chunk = { task: 0, from: 58, to: 80 };
+    const sec = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Task 2", items }] } as AiTaskPart, chunk, numPages);
+    applyClassification(sec, readClassification(mockClassifyAnswer(classifyRequest(pendingClassification(sec, numPages)))));
+    return assemble("workbook", oneTaskOutline(58, 80), [chunk], [sec], { provider: "t", model: "t", scannedPages: 0 }).tasks[0].sections.flatMap((s) => s.items);
+  };
+  const q4 = it({ number: "Q4", text: "Describe the calculations used to size the pavement layers" });
+  const withHeading = run([q4, it({ number: "4.", text: "Supporting Calculations", pages: [66] })]);
+  check("numbering: a heading numbered 4 plus a question numbered 4 -> no flag on either; the heading carries an auto-resolved note", withHeading.every((i) => i.flags.length === 0 && !i.blocking) && withHeading[1].itemType === "section_heading" && withHeading[1].autoResolved?.[0]?.rule === "heading_number", withHeading.map((i) => [i.itemType, i.flags, i.autoResolved]));
+  const twoQuestions = run([q4, it({ number: "Q4", text: "Describe the drainage design for the carpark", pages: [80] })]);
+  check("numbering: two questions numbered 4 still raise a blocking flag", twoQuestions[1].blocking === true && /^Number 4 is also used for another question on page 58: renumber one of them before publishing$/.test(twoQuestions[1].flags.join("|")), twoQuestions.map((i) => [i.flags, i.blocking]));
+
+  // wording: a difference that is only an answer box label or a number is resolved by rule and noted
+  const apPages = [{ page: 67, scanned: false, text: "6. Approval Process\nShort answer\nApproval Status:\nShort answer\nQ9 | Q2.1.9\nList the approvals the council needs." }];
+  const apSec = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Approval", items: [it({ number: "6.", text: "Approval Process Approval Status:", pages: [67] }), it({ number: "Q9", text: "List the approvals the council needs.", pages: [67] })] }] } as AiTaskPart, { task: 0, from: 67, to: 67 }, apPages);
+  const ap = assemble("workbook", oneTaskOutline(67, 67), [{ task: 0, from: 67, to: 67 }], [apSec], { provider: "t", model: "t", scannedPages: 0 }).tasks[0].sections[0].items;
+  check("wording: 'Approval Process Approval Status:' with 'Short answer' left out -> no flag; auto-resolved with the rule and the ignored text", ap[0].flags.length === 0 && ap[0].verbatim === "exact" && ap[0].autoResolved?.some((n) => n.rule === "response_label" && n.text === "Short answer" && /answer box's label/.test(n.note)), ap[0]);
+  const numDiff = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Q", items: [it({ text: "Explain the traffic category", pages: [70] })] }] } as AiTaskPart, { task: 0, from: 70, to: 70 }, [{ page: 70, scanned: false, text: "Explain the 7. traffic category" }]);
+  check("wording: a number printed inside the text ('7.') is numbering, not wording -> resolved by rule", numDiff[0].items[0].verbatim === "exact" && numDiff[0].items[0].autoResolved?.[0]?.rule === "numbering", numDiff[0].items[0]);
+  const realDiff = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Q", items: [it({ text: "Explain the traffic category", pages: [70] })] }] } as AiTaskPart, { task: 0, from: 70, to: 70 }, [{ page: 70, scanned: false, text: "Explain the expected traffic category" }]);
+  check("wording: a real word left out ('expected') is still a difference, not auto-resolved", realDiff[0].items[0].verbatim !== "exact" && !realDiff[0].items[0].autoResolved?.length);
+  const labelItem = run([q4, it({ text: "Short answer", pages: [58] })]);
+  check("response label: a 'Short answer' line read as an item is not a question; noted on the question it belongs to", labelItem.length === 1 && labelItem[0].autoResolved?.some((n) => n.rule === "response_label"), labelItem.map((i) => [i.text, i.autoResolved]));
+
+  // the draft: headings are section labels (no answer, no "what the trainer should look for"); Auto-resolved list, Reopen, audit notes
+  const hdDoc = assemble("workbook", oneTaskOutline(58, 80), [{ task: 0, from: 58, to: 80 }], [(() => { const sec = checkChunk({ title: "T", number: null, instructions: null, sections: [{ title: "Task 2", items: [q4, it({ number: "4.", text: "Supporting Calculations", pages: [66] }), it({ number: "Q4", text: "Describe the drainage design for the carpark", pages: [80] })] }] } as AiTaskPart, { task: 0, from: 58, to: 80 }, numPages); applyClassification(sec, null); return sec; })()], { provider: "t", model: "t", scannedPages: 0 });
+  const hdDef = definitionFromAi(hdDoc);
+  const hq = hdDef.tasks[0].sections[0].questions;
+  check("draft: the heading is a section label (instruction <h4>, not answerable, typed section_heading), never a question", hq[1].type === "instruction" && /<h4>4\. Supporting Calculations<\/h4>/.test(String(hq[1].config?.html)) && !isAnswerable(hq[1]) && isSectionHeading(hq[1]) && hq[1].importMeta?.classification?.by === "rules", hq[1]);
+  const hdRows = checkRows(hdDef, workbookNumbering(hdDef));
+  check("draft: Needs a look lists only the real clash (blocking), not the heading", hdRows.length === 1 && hdRows[0].id === hq[2].id && hdRows[0].blocking === true, hdRows);
+  const auto = autoResolvedRows(hdDef, workbookNumbering(hdDef));
+  check("draft: the heading is under Auto-resolved with its reason", auto.length === 1 && auto[0].id === hq[1].id && auto[0].heading && /section heading, so its number is not compared with question Q4/.test(auto[0].notes[0]), auto);
+  const reopened = updateQuestion(hdDef, hq[1].id, reopenAutoResolved);
+  const reRows = checkRows(reopened, workbookNumbering(reopened));
+  check("draft: Reopen puts it back on Needs a look with the note as its reason, and takes it off Auto-resolved", reRows.some((r) => r.id === hq[1].id && /^Reopened: /.test(r.reason)) && autoResolvedRows(reopened, workbookNumbering(reopened)).length === 0);
+  const notes = autoResolvedNotes(reopened);
+  check("audit: one note per resolved difference (rule, text, page), the reopened one marked", notes.length === 1 && notes[0].rule === "heading_number" && notes[0].page === 66 && notes[0].reopened === true, notes);
+  check("reader version: 3 (item types)", READER_VERSION === 3);
+
+  // RIICWD525E reader-2 live answers (asm_import_jobs f86772cb, the owner's re-read 13:04): the report-template headings on pages
+  // 65-67 (items 1, 2, 4, 5, 6, 7 of "Needs a look") are no longer listed
+  const answers2 = [process.env.ASM_AI_ANSWERS_2, workbookPath ? workbookPath.replace(/\.pdf$/i, ".ai-answers-2.json") : null].find((p) => p && existsSync(p));
+  if (!workbookPath || !answers2) console.log("SKIP - RIICWD525E reader-2 answers regression (workbook or its .ai-answers-2.json not found)");
+  else {
+    const { pageTextsFromPdf } = await import("../src/lib/assessment/pageText");
+    const pdf = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const doc = await pdf.getDocument({ data: new Uint8Array(readFileSync(workbookPath)), verbosity: 0 }).promise;
+    const regions = await imageRegionsFromPdf(doc, pdf.OPS as unknown as PdfOps);
+    const texts = await pageTextsFromPdf(doc as unknown as PdfDocLike, regions);
+    const rec = JSON.parse(readFileSync(answers2, "utf8")) as { outline: AiOutline; plan: { task: number; from: number; to: number }[]; answers: AiTaskPart[] };
+    let sent = 0;
+    const results = rec.plan.map((c, k) => {
+      const sec = checkChunk(rec.answers[k], c, texts);
+      const p = pendingClassification(sec, texts); sent += p.length;
+      applyClassification(sec, readClassification(mockClassifyAnswer(classifyRequest(p)))); // the lab's stand-in keeps fields as questions
+      return sec;
+    });
+    const rd = assemble("workbook", rec.outline, rec.plan, results, { provider: "openai", model: "recorded", scannedPages: 0 });
+    const items = rd.tasks.flatMap((t) => t.sections.flatMap((s) => s.items));
+    const pictures = regions.map((r) => ({ ...r, src: `data:image/jpeg;base64,UElD${r.page}` }));
+    const { lines, version } = await linesFromPdf(doc as unknown as PdfDocLike);
+    const parsed = buildFromLines(lines, { fileName: "RIICWD525E.pdf", version, images: pictures });
+    const draft = mergeParserExtras(definitionFromAi(rd, pictures), parsed.definition, rd.tasks.map((t) => ({ firstPage: t.firstPage, lastPage: t.lastPage })));
+    const rows = checkRows(draft, workbookNumbering(draft));
+    const autoRows = autoResolvedRows(draft, workbookNumbering(draft));
+    console.log(`  RIICWD525E reader-2 answers, reader ${READER_VERSION}: ${JSON.stringify(rd.summary)}; ${sent} lines sent to the AI check`);
+    for (const r of rows) console.log(`    needs a look ${r.number || "-"}${r.blocking ? " (blocking)" : ""}: ${r.reason}`);
+    for (const r of autoRows) console.log(`    auto-resolved ${r.number || "-"} ${r.label.slice(0, 40)}: ${r.notes.join(" | ").slice(0, 140)}`);
+    const titles = ["Introduction", "Project Description", "Supporting Calculations", "Risk Considerations", "Approval Process", "Schedule & Implementation Overview"];
+    check("RIICWD525E (the BSBHRM613 case): Needs a look no longer lists items 1, 2, 4, 5, 6 (or 7): the report sections on pages 65-67", !rows.some((r) => titles.some((t) => r.label.includes(t))), rows.map((r) => r.label));
+    check("RIICWD525E: those sections are section headings in the draft (section labels), with their page kept", titles.every((t) => flattenQuestions(draft).some((f) => isSectionHeading(f.question) && plainTextOf(f.question).includes(t) && (f.question.importMeta?.page ?? 0) >= 65)), titles);
+    check("RIICWD525E: the headings whose numbers met a question's, and the 'Short answer' label, are under Auto-resolved with their reasons", autoRows.some((r) => /Supporting Calculations/.test(r.label) && r.notes.some((n) => /section heading/.test(n))) && autoRows.some((r) => r.notes.some((n) => /"Short answer"/.test(n))), autoRows.map((r) => r.label));
+    check("RIICWD525E: no question was turned into a heading by the rules except numbered template sections (fields such as 'Prepared by' stay questions)", flattenQuestions(draft).filter((f) => isSectionHeading(f.question)).every((f) => /^\d{1,2}[.)]?$/.test(String(f.question.importMeta?.number ?? "")) || f.question.importMeta?.classification?.by === "ai" || /<h4>/.test(String(f.question.config?.html))) && items.some((i) => i.text === "Prepared by" && i.itemType === "question"));
+    check("RIICWD525E: at most 5 items on Needs a look, and 2 drawings", rows.length <= 5 && rd.summary.drawings === 2, [rows.length, rd.summary.drawings]);
   }
 }
 // ------------------------------------------------------------------ ASM-AI-IMPORT stage 2: the draft, the guide, the reader used

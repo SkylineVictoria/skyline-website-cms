@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import PdfPages from "@/components/signing/PdfPages";
 import RichBlockEditor from "./RichBlockEditor";
 import { questionType } from "@/lib/assessment/registry";
-import type { CheckRow } from "@/lib/assessment/checkList";
+import type { AutoResolvedRow, CheckRow } from "@/lib/assessment/checkList";
 import type { Question, QuestionKey } from "@/lib/assessment/types";
 
 export const FIELD = "w-full rounded-lg border border-background-300 bg-white px-3 py-2 text-sm text-foreground-900 focus:border-primary-400 focus:outline-none";
@@ -47,13 +47,47 @@ export function NeedsALook({ rows, done, open, onToggle, renderEditor, title = "
                 {how ? <i className="ri-check-line text-green-700" aria-hidden="true" /> : <span className={`h-3.5 w-3.5 shrink-0 rounded-full border-2 ${isOpen ? "border-primary-600 bg-primary-600" : "border-background-400"}`} aria-hidden="true" />}
                 <span className="w-12 shrink-0 text-sm font-semibold text-foreground-900">{r.number || "–"}</span>
                 <span className={`min-w-0 flex-1 truncate text-sm ${how ? "text-foreground-500 line-through" : "text-foreground-800"}`}>{r.reason}{!isOpen ? <span className="ml-2 hidden text-foreground-500 sm:inline">{r.label.length > 60 ? `${r.label.slice(0, 59)}…` : r.label}</span> : null}</span>
-                {how ? <span className="shrink-0 text-xs text-foreground-500">{how}</span> : <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold ${TAG_TONE[r.tag] ?? "bg-background-100"}`}>{r.tag}</span>}
+                {how ? <span className="shrink-0 text-xs text-foreground-500">{how}</span>
+                  : r.blocking ? <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-2xs font-semibold text-red-900" title="Resolve this before publishing" data-testid="blocking-tag">Fix before publishing</span>
+                  : <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold ${TAG_TONE[r.tag] ?? "bg-background-100"}`}>{r.tag}</span>}
               </button>
               {isOpen ? renderEditor(r) : null}
             </li>
           );
         })}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * "Auto-resolved (n)": the items whose differences a rule resolved (a section heading's number, an answer box label left out of the
+ * text…), collapsed under "Needs a look", each with its reasons and Reopen (the classifier or the rule may have been wrong).
+ */
+export function AutoResolvedList({ rows, onReopen, readOnly }: { rows: AutoResolvedRow[]; onReopen: (id: string) => void; readOnly?: boolean }) {
+  const [open, setOpen] = useState(false);
+  if (!rows.length) return null;
+  return (
+    <section className="rounded-xl border border-background-200 bg-white" data-testid="auto-resolved">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left text-sm sm:px-4">
+        <i className={`${open ? "ri-arrow-down-s-line" : "ri-arrow-right-s-line"} text-foreground-500`} aria-hidden="true" />
+        <span className="font-semibold text-foreground-800">Auto-resolved ({rows.length})</span>
+        <span className="hidden text-foreground-500 sm:inline">· resolved by a rule, nothing to do</span>
+      </button>
+      {open ? (
+        <ul className="divide-y divide-background-200 border-t border-background-200" data-testid="auto-resolved-list">
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-start gap-3 px-3 py-2 sm:px-4">
+              <i className="ri-check-line mt-0.5 shrink-0 text-green-700" aria-hidden="true" />
+              <div className="min-w-0 flex-1 text-sm">
+                <p className="truncate text-foreground-800">{r.heading ? null : <span className="mr-2 font-semibold">{r.number || "–"}</span>}{r.heading ? <span className="mr-1.5 rounded bg-background-100 px-1.5 py-0.5 text-2xs font-semibold uppercase tracking-wide text-foreground-600">Section heading</span> : null}{r.label}</p>
+                {r.notes.map((n) => <p key={n} className="mt-0.5 text-xs text-foreground-600">{n}</p>)}
+              </div>
+              {!readOnly ? <button type="button" className={`${BTN_SECONDARY} !px-2 !py-1 text-xs`} onClick={() => onReopen(r.id)} data-testid="reopen">Reopen</button> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   );
 }
@@ -75,13 +109,15 @@ export function QuestionLine({ q, number, open, onClick, depth = 0, actions, tag
   const text = content ? (q.config?.html ? String(q.config.html).replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim() : "") || (String(q.config?.html ?? "").includes("<img") ? "Picture" : "Instruction") : q.label || type?.label || q.type;
   const edited = Boolean(q.importMeta?.editedAt);
   const original = q.importMeta?.original ?? "";
+  // a section heading found by the import ("1. Introduction"): a section label, not a question
+  const heading = q.importMeta?.itemType === "section_heading";
   return (
-    <div className="group" data-question-line={q.id}>
-      <div className={`flex items-center gap-2 px-3 py-2 sm:px-4 ${depth ? "pl-8 sm:pl-10" : ""} ${open ? "bg-primary-50/30" : "hover:bg-background-50"}`}>
+    <div className="group" data-question-line={q.id} data-section-heading={heading ? "true" : undefined}>
+      <div className={`flex items-center gap-2 px-3 py-2 sm:px-4 ${depth ? "pl-8 sm:pl-10" : ""} ${open ? "bg-primary-50/30" : heading ? "bg-background-50" : "hover:bg-background-50"}`}>
         <button type="button" onClick={onClick} aria-expanded={open} className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left">
-          <span className="w-14 shrink-0 text-sm font-semibold text-foreground-900">{number}</span>
-          <i className={`${type?.icon ?? "ri-question-line"} shrink-0 text-foreground-400`} title={type?.label ?? q.type} aria-label={type?.label ?? q.type} />
-          <span className={`min-w-0 flex-1 truncate text-sm ${content ? "text-foreground-600" : "text-foreground-800"}`}>{showOriginal && original ? original.replace(/<[^>]*>/g, " ") : text}</span>
+          <span className="w-14 shrink-0 text-sm font-semibold text-foreground-900">{heading ? "" : number}</span>
+          <i className={`${heading ? "ri-heading" : type?.icon ?? "ri-question-line"} shrink-0 text-foreground-400`} title={heading ? "Section heading" : type?.label ?? q.type} aria-label={heading ? "Section heading" : type?.label ?? q.type} />
+          <span className={`min-w-0 flex-1 truncate text-sm ${heading ? "text-2xs font-bold uppercase tracking-wide text-foreground-700" : content ? "text-foreground-600" : "text-foreground-800"}`}>{showOriginal && original ? original.replace(/<[^>]*>/g, " ") : text}</span>
           {q.importMeta?.page ? <span className="shrink-0 text-2xs text-foreground-500" title="Page in the imported workbook">p.{q.importMeta.page}</span> : null}
           {tags.map((t) => <span key={t} className="hidden shrink-0 rounded bg-background-100 px-1.5 py-0.5 text-2xs font-medium text-foreground-600 sm:inline">{t}</span>)}
           {answered ? <i className="ri-key-2-line shrink-0 text-foreground-400" title="Has a model answer" aria-label="Has a model answer" /> : null}

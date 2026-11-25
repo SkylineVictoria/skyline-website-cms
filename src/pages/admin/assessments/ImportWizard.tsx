@@ -14,8 +14,8 @@
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BTN_PRIMARY, BTN_SECONDARY, NeedsALook, PdfPreviewDialog, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
-import { checkRows, editCount, markReviewed, numberOf, plainText, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
+import { AutoResolvedList, BTN_PRIMARY, BTN_SECONDARY, NeedsALook, PdfPreviewDialog, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
+import { autoResolvedNotes, autoResolvedRows, checkRows, editCount, isSectionHeading, markReviewed, numberOf, plainText, reopenAutoResolved, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { ConfirmDialog } from "@/components/shared/application-status/ActionDrawer";
 import { flattenQuestions, updateQuestion } from "@/lib/assessment/definition";
@@ -290,6 +290,11 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   const left = rows.filter((r) => !done[r.id]).length;
   const answersMissing = rows.filter((r) => r.tag === "Answer missing").length;
   const importChecks = rows.length - answersMissing;
+  /** Two questions with the same number: Publish waits until they are resolved. */
+  const blockingLeft = rows.filter((r) => r.blocking && !done[r.id]).length;
+  /** Differences resolved by a rule (section heading numbers, answer box labels…): listed under "Auto-resolved" with Reopen. */
+  const autoRows = useMemo(() => (definition ? autoResolvedRows(definition, numbers) : []), [definition, numbers]);
+  const reopen = (id: string) => { setDefinition((d) => d && updateQuestion(d, id, reopenAutoResolved)); setOpen(id); };
 
   /* ---------------- editing ---------------- */
   const who = { id: user?.id ?? null, name: user?.name ?? null };
@@ -352,6 +357,9 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
       if (out.ok === false || !out.id) throw new Error(out.errors?.map((e) => e.message).join(" ") || "The assessment was not created.");
       const trace = keyList.map((k) => ({ questionId: k.questionId, originalModelAnswer: k.originalModelAnswer ?? null, originalGuidance: k.originalGuidance ?? null, source: k.source ?? "manual", edited: Boolean(k.edited) }));
       if (trace.length) { const t = await supabase.rpc("asm_import_key_trace", { p_assessment: out.id, p_traces: trace }); if (t.error) console.warn("asm_import_key_trace", t.error.message); }
+      // the differences the import resolved by a rule (and any the admin reopened) go to the assessment's audit log
+      const notes = autoResolvedNotes(docDefinition);
+      if (notes.length) { const a = await supabase.rpc("asm_import_auto_resolved", { p_assessment: out.id, p_notes: notes }); if (a.error) console.warn("asm_import_auto_resolved", a.error.message); }
       if (publish) {
         const pub = await asmAdmin<{ ok: boolean; errors?: { message: string }[] }>("version_publish", { assessmentId: out.id });
         if (!pub.ok) { setPublished({ id: out.id, version: docDefinition.source?.version ?? null, draft: true }); setSaveError(`Saved as a draft, not published: ${pub.errors?.map((e) => e.message).join(" ") ?? ""}`); setStep("done"); return; }
@@ -409,6 +417,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
             {definition && !busy ? (rows.length
               ? <li className="flex items-start gap-2 text-primary-800"><i className="ri-error-warning-line mt-0.5" aria-hidden="true" /><span><strong>{rows.length} item{rows.length === 1 ? "" : "s"}</strong> need{rows.length === 1 ? "s" : ""} a quick look ({[answersMissing ? `${answersMissing} answer${answersMissing === 1 ? "" : "s"} missing` : "", importChecks ? `${importChecks} import check${importChecks === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ")})</span></li>
               : <li className="flex items-start gap-2"><i className="ri-check-double-line mt-0.5 text-green-700" aria-hidden="true" /><span>Nothing needs a look</span></li>) : null}
+            {definition && !busy && autoRows.length ? <li className="flex items-start gap-2 text-foreground-600" data-testid="auto-resolved-count"><i className="ri-magic-line mt-0.5" aria-hidden="true" /><span>{autoRows.length} item{autoRows.length === 1 ? "" : "s"} auto-resolved (section headings, answer box labels): listed under the check</span></li> : null}
             {pathLine(wb, "Workbook")}{pathLine(guide, "Answer guide")}
           </ul>
         </section>
@@ -462,10 +471,13 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
     <div className="space-y-3">
       {rows.length ? <NeedsALook rows={rows} done={done} open={open} onToggle={setOpen} renderEditor={(r) => editor(r.id, r.tag)} />
         : <p className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900"><i className="ri-check-double-line mr-1" aria-hidden="true" />Nothing was flagged. Browse the questions if you want to look anyway.</p>}
+      {blockingLeft ? <p role="alert" className="text-sm text-red-800" data-testid="blocking-note"><i className="ri-error-warning-line mr-1" aria-hidden="true" />{blockingLeft} numbering clash{blockingLeft === 1 ? "" : "es"} to resolve before publishing.</p> : null}
+      <AutoResolvedList rows={autoRows} onReopen={reopen} />
       <button type="button" className="cursor-pointer text-sm font-semibold text-primary-700 hover:underline" onClick={() => setBrowse((b) => !b)} aria-expanded={browse}>{browse ? "Hide the questions" : `Browse all ${answerable.length} questions ›`}</button>
       {browse ? (
         <ul className="divide-y divide-background-200 overflow-hidden rounded-xl border border-background-200 bg-white" data-testid="browse-list">
-          {flat.filter((f) => isAnswerable(f.question)).map((f) => {
+          {/* the questions, with the section headings the import found shown as section labels among them */}
+          {flat.filter((f) => isAnswerable(f.question) || isSectionHeading(f.question)).map((f) => {
             const q = f.question; const id = `browse:${q.id}`; const isOpen = open === id;
             return (
               <li key={q.id}>
@@ -497,7 +509,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
         <button type="button" className={SECONDARY} disabled={!definition || busy} onClick={() => void openPreview()} data-testid="preview-pdf">Preview PDF</button>
         {step === "upload" ? <button type="button" className={PRIMARY} disabled={!canCheck} onClick={goCheck} data-testid="go-check">{rows.length ? `Check ${rows.length} item${rows.length === 1 ? "" : "s"} →` : "Continue →"}</button> : null}
         {step === "unit" ? <button type="button" className={PRIMARY} disabled={!(courseId && unitId) || saving} onClick={() => (manual ? void createEmpty() : setStep("check"))}>{manual ? "Create and open the builder" : "Continue →"}</button> : null}
-        {step === "check" ? <button type="button" className={PRIMARY} disabled={!(courseId && unitId) || saving} onClick={() => setAsk("publish")} data-testid="publish">Publish</button> : null}
+        {step === "check" ? <button type="button" className={PRIMARY} disabled={!(courseId && unitId) || saving || blockingLeft > 0} title={blockingLeft ? "Resolve the numbering clashes first" : undefined} onClick={() => setAsk("publish")} data-testid="publish">Publish</button> : null}
       </div>
     </div>
   );

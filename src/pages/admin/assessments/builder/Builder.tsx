@@ -13,8 +13,8 @@ import SearchableSelect from "@/components/ui/SearchableSelect";
 import { Empty } from "@/pages/admin/components/rto/overlay";
 import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
 import RichBlockEditor from "@/components/assessment/RichBlockEditor";
-import { BTN_PRIMARY, BTN_SECONDARY, FIELD, HOVER_ACTIONS, NeedsALook, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
-import { asHtml, checkRows, markReviewed, numberOf, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
+import { AutoResolvedList, BTN_PRIMARY, BTN_SECONDARY, FIELD, HOVER_ACTIONS, NeedsALook, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
+import { asHtml, autoResolvedRows, checkRows, markReviewed, numberOf, reopenAutoResolved, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
 import { cloneQuestion, cloneSection, cloneTask, earlierQuestionIds, flattenQuestions, moveItem, newSection, newTask, removeQuestion, updateQuestion } from "@/lib/assessment/definition";
 import { GROUP_LABEL, newQuestion, QUESTION_TYPES, questionType, setQuestionDefaults, withSchema, type TypeGroup } from "@/lib/assessment/registry";
 import { workbookNumbering } from "@/lib/assessment/workbookLayout";
@@ -132,6 +132,7 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
   // "Needs a look": imported items still flagged; finished rows stay listed, struck through
   const listed = useRef<CheckRow[]>([]);
   const rows = useMemo(() => (listed.current = stableRows(listed.current, checkRows(definition, numbers, null))), [definition, numbers]);
+  const autoRows = useMemo(() => autoResolvedRows(definition, numbers), [definition, numbers]);
 
   const setDef = (d: Definition) => onChange(d, keys);
   const editQ = (id: string, fn: (q: Question) => Question) => setDef(updateQuestion(definition, id, fn));
@@ -258,6 +259,7 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
             </>, false);
           }} />
       ) : null}
+      <AutoResolvedList rows={autoRows} readOnly={readOnly} onReopen={(id) => { editQ(id, reopenAutoResolved); setOpen(`look:${id}`); }} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-foreground-600">{definition.tasks.length} task{definition.tasks.length === 1 ? "" : "s"} · {flat.filter((f) => !questionType(f.question.type)?.content).length} questions</p>

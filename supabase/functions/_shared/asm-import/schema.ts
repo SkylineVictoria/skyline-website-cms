@@ -3,8 +3,8 @@
  * Two calls per document: the outline (what the document is, its codes, its tasks and their pages), then one call per task
  * (or per part of a long task): tasks -> sections -> items. Pure data, shared by the worker, the browser and the tests.
  */
-import type { Classification, ItemType } from "./classify.ts";
-export type { Classification, ItemType };
+import type { Classification, ItemType, ResponseKind } from "./classify.ts";
+export type { Classification, ItemType, ResponseKind };
 
 /** A difference the checks resolved by a rule: which rule, the text it ignored, and a sentence for the admin / audit log. */
 export interface AutoResolved { rule: "response_label" | "numbering" | "heading_number"; text: string; note: string; page: number | null }
@@ -98,6 +98,8 @@ export interface CheckedPart {
   label: string; part: string; text: string; answer: string | null; verbatim: VerbatimStatus; pdfText: string | null;
   /** close / missing: what differs, in words the admin can act on. */
   diff?: string | null;
+  /** A short category label to answer against (table_row) or a sub-question of its own. */
+  itemType?: "question" | "table_row";
 }
 export type VerbatimStatus = "exact" | "close" | "missing" | "empty" | "scanned";
 export interface CheckedItem {
@@ -131,6 +133,10 @@ export interface CheckedItem {
   autoResolved?: AutoResolved[];
   /** A flag that must be resolved before publishing (two questions with the same number). */
   blocking?: boolean;
+  /** response_label of an answer area: upload or calculation box (attached to the question it serves). */
+  responseKind?: ResponseKind;
+  /** The answer areas attached to this question (its response types): "Submission of Supporting Evidence…" = upload. */
+  responseAreas?: { kind: ResponseKind; text: string; page: number | null }[];
   /** Reasons this item is on the "Check this" list (empty = looks good); worked out when the document is put together. */
   flags: string[];
 }

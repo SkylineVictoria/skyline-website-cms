@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(413);
+select plan(420);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -835,5 +835,17 @@ select throws_ok(format($$select public.asm_import_auto_resolved('%s', '{"a":1}'
 select pg_temp.as_postgres();
 select ok(not has_function_privilege('anon', 'public.asm_import_auto_resolved(uuid,jsonb)', 'execute'), 'AUTO anonymous callers cannot write import notes');
 
+-- ASM-UNIT-CHECK (2026-11-25): the unit decision of Add assessment goes to the audit log; kept without a reason is refused
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is(public.asm_import_unit_check(pg_temp.v('assessment')::uuid, '{"kind":"switched","reason":"","foundCode":"RIICWD525E","foundTitle":"Select pavement surfacing","selectedCode":"BSBHRM613","selectedTitle":"Contribute to the development of learning and development strategies"}'::jsonb)->>'decision', 'switched', 'UNIT switching to the workbook''s unit is recorded');
+select is(public.asm_import_unit_check(pg_temp.v('assessment')::uuid, '{"kind":"kept","reason":"Mapped to BSBHRM613 by the compliance team","foundCode":"RIICWD525E","selectedCode":"BSBHRM613"}'::jsonb)->>'decision', 'kept', 'UNIT keeping the selected unit with a reason is recorded');
+select throws_ok(format($$select public.asm_import_unit_check('%s', '{"kind":"kept","reason":"  ","foundCode":"RIICWD525E","selectedCode":"BSBHRM613"}')$$, pg_temp.v('assessment')), '22023', 'A reason is needed to keep the selected unit', 'UNIT keep without a reason is refused');
+select throws_ok(format($$select public.asm_import_unit_check('%s', '{"kind":"ignore"}')$$, pg_temp.v('assessment')), '22023', null, 'UNIT an unknown decision is refused');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.asm_audit_log where target_id = pg_temp.s('assessment') and action = 'import_unit_mismatch' and detail->>'foundCode' = 'RIICWD525E' and detail->>'selectedCode' = 'BSBHRM613' and actor is not null), 2, 'UNIT both decisions are in the audit log with both codes and the admin');
+select is((select detail->>'reason' from public.asm_audit_log where target_id = pg_temp.s('assessment') and action = 'import_unit_mismatch' and detail->>'decision' = 'kept'), 'Mapped to BSBHRM613 by the compliance team', 'UNIT the reason is kept');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select throws_ok(format($$select public.asm_import_unit_check('%s', '{"kind":"switched"}')$$, pg_temp.v('assessment')), '42501', null, 'UNIT a student cannot record a unit decision');
+select pg_temp.as_postgres();
 select * from finish();
 rollback;

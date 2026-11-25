@@ -17,15 +17,15 @@
  */
 import { normalizeNumber, normalizePart } from "./numbering.ts";
 import { checkVerbatim, compareTokens, core, describeDiff, normText, stripRunningText } from "./verbatim.ts";
-import { classifyByRules, isResponseLabel, RULES_DECIDE, type Classification, type PendingItem } from "./classify.ts";
+import { classifyByRules, classifyPart, isResponseLabel, responseAreaKind, RULES_DECIDE, type Classification, type PendingItem } from "./classify.ts";
 import type { AiInput } from "./provider.ts";
 import {
   ITEM_KINDS, OUTLINE_SCHEMA, TASK_KINDS, TASK_SCHEMA,
-  type AiItem, type AiOutline, type AiTaskPart, type AutoResolved, type CheckedDocument, type CheckedItem, type CheckedPart, type CheckedSection, type CheckedTask, type ImportSummary,
+  type AiItem, type AiOutline, type AiTaskPart, type AutoResolved, type ResponseKind, type CheckedDocument, type CheckedItem, type CheckedPart, type CheckedSection, type CheckedTask, type ImportSummary,
 } from "./schema.ts";
 
-/** Bumped whenever the reading or the checks change (2: formatting-proof verbatim check, headers removed, pictures, calibrated flags; 3: item types, auto-resolved differences). */
-export const READER_VERSION = 3;
+/** Bumped whenever the reading or the checks change (2: formatting-proof verbatim check, headers removed, pictures, calibrated flags; 3: item types, auto-resolved differences; 4: table rows, answer areas, merged headings, printed number pairs). */
+export const READER_VERSION = 4;
 
 /** One page as the browser read it: its text (lines, cells joined with " | ", [Picture] where a picture is printed). */
 export interface PageText { page: number; text: string; scanned: boolean; pictures?: number }
@@ -105,6 +105,8 @@ export function cleanOutline(raw: AiOutline, pages: PageText[]): AiOutline {
     .sort((a, b) => a.first_page - b.first_page);
   // overlapping ranges: a task ends where the next one starts
   tasks = tasks.map((t, i) => { const n = tasks[i + 1]; return n && t.last_page >= n.first_page ? { ...t, last_page: Math.max(t.first_page, n.first_page - (n.first_page > t.first_page ? 1 : 0)) } : t; });
+  // the same task listed twice (its header repeated on a later page with only formatting differences): one task over both ranges
+  tasks = tasks.reduce<typeof tasks>((out, t) => { const prev = out[out.length - 1]; if (prev && sameHeading(prev.title, t.title)) { prev.last_page = Math.max(prev.last_page, t.last_page); return out; } out.push({ ...t }); return out; }, []);
   if (!tasks.length) tasks = [{ number: null, title: normText(raw?.title ?? "") || "Assessment", kind: "other", first_page: first, last_page: last }];
   const version = raw?.version ? (/\d+(?:\.\d+)*/.exec(raw.version)?.[0] ?? null) : null;
   return {
@@ -194,13 +196,16 @@ function checkItem(it: AiItem, chunk: Chunk, byPage: Map<number, PageText>): Che
   const parts: CheckedPart[] = (Array.isArray(it.parts) ? it.parts : []).map((p, i) => {
     const label = normText(String(p?.label ?? "")) || String.fromCharCode(97 + (i % 26));
     const r = check(String(p?.text ?? ""));
-    return { label, part: normalizePart(label) ?? label.toLowerCase(), text: r.text, answer: p?.answer ? String(p.answer).trim() : null, verbatim: r.status, pdfText: r.pdfText, diff: r.diff };
+    return { label, part: normalizePart(label) ?? label.toLowerCase(), text: r.text, answer: p?.answer ? String(p.answer).trim() : null, verbatim: r.status, pdfText: r.pdfText, diff: r.diff, itemType: classifyPart(label, r.text) };
   });
   const confidence = Math.max(0, Math.min(1, Number(it.confidence)));
-  const number = it.number ? normText(String(it.number)) : null;
+  // the workbook may print two numbers side by side ("Q3 | Q1.3"): the model gives one of them; the most specific is used
+  const number = pairedNumber(it.number ? normText(String(it.number)) : null, pages.map((p) => byPage.get(p)?.text ?? ""));
   const canonical = normalizeNumber(number)?.canonical ?? null;
   const classification = classifyByRules({ kind: it.kind, number, text: main.text || normText(String(it.text ?? "")) });
+  const responseKind = classification.type === "response_label" ? responseAreaKind({ kind: it.kind, text: main.text }) : null;
   return {
+    ...(responseKind ? { responseKind } : {}),
     kind: it.kind, number, canonical, text: main.text, parts, pages,
     table: it.table && Array.isArray(it.table.columns) ? { columns: it.table.columns.map((c) => normText(String(c))), rows: (Array.isArray(it.table.rows) ? it.table.rows : []).map((r) => (Array.isArray(r) ? r.map((c) => normText(String(c))) : [])) } : null,
     confidence: Number.isFinite(confidence) ? confidence : 0,
@@ -208,6 +213,25 @@ function checkItem(it: AiItem, chunk: Chunk, byPage: Map<number, PageText>): Che
     verbatim: main.status, pdfText: main.pdfText, diff: main.diff, reason: it.reason ? normText(String(it.reason)) : null, scanned,
     itemType: classification.type, classification, autoResolved, flags: [],
   };
+}
+
+/**
+ * The number the workbook prints beside an item, when it prints two in one row ("Q3 | Q1.3 | Satisfactory"): the row of the item's
+ * page whose cells include the model's number gives the pair, and the most specific number of the pair is used (Q1.3 -> 1.3).
+ * Without such a row the model's number stays.
+ */
+export function pairedNumber(number: string | null, pageTexts: string[]): string | null {
+  const mine = normalizeNumber(number)?.canonical;
+  if (!number || !mine) return number;
+  for (const text of pageTexts) for (const line of text.split("\n")) {
+    const cells = line.split("|").map((c) => c.trim()).filter(Boolean);
+    const nums = cells.filter((c) => /^(?:q(?:uestion)?\s*)?\d{1,3}(?:\.\d{1,3})*[a-z]?$/i.test(c));
+    if (nums.length < 2 || !nums.some((c) => normalizeNumber(c)?.canonical === mine)) continue;
+    const best = normalizeNumber(nums.join(" | "));
+    if (best && best.canonical !== mine) return nums.sort((a, b) => (normalizeNumber(b)?.base.split(".").length ?? 0) - (normalizeNumber(a)?.base.split(".").length ?? 0))[0];
+    return number;
+  }
+  return number;
 }
 
 /** A piece that is only a number ("6.", "Q14", "2.1.3") is numbering, not wording. */
@@ -300,6 +324,44 @@ export const typeOf = (it: Pick<CheckedItem, "itemType">) => it.itemType ?? "que
 const follows = (a: CheckedItem, b: CheckedItem) => Math.min(...b.pages) - Math.max(...a.pages) <= 1;
 
 /**
+ * Two headings that differ only in case, punctuation, hyphens or brackets, or where one is the other with more words after it
+ * ("Assessment Task 1 - Written Assessment (Knowledge Application)" / "Assessment Task - 1 Written Assessment"), are the same.
+ */
+export function sameHeading(a: string, b: string): boolean {
+  const norm = (s: string) => normText(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(" ").filter(Boolean);
+  const x = norm(a); const y = norm(b);
+  if (!x.length || !y.length) return false;
+  if (x.join(" ") === y.join(" ")) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.length >= 3 && short.every((w, i) => long[i] === w);
+}
+
+/** The letter a row / part starts with ("k. Selection approval" -> k), or null. */
+const letterOf = (label: string) => /^\s*\(?([a-z])[.)]?\)?(?:\s|$)/i.exec(label)?.[1]?.toLowerCase() ?? null;
+const lastLetter = (q: CheckedItem) => (q.kind === "table" ? letterOf(q.table?.rows[q.table.rows.length - 1]?.[0] ?? "") : letterOf(q.parts[q.parts.length - 1]?.part ?? q.parts[q.parts.length - 1]?.label ?? ""));
+/** An item's rows / parts as {label, text} ("k.", "Selection approval"). */
+function rowsOf(it: CheckedItem): { label: string; text: string }[] {
+  if (it.kind === "table") return (it.table?.rows ?? []).map((r) => { const m = /^\s*(\(?[a-z][.)]\)?)\s+(.*)$/i.exec(r[0] ?? ""); return m ? { label: m[1], text: m[2] } : { label: "", text: r[0] ?? "" }; });
+  return it.parts.map((p) => ({ label: p.label, text: p.text }));
+}
+/** The item's rows / parts carry on the letters of q's (j -> k), all of them category labels (not sub-questions). */
+function continuesRows(q: CheckedItem, it: CheckedItem): boolean {
+  const last = lastLetter(q); const rows = rowsOf(it);
+  const first = rows[0] ? letterOf(rows[0].label) : null;
+  if (!last || !first || first.charCodeAt(0) !== last.charCodeAt(0) + 1) return false;
+  return it.kind === "table" || it.parts.every((p) => (p.itemType ?? classifyPart(p.label, p.text)) === "table_row");
+}
+/** Rows appended to a table (label + text in the first cell, the answer cells empty) or parts to a question with parts. */
+function appendRows(q: CheckedItem, rows: { label: string; text: string }[]) {
+  if (q.kind === "table" && q.table) {
+    const width = Math.max(1, q.table.columns.length);
+    q.table.rows.push(...rows.map((r) => [[r.label, r.text].filter(Boolean).join(" "), ...Array.from({ length: width - 1 }, () => "")]));
+  } else {
+    q.parts.push(...rows.map((r) => ({ label: r.label, part: normalizePart(r.label) ?? r.label.toLowerCase(), text: r.text, answer: null, verbatim: "exact" as const, pdfText: null, itemType: "table_row" as const })));
+  }
+}
+
+/**
  * The finished document: chunks put back together task by task (same section title in a row = one section), a question with parts
  * that runs on into the next pages joined back up, numbers checked, then each item's flags worked out. The chunk results are not
  * changed (they are saved on the job and put together again after every chunk).
@@ -311,8 +373,9 @@ export function assemble(kind: "workbook" | "guide", outline: AiOutline, chunks:
     chunks.forEach((c, k) => {
       if (c.task !== i) return;
       for (const s of fresh[k] ?? []) {
+        // the same heading again (often on the next chunk) with only formatting differences is the same part of the task
         const prev = sections[sections.length - 1];
-        if (prev && prev.title.toLowerCase() === s.title.toLowerCase()) prev.items.push(...s.items); else sections.push({ title: s.title, items: [...s.items] });
+        if (prev && sameHeading(prev.title, s.title)) prev.items.push(...s.items); else sections.push({ title: s.title, items: [...s.items] });
       }
     });
     return { number: t.number, title: t.title, kind: t.kind, instructions: null, firstPage: t.first_page, lastPage: t.last_page, sections };
@@ -324,7 +387,37 @@ export function assemble(kind: "workbook" | "guide", outline: AiOutline, chunks:
     const headings: CheckedItem[] = [];
     let before: CheckedItem | null = null;
     let carry: AutoResolved[] = [];
-    for (const s of t.sections) for (const it of s.items) {
+    /** The last question of the task (what a continued table, a category row or an answer area belongs to). */
+    let lastQuestion: CheckedItem | null = null;
+    /** Answer areas printed before the question they serve (attached to the next question of the task). */
+    let waiting: { kind: ResponseKind; text: string; page: number | null }[] = [];
+    const attachArea = (q: CheckedItem, a: { kind: ResponseKind; text: string; page: number | null }) => { q.responseAreas = [...(q.responseAreas ?? []), a]; };
+    for (const s of t.sections) {
+      let inSection: CheckedItem | null = null;
+      for (const it of s.items) {
+      // an answer area ("Submission of Supporting Evidence…", "Mathematics Calculation Box…"): the response type of the question it
+      // serves (the question before it in its section, else the next question of the task); it never takes a number
+      if (typeOf(it) === "response_label" && it.responseKind) {
+        drop.add(it);
+        const area = { kind: it.responseKind, text: it.text, page: it.pages[0] ?? null };
+        if (inSection) attachArea(inSection, area); else waiting.push(area);
+        continue;
+      }
+      // a lettered category row on its own ("k. Selection approval"): a row of the table / a part of the question above it
+      if (typeOf(it) === "table_row" && lastQuestion && (lastQuestion.kind === "table" || lastQuestion.kind === "multipart") && follows(lastQuestion, it)) {
+        appendRows(lastQuestion, [{ label: it.number ?? "", text: it.text }]);
+        drop.add(it);
+        continue;
+      }
+      // a table or list of categories continued on the next pages (often across a chunk, numbered from the other number of the
+      // printed pair: "Q2" for Q1.2): its rows / parts carry on the letters of the question above it (j -> k)
+      if (lastQuestion && (it.kind === "multipart" || it.kind === "table") && follows(lastQuestion, it) && continuesRows(lastQuestion, it)
+        && (it.verbatim === "empty" || !it.text || normText(it.text) === normText(lastQuestion.text))) {
+        appendRows(lastQuestion, rowsOf(it));
+        lastQuestion.pages = [...new Set([...lastQuestion.pages, ...it.pages])].sort((a, b) => a - b);
+        drop.add(it);
+        continue;
+      }
       // an answer box's label read as an item of its own ("Short answer"): not a question; noted on the item it belongs to
       if (typeOf(it) === "response_label") {
         drop.add(it);
@@ -345,13 +438,20 @@ export function assemble(kind: "workbook" | "guide", outline: AiOutline, chunks:
         continue;
       }
       before = it;
+      if (typeOf(it) === "question" && it.kind !== "instruction" && it.kind !== "drawing") {
+        lastQuestion = it; inSection = it;
+        if (waiting.length) { waiting.forEach((a) => attachArea(it, a)); waiting = []; }
+      }
       // only questions are compared: two questions with the same number far apart is a real clash (blocking)
       if (!it.canonical || !QUESTION_KINDS.has(it.kind) || typeOf(it) !== "question") continue;
       const first = seen.get(it.canonical);
       if (!first) { seen.set(it.canonical, it); continue; }
       if (it.text && normText(first.text) === normText(it.text)) { drop.add(it); continue; } // read twice (a chunk boundary)
       if (!follows(first, it)) dup.set(it, first); // nearby, it is another table / box of the same question
+      }
     }
+    // answer areas after the task's last question belong to it
+    if (waiting.length && lastQuestion) { const q: CheckedItem = lastQuestion; waiting.forEach((a) => attachArea(q, a)); waiting = []; }
     for (const h of headings) {
       const q = h.canonical ? seen.get(h.canonical) : null;
       if (q) h.autoResolved = [...(h.autoResolved ?? []), { rule: "heading_number", text: h.number ?? h.canonical ?? "", page: h.pages[0] ?? null,

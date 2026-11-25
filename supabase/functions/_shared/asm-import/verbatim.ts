@@ -104,9 +104,16 @@ const PICTURE_LINE = /^\[picture\]$/i;
  */
 export function stripRunningText<T extends { page: number; text: string; scanned?: boolean }>(pages: T[], opts: { keepPictures?: boolean } = {}): T[] {
   const withText = pages.filter((p) => !p.scanned && p.text.trim());
+  // a header / footer line sits at the same place on every page: the same line counted from the top (or from the bottom), with
+  // the same text (digits ignored). Repeated content ("Model answer: …" on every page of a guide) moves about and is never taken.
+  // a line can be in both zones of a short page: it has both places (from the top and from the bottom)
+  const slotsOf = (i: number, n: number) => [...(i < RUNNING_TOP ? [`t${i}`] : []), ...(n - 1 - i < RUNNING_BOTTOM ? [`b${n - 1 - i}`] : [])];
+  const textLines = (p: { text: string }) => p.text.split("\n").filter((l) => !PICTURE_LINE.test(l.trim()));
   const seen = new Map<string, string[]>();
-  const zone = (lines: string[]) => new Set([...lines.slice(0, RUNNING_TOP), ...lines.slice(Math.max(RUNNING_TOP, lines.length - RUNNING_BOTTOM))].map((l) => normText(l)).filter(Boolean));
-  for (const p of withText) for (const l of zone(p.text.split("\n"))) { const m = mask(l); seen.set(m, [...(seen.get(m) ?? []), l]); }
+  for (const p of withText) {
+    const lines = textLines(p);
+    lines.forEach((l, i) => { const t = normText(l); if (!t) return; for (const slot of slotsOf(i, lines.length)) { const key = `${slot}|${mask(t)}`; seen.set(key, [...(seen.get(key) ?? []), t]); } });
+  }
   const need = Math.max(3, Math.ceil(withText.length * 0.4));
   // the same line on many pages, where at most one number changes (the page number); "Q12 | Q2.2.1 | Satisfactory" on many
   // pages changes two numbers from page to page, so a question's table heading is never taken for a header
@@ -115,13 +122,16 @@ export function stripRunningText<T extends { page: number; text: string; scanned
     const varying = (nums[0] ?? []).filter((_, i) => nums.some((n) => n[i] !== nums[0][i])).length;
     return varying <= 1;
   };
-  const running = new Set([...seen].filter(([, ls]) => ls.length >= need && oneNumberVaries(ls)).map(([m]) => m));
+  const running = new Set([...seen].filter(([, ls]) => ls.length >= need && oneNumberVaries(ls)).map(([key]) => key));
   return pages.map((p) => {
-    const lines = p.text.split("\n");
-    const keep = lines.filter((l, i) => {
+    const all = p.text.split("\n");
+    const n = textLines(p).length;
+    let i = -1;
+    const keep = all.filter((l) => {
       if (PICTURE_LINE.test(l.trim())) return Boolean(opts.keepPictures);
-      const edge = i < RUNNING_TOP || i >= lines.length - RUNNING_BOTTOM;
-      return !(edge && running.has(mask(l)));
+      i += 1;
+      const m = mask(normText(l));
+      return !slotsOf(i, n).some((slot) => running.has(`${slot}|${m}`));
     });
     return { ...p, text: keep.join("\n") };
   });

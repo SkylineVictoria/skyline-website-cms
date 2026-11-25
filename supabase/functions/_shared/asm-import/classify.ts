@@ -12,8 +12,29 @@
  */
 import type { AiInput } from "./provider.ts";
 
-export const ITEM_TYPES = ["question", "section_heading", "instruction", "response_label"] as const;
+export const ITEM_TYPES = ["question", "section_heading", "instruction", "response_label", "table_row"] as const;
 export type ItemType = typeof ITEM_TYPES[number];
+
+/**
+ * ASM-BUILDER-COMPACT: an answer area printed as a box of its own ("Submission of Supporting Evidence … upload the Graphs",
+ * "Mathematics Calculation Box …", "Any other Additional Work") is a response_label of kind upload / calc: it is attached to the
+ * question it serves as a response type and never takes a question number.
+ */
+export type ResponseKind = "upload" | "calc";
+const RESPONSE_AREAS: { kind: ResponseKind; re: RegExp }[] = [
+  { kind: "calc", re: /^(?:mathematic(?:s|al)?\s+)?calculations?\s+box\b/i },
+  { kind: "calc", re: /\bunable to write your mathematical (?:equations|solutions)\b/i },
+  { kind: "upload", re: /^submission of supporting evidence\b/i },
+  { kind: "upload", re: /^any other additional work\b/i },
+  { kind: "upload", re: /^if you need to submit any other additional work\b/i },
+  { kind: "upload", re: /^please upload the (?:graphs|files?|evidence)\b.*\b(?:assessment (?:pack|folder|designated area))\b/i },
+];
+/** The kind of answer area an upload / box item is, or null when it is a question of its own. */
+export function responseAreaKind(it: { kind: string; text: string }): ResponseKind | null {
+  if (!["evidence", "question", "instruction"].includes(it.kind)) return null;
+  const t = (it.text ?? "").trim();
+  return RESPONSE_AREAS.find((a) => a.re.test(t))?.kind ?? null;
+}
 
 export interface Classification {
   type: ItemType;
@@ -69,6 +90,28 @@ export const isQuestionNumber = (number: string | null | undefined) => Boolean(n
 
 export interface ClassifyInput { kind: string; number: string | null; text: string }
 
+/** A letter list marker ("k.", "(k)", "k)") as the item's number or at the start of its text. */
+export const isLetterMarker = (number: string | null | undefined, text = "") =>
+  Boolean((number && /^\(?[a-z][.)]?\)?$/i.test(number.trim())) || /^\s*\(?[a-z][.)]\s+\S/i.test(text));
+const stripLetter = (s: string) => s.replace(/^\s*\(?[a-z][.)]\s+/i, "").trim();
+
+/**
+ * A short category label (a row of a table the learner fills in per category, or an item of a category list): at most 6 words,
+ * no question mark, no command verb, starts with a capital ("Selection approval", "Work health and safety"). Not "Describe…".
+ */
+export function isTableRowLabel(text: string): boolean {
+  const body = stripLetter((text ?? "").trim());
+  const ws = words(body);
+  if (!ws.length || ws.length > 6 || /\?/.test(body) || /[.:]$/.test(body) && ws.length > 4) return false;
+  if (COMMAND_VERBS.has((ws[0] ?? "").toLowerCase().replace(/[^a-z]/g, ""))) return false;
+  return /^[\p{Lu}\p{N}]/u.test(body);
+}
+
+/** A part of a question with parts: a table row (a category label to answer against) or a sub-question of its own. */
+export function classifyPart(label: string, text: string): Extract<ItemType, "question" | "table_row"> {
+  return isTableRowLabel(text) && !/^(?:[ivx]+|\d+)[.)]?$/i.test(label.trim()) ? "table_row" : "question";
+}
+
 /**
  * The rules. Returns the type with a confidence; below RULES_DECIDE the item is for the AI (the type returned is then the rules'
  * best guess, used if the AI cannot be asked).
@@ -77,6 +120,12 @@ export function classifyByRules(it: ClassifyInput): Classification {
   const text = (it.text ?? "").trim();
   const decide = (type: ItemType, confidence: number, reason: string): Classification => ({ type, by: "rules", confidence, reason });
   if (text && isResponseLabel(stripNumber(text))) return decide("response_label", 0.98, `"${text}" is an answer box's label (response type), not a question`);
+  const area = responseAreaKind(it);
+  if (area) return decide("response_label", 0.95, `"${text.slice(0, 60)}" is an answer area (${area === "calc" ? "calculation box" : "upload box"}) for a question, not a question`);
+  // "k. Selection approval": a lettered category label is a row of the table / list of the question above it
+  if (["question", "instruction"].includes(it.kind) && isLetterMarker(it.number, text) && isTableRowLabel(stripLetter(text))) {
+    return decide("table_row", 0.88, `"${text}" is a lettered category label: a row of the table or list above it`);
+  }
   if (!["question", "instruction"].includes(it.kind)) {
     // tables, uploads, questions with parts, declarations: answered; drawings: read
     return decide(it.kind === "drawing" ? "instruction" : "question", 1, `kind ${it.kind}`);

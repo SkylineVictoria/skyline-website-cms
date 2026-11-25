@@ -649,14 +649,15 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     .filter((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && doc.extraction === "done")
     .map((doc) => String(doc.extracted?.issuing_country || doc.extracted?.passport_issuing_country || "").trim())
     .find(Boolean) || "";
-  // Residency (owner, 2026-11-25): the visa step asks for PR evidence (permanent resident) or is skipped (everyone else).
+  // Residency (owner, 2026-11-25): the visa step asks for PR evidence (permanent resident) or the student's visa (not PR; required as
+  // the Business Rule says), and is skipped for an Australian / New Zealand passport.
   const need: VisaNeed = visaNeed(passportCountry, answers[PR_ANSWER] ?? "");
   const residencyDone = residencyAnswered(passportCountry, answers[PR_ANSWER] ?? "");
   const kind = studentKind(passportCountry, answers[PR_ANSWER] ?? "");
   // PR evidence checked: a subclass read from the upload that is not a permanent visa is flagged.
   const temporaryPrVisa = need === "pr" ? acceptableVisa.find((doc) => doc.extraction === "done" && notPermanentSubclass(String(doc.extracted?.visa_subclass ?? ""))) : undefined;
   const skipStep = (item: WizardStep | WizardQuestion | undefined) => item?.id === "visa" && need === "none";
-  const stepRequired = (item: WizardStep) => (item.id === "visa" ? need !== "none" : Boolean(item.required));
+  const stepRequired = (item: WizardStep) => (item.id !== "visa" ? Boolean(item.required) : need === "pr" || (need === "visa" && Boolean(item.required)));
   /** The step as shown: the visa step reads as PR evidence for a permanent resident. */
   const shownStep = (item: WizardStep): WizardStep => (item.id !== "visa" || need !== "pr" ? item
     : { ...item, title: "Permanent residency evidence", short: "PR evidence", noun: "PR evidence", subtitle: "Required. Upload the permanent residency visa grant notice." });
@@ -676,7 +677,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   /**
    * Next on a document step. After the passport: saves the residency answer (au_permanent_resident; blank for an Australian /
-   * New Zealand passport) and holds_visa No when no visa is needed. After the PR evidence: holds_visa Yes.
+   * New Zealand passport) and holds_visa No when no visa is needed. After the visa screen: holds_visa Yes (PR evidence or a visa
+   * uploaded) or No (skipped where the Business Rule allows it).
    */
   const [savingResidency, setSavingResidency] = useState(false);
   const nextFromDocument = async () => {
@@ -688,6 +690,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (need === "none") values.holds_visa = "No";
     } else if (current.id === "visa" && need === "pr") {
       values.holds_visa = "Yes";
+    } else if (current.id === "visa" && need === "visa") {
+      values.holds_visa = visaDocuments.length > 0 ? "Yes" : "No";
     }
     if (!Object.keys(values).length) { await goTo(step + 1, true); return; }
     setSavingResidency(true);
@@ -1282,7 +1286,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             {onDocStep && !hasFile && !blockedByPassport && !stepRequired(current) ? (
               <button
                 type="button"
-                onClick={() => void goTo(step + 1, true)}
+                onClick={() => void nextFromDocument()}
                 className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-4 py-2.5 text-sm font-semibold text-foreground-700 transition-colors hover:border-primary-300 hover:text-primary-700"
               >
                 {current.skipLabel}

@@ -5095,13 +5095,14 @@ test("Birth country from the passport (2026-11-25): Were you born in {issuing co
   assert.ok(steps.includes("<BirthCountryField passportCountry={passportCountry}") && !steps.includes('select("birth_country"'));
 });
 
-test("Residency after the passport (2026-11-25): AU / NZ Domestic (no question, no visa), PR Yes -> PR evidence, PR No -> no visa upload (in / out of Australia not asked)", async () => {
+test("Residency after the passport (2026-11-25): AU / NZ Domestic (no question, no visa), PR Yes -> PR evidence, PR No -> the visa screen (in / out of Australia not asked)", async () => {
   const r = await load.import<typeof import("../src/pages/agency/lib/residency.ts")>("../src/pages/agency/lib/residency.ts");
   assert.ok(r.isDomesticPassport("Australia") && r.isDomesticPassport("new zealand") && !r.isDomesticPassport("India"));
   assert.equal(r.visaNeed("Australia", ""), "none");
   assert.equal(r.visaNeed("New Zealand", "Yes"), "none", "domestic ignores a stale answer");
   assert.equal(r.visaNeed("India", "Yes"), "pr");
-  assert.equal(r.visaNeed("India", "No"), "none", "not PR: no visa upload");
+  assert.equal(r.visaNeed("India", "No"), "visa", "not PR: the visa screen to get the status");
+  assert.equal(r.visaNeed("India", ""), "none", "unanswered: held on the passport screen");
   assert.equal(r.visaNeed("", ""), "none");
   assert.ok(r.residencyAnswered("Australia", "") && r.residencyAnswered("India", "Yes") && r.residencyAnswered("India", "No"));
   assert.ok(!r.residencyAnswered("India", "") && !r.residencyAnswered("", ""), "an unread passport country is asked too");
@@ -5113,14 +5114,14 @@ test("Residency after the passport (2026-11-25): AU / NZ Domestic (no question, 
   assert.ok(!r.notPermanentSubclass("189") && !r.notPermanentSubclass("") && r.notPermanentSubclass("500") && r.notPermanentSubclass("Subclass 485"), "PR evidence: 500 / 485 flagged");
   const wizard = read("src/pages/agency/components/ApplicationWizard.tsx"), ui = read("src/pages/agency/components/WizardResidency.tsx");
   assert.ok(ui.includes("Are you an Australian permanent resident?") && !ui.includes("Are you currently in Australia?"), "the in-Australia question is gone");
-  assert.ok(wizard.includes('const stepRequired = (item: WizardStep) => (item.id === "visa" ? need !== "none" : Boolean(item.required));'));
+  assert.ok(wizard.includes('need === "pr" || (need === "visa" && Boolean(item.required))'), "PR evidence required; the visa as the Business Rule says");
   assert.ok(wizard.includes("if (skipStep(ALL_STEPS[next]) && next !== step)"), "the visa step is passed over when not needed");
   assert.ok(wizard.includes("values[PR_ANSWER] = pr;") && !wizard.includes("au_currently_in_australia") && !wizard.includes("VisaDetails"));
   assert.ok(!wizard.includes("issuing_country:"), "issuing_country is saved as before (not written by the wizard)");
   assert.ok(wizard.includes('defaultLoad={kind === "international" ? "coe" : undefined}') && read("src/pages/agency/components/IntakeSelect.tsx").includes("(defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null)"), "international: CoE chosen to start with");
   const steps = read("src/pages/agency/lib/wizardConfig.ts").split("export const WIZARD_STEPS")[1].split("];")[0];
   assert.deepEqual([...steps.matchAll(/\n    id: "(\w+)"/g)].map((m) => m[1]).slice(0, 2), ["passport", "visa"], "the visa screen follows the passport");
-  assert.ok(ui.includes("a <strong>domestic</strong> student") && ui.includes("The course is offered as <strong>CoE</strong>"));
+  assert.ok(ui.includes("a <strong>domestic</strong> student") && ui.includes("The course is offered as <strong>CoE</strong>") && ui.includes("upload the current Australian visa grant notice"));
 });
 
 test("Full form country of birth (2026-11-25): the same AVETMISS country search as the wizard, in a hidden form input; no copy from citizenship", () => {

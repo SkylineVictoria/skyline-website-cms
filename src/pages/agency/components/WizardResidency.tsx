@@ -19,7 +19,7 @@ function YesNo({ name, label, value, error, onChange }: { name: string; label: s
 
 /**
  * Shown under the passport once it is uploaded (owner, 2026-11-25): an Australian / New Zealand passport needs no residency
- * question (Domestic); any other passport is asked about permanent residency (Yes: PR evidence next; No: no visa upload).
+ * question (Domestic); any other passport is asked about permanent residency (Yes: PR evidence next; No: the visa next).
  */
 export function ResidencyQuestions({ issuingCountry, answers, errors, onChange }: {
   issuingCountry: string;
@@ -46,7 +46,8 @@ export function ResidencyQuestions({ issuingCountry, answers, errors, onChange }
       ) : null}
       {pr === "No" ? (
         <p className="rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-900" data-testid="wizard-residency-international">
-          <i className="ri-earth-line" aria-hidden="true" /> An <strong>international</strong> student: no visa upload is needed. The course is offered as <strong>CoE</strong>.
+          <i className="ri-earth-line" aria-hidden="true" /> An <strong>international</strong> student. Next, upload the current Australian visa grant notice
+          or VEVO record so SLIT can see the visa status. The course is offered as <strong>CoE</strong>.
         </p>
       ) : null}
     </div>

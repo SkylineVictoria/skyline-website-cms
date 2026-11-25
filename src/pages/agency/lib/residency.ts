@@ -1,14 +1,15 @@
 /**
  * Residency question after the passport scan (owner, 2026-11-25). An Australian or New Zealand passport makes the student
  * Domestic (no question, no visa step). Anyone else is asked "Are you an Australian permanent resident?"
- * (values.au_permanent_resident): Yes asks for PR evidence (a visa grant notice, category Visa); No needs no visa upload at all
- * (whether the student is in Australia or not does not matter, so it is not asked). The database derives residency_status from
- * issuing_country and au_permanent_resident.
+ * (values.au_permanent_resident): Yes asks for PR evidence (a visa grant notice, category Visa); No asks for the student's visa
+ * (grant notice or VEVO record) to get their status, required as the Business Rule admissions.application_required_documents says
+ * (whether the student is in Australia or not is not asked). The database derives residency_status from issuing_country and
+ * au_permanent_resident.
  */
 export const PR_ANSWER = "au_permanent_resident";
 
-/** What the visa step asks for: nothing (skipped) or PR evidence. */
-export type VisaNeed = "none" | "pr";
+/** What the visa step asks for: nothing (skipped: domestic passport or unanswered), PR evidence, or the student's visa. */
+export type VisaNeed = "none" | "pr" | "visa";
 
 const DOMESTIC = new Set(["australia", "new zealand", "aus", "nzl", "au", "nz"]);
 
@@ -18,7 +19,8 @@ export function isDomesticPassport(issuingCountry: string): boolean {
 }
 
 export function visaNeed(issuingCountry: string, pr: string): VisaNeed {
-  return !isDomesticPassport(issuingCountry) && pr === "Yes" ? "pr" : "none";
+  if (isDomesticPassport(issuingCountry)) return "none";
+  return pr === "Yes" ? "pr" : pr === "No" ? "visa" : "none";
 }
 
 /** The residency question is answered (or not asked: Domestic). */

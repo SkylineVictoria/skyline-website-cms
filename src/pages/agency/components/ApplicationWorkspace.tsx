@@ -1,4 +1,5 @@
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
+import { FormCountrySearch } from "@/components/shared/CountrySearch";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, useLayoutEffect } from "react";
 import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import AddressSearch from "@/components/shared/wizard/AddressSearch";
@@ -959,14 +960,14 @@ export default function ApplicationWorkspace({
 
   /* ------------------------------------------ passport-derived answers */
 
-  // Title follows the passport gender (Male: Mr, Female: Miss) and country of birth follows citizenship. Each is only
-  // filled when empty or still holding the value worked out earlier, and is shown green with Edit.
+  // Title follows the passport gender (Male: Mr, Female: Miss). It is only filled when empty or still holding the value worked out
+  // earlier, and is shown green with Edit. Country of birth is no longer copied from citizenship (owner, 2026-11-25): it is chosen
+  // in the country search, as in the wizard.
   useEffect(() => {
     const form = formRef.current;
     if (!form || readOnly) return;
     const wanted: Record<string, string> = {
       title: values.gender === "Male" ? "Mr" : values.gender === "Female" ? "Miss" : "",
-      birth_country: String(values.citizenship ?? "").trim(),
     };
     const updates: Record<string, string> = {};
     for (const [name, value] of Object.entries(wanted)) {
@@ -984,7 +985,7 @@ export default function ApplicationWorkspace({
     setDerivedFields((prev) => new Set([...prev, ...names]));
     window.requestAnimationFrame(() => computeProgress());
     scheduleSave(true);
-  }, [values.gender, values.citizenship, readOnly, computeProgress, scheduleSave]);
+  }, [values.gender, readOnly, computeProgress, scheduleSave]);
 
   /* -------------------------------------------------- academic choice */
 
@@ -1632,6 +1633,10 @@ export default function ApplicationWorkspace({
           <WorkspaceIntakeField formId={FORM_ID} courseField={COURSE_FIELD} disabled={locked} className={baseFieldClass}
             courseIdOf={(label) => { try { return resolveCourse(label).courseId || null; } catch { return null; } }}
             initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} initialJoinDate={String(mergedInitial.intake_join_date ?? "")} />
+        ) : field.name === "birth_country" ? (
+          <FormCountrySearch id={`${FORM_ID}-${field.name}`} name={field.name} defaultValue={String(mergedInitial.birth_country ?? "")} required={field.required} locked={locked}
+            className={`${baseFieldClass}${locked ? " bg-background-100 text-foreground-600" : ""}`}
+            onPicked={() => setUnlockedFields((prev) => (prev.has("birth_country") ? prev : new Set(prev).add("birth_country")))} />
         ) : field.name === "school_level" ? (
           <SchoolLevelField field={field} id={`${FORM_ID}-${field.name}`} locked={locked}
             choice={String(mergedInitial.highest_education ?? "")} schoolLevel={String(mergedInitial.school_level ?? "")} />

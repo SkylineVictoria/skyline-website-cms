@@ -5087,7 +5087,7 @@ test("Birth country from the passport (2026-11-25): Were you born in {issuing co
   assert.equal(lib.pickPassportCountry("Korea", [{ code: "6202", label: "Korea, Democratic People's Republic of (North)" }, { code: "6203", label: "Korea, Republic of (South)" }]), "", "unsure: the search field only");
   assert.equal(lib.pickPassportCountry("", [{ code: "7103", label: "India" }]), "");
   const field = read("src/pages/agency/components/BirthCountryField.tsx"), wizard = read("src/pages/agency/components/ApplicationWizard.tsx"), steps = read("src/pages/agency/components/WizardFinishSteps.tsx");
-  assert.ok(field.includes('supabase.rpc("avetmiss_code_search", { p_set: "country", p_query: query, p_limit: limit })'));
+  assert.ok(read("src/lib/countrySearch.ts").includes('supabase.rpc("avetmiss_code_search", { p_set: "country", p_query: query, p_limit: limit })'));
   assert.ok(field.includes('if (answer === "Yes") onChange("birth_country", label);') && field.includes('else if (value === label) onChange("birth_country", "");'), "Yes sets the label, No starts empty");
   assert.ok(field.includes("{!label || born === \"No\" ? ("), "the search shows on No, or without a passport country");
   assert.ok(!wizard.includes('fill("birth_country", next.citizenship'), "no longer copied from the citizenship");
@@ -5117,4 +5117,14 @@ test("Residency after the passport (2026-11-25): AU / NZ Domestic (no visa), PR 
   assert.ok(wizard.includes("if (skipStep(ALL_STEPS[next]) && next !== step)"), "the visa step is passed over when not needed");
   assert.ok(wizard.includes("Object.assign(values, { [PR_ANSWER]: pr, [IN_AUSTRALIA_ANSWER]: inAu });") && wizard.includes('holds_visa: "Yes", visa_subclass: field("visa_subclass")'));
   assert.ok(!wizard.includes("issuing_country:"), "issuing_country is saved as before (not written by the wizard)");
+});
+
+test("Full form country of birth (2026-11-25): the same AVETMISS country search as the wizard, in a hidden form input; no copy from citizenship", () => {
+  const form = read("src/pages/agency/components/ApplicationWorkspace.tsx"), search = read("src/components/shared/CountrySearch.tsx"), field = read("src/pages/agency/components/BirthCountryField.tsx");
+  assert.ok(form.includes('field.name === "birth_country" ? (') && form.includes("<FormCountrySearch id={`${FORM_ID}-${field.name}`} name={field.name}"));
+  assert.ok(!form.includes("birth_country: String(values.citizenship"), "no longer copied from citizenship");
+  assert.ok(search.includes('<input ref={hidden} type="text" hidden tabIndex={-1}') && !search.includes("hidden readOnly"), "required check stays on (readOnly would bar it)");
+  assert.ok(search.includes('input.addEventListener("change", sync)'), "values restored into the form show in the box");
+  assert.ok(field.includes('import CountrySearch from "@/components/shared/CountrySearch";'), "the wizard uses the same search");
+  assert.ok(read("src/lib/countrySearch.ts").includes('supabase.rpc("avetmiss_code_search", { p_set: "country"'));
 });

@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { coreUnits, ImportError, qualificationDetails, rtoScope, searchQualifications, selectedUnits } from "./tga.ts";
 import { addUnits, lookupUnit, syncCourse } from "./sync.ts";
+import { unitDetails } from "./units.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -34,6 +35,25 @@ Deno.serve(async req => {
   try {
     const { data: { user }, error: authError } = await caller.auth.getUser(authorization.slice(7));
     if (authError || !user) return json({ error: "Your session has expired. Sign in again." }, 401);
+    // ASM-BUILDER (2026-11-25): a unit's training.gov.au content for Assessments › Unit mapping (admins and RTO managers), cached
+    // per unit code in tga_unit_content; refresh = fetch it again. The assessment page merges it into the unit's elements itself.
+    const early = await req.clone().json().catch(() => null) as { action?: unknown; code?: unknown; refresh?: unknown } | null;
+    if (early?.action === "unit_content") {
+      stage = "unit_content";
+      const { data: allowed, error: allowError } = await caller.rpc("asm_is_admin");
+      if (allowError || allowed !== true) return json({ error: "Admin or RTO Manager access is required." }, 403);
+      const code = typeof early.code === "string" ? early.code.trim().toUpperCase() : "";
+      if (!/^[A-Z0-9]{4,20}$/.test(code)) return json({ error: "Enter a unit code." }, 400);
+      const store = createClient(url, service, { auth });
+      if (early.refresh !== true) {
+        const { data: cached } = await store.from("tga_unit_content").select("details,fetched_at").eq("code", code).maybeSingle();
+        if (cached) return json({ code, details: cached.details, fetchedAt: cached.fetched_at, cached: true });
+      }
+      const details = await unitDetails(code);
+      const fetchedAt = new Date().toISOString();
+      await store.from("tga_unit_content").upsert({ code, details, fetched_at: fetchedAt });
+      return json({ code, details, fetchedAt, cached: false });
+    }
     const { data: scope, error: scopeError } = await caller.rpc("rto_tga_import_scope");
     if (scopeError?.code === "42501") return json({ error: "RTO Manager access is required for this site." }, 403);
     if (scopeError || !scope) return json({ error: "Could not verify course import access." }, 503);

@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(391);
+select plan(405);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -792,6 +792,33 @@ select is((select array_agg(x) from public.rto_unit_requires('unit-asm-1') x), a
 select is((select count(*)::int from public.rto_unit_requires('unit-asm-2')), 0, 'PRE a unit without prerequisite text needs nothing');
 select public.intake_generate_schedule('f5000000-0000-0000-0000-000000000001', date '2026-01-05', null, null);
 select is((select unit_id from public.intake_units where intake_id = 'f5000000-0000-0000-0000-000000000001' order by sort limit 1), 'unit-asm-2', 'PRE the prerequisite unit is laid out first');
+
+-- ASM-BUILDER: AI mapping suggestions are ticks to confirm (who and when kept); training.gov.au content is the Edge Function's only
+select pg_temp.as_postgres();
+insert into public.asm_mapping_suggestions(assessment_id, question_id, element_id, confidence, reason, model)
+ values (pg_temp.v('assessment')::uuid, 'q_short', pg_temp.v('el_pc')::uuid, 0.8, 'Asks which PPE to select', 'mock'),
+        (pg_temp.v('assessment')::uuid, 'q_single', pg_temp.v('el_ke')::uuid, 0.4, 'Shares a word', 'mock');
+select pg_temp.put('sug1', (select id::text from public.asm_mapping_suggestions where assessment_id = pg_temp.v('assessment')::uuid and question_id = 'q_short'));
+select pg_temp.put('sug2', (select id::text from public.asm_mapping_suggestions where assessment_id = pg_temp.v('assessment')::uuid and question_id = 'q_single'));
+select throws_ok($$insert into public.tga_unit_content(code, details) values ('not a code', '{}')$$, '23514', null, 'MAP the training.gov.au cache is kept per unit code');
+select ok(pg_get_functiondef('public.asm_admin(text,jsonb)'::regprocedure) !~ 'delete from asm_tmp_(keep|scope);', 'MAP asm_admin empties its temp tables with a WHERE (the API refuses a bare DELETE)');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is(jsonb_array_length(public.asm_mapping_suggestions_list(pg_temp.v('assessment')::uuid)), 2, 'MAP an admin lists the suggestions of an assessment');
+select is(public.asm_mapping_suggestions_list(pg_temp.v('assessment')::uuid)->0->>'state', 'suggested', 'MAP a suggestion starts as a suggestion, never a mapping');
+select ok((select v->>'state' = 'confirmed' and v->>'decidedBy' is not null and v->>'decidedAt' is not null from jsonb_array_elements(public.asm_mapping_decide(array[pg_temp.v('sug1')::uuid], 'confirmed')) v where v->>'id' = pg_temp.s('sug1')), 'MAP confirming records who confirmed and when');
+select is(public.asm_mapping_decide(array[pg_temp.v('sug2')::uuid], 'dismissed')->1->>'state', 'dismissed', 'MAP a suggestion can be dismissed');
+select throws_ok($$select public.asm_mapping_decide(array[]::uuid[], 'maybe')$$, '22023', null, 'MAP an unknown decision is refused');
+select throws_ok($$select count(*) from public.tga_unit_content$$, '42501', null, 'MAP the training.gov.au cache is not read by users (the Edge Function serves it)');
+select pg_temp.as_postgres();
+select is((select decided_by::text from public.asm_mapping_suggestions where id = pg_temp.v('sug1')::uuid), 'a5000000-0000-0000-0000-000000000001', 'MAP the confirming admin is stored');
+select ok(not has_function_privilege('anon', 'public.asm_mapping_decide(uuid[],text)', 'execute') and not has_function_privilege('anon', 'public.asm_mapping_suggestions_list(uuid)', 'execute'), 'MAP anonymous callers cannot list or decide');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select throws_ok(format($$select public.asm_mapping_suggestions_list('%s')$$, pg_temp.v('assessment')), '42501', null, 'MAP a student cannot list suggestions');
+select throws_ok(format($$select public.asm_mapping_decide(array['%s']::uuid[], 'confirmed')$$, pg_temp.v('sug2')), '42501', null, 'MAP a student cannot confirm a suggestion');
+select throws_ok($$select count(*) from public.asm_mapping_suggestions$$, '42501', null, 'MAP a student reads no suggestion rows');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select throws_ok(format($$select public.asm_mapping_suggestions_list('%s')$$, pg_temp.v('assessment')), '42501', null, 'MAP a trainer cannot list suggestions');
+select pg_temp.as_postgres();
 
 select * from finish();
 rollback;

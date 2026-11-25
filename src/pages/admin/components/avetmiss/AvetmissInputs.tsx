@@ -5,17 +5,21 @@ import { type PriorEducationRow } from "./avetmissValues";
 /** AVETMISS-UI (2026-11-25): the disability types and prior education inputs (values in ./avetmissValues). */
 const BOX = "w-full rounded-md border border-background-300 bg-background-50 px-2.5 py-1.5 text-sm text-foreground-900 focus:border-primary-500 focus:outline-none";
 
-export function DisabilityTypesInput({ codes, value, onChange, idPrefix = "avetmiss-disability" }: {
-  codes: AvetmissCodes; value: string[]; onChange: (next: string[]) => void; idPrefix?: string;
+// rule-policy: technical display-control The application omits the reporting-only unspecified option.
+export function DisabilityTypesInput({ codes, value, onChange, idPrefix = "avetmiss-disability", allowUnspecified = true }: {
+  codes: AvetmissCodes; value: string[]; onChange: (next: string[]) => void; idPrefix?: string; allowUnspecified?: boolean;
 }) {
-  const options = avetmissOptions(codes, "disability_type");
+  // NCVER's unspecified type is recorded for an empty selection on submission.
+  // rule-policy: regulatory ncver-disability-type NCVER defines 99 for unspecified type. https://www.ncver.edu.au/rto-hub/statistical-standard-software/avetmiss-data-element-definitions-edition-2.3
+  const options = avetmissOptions(codes, "disability_type").filter(({ code }) => allowUnspecified || code !== "99");
+  const selected = allowUnspecified ? value : value.filter((code) => code !== "99");
   if (!options.length) return <p className="text-xs text-foreground-500">Loading the disability types…</p>;
   return (
     <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2" data-testid="avetmiss-disability-types">
       {options.map((o) => (
         <label key={o.code} htmlFor={`${idPrefix}-${o.code}`} className="flex items-start gap-2 text-sm text-foreground-800">
-          <input id={`${idPrefix}-${o.code}`} type="checkbox" className="mt-0.5 h-4 w-4 accent-primary-500" checked={value.includes(o.code)}
-            onChange={(e) => onChange(e.target.checked ? [...value, o.code] : value.filter((c) => c !== o.code))} />
+          <input id={`${idPrefix}-${o.code}`} type="checkbox" className="mt-0.5 h-4 w-4 accent-primary-500" checked={selected.includes(o.code)}
+            onChange={(e) => onChange(e.target.checked ? [...selected, o.code] : selected.filter((c) => c !== o.code))} />
           <span>{o.label}</span>
         </label>
       ))}
@@ -33,8 +37,8 @@ export function PriorEducationInput({ codes, rows, onChange }: { codes: Avetmiss
             <option value="">Level</option>
             {avetmissOptions(codes, "prior_education", row.code).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
           </select>
-          <select aria-label="Where it was completed" className={BOX} value={row.recognition} onChange={(e) => set(i, { recognition: e.target.value })}>
-            <option value="">Completed in</option>
+          <select aria-label="Qualification recognition" className={BOX} value={row.recognition} onChange={(e) => set(i, { recognition: e.target.value })}>
+            <option value="">Recognition</option>
             {avetmissOptions(codes, "prior_education_recognition", row.recognition).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
           </select>
           <input aria-label="Qualification name" className={BOX} maxLength={200} placeholder="Qualification name (optional)" value={row.name} onChange={(e) => set(i, { name: e.target.value })} />

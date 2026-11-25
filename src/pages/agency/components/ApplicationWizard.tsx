@@ -21,14 +21,14 @@ import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { AVETMISS_EXTRA_FIELDS, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
-import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
+import { useAvetmissCodes, activeAvetmissCode } from "@/lib/avetmissCodes";
 import { addressProblems, emailProblem } from "../../../../supabase/functions/_shared/validation/person";
 import { validateStoredPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 import type { AddressPick } from "@/components/shared/wizard/AddressSearch";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
-import { OTHER_LANGUAGE, WIZARD_QUESTIONS, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { ENGLISH_ONLY_CODE, OTHER_LANGUAGE, WIZARD_QUESTIONS, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
 import {
@@ -242,7 +242,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // WIZARD-FULL: answers typed on the new screens are never replaced by values read later from the draft.
   const touchedRef = useRef(new Set<string>());
   /** AVETMISS-UI: the application's student, for copying the AVETMISS answers to the student's tables. */
-  const studentIdRef = useRef<string | null>(null);
+  const { codes } = useAvetmissCodes();
   const [submittedRef, setSubmittedRef] = useState("");
   // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
   const [hydrated, setHydrated] = useState(0);
@@ -330,8 +330,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           if (saved.studyChoice) { setEnglishAlt(true); setAusStudy(saved.studyChoice); }
           if (saved.cambridgeChoice) setCambridge(saved.cambridgeChoice);
           setAnswers({
-            // "Yes, another language" is selected unless an answer was already given.
-            language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), usi_number: pick("usi_number"),
+            language_home: pick("language_home"), language_other: pick("language_other"), usi_number: pick("usi_number"),
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
             course: saved.courseChoice ?? courses[0] ?? "", preferred_intake: saved.intakeLabel ?? pick("preferred_intake"),
             // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
@@ -697,8 +696,17 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const staffCourseOf = (label: string) => staffCourses?.find((c) => staffCourseLabel(c) === label) ?? null;
   const setAnswer = (name: string, value: string) => {
     touchedRef.current.add(name);
-    // A new course clears the intake: intakes belong to one course.
-    setAnswers((prev) => ({ ...prev, [name]: value, ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
+    // Clear answers that no longer apply when their controlling answer changes.
+    const cleared: Record<string, string> = {};
+    if (name === "disability" && value !== "Yes") cleared.disability_types = "";
+    if (name === "prior_ed" && value !== "Yes") cleared.prior_education = "";
+    if (name === "language_home" && value !== OTHER_LANGUAGE) {
+      cleared.language_other = "";
+      cleared.english_proficiency_code = "";
+    }
+    Object.keys(cleared).forEach((field) => touchedRef.current.add(field));
+    setAnswers((prev) => ({ ...prev, [name]: value, ...cleared,
+      ...(name === "course" && value !== prev.course ? { intake_id: "", preferred_intake: "", intake_join_date: "" } : {}) }));
     if (name === "course") {
       setIntakeList(null);
       Object.assign(pendingWizard.current, { courseChoice: value, intakeChoice: "", intakeLabel: "", intakeJoin: "" });
@@ -706,7 +714,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     } else if (name !== "mobile" && name !== "ec_phone" || !value || !validateStoredPhone(value)) {
       const declaration = ["declaration_read", "consent_confirmed", "consent_authorised"];
       if (!declaration.includes(name) && (name !== "email" || (!emailProblem(value) && role !== "student"))) {
-        pendingValues.current[name] = value;
+        Object.assign(pendingValues.current, cleared, { [name]: value });
         if (name === "email") pendingValues.current.confirm_email = value;
         markDirty();
       }
@@ -755,7 +763,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (!application) return;
     const values = (application.data.values ?? {}) as Record<string, unknown>;
     const stored = (name: string) => (typeof values[name] === "string" ? String(values[name]).trim() : Array.isArray(values[name]) && (values[name] as unknown[]).length ? "Yes" : "");
-    const hasAcademic = documentsRef.current.some((doc) => doc.category === "Academic");
     setAnswers((prev) => {
       const next = { ...prev };
       const fill = (name: string, value: string) => { if (!touchedRef.current.has(name)) next[name] = value; };
@@ -763,7 +770,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // AVETMISS-UI: the extra AVETMISS answers are strings (codes, a comma list, JSON rows).
       for (const name of AVETMISS_EXTRA_FIELDS) fill(name, typeof values[name] === "string" ? String(values[name]) : "");
       if (!next.language_home && typeof values.language_home === "string") next.language_home = String(values.language_home);
-      studentIdRef.current = application.studentId;
       // Nothing typed twice: what the student record already has (the name and email given when the student was added)
       // fills the boxes the passport did not.
       const fullName = application.studentName.trim().replace(/\s+/g, " ");
@@ -777,15 +783,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (!next.confirm_email && next.email) fill("confirm_email", next.email);
       const gender = next.gender ?? "";
       if (!next.title) fill("title", gender === "Male" ? "Mr" : gender === "Female" ? "Miss" : "");
-      if (!next.citizenship) fill("citizenship", next.nationality ?? "");
-
       if (!next.au_country) fill("au_country", "Australia");
-
-
-
-
-      if (!next.prior_ed && hasAcademic) fill("prior_ed", "Yes");
-      if (!next.study_reason) fill("study_reason", "For personal interest or self-development - 09");
       if (!next.rpl) fill("rpl", "No");
       if (!next.oshc_require) fill("oshc_require", "No");
       if (!next.hear_about) fill("hear_about", role === "student" ? "" : "Agent");
@@ -811,9 +809,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     const filled = (name: string) => String(answers[name] ?? "").trim();
     if (target.id === "language") {
       if (!filled("language_home")) errors.language_home = "Choose Yes or No.";
-      else if (answers.language_home === OTHER_LANGUAGE && !filled("language_other")) errors.language_other = "Enter the language the student speaks.";
+      else if (answers.language_home === OTHER_LANGUAGE && (!activeAvetmissCode(codes, "language", filled("language_other")) || activeAvetmissCode(codes, "language", filled("language_other")) === ENGLISH_ONLY_CODE)) {
+        errors.language_other = "Choose the language from the reporting list.";
+      }
       values.language_home = answers.language_home;
-      values.language_other = answers.language_home === OTHER_LANGUAGE ? filled("language_other") : "";
+      values.language_other = answers.language_home === OTHER_LANGUAGE ? activeAvetmissCode(codes, "language", filled("language_other")) ?? "" : "";
     } else if (target.id === "usi") {
       const usi = normalizeUsi(answers.usi_number ?? "");
       // Business Rules admissions.usi_required: Required (today) needs a USI here; Optional lets it stay blank ("No USI yet").
@@ -846,7 +846,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (emailIssue) errors.email = emailIssue;
       oneOf("nationality", "Choose the nationality.");
       oneOf("citizenship", "Choose the country of citizenship.");
-      oneOf("birth_country", "Choose the country of birth.");
+      if (!activeAvetmissCode(codes, "country", filled("birth_country"))) {
+        errors.birth_country = "Choose the country of birth from the reporting list.";
+      }
       if (!filled("passport_number")) errors.passport_number = "Enter the passport number.";
       if (!validDate(filled("passport_expiry"))) errors.passport_expiry = "Enter the passport expiry date.";
       for (const name of FINISH_SCREEN_FIELDS.personal) values[name] = filled(name);
@@ -870,16 +872,27 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         values[name] = filled(name);
       }
       // AVETMISS-UI: English proficiency when another language is spoken at home, disability types, prior qualifications.
-      const otherLanguage = String(answers.language_home ?? "") === OTHER_LANGUAGE;
-      if (otherLanguage && !filled("english_proficiency_code")) errors.english_proficiency_code = "Choose how well the student speaks English.";
+      const otherLanguage = filled("language_home") === OTHER_LANGUAGE;
+      const types = parseCodeList(filled("disability_types"));
+      if (filled("disability") === "Yes" && types.some((code) => !activeAvetmissCode(codes, "disability_type", code))) {
+        errors.disability_types = "Choose current disability categories.";
+      }
+      if (otherLanguage && filled("english_proficiency_code") && !activeAvetmissCode(codes, "english_proficiency", filled("english_proficiency_code"))) errors.english_proficiency_code = "Choose how well the student speaks English.";
 
       const priorRows = parsePriorEducation(filled("prior_education")).filter((r) => r.code || r.recognition || r.name.trim());
-      if (filled("prior_ed") === "Yes" && priorEducationProblem(priorRows)) errors.prior_education = priorEducationProblem(priorRows);
+      if (filled("prior_ed") === "Yes") {
+        errors.prior_education = priorEducationProblem(priorRows);
+        if (!errors.prior_education && priorRows.some(({ code, recognition }) =>
+          !activeAvetmissCode(codes, "prior_education", code) || !activeAvetmissCode(codes, "prior_education_recognition", recognition))) {
+          errors.prior_education = "Choose current qualification categories and recognition.";
+        }
+      }
       values.english_proficiency_code = otherLanguage ? filled("english_proficiency_code") : "";
       values.disability_types = filled("disability") === "Yes" ? filled("disability_types") : "";
       values.prior_education = filled("prior_ed") === "Yes" ? JSON.stringify(priorRows) : "";
     } else if (target.id === "study") {
-      for (const [name, message] of [["study_reason", "Choose the main reason."], ["rpl", "Choose Yes or No."], ["oshc_require", "Choose an answer."], ["hear_about", "Choose how the student heard about SLIT."]] as const) {
+      if (!activeAvetmissCode(codes, "study_reason", filled("study_reason"))) errors.study_reason = "Choose the main reason from the reporting list.";
+      for (const [name, message] of [["rpl", "Choose Yes or No."], ["oshc_require", "Choose an answer."], ["hear_about", "Choose how the student heard about SLIT."]] as const) {
         if (!optionsOf(name).includes(filled(name))) errors[name] = message;
       }
       if (filled("oshc_require") === "No" && filled("oshc_self_confirm") !== "Yes") errors.oshc_self_confirm = "Confirm the student will arrange their own health cover.";
@@ -952,8 +965,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       await flushApplicationEdits(applicationId);
       if (!(await persist())) return false;
       await saveWizardDraft(applicationId, { values, ...patch });
-      // AVETMISS-UI: copied to the student's AVETMISS tables when this user may write them (best effort; an agent's stays pending).
-      if (target.id === "identifier" && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
       return true;
     } catch (error) {
       setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");

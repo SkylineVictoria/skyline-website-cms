@@ -127,7 +127,9 @@ if (USI_QUESTION) Object.defineProperty(USI_QUESTION, "subtitle", {
   get: () => `${usiRequired() ? "Required" : "Optional"}. The student's 10-character USI from usi.gov.au.`, enumerable: true, configurable: true,
 });
 
-export const ENGLISH_ONLY = "No, English only - 1201";
+// NCVER Data Element Definitions 2.3, Language identifier (ASCL): English, 1201.
+export const ENGLISH_ONLY_CODE = "1201";
+export const ENGLISH_ONLY = `No, English only - ${ENGLISH_ONLY_CODE}`;
 export const OTHER_LANGUAGE = "Yes, language other than English";
 
 /** Set when the wizard finishes: the full form then opens on its Student declaration page. */

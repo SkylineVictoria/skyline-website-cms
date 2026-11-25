@@ -16,11 +16,7 @@ export const FINISH_SCREEN_FIELDS: Record<string, string[]> = {
   declare: ["mobile", "declaration_name", "digital_signature", "declaration_date", "checklist"],
 };
 
-/**
- * AVETMISS-UI (2026-11-25): extra answers of the "About the student" screen, kept as strings in the application values and copied
- * to the student's AVETMISS tables when the user may write them (english_proficiency_code: one code; disability_types: codes
- * separated by commas; prior_education: JSON rows { code, recognition, name }). Not in FINISH_SCREEN_FIELDS (not form options).
- */
+/** Reporting details stored as draft answers and applied on submission. */
 export const AVETMISS_EXTRA_FIELDS = ["english_proficiency_code", "disability_types", "prior_education"] as const;
 
 export interface FinishSummary {

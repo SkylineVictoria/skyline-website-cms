@@ -7,7 +7,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
  * its label. Loaded once per page load (one small table, readable by everyone).
  */
 export type AvetmissCodeSet =
-  | "commencing" | "disability_type" | "english_proficiency" | "flag" | "funding_source" | "indigenous_status" | "labour_force" | "org_type"
+  | "country" | "language" | "commencing" | "disability_type" | "english_proficiency" | "flag" | "funding_source" | "indigenous_status" | "labour_force" | "org_type"
   | "outcome" | "predominant_delivery_mode" | "prior_education" | "prior_education_recognition" | "school_level" | "sex" | "state" | "study_reason";
 
 export interface AvetmissCode { code_set: string; code: string; label: string; sort: number; is_active: boolean }
@@ -17,12 +17,19 @@ let cache: Promise<AvetmissCodes> | null = null;
 
 export function loadAvetmissCodes(): Promise<AvetmissCodes> {
   cache ??= (async () => {
-    const { data, error } = await supabase.from("avetmiss_codes").select("code_set, code, label, sort, is_active").order("code_set").order("sort").order("code");
-    if (error) { cache = null; throw new Error(error.message); }
     const sets: AvetmissCodes = {};
-    for (const row of (data ?? []) as AvetmissCode[]) (sets[row.code_set] ??= []).push(row);
+    const pageSize = 200;
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await supabase.from("avetmiss_codes")
+        .select("code_set, code, label, sort, is_active")
+        .order("code_set").order("sort").order("code").range(offset, offset + pageSize - 1);
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as AvetmissCode[];
+      for (const row of rows) (sets[row.code_set] ??= []).push(row);
+      if (rows.length < pageSize) break;
+    }
     return sets;
-  })();
+  })().catch((error: unknown) => { cache = null; throw error; });
   return cache;
 }
 
@@ -45,4 +52,10 @@ export function avetmissLabel(codes: AvetmissCodes, set: AvetmissCodeSet, code?:
   if (!code) return "";
   const hit = (codes[set] ?? []).find((c) => c.code === code);
   return hit ? hit.label : code;
+}
+
+/** Resolves current codes and the labels saved by older application drafts. */
+export function activeAvetmissCode(codes: AvetmissCodes, set: AvetmissCodeSet, value: string): string | undefined {
+  const answer = value.trim().toLowerCase();
+  return codes[set]?.find((row) => row.is_active && (row.code.toLowerCase() === answer || row.label.toLowerCase() === answer))?.code;
 }

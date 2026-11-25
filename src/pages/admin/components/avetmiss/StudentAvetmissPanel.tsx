@@ -36,9 +36,9 @@ const FIELDS: Array<{ column: keyof Student; label: string; set?: AvetmissCodeSe
   { column: "school_level_code", label: "Highest school level completed", set: "school_level" },
   { column: "school_level_year", label: "Year school level completed", pattern: /^\d{4}$/, hint: "4 digits, e.g. 2018" },
   { column: "at_school_flag", label: "Still at school", set: "flag" },
-  { column: "home_language_code", label: "Language spoken at home (ASCL code)", pattern: /^\d{4}$/, hint: "4 digits, 1201 = English only" },
-  { column: "english_proficiency_code", label: "English proficiency", set: "english_proficiency", when: (s) => Boolean(s.home_language_code) && s.home_language_code !== ENGLISH_ONLY },
-  { column: "birth_country_code", label: "Country of birth (SACC code)", pattern: /^(\d{4}|@@@@)$/, hint: "4 digits, e.g. 1101 = Australia" },
+  { column: "home_language_code", label: "Language spoken at home", set: "language" },
+  { column: "english_proficiency_code", label: "English proficiency (optional admissions field)", set: "english_proficiency", when: (s) => Boolean(s.home_language_code) && s.home_language_code !== ENGLISH_ONLY },
+  { column: "birth_country_code", label: "Country of birth", set: "country" },
   { column: "disability_flag", label: "Disability", set: "flag" },
   { column: "prior_education_flag", label: "Prior educational achievement", set: "flag" },
 ];
@@ -69,7 +69,8 @@ export default function StudentAvetmissPanel({ studentId }: { studentId: string 
       supabase.from("student_disabilities").select("disability_type_code").eq("student_id", studentId),
       supabase.from("student_prior_education").select("prior_education_code, recognition_code, qualification_name").eq("student_id", studentId).order("created_at"),
       supabase.from("intake_enrolments").select("id, status, study_reason_code, funding_source_code, intake:course_intakes(name, label, start_date, course:cms_courses(code, name))").eq("student_id", studentId),
-      supabase.from("enrollment_applications").select("id, reference, data").eq("student_id", studentId).order("updated_at", { ascending: false }).limit(1),
+      // rule-policy: technical submitted-application-source Select the latest submitted disclosure for reporting.
+      supabase.from("enrollment_applications").select("id, reference, data").eq("student_id", studentId).not("submitted_at", "is", null).order("submitted_at", { ascending: false }).limit(1),
     ]);
     const failed = [s, d, p, e, a].find((r) => r.error);
     if (failed?.error) { setError(failed.error.message); return; }
@@ -125,7 +126,7 @@ export default function StudentAvetmissPanel({ studentId }: { studentId: string 
   const pendingEnglish = app ? String(app.values.english_proficiency_code ?? "") : "";
   const pendingTypes = app ? parseCodeList(app.values.disability_types) : [];
   const pendingPrior = app ? parsePriorEducation(app.values.prior_education) : [];
-  const missingCount = shown.filter((f) => !student[f.column]).length
+  const missingCount = shown.filter((f) => f.column !== "english_proficiency_code" && !student[f.column]).length
     + (student.disability_flag === "Y" && !disabilities.length ? 1 : 0) + (student.prior_education_flag === "Y" && !prior.length ? 1 : 0)
     + enrolments.filter((e) => !e.study_reason_code).length + (usi?.usi || app?.values.usi_number ? 0 : 1);
 

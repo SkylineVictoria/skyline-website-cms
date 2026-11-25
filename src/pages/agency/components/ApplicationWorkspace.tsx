@@ -45,7 +45,7 @@ import ApplicationAttachmentField from "@/pages/agency/components/ApplicationAtt
 import SchoolLevelField from "@/pages/agency/components/SchoolLevelField";
 import WorkspaceIntakeField from "@/pages/agency/components/WorkspaceIntakeField";
 import { baseFieldClass } from "@/components/feature/applicationFieldHelpers";
-import { DEGREE_LEVELS, schoolLevelFor } from "@/pages/agency/lib/educationLevels";
+import { DEGREE_LEVELS } from "@/pages/agency/lib/educationLevels";
 import { PortalError } from "@/pages/agency/components/PortalUI";
 import StepShell, { FooterMessage } from "@/components/shared/application-form/StepShell";
 import type { NavStage, StepState } from "@/components/shared/application-form/StepDrawer";
@@ -57,6 +57,7 @@ import SegmentedControl from "@/components/shared/application-form/SegmentedCont
 import Toast from "@/components/shared/application-form/Toast";
 import { useToast } from "@/components/shared/application-form/useToast";
 import { stepTitle } from "@/components/shared/application-form/stepTitle";
+import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 import { usiRequired } from "@/pages/agency/lib/admissionsRules";
 
 /** "AUR40226 - Certificate IV ... (36 weeks)" -> "AUR40226". */
@@ -76,22 +77,14 @@ const VISA_CATEGORY = "Visa";
 const VISA_DETAIL_FIELDS = ["visa_subclass", "visa_grant_date", "visa_stay_until", "visa_grant_number"] as const;
 const VISA_UPLOAD_FIELD: AppField = { name: "visa_upload", label: "Visa grant notice or VEVO record", type: "file" };
 const ENGLISH_CATEGORY = "English Test";
-// Student identifier answers that start with a default when empty (shown pre-filled, green, with Edit).
-const IDENTIFIER_DEFAULTS: Record<string, string> = {
-  atsi: "No",
-  disability: "No",
-  employment: "Unemployed - Seeking Part-Time Work - 07",
-  language_home: "Yes, language other than English",
-};
 // Later-page answers that start with a default when empty (plain, editable).
 const FORM_DEFAULTS: Record<string, string | string[]> = {
-  study_reason: "For personal interest or self-development - 09",
   rpl: "No",
   oshc_require: "No",
   oshc_self_confirm: ["I understand I must arrange and maintain my own Overseas Student Health Cover for the full duration of my student visa and provide proof when requested."],
   hear_about: "Agent",
 };
-const PREFILL_LOCK_FIELDS = ["atsi", "employment", "language_home", "disability", "usi_consent"];
+const PREFILL_LOCK_FIELDS = ["usi_consent"];
 const EDUCATION_FIELDS = ["secondary_enrolled", "highest_education", "school_level", "prior_ed"] as const;
 
 /**
@@ -106,25 +99,6 @@ function KeptValue({ name, value }: { name: string; value: string }) {
   return <input ref={ref} type="hidden" name={name} />;
 }
 
-/** Highest university level a qualification shows (PhD, Master's, Bachelor's); "" when it shows none. */
-function degreeOf(text: string): string {
-  const t = ` ${text.toLowerCase()} `;
-  if (/(\bph\.?\s?d\b|doctor)/.test(t)) return "Doctorate (PhD)";
-  if (/(master|\bmba\b|\bm\.\s?(e|tech|sc|com|a|phil)\b|\bm(tech|sc|com|phil)\b)/.test(t)) return "Master's degree";
-  if (/(bachelor|degree|engineering|university|\bb\.\s?(e|tech|sc|com|a|ba|ca|pharm|arch)\b|\bb(tech|sc|com|ba|ca|pharm|arch)\b)/.test(t)) return "Bachelor's degree";
-  return "";
-}
-
-/** Best reading of the highest school level a qualification shows; "" when it says nothing about school. */
-function schoolLevelOf(text: string): string {
-  const t = ` ${text.toLowerCase()} `;
-  // Any university degree (bachelor's, master's, doctorate) means school was completed to Year 12.
-  if (/(bachelor|degree|diploma|master|graduate|university|engineering|\bb\.?\s?(e|tech|sc|com|a|ba|ca|pharm|arch)\b|\bm\.?\s?(e|tech|sc|com|a|ba|ca|phil)\b|\bph\.?\s?d\b|doctor|year\s*12|\bxii\b|\b12th\b|higher secondary|senior secondary|\bhsc\b|intermediate|a[ -]level|class 12|grade 12)/.test(t)) return "Year 12 or equivalent - 12";
-  if (/(year\s*11|\bxi\b|\b11th\b|class 11|grade 11)/.test(t)) return "Year 11 or equivalent - 11";
-  if (/(year\s*10|\bx\b|\b10th\b|\bssc\b|secondary school certificate|matric|o[ -]level|class 10|grade 10)/.test(t)) return "Year 10 or equivalent - 10";
-  return "";
-}
-const SCHOOL_RANK = ["Year 10 or equivalent - 10", "Year 11 or equivalent - 11", "Year 12 or equivalent - 12"];
 const ACADEMIC_CATEGORY = "Academic";
 const ACADEMIC_RECORD_FIELDS = ["academic_institution", "academic_qualification", "academic_year"] as const;
 const ACADEMIC_FIELDS: readonly string[] = [...EDUCATION_FIELDS, ...ACADEMIC_RECORD_FIELDS];
@@ -235,7 +209,18 @@ export default function ApplicationWorkspace({
     return courseChoices ? saved.filter(label => !courseChoices.some(c => c.label === label || c.row.code.toUpperCase() === courseCodeOf(label))) : [];
   }, [application.data, courseChoices]);
   const courseLabels = useMemo(() => courseChoices ? [...courseChoices.map(c => c.label), ...legacyCourses] : [], [courseChoices, legacyCourses]);
-  const sections = useMemo(() => portalSections.map(section => ({ ...section, fields: section.fields.map(field => field.name === COURSE_FIELD ? { ...field, options: courseLabels } : field) })), [courseLabels]);
+  const { codes: avetmissCodes } = useAvetmissCodes();
+  const sections = useMemo(() => portalSections.map((section) => ({
+    ...section,
+    fields: section.fields.map((field) => {
+      if (field.name === COURSE_FIELD) return { ...field, options: courseLabels };
+      const set = field.name === "birth_country" ? "country" : field.name === "study_reason" ? "study_reason" : null;
+      if (!set || !avetmissCodes[set]?.length) return field;
+      const labels = avetmissOptions(avetmissCodes, set).map((option) => option.label);
+      const saved = String((application.data.values as Record<string, unknown> | undefined)?.[field.name] ?? "").trim();
+      return { ...field, options: saved && !labels.includes(saved) ? [saved, ...labels] : labels };
+    }),
+  })), [application.data.values, avetmissCodes, courseLabels]);
   const resolveCourse = useCallback((label: string): ApplicationCourseRow => {
     // The staff form saves "CODE - Name (duration)", this page lists "CODE - Name": match on the course code when the text differs.
     const code = courseCodeOf(label);
@@ -293,7 +278,6 @@ export default function ApplicationWorkspace({
     // The student's address is always an Australian one (fixed and greyed out on the form).
     Object.assign(out, fixedValues());
     if (!Array.isArray(out.usi_consent) || !out.usi_consent.length) out.usi_consent = [USI_CONSENT_TEXT];
-    for (const [name, value] of Object.entries(IDENTIFIER_DEFAULTS)) if (!String(out[name] ?? "").trim()) out[name] = value;
     for (const [name, value] of Object.entries(FORM_DEFAULTS)) if (!String(out[name] ?? "").trim()) out[name] = value;
     out.checklist = sections.flatMap((section) => section.fields).find((field) => field.name === "checklist")?.options ?? [];
     return out;
@@ -918,54 +902,12 @@ export default function ApplicationWorkspace({
     if (values.holds_visa !== answer || kept !== answer) setHoldsVisa(answer);
   }, [readOnly, visaShown, visaMode, values.holds_visa, setHoldsVisa]);
 
-  /* ------------------------------------------------- education answers */
-
-  useEffect(() => {
-    const form = formRef.current;
-    if (!form || !attachmentsLoaded || readOnly) return;
-    const attached = new Set(attachments.map((document) => document.id));
-    const fromDocuments = qualifications.filter((item) => item.documentIds.some((id) => attached.has(id)));
-    if (!fromDocuments.length) return;
-    let level = "";
-    let degree = "";
-    for (const item of fromDocuments) {
-      const text = `${item.qualification} ${item.program}`;
-      const found = schoolLevelOf(text);
-      if (found && SCHOOL_RANK.indexOf(found) >= SCHOOL_RANK.indexOf(level)) level = found;
-      const foundDegree = degreeOf(text);
-      // DEGREE_LEVELS runs highest first.
-      if (foundDegree && (!degree || DEGREE_LEVELS.indexOf(foundDegree) < DEGREE_LEVELS.indexOf(degree))) degree = foundDegree;
-    }
-    const answers: Record<string, string> = { prior_ed: "Yes", secondary_enrolled: "No", school_level: level || (degree ? schoolLevelFor(degree) : ""), highest_education: degree || level };
-    const updates: Record<string, string> = {};
-    for (const name of EDUCATION_FIELDS) {
-      const value = answers[name];
-      if (!value) continue;
-      const controls = Array.from(form.querySelectorAll<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`));
-      let current = controls.some((control) => (control instanceof HTMLInputElement && control.type === "radio" ? control.checked : control.value.trim() !== ""));
-      // A degree read from the documents replaces a plain school level shown before degrees could be chosen.
-      if (name === "highest_education" && degree && !controls.some((control) => DEGREE_LEVELS.includes(control.value)) && !unlockedFieldsRef.current.has("school_level")) current = false;
-      if (!current) updates[name] = value;
-    }
-    const names = Object.keys(updates);
-    if (!names.length) return;
-    applyFormValues(form, updates);
-    // The dropdown shown is the school-level field, so it carries the "From document" mark.
-    setDerivedFields((prev) => new Set([...prev, ...names, ...(names.includes("highest_education") ? ["school_level"] : [])]));
-    window.requestAnimationFrame(() => computeProgress());
-    scheduleSave(true);
-  }, [attachments, attachmentsLoaded, qualifications, readOnly, computeProgress, scheduleSave]);
-
-  /* ------------------------------------------ passport-derived answers */
-
-  // Title follows the passport gender (Male: Mr, Female: Miss) and country of birth follows citizenship. Each is only
-  // filled when empty or still holding the value worked out earlier, and is shown green with Edit.
+  // Offer a title from the passport details while leaving country of birth for the applicant.
   useEffect(() => {
     const form = formRef.current;
     if (!form || readOnly) return;
     const wanted: Record<string, string> = {
       title: values.gender === "Male" ? "Mr" : values.gender === "Female" ? "Miss" : "",
-      birth_country: String(values.citizenship ?? "").trim(),
     };
     const updates: Record<string, string> = {};
     for (const [name, value] of Object.entries(wanted)) {
@@ -983,7 +925,7 @@ export default function ApplicationWorkspace({
     setDerivedFields((prev) => new Set([...prev, ...names]));
     window.requestAnimationFrame(() => computeProgress());
     scheduleSave(true);
-  }, [values.gender, values.citizenship, readOnly, computeProgress, scheduleSave]);
+  }, [values.gender, readOnly, computeProgress, scheduleSave]);
 
   /* -------------------------------------------------- academic choice */
 

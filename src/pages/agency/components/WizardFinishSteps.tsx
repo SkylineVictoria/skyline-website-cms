@@ -7,7 +7,7 @@ import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel a
 import { DECLARATION_TERMS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import SearchableSelect from "@/components/ui/SearchableSelect";
-import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
+import { activeAvetmissCode, avetmissOptions, useAvetmissCodes, type AvetmissCodeSet } from "@/lib/avetmissCodes";
 import { OTHER_LANGUAGE } from "@/pages/agency/lib/wizardConfig";
 import { DisabilityTypesInput, PriorEducationInput } from "@/pages/admin/components/avetmiss/AvetmissInputs";
 import { parseCodeList, parsePriorEducation, serializeCodeList, serializePriorEducation } from "@/pages/admin/components/avetmiss/avetmissValues";
@@ -40,7 +40,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   version?: number;
 }) {
   const v = (name: string) => answers[name] ?? "";
-  const { codes } = useAvetmissCodes();
+  const { codes, error: codesError } = useAvetmissCodes();
   // One page, one time (owner, 2026-11-23): what the passport (or the student record) already filled was shown on the document
   // step, so Personal details asks only for what is still missing and does not show the rest again.
   const [prefilled, setPrefilled] = useState<Set<string>>(new Set());
@@ -54,16 +54,23 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={v(name)} error={errors[name]} required={props.required ?? true} maxLength={props.maxLength ?? 200}
       placeholder={props.placeholder} upper={props.upper} type={props.type} onChange={(value) => onChange(name, value)} />
   );
-  const select = (name: string, label: string, options: string[] = optionsOf(name), required = true) => (
+  // rule-policy: technical application-select Render existing required field metadata.
+  const select = (name: string, label: string, options: string[] = optionsOf(name), required = true, selected = v(name)) => (
     <div>
       <Label htmlFor={`wizard-${name}`} required={required}>{label}</Label>
-      <SearchableSelect id={`wizard-${name}`} name={name} value={v(name)} aria-invalid={Boolean(errors[name])} className={INPUT} onChange={(e) => onChange(name, e.target.value)}>
+      <SearchableSelect id={`wizard-${name}`} name={name} value={selected} aria-invalid={Boolean(errors[name])} className={INPUT} onChange={(e) => onChange(name, e.target.value)}>
         <option value="">Select</option>
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
       </SearchableSelect>
       <FieldError text={errors[name]} />
     </div>
   );
+  const governmentSelect = (name: string, label: string, codeSet: AvetmissCodeSet) => {
+    const options = avetmissOptions(codes, codeSet);
+    const current = options.find((option) => option.code === activeAvetmissCode(codes, codeSet, v(name)));
+    // rule-policy: technical existing-field-schema Render existing mandatory fields using their current reference options.
+    return select(name, label, options.map((option) => option.label), true, current?.label ?? "");
+  };
   const radios = (name: string, label: string, options: string[] = optionsOf(name)) => (
     <fieldset>
       <legend className={LABEL}>{label} <span className="text-primary-600">*</span></legend>
@@ -92,14 +99,12 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
         <p className="mt-1 text-sm text-foreground-600">{question.subtitle}</p>
       </div>
 
+      {codesError && ["personal", "identifier", "study"].includes(question.id) ? (
+        <p role="alert">The AVETMISS reference lists could not be loaded. Reopen the wizard to retry.</p>
+      ) : null}
+
       {question.id === "personal" ? (
         <div className="space-y-4">
-          {/* Only what is missing is asked; what the passport and the student record filled is not shown again. */}
-          {PERSONAL_FIELDS.every((name) => !ask(name) || name === "middle_name" || name === "place_of_birth") ? (
-            <p className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm text-emerald-900" data-testid="wizard-personal-done">
-              <i className="ri-checkbox-circle-line" aria-hidden="true" /> Nothing else is needed here. Press Next.
-            </p>
-          ) : null}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {ask("title") ? select("title", "Title") : null}
             {ask("gender") ? radios("gender", "Gender") : null}
@@ -110,7 +115,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
             {ask("email") ? text("email", "Email", { type: "email" }) : null}
             {ask("nationality") ? select("nationality", "Nationality") : null}
             {ask("citizenship") ? select("citizenship", "Country of citizenship") : null}
-            {ask("birth_country") ? select("birth_country", "Country of birth") : null}
+            {governmentSelect("birth_country", "Country of birth", "country")}
             {ask("place_of_birth") && !prefilled.size ? text("place_of_birth", "Town / city of birth", { required: false, placeholder: "As on the passport" }) : null}
             {ask("passport_number") ? text("passport_number", "Passport number", { upper: true, maxLength: 20 }) : null}
             {ask("passport_expiry") ? text("passport_expiry", "Passport expiry date", { type: "date" }) : null}
@@ -133,7 +138,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
           {select("employment", "Employment status")}
           {v("language_home") === OTHER_LANGUAGE ? (
             <div>
-              <Label htmlFor="wizard-english_proficiency_code" required>How well does the student speak English?</Label>
+              <Label htmlFor="wizard-english_proficiency_code">How well does the student speak English? (Optional)</Label>
               <SearchableSelect id="wizard-english_proficiency_code" name="english_proficiency_code" value={v("english_proficiency_code")} aria-invalid={Boolean(errors.english_proficiency_code)} className={INPUT}
                 onChange={(e) => onChange("english_proficiency_code", e.target.value)}>
                 <option value="">Select</option>
@@ -146,7 +151,13 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
           {v("disability") === "Yes" ? (
             <fieldset>
               <legend className={LABEL}>Which types of disability? (Optional)</legend>
-              <DisabilityTypesInput codes={codes} value={parseCodeList(v("disability_types"))} idPrefix="wizard-disability" onChange={(next) => onChange("disability_types", serializeCodeList(next))} />
+              <p className="mb-2 text-xs text-foreground-600">
+                You may leave the categories blank.{" "}
+                <a className="underline" href="https://www.ncver.edu.au/sites/default/files/ncver-documents/AVETMISS-Data-element-definitions-2_3-Nov-2022.pdf#page=70" target="_blank" rel="noreferrer">
+                  NCVER disability category definitions
+                </a>
+              </p>
+              <DisabilityTypesInput allowUnspecified={false} codes={codes} value={parseCodeList(v("disability_types"))} idPrefix="wizard-disability" onChange={(next) => onChange("disability_types", serializeCodeList(next))} />
               <FieldError text={errors.disability_types} />
             </fieldset>
           ) : null}
@@ -166,7 +177,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
 
       {question.id === "study" ? (
         <div className="space-y-5">
-          {select("study_reason", "Main reason for doing this course")}
+          {governmentSelect("study_reason", "Main reason for doing this course", "study_reason")}
           {radios("rpl", "Apply for Recognition of Prior Learning (RPL) or Credit Transfer?")}
           {v("rpl") === "Yes" ? <p className="text-xs text-foreground-600">SLIT will ask for the supporting documents (prior qualifications, transcripts) after the application is submitted.</p> : null}
           {select("oshc_require", "Should SLIT arrange Overseas Student Health Cover (OSHC)?")}

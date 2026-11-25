@@ -728,5 +728,30 @@
       "c920df1f3b08836684b6346edc3a04fceffdc25b9c1118aff0ce5ec425f38609",
       "068d15eb12ee1658de928ac5255257650ff309110780c245e5163261826058dd"
     ]
+  },
+  {
+    "type": "regulatory",
+    "id": "ncver-disclosure-controls",
+    "reason": "Disclosure and language controls reflect the NCVER Data Element Definitions.",
+    "source": "https://www.ncver.edu.au/rto-hub/statistical-standard-software/avetmiss-data-element-definitions-edition-2.3",
+    "fingerprints": [
+      "15a2df7e3a62702ccd4ed7c1fff8a5808f4468f9753c9c6d2936e0942baec79b",
+      "215a6273ef89a9a528b0401dc37154f61ee8710c836e45fe716cc38aab6adea1",
+      "6b342cfdc75f0241ce2a485ca49619d07ffd914c0f9c8c02d741622b0580fba6"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "existing-admission-validator",
+    "reason": "Pre-existing submission checks and rule wiring carried forward from the deployed validator.",
+    "fingerprints": [
+      "097be22ebf2daade7c7f80bdb01c25d381fb67462270dce62f28ec14ab1cbff9",
+      "155a8f887d669dd5c9b15955283bf60d8e8d5e92c8a11ae1b4dce09d4d17043d",
+      "6a78fe81d12756b10ce4f39b743698a50bad5a9d353a7fb904cea672be352329",
+      "81aab9bd701bb5c76ab6d33cce50131d8241faee38c817b9675ef730d6ff5515",
+      "b26e9b34bdd0b8dc9e0a7b2ebc69b02db8f6146e12480b5d8dbd7fa0aa8e0d18",
+      "d4ffc068d123d787f8add0a6cb263d8f17b0f31802749abb6198782ff34eff3c",
+      "ea7a4ab51cf7e005eaadb70debacf50854029c85ab3167386441c06f88c5c584"
+    ]
   }
 ]

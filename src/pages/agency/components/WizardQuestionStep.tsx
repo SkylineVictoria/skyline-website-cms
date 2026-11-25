@@ -3,7 +3,8 @@ import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel a
 import IntakeSelect from "@/pages/agency/components/IntakeSelect";
 import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
-import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { ENGLISH_ONLY, ENGLISH_ONLY_CODE, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { activeAvetmissCode, avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
 /**
@@ -30,6 +31,7 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   /** The application (USI screen: Verify / find / create the USI with usi-service). */
   applicationId?: string;
 }) {
+  const { codes, error: codesError } = useAvetmissCodes();
   const text = (name: string, label: string, props: { placeholder?: string; maxLength?: number; upper?: boolean } = {}) => (
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={answers[name] ?? ""} error={errors[name]} maxLength={props.maxLength ?? 200}
       placeholder={props.placeholder} upper={props.upper} onChange={(value) => onChange(name, value)} />
@@ -55,7 +57,21 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
             </div>
             <FieldError text={errors.language_home} />
           </fieldset>
-          {answers.language_home === OTHER_LANGUAGE ? text("language_other", "Which language does the student speak?", { placeholder: "e.g. Hindi", maxLength: 100 }) : null}
+          {answers.language_home === OTHER_LANGUAGE ? (
+            <div>
+              <Label htmlFor="wizard-language_other" required>Which language does the student speak?</Label>
+              <SearchableSelect id="wizard-language_other" name="language_other"
+                value={activeAvetmissCode(codes, "language", answers.language_other ?? "") ?? ""}
+                aria-invalid={Boolean(errors.language_other)} className={INPUT}
+                onChange={(event) => onChange("language_other", event.target.value)}>
+                <option value="">Select a language</option>
+                {avetmissOptions(codes, "language").filter(({ code }) => code !== ENGLISH_ONLY_CODE).map(({ code, label }) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
+              </SearchableSelect>
+              <FieldError text={codesError ? "The reporting language list could not be loaded. Reopen the wizard to retry." : errors.language_other} />
+            </div>
+          ) : null}
         </div>
       ) : null}
 

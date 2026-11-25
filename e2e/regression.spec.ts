@@ -138,7 +138,9 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   await upload("Academic", `academic-${student.local}.pdf`, { academic_institution: "Example University", academic_qualification: "Bachelor of Science" });
   await next.click();
   await wizard.getByRole("button", { name: "Continue without licence" }).click();
-  await wizard.locator("#wizard-language_other").fill("Hindi");
+  await expect(wizard.getByRole("radio", { name: "Yes, another language" })).not.toBeChecked();
+  await wizard.getByRole("radio", { name: "Yes, another language" }).check();
+  await choose(wizard.locator("#wizard-language_other"), "Hindi");
   await next.click();
   await wizard.locator("#wizard-usi_number").fill("ABC234DEF5");
   await next.click();
@@ -238,7 +240,7 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   const next = wizard.getByRole("button", { name: "Next" });
   for (let i = 0; i < 12 && !(await wizard.locator("#wizard-course").isVisible()); i++) {
     if (await wizard.getByRole("button", { name: "Continue without licence" }).isVisible()) await wizard.getByRole("button", { name: "Continue without licence" }).click();
-    else if (await wizard.locator("#wizard-language_other").isVisible()) { await wizard.locator("#wizard-language_other").fill("Hindi"); await next.click(); }
+    else if (await wizard.getByRole("radio", { name: "No, English only" }).isVisible()) { await wizard.getByRole("radio", { name: "No, English only" }).check(); await next.click(); }
     else if (await wizard.locator("#wizard-usi_number").isVisible()) { await wizard.locator("#wizard-usi_number").fill("ABC234DEF5"); await next.click(); }
     else if (await wizard.locator("#wizard-ec_name").isVisible()) { await wizard.locator("#wizard-ec_name").fill("Em Contact"); await wizard.locator("#wizard-ec_relationship").fill("Sibling"); await wizard.locator("#wizard-ec_phone").fill("0422333444"); await next.click(); }
     else await next.click();

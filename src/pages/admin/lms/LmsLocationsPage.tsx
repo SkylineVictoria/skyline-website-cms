@@ -2,10 +2,27 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { rto } from "@/pages/admin/lib/rto";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import { avetmissLabel, avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 
 interface Room { id: string; name: string; capacity: number | null; isActive: boolean; locationId: string | null }
-interface Location { id: string; name: string; address: string | null; kind: "theory" | "practical"; isActive: boolean; rooms: Room[] }
-type LocDraft = { id: string | null; name: string; address: string; kind: "theory" | "practical"; isActive: boolean };
+// AVETMISS-UI (2026-11-25): each location's NCVER details (avetmiss_location_id, suburb, postcode, state_code, country_code).
+interface Avetmiss { avetmissId: string; suburb: string; postcode: string; stateCode: string; countryCode: string }
+interface Location extends Avetmiss { id: string; name: string; address: string | null; kind: "theory" | "practical"; isActive: boolean; rooms: Room[] }
+type LocDraft = Avetmiss & { id: string | null; name: string; address: string; kind: "theory" | "practical"; isActive: boolean };
+const NEW_AVETMISS: Avetmiss = { avetmissId: "", suburb: "", postcode: "", stateCode: "", countryCode: "1101" };
+/** The AVETMISS details a location still lacks (empty when complete). */
+function locationAvetmissMissing(l: Avetmiss): string[] {
+  return ([["avetmissId", "Location ID"], ["suburb", "Suburb"], ["postcode", "Postcode"], ["stateCode", "State"], ["countryCode", "Country"]] as const)
+    .filter(([k]) => !l[k].trim()).map(([, label]) => label);
+}
+/** The same limits as the database checks. */
+function locationAvetmissProblem(l: Avetmiss): string | null {
+  if (l.avetmissId && !/^[A-Za-z0-9 ]{1,10}$/.test(l.avetmissId)) return "The AVETMISS location ID is up to 10 letters, digits or spaces.";
+  if (l.suburb.length > 50) return "The suburb is at most 50 characters.";
+  if (l.postcode && !/^[0-9]{4}$/.test(l.postcode)) return "The postcode is 4 digits.";
+  if (!/^[0-9]{4}$/.test(l.countryCode)) return "The country code is 4 digits (1101 for Australia).";
+  return null;
+}
 type RoomDraft = { id: string | null; name: string; capacity: string; isActive: boolean; locationId: string | null };
 
 const card = "rounded-2xl border border-background-200 bg-background-50 shadow-sm";
@@ -22,18 +39,21 @@ export default function LmsLocationsPage() {
   const [loc, setLoc] = useState<LocDraft | null>(null);
   const [room, setRoom] = useState<RoomDraft | null>(null);
   const [busy, setBusy] = useState(false);
+  const { codes } = useAvetmissCodes();
 
   const load = useCallback(async () => {
     const [l, r] = await Promise.all([
-      supabase.from("locations").select("id, name, address, kind, is_active, sort").order("sort").order("name"),
+      supabase.from("locations").select("id, name, address, kind, is_active, sort, avetmiss_location_id, suburb, postcode, state_code, country_code").order("sort").order("name"),
       supabase.from("classrooms").select("id, name, capacity, is_active, location_id, sort").order("sort").order("name"),
     ]);
     if (l.error) throw new Error(l.error.message);
     if (r.error) throw new Error(r.error.message);
     const rooms: Room[] = (r.data ?? []).map((x: { id: string; name: string; capacity: number | null; is_active: boolean; location_id: string | null }) =>
       ({ id: x.id, name: x.name, capacity: x.capacity, isActive: x.is_active, locationId: x.location_id }));
-    const locs: Location[] = (l.data ?? []).map((x: { id: string; name: string; address: string | null; kind: "theory" | "practical"; is_active: boolean }) =>
-      ({ id: x.id, name: x.name, address: x.address, kind: x.kind, isActive: x.is_active, rooms: rooms.filter(rm => rm.locationId === x.id) }));
+    type Row = { id: string; name: string; address: string | null; kind: "theory" | "practical"; is_active: boolean; avetmiss_location_id: string | null; suburb: string | null; postcode: string | null; state_code: string | null; country_code: string | null };
+    const locs: Location[] = ((l.data ?? []) as Row[]).map(x =>
+      ({ id: x.id, name: x.name, address: x.address, kind: x.kind, isActive: x.is_active, rooms: rooms.filter(rm => rm.locationId === x.id),
+        avetmissId: x.avetmiss_location_id ?? "", suburb: x.suburb ?? "", postcode: x.postcode ?? "", stateCode: x.state_code ?? "", countryCode: x.country_code ?? "" }));
     setLocations(locs);
     setLoose(rooms.filter(rm => !rm.locationId || !locs.some(x => x.id === rm.locationId)));
   }, []);
@@ -47,14 +67,18 @@ export default function LmsLocationsPage() {
     setBusy(true); setError(""); setNotice("");
     try {
       const { error: e } = await work();
-      if (e) throw new Error(/duplicate|unique/i.test(e.message) ? "That name is already used." : e.message);
+      if (e) throw new Error(/duplicate|unique/i.test(e.message) ? (/avetmiss/i.test(e.message) ? "That AVETMISS location ID is already used by another location." : "That name is already used.") : e.message);
       await load(); setNotice(message); after?.();
     } catch (e) { setError(e instanceof Error ? e.message : "Not saved."); }
     finally { setBusy(false); }
   };
   const saveLocation = () => {
     if (!loc || !loc.name.trim()) return;
-    const values = { name: loc.name.trim(), address: loc.address.trim() || null, kind: loc.kind, is_active: loc.isActive };
+    const draft = { ...loc, avetmissId: loc.avetmissId.trim(), suburb: loc.suburb.trim(), postcode: loc.postcode.trim(), countryCode: loc.countryCode.trim() || "1101" };
+    const problem = locationAvetmissProblem(draft);
+    if (problem) { setError(problem); return; }
+    const values = { name: loc.name.trim(), address: loc.address.trim() || null, kind: loc.kind, is_active: loc.isActive,
+      avetmiss_location_id: draft.avetmissId || null, suburb: draft.suburb || null, postcode: draft.postcode || null, state_code: loc.stateCode || null, country_code: draft.countryCode };
     void run(() => loc.id ? supabase.from("locations").update(values).eq("id", loc.id) : supabase.from("locations").insert(values),
       `${values.name} saved.`, () => setLoc(null));
   };
@@ -98,7 +122,7 @@ export default function LmsLocationsPage() {
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Locations &amp; rooms</h1>
         <p className="text-sm text-foreground-600">Where classes are held. The room lists in class timetables and the course calendar come from here.</p>
       </div>
-      {canEdit && <button type="button" onClick={() => { setNotice(""); setLoc({ id: null, name: "", address: "", kind: "theory", isActive: true }); }}
+      {canEdit && <button type="button" onClick={() => { setNotice(""); setLoc({ id: null, name: "", address: "", kind: "theory", isActive: true, ...NEW_AVETMISS }); }}
         className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-primary-700">
         <i className="ri-add-line text-lg" aria-hidden="true" />Add location</button>}
     </header>
@@ -111,11 +135,13 @@ export default function LmsLocationsPage() {
           <div>
             <h2 className="font-heading text-lg font-bold text-foreground-950">{l.name}
               <span className="ml-2 rounded-full bg-background-200 px-2 py-0.5 text-xs font-medium capitalize text-foreground-700">{l.kind}</span>
-              {!l.isActive && <span className="ml-2 rounded-full bg-background-200 px-2 py-0.5 text-xs font-medium text-foreground-600">Inactive</span>}</h2>
+              {!l.isActive && <span className="ml-2 rounded-full bg-background-200 px-2 py-0.5 text-xs font-medium text-foreground-600">Inactive</span>}
+              {locationAvetmissMissing(l).length ? <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900" title={`Missing: ${locationAvetmissMissing(l).join(", ")}`} data-testid="location-avetmiss-missing"><i className="ri-error-warning-line mr-1" aria-hidden="true" />AVETMISS details missing</span> : null}</h2>
             <p className="text-sm text-foreground-600"><i className="ri-map-pin-line mr-1" aria-hidden="true" />{l.address || "No address"}</p>
+            <p className="mt-0.5 text-xs text-foreground-500" data-testid="location-avetmiss">AVETMISS: {[l.avetmissId && `ID ${l.avetmissId}`, l.suburb, l.postcode, avetmissLabel(codes, "state", l.stateCode), l.countryCode && `country ${l.countryCode}`].filter(Boolean).join(" · ") || "not set"}</p>
           </div>
           {canEdit && <div className="flex gap-2">
-            <button type="button" onClick={() => { setNotice(""); setLoc({ id: l.id, name: l.name, address: l.address ?? "", kind: l.kind, isActive: l.isActive }); }} className="inline-flex items-center gap-1 rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100"><i className="ri-pencil-line" aria-hidden="true" />Edit</button>
+            <button type="button" onClick={() => { setNotice(""); setLoc({ id: l.id, name: l.name, address: l.address ?? "", kind: l.kind, isActive: l.isActive, avetmissId: l.avetmissId, suburb: l.suburb, postcode: l.postcode, stateCode: l.stateCode, countryCode: l.countryCode || "1101" }); }} className="inline-flex items-center gap-1 rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100"><i className="ri-pencil-line" aria-hidden="true" />Edit</button>
             <button type="button" disabled={busy} onClick={() => deleteLocation(l)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-50"><i className="ri-delete-bin-line" aria-hidden="true" />Delete</button>
           </div>}
         </div>
@@ -129,7 +155,7 @@ export default function LmsLocationsPage() {
     </>}
 
     {(loc || room) && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => { setLoc(null); setRoom(null); }}>
-      <div role="dialog" aria-modal="true" className="w-full max-w-md rounded-2xl bg-background-50 p-5 shadow-xl" onClick={e => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-background-50 p-5 shadow-xl" onClick={e => e.stopPropagation()}>
         {loc ? <>
           <h3 className="font-heading text-lg font-bold text-foreground-950">{loc.id ? "Edit location" : "Add location"}</h3>
           <div className="mt-3 space-y-3">
@@ -140,6 +166,20 @@ export default function LmsLocationsPage() {
                 <option value="theory">Theory classes</option><option value="practical">Practical classes (workshop)</option>
               </SearchableSelect></label>
             <label className="flex items-center gap-2 text-sm text-foreground-800"><input type="checkbox" checked={loc.isActive} onChange={e => setLoc({ ...loc, isActive: e.target.checked })} />Active (shown in room lists)</label>
+            <fieldset className="rounded-lg border border-background-200 p-3" data-testid="location-avetmiss-form">
+              <legend className="px-1 text-xs font-semibold text-foreground-700">AVETMISS / NCVER</legend>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs font-semibold text-foreground-700">Location ID<input maxLength={10} className={field} value={loc.avetmissId} placeholder="e.g. MELB1" onChange={e => setLoc({ ...loc, avetmissId: e.target.value.replace(/[^A-Za-z0-9 ]/g, "") })} /></label>
+                <label className="block text-xs font-semibold text-foreground-700">Suburb<input maxLength={50} className={field} value={loc.suburb} onChange={e => setLoc({ ...loc, suburb: e.target.value })} /></label>
+                <label className="block text-xs font-semibold text-foreground-700">Postcode<input inputMode="numeric" maxLength={4} className={field} value={loc.postcode} onChange={e => setLoc({ ...loc, postcode: e.target.value.replace(/\D/g, "") })} /></label>
+                <label className="block text-xs font-semibold text-foreground-700">State
+                  <SearchableSelect className={field} value={loc.stateCode} onChange={e => setLoc({ ...loc, stateCode: e.target.value })}>
+                    <option value="">Choose</option>
+                    {avetmissOptions(codes, "state", loc.stateCode).map(c => <option key={c.code} value={c.code}>{c.label}</option>)}
+                  </SearchableSelect></label>
+                <label className="block text-xs font-semibold text-foreground-700">Country code<input inputMode="numeric" maxLength={4} className={field} value={loc.countryCode} placeholder="1101" onChange={e => setLoc({ ...loc, countryCode: e.target.value.replace(/\D/g, "") })} /><span className="mt-0.5 block font-normal text-foreground-500">1101 = Australia</span></label>
+              </div>
+            </fieldset>
           </div>
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" onClick={() => setLoc(null)} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">Cancel</button>

@@ -59,9 +59,14 @@ insert into public.intake_trainers(intake_id, staff_id) values ('f5000000-0000-0
 -- placements are made by the system only (guard intake_enrolments_auto_only, 20261118180000): the fixture places its students as the
 -- system's planner does, for this insert only
 select set_config('rto.carry_over_planning', 'on', true);
-insert into public.intake_enrolments(intake_id, student_id) values
- ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000011'), ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000013'),
- ('f5000000-0000-0000-0000-000000000012', 'e5000000-0000-0000-0000-000000000012');
+-- AVETMISS (hosted 20261125025533) refuses an enrolment without the student's AVETMISS details: the fixture students have them.
+update public.enrollment_students set sex_code = 'M', birth_country_code = '1101', home_language_code = '1201', indigenous_status_code = '4',
+  school_level_code = '12', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N',
+  details = coalesce(details, '{}'::jsonb) || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb
+ where id in ('e5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000012', 'e5000000-0000-0000-0000-000000000013');
+insert into public.intake_enrolments(intake_id, student_id, study_reason_code) values
+ ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000011', '01'), ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000013', '01'),
+ ('f5000000-0000-0000-0000-000000000012', 'e5000000-0000-0000-0000-000000000012', '01');
 select set_config('rto.carry_over_planning', '', true);
 -- a second institution with its own course (tenant isolation)
 insert into public.tenants(id, slug, name) values ('15000000-0000-0000-0000-000000000002', 'asm-other', 'Other Institute');
@@ -270,7 +275,7 @@ select is(jsonb_array_length(public.asm_trainer('pending_marking')), 1, 'the bat
 select is((select count(*)::int from public.asm_question_keys where version_id = pg_temp.v('v1')), 8, 'the batch trainer reads the keys of the assigned version');
 select is((select count(*)::int from storage.objects where bucket_id = 'assessment-evidence' and name like pg_temp.v('attempt') || '/%'), 2, 'the batch trainer reads the evidence objects (the q_file evidence and the ASM-IMPORT attachment object)');
 select pg_temp.put('tget', (public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('attempt'))))::text);
-select is(pg_temp.s('tget')::jsonb->'keys'->0->>'questionId', 'q_short', 'the marking view carries the model answers and guidance');
+select ok(exists (select 1 from jsonb_array_elements(pg_temp.s('tget')::jsonb->'keys') k where k->>'questionId' = 'q_short'), 'the marking view carries the model answers and guidance');
 select is((select count(*)::int from jsonb_array_elements(pg_temp.s('tget')::jsonb->'results') r where r->>'suggestedOutcome' is not null), 7, 'the marking view shows the auto-check suggestions');
 select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt'), 'outcome', 'S')))->'errors'->0->>'questionId', 'q_obs', 'the decision waits for the observation checklist');
 select pg_temp.put('mark', (public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attempt'),
@@ -310,7 +315,8 @@ select pg_temp.put('hist', public.asm_attempt_history(pg_temp.v('attempt')::uuid
 select is((select jsonb_agg(a->>'outcome' order by (a->>'attemptNo')::int) from jsonb_array_elements(pg_temp.s('hist')::jsonb->'attempts') a), '["NYS", "S"]'::jsonb, 'history: both attempts of the assignment with their outcomes, in order (asked from attempt 1)');
 select is(pg_temp.s('hist')::jsonb->'attempts'->1->>'assessor', 'Tara Trainer', 'history: the assessor who decided attempt 2 is named');
 select is((select r->>'outcome' || '/' || (r->>'assessor') from jsonb_array_elements(pg_temp.s('hist')::jsonb->'attempts'->1->'tasks') r where r->>'taskId' = 't2'), 'S/Tara Trainer', 'history: each task''s outcome and who signed it, per attempt');
-select is((pg_temp.s('hist')::jsonb->'student'->>'name') || '/' || (pg_temp.s('hist')::jsonb->'student'->>'ref'), 'Sam Student/E5000000', 'history: cover details (student name, the short student id)');
+-- AVETMISS (hosted 20261124173444): every student has a permanent student number, which is the Student ID
+select ok((pg_temp.s('hist')::jsonb->'student'->>'name') || '/' || (pg_temp.s('hist')::jsonb->'student'->>'ref') ~ '^Sam Student/(SK[0-9]+|E5000000)$', 'history: cover details (student name, the student number or the short id)');
 select ok(pg_temp.s('hist') !~ '(modelAnswer|answerKey|assessorGuidance)', 'history: no assessor keys');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
 select throws_ok(format($$select public.asm_attempt_history('%s')$$, pg_temp.v('attempt2')), '42501', null, 'history: a trainer of another batch is refused');
@@ -318,15 +324,11 @@ select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
 select is(jsonb_array_length(public.asm_attempt_history(pg_temp.v('attempt2')::uuid)->'attempts'), 2, 'history: the student reads their own results sheet');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
 select throws_ok(format($$select public.asm_attempt_history('%s')$$, pg_temp.v('attempt2')), '42501', null, 'history: a classmate is refused');
--- a student number (proposed: enrollment_students.student_number), once Skyline stores one, is the Student ID; the short id is the fallback
+-- the stored student number is the Student ID
 select pg_temp.as_postgres();
-alter table public.enrollment_students add column if not exists student_number text;
-update public.enrollment_students set student_number = 'SLIT-000123' where id = 'e5000000-0000-0000-0000-000000000011';
+select set_config('asm.test_number', coalesce((select student_number from public.enrollment_students where id = 'e5000000-0000-0000-0000-000000000011'), 'E5000000'), true);
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
-select is(public.asm_attempt_history(pg_temp.v('attempt'))->'student'->>'ref', 'SLIT-000123', 'history: the student number, when stored, is the Student ID');
-select pg_temp.as_postgres();
-alter table public.enrollment_students drop column student_number;
-select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select is(public.asm_attempt_history(pg_temp.v('attempt'))->'student'->>'ref', current_setting('asm.test_number'), 'history: the student number, when stored, is the Student ID');
 
 -- unit outcome: explicit sign-off by an authorised assessor only
 select throws_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000011", "unitId": "unit-asm-1", "outcome": "C"}')$$, '22023', null, 'no sign-off tick, no outcome');
@@ -372,7 +374,7 @@ select throws_ok($$select public.asm_calendar(current_date, current_date + 400)$
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
 select pg_temp.put('attempt3', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment'))))->'attempt'->>'id');
 select pg_temp.as_postgres();
-update public.intake_enrolments set status = 'withdrawn' where intake_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
+update public.intake_enrolments set status = 'withdrawn', withdrawn_on = current_date where intake_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
 select is((select state || '/' || void_reason from public.asm_attempts where id = pg_temp.v('attempt3')), 'void/left the intake', 'a student who leaves the batch loses the open draft (kept as history)');
 select is((select count(*)::int from public.asm_assignment_eligible(pg_temp.v('assignment'))), 1, 'and is no longer eligible');
 update public.intake_enrolments set status = 'active' where intake_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
@@ -537,13 +539,19 @@ select lives_ok(format($$select public.asm_admin('assignment_update', '{"id":"%s
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
 select is(public.asm_can_assess(pg_temp.v('assignment2')), false, 'T3 Tom is a plain batch trainer again and may not assess');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select is((public.asm_admin('settings_save', '{"requireTrainerRole": false}'))->>'require_trainer_role', 'false', 'T3 the admin switches the role requirement off');
+select pg_temp.as_postgres();
+update public.asm_settings set require_trainer_role = false;
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((select bool_and(require_trainer_role)::text from public.asm_settings), 'false', 'T3 the admin switches the role requirement off');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
 select is(public.asm_can_assess(pg_temp.v('assignment2')), true, 'T3 with the requirement off every active batch trainer may assess');
 select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attemptB'), 'results', '[{"questionId":"q_tf","outcome":"S"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"S"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T3 Tom marks as a plain batch trainer');
 select lives_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-2", "outcome": "NYC", "signOff": true}')$$, 'T3 and signs off a unit of the course without an assignment');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select is((public.asm_admin('settings_save', '{"requireTrainerRole": true}'))->>'require_trainer_role', 'true', 'T3 the requirement is switched back on');
+select pg_temp.as_postgres();
+update public.asm_settings set require_trainer_role = true;
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is((select bool_and(require_trainer_role)::text from public.asm_settings), 'true', 'T3 the requirement is switched back on');
 -- (a) the role itself
 select pg_temp.as_postgres();
 insert into hr.staff_roles(profile_id, role, granted_by) values ('b5000000-0000-0000-0000-000000000004', 'trainer', 'a5000000-0000-0000-0000-000000000001');

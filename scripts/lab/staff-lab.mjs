@@ -31,6 +31,7 @@
 //   node scripts/lab/staff-lab.mjs assistant P09-01 public assistant per tenant: two verified hosts with the same FAQ, the real public-assistant
 //                                           and public-assistant-index functions (mock embeddings), cache, spoofed / unverified / unknown hosts,
 //                                           a tenant document in another institution's storage refused, unpublish reflected (needs a fresh `up`)
+//   node scripts/lab/staff-lab.mjs asm-import  ASM-AI-IMPORT: the assessment import through the real asm-import function (stand-in model), cache, failure, access
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
@@ -78,6 +79,8 @@ const LAB_SECRETS = {
   OPENAI_BASE_URL: `http://host.docker.internal:${MOCK_OPENAI_PORT}/v1`,
   PUBLIC_ASSISTANT_WORKER_SECRET: "lab-public-assistant-worker-secret",
   OPENAI_DOCUMENT_MODEL: "lab-reader",
+  // ASM-AI-IMPORT: the assessment import worker uses its deterministic stand-in model in the lab; nothing reaches OpenAI.
+  EF_ASM_IMPORT_PROVIDER: "mock",
   EF_OPENAI_API_URL: `http://host.docker.internal:${MOCK_OPENAI_PORT}`,
   // Address search (Geoscape): the lab key and a mock on port 57392; nothing reaches Geoscape.
   EF_ADDRESS_SEARCH_GEOSCAPE_KEY: "lab-geoscape-key",
@@ -173,8 +176,26 @@ function setKey(toml, section, key, value) {
   throw new Error(`config.toml has no ${section}.${key}`);
 }
 
+/** Supabase CLI 3.x `init` writes config.jsonc; the lab keeps editing TOML, so the JSONC is turned into the same settings in TOML. */
+function jsoncToToml(file) {
+  const json = JSON.parse(fs.readFileSync(file, "utf8").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n").replace(/,(\s*[}\]])/g, "$1"));
+  const scalar = (v) => (typeof v === "string" ? JSON.stringify(v) : Array.isArray(v) ? `[${v.map(scalar).join(", ")}]` : String(v));
+  const out = [];
+  const table = (obj, name) => {
+    const plain = Object.entries(obj).filter(([k, v]) => k !== "$schema" && (v === null || typeof v !== "object" || Array.isArray(v)) && v !== null);
+    const nested = Object.entries(obj).filter(([, v]) => v && typeof v === "object" && !Array.isArray(v));
+    if (name && (plain.length || !nested.length)) out.push(`\n[${name}]`);
+    for (const [k, v] of plain) out.push(`${/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k)} = ${scalar(v)}`);
+    for (const [k, v] of nested) table(v, name ? `${name}.${k}` : k);
+  };
+  table(json, "");
+  return out.join("\n").trim() + "\n";
+}
+
 function writeConfig() {
-  let toml = fs.readFileSync(path.join(WORK, "supabase", "config.toml"), "utf8");
+  const tomlFile = path.join(WORK, "supabase", "config.toml"), jsoncFile = path.join(WORK, "supabase", "config.jsonc");
+  if (!fs.existsSync(tomlFile) && fs.existsSync(jsoncFile)) { fs.writeFileSync(tomlFile, jsoncToToml(jsoncFile)); fs.rmSync(jsoncFile); }
+  let toml = fs.readFileSync(tomlFile, "utf8");
   toml = toml.replace(/^project_id = .*$/m, `project_id = "${PROJECT}"`);
   toml = setKey(toml, "api", "port", PORTS.api);
   toml = setKey(toml, "db", "port", PORTS.db);
@@ -226,11 +247,24 @@ async function up() {
     // (20261113140000) adds; hosted applied them after it.
     "20261113025808_business_onboarding.sql": "20261113140001_business_onboarding.sql",
     "20261113031341_staff_signed_documents.sql": "20261113140002_staff_signed_documents.sql",
+    // Hosted-only AVETMISS files (pulled into the repo 2026-11-25) that read the LMS-BATCHES tables (batch_students, 20261125030517+).
+    "20261125024946_avetmiss_rto_hours_and_batch_location.sql": "20261125050518_avetmiss_rto_hours_and_batch_location.sql",
+    "20261125025533_avetmiss_results_withdrawals_enrolment_rules.sql": "20261125050519_avetmiss_results_withdrawals_enrolment_rules.sql",
   };
   // Lab copy only: the CLI replays every migration in ONE session, where a pg_temp function made by an earlier file still exists.
   // Hosted applied these files one by one, so the repo files stay as they are.
-  const LAB_TWEAKS = { "20261118023417_agent_agreement_required.sql": [["create function pg_temp.patch(", "create or replace function pg_temp.patch("]] };
+  const LAB_TWEAKS = {
+    "20261118023417_agent_agreement_required.sql": [["create function pg_temp.patch(", "create or replace function pg_temp.patch("]],
+    // The staff offer letter template was inserted on hosted by hand (2026-11-23); the lab has none, so the letters derived from it are skipped.
+    // The repo copy reads agents.name; hosted's function (fixed there) reads agents.full_name, the only name column agents has.
+    "20261125080517_email_one_role.sql": [["select 'agent', 'agents', g.id::text, g.name, 'an agent of '", "select 'agent', 'agents', g.id::text, g.full_name, 'an agent of '"]],
+    "20261124235517_staff_offer_full_part_time.sql": [["  raise exception 'Run 20261124001517_staff_offer_variables first (the staff offer letter must use placeholders).' using errcode = '55000';", "  return; -- (lab) the hand-inserted hosted template is not in the lab"]],
+  };
+  // Repo files hosted never applied, whose effect later hosted files contradict (lab replays the hosted state):
+  // 20261121170100 drops intake_wizard_cleanup, which 20261125042517 patches on hosted.
+  const LAB_SKIP = new Set(["20261121170100_remove_wizard_cleanup_job.sql"]);
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
+    if (LAB_SKIP.has(file)) continue;
     // Line ends, lab copy only: hosted function bodies are CRLF (Windows `db push`) or LF (SQL editor / MCP), and each in-place
     // patch anchors on what hosted had (20261118234157 spells E'...\r\n...', 20261120063419 E'\n...', 20261119003517 a literal
     // multi-line string). The lab makes every file LF, and in files that patch function definitions turns the escape \r\n into
@@ -1108,6 +1142,83 @@ async function activate() {
 /* ------------------------------------------------------------------ retention (HR-02h) */
 
 /** Public holiday sync (20261113150000 + holiday-sync): the real function against the mock sources, refusals, re-runs, failure, the cron dispatcher. */
+/* ------------------------------------------------------------------ ASM-AI-IMPORT (2026-11-25) */
+// The assessment import end to end: the browser's steps (fingerprint, page text, upload, queue) with the lab admin's session, the
+// real pg_cron/pg_net dispatcher and the real asm-import function (EF_ASM_IMPORT_PROVIDER=mock: a stand-in model, never OpenAI),
+// the cache by file hash, a failure (the upload does not match its fingerprint) and who may read jobs and files.
+async function asmImport() {
+  const lab = readLab();
+  await ensureLabAdmin();
+  const jwt = await adminToken(lab);
+  psql("select vault.create_secret('http://kong:8000/functions/v1/staff-admin', 'hr_retention_function_url', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_function_url');");
+  psql("select vault.create_secret('" + lab.serviceKey + "', 'hr_retention_service_role_key', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_service_role_key');");
+  const workbook = [process.env.ASM_WORKBOOK, path.join(REPO, "DNT_RII50520_RIICWD525E_Select Pavement surfacing.pdf")].find((p) => p && fs.existsSync(p));
+  if (!workbook) { console.log("SKIP asm-import: the RIICWD525E workbook is not here (set ASM_WORKBOOK)"); return; }
+  const { createJiti } = await import("jiti");
+  const jiti = createJiti(import.meta.url);
+  const { pageTextsFromPdf } = await jiti.import(path.join(REPO, "src/lib/assessment/pageText.ts"));
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const bytes = new Uint8Array(fs.readFileSync(workbook));
+  const doc = await pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise;
+  const pages = await pageTextsFromPdf(doc);
+  const sha256 = nodeCrypto.createHash("sha256").update(bytes).digest("hex");
+  const rpc = async (fn, args, token = jwt) => {
+    const res = await fetch(`${lab.apiUrl}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(args) });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  };
+  const upload = async (id, name, body, type, token = jwt) => (await fetch(`${lab.apiUrl}/storage/v1/object/asm-imports/${id}/${name}`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${token}`, "content-type": type }, body })).status;
+  const startArgs = (force, sha = sha256, size = bytes.byteLength) => ({ p_kind: "workbook", p_sha256: sha, p_file_name: path.basename(workbook), p_bytes: size, p_pages: pages.length, p_scanned: [], p_force: force });
+  psql(`delete from public.asm_import_jobs where sha256 = '${sha256}';`);
+
+  // 1. start -> upload -> queue -> the dispatcher wakes asm-import, which reads it one step at a time
+  const t0 = Date.now();
+  const started = await rpc("asm_import_start", startArgs(false));
+  const id = started.body?.id;
+  check("asm-import: an admin starts an import (state uploading, not cached)", started.status === 200 && started.body?.state === "uploading" && started.body?.cached === false, JSON.stringify(started.body).slice(0, 200));
+  const early = await rpc("asm_import_queue", { p_id: id });
+  check("asm-import: queueing before the upload is refused", early.status >= 400 && /not complete/.test(JSON.stringify(early.body)), JSON.stringify(early.body));
+  const up1 = await upload(id, "source.pdf", bytes, "application/pdf");
+  const up2 = await upload(id, "pages.json", JSON.stringify(pages), "application/json");
+  const stray = await upload(id, "other.txt", "x", "application/json");
+  check("asm-import: the admin uploads the PDF and its page text into the job's folder; any other name is refused", up1 === 200 && up2 === 200 && stray >= 400, `${up1}/${up2}/${stray}`);
+  const queued = await rpc("asm_import_queue", { p_id: id });
+  check("asm-import: queued", queued.status === 200 && queued.body?.state === "queued", JSON.stringify(queued.body).slice(0, 200));
+  let st = queued.body; const seen = new Set();
+  for (let i = 0; i < 240 && !["done", "failed"].includes(st?.state); i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    st = (await rpc("asm_import_status", { p_id: id })).body;
+    if (st?.progress?.label) seen.add(`${st.progress.done}/${st.progress.total} ${st.progress.label}`);
+  }
+  const ms = Date.now() - t0;
+  console.log(`  progress seen: ${[...seen].join(" | ")}`);
+  console.log(`  summary: ${JSON.stringify(st?.summary)} in ${Math.round(ms / 1000)} s`);
+  check("asm-import: the worker finished the job step by step with live progress (outline, each task chunk, done)", st?.state === "done" && st?.progress?.total >= 4 && st?.progress?.done === st?.progress?.total && Number(st?.usage?.calls) === st?.progress?.total - 1, `${st?.state} ${st?.error ?? ""}`);
+  check("asm-import: the result names RIICWD525E version 1.0, provider mock, its questions checked verbatim", st?.result?.unit?.code === "RIICWD525E" && st?.result?.version === "1.0" && st?.provider === "mock"
+    && (st?.result?.tasks ?? []).flatMap((t) => t.sections.flatMap((s) => s.items)).every((it) => it.verbatim === "exact"), JSON.stringify(st?.result?.unit));
+  check("asm-import: usage is logged on the job (calls counted)", Number(st?.usage?.calls) >= 2, JSON.stringify(st?.usage));
+  // 2. the same file again: the finished job comes back, nothing new is made
+  const jobs = () => psql(`select count(*) from public.asm_import_jobs where sha256 = '${sha256}';`);
+  const before = jobs();
+  const again = await rpc("asm_import_start", startArgs(false));
+  check("asm-import: the same file again is answered from the cache (same job, done, no new job, no cost)", again.body?.cached === true && again.body?.id === id && again.body?.state === "done" && jobs() === before);
+  // 3. a failure: the uploaded bytes do not match the fingerprint -> failed with the reason (the browser then uses the standard reader)
+  const fake = "0".repeat(64);
+  psql(`delete from public.asm_import_jobs where sha256 = '${fake}';`);
+  const bad = await rpc("asm_import_start", startArgs(true, fake));
+  await upload(bad.body.id, "source.pdf", bytes, "application/pdf"); await upload(bad.body.id, "pages.json", JSON.stringify(pages), "application/json");
+  await rpc("asm_import_queue", { p_id: bad.body.id });
+  let bst = null;
+  for (let i = 0; i < 90 && !["done", "failed"].includes(bst?.state); i++) { await new Promise((r) => setTimeout(r, 1000)); bst = (await rpc("asm_import_status", { p_id: bad.body.id })).body; }
+  check("asm-import: an upload that does not match its fingerprint fails with a plain reason (fallback path)", bst?.state === "failed" && /fingerprint/.test(bst?.error ?? ""), `${bst?.state} ${bst?.error}`);
+  // 4. access: anon cannot start, read jobs or files; the worker refuses user tokens
+  const anonStart = await rpc("asm_import_start", startArgs(false), lab.anonKey);
+  const anonRead = await fetch(`${lab.apiUrl}/rest/v1/asm_import_jobs?select=id`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}` } }).then((r) => r.json()).catch(() => null);
+  const anonFile = (await fetch(`${lab.apiUrl}/storage/v1/object/asm-imports/${id}/pages.json`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}` } })).status;
+  check("asm-import: anon cannot start an import, list jobs or read the uploaded files", anonStart.status >= 400 && ((Array.isArray(anonRead) && anonRead.length === 0) || anonRead?.code === "42501") && anonFile >= 400, `${anonStart.status} ${JSON.stringify(anonRead).slice(0, 80)} ${anonFile}`);
+  const direct = await fetch(`${lab.apiUrl}/functions/v1/asm-import`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}`, "content-type": "application/json" }, body: "{}" });
+  check("asm-import: the worker refuses a signed-in admin's token (service callers only)", direct.status === 403, String(direct.status));
+}
+
 async function holidays() {
   const lab = readLab();
   await ensureLabAdmin();
@@ -2485,6 +2596,7 @@ try {
   else if (command === "activate") await activate();
   else if (command === "retention") await retention();
   else if (command === "holidays") await holidays();
+  else if (command === "asm-import") await asmImport();
   else if (command === "flow") await flow();
   else if (command === "wizard") await wizard();
   else if (command === "signing") await signing();

@@ -1,0 +1,179 @@
+/**
+ * ASM-AI-IMPORT worker (JWT-verified, service callers only; dispatched by public.asm_import_dispatch via pg_net, then by itself).
+ *
+ * Each call claims one import job (public.asm_import_claim: lease, one worker per job) and does ONE step:
+ *   outline -> one task chunk at a time -> assemble.
+ * After a step it hands the next one to a fresh call (its own URL, the same service credential), so no call runs long and the
+ * browser sees live progress (asm_import_status). A job that stops (worker killed) is picked up again by the every-minute cron.
+ *
+ * Only the uploaded workbook / answer guide (its page text, and images of pages with no text layer) is sent to the AI; never
+ * student data. The API key is OPENAI_API_KEY (server side only, never logged or returned). The AI does not mark.
+ */
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
+import { isServiceCaller } from "../_shared/service-role.ts";
+import { AiError, costUsd, createProvider, type AiUsage, type StructuredProvider } from "../_shared/asm-import/provider.ts";
+import { assemble, checkChunk, cleanOutline, mockAnswer, outlineRequest, planChunks, summarize, taskRequest, type Chunk, type PageText } from "../_shared/asm-import/pipeline.ts";
+import type { AiOutline, AiTaskPart, CheckedSection } from "../_shared/asm-import/schema.ts";
+
+const url = Deno.env.get("SUPABASE_URL") ?? "";
+const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const BUCKET = "asm-imports";
+const MAX_ATTEMPTS = 3;
+const price = (name: string) => { const v = Number(Deno.env.get(name)); return Number.isFinite(v) && v >= 0 && Deno.env.get(name) ? v : undefined; };
+
+function provider(): StructuredProvider {
+  return createProvider({
+    provider: Deno.env.get("EF_ASM_IMPORT_PROVIDER") ?? "openai",
+    model: Deno.env.get("EF_ASM_IMPORT_MODEL") || Deno.env.get("OPENAI_DOCUMENT_MODEL") || "",
+    apiKey: Deno.env.get("OPENAI_API_KEY") ?? "",
+    baseUrl: Deno.env.get("OPENAI_BASE_URL") ?? undefined,
+    mock: mockAnswer,
+  });
+}
+
+interface Job {
+  id: string; kind: "workbook" | "guide"; sha256: string; bytes: number; lease: string;
+  outline: AiOutline | null; plan: Chunk[] | null; chunk_results: (CheckedSection[] | null)[] | null; next_chunk: number; chunk_attempts: number;
+  scanned_pages: number[]; usage: { input_tokens?: number; output_tokens?: number; calls?: number; cost_usd?: number | null } | null;
+  provider: string | null; model: string | null;
+}
+
+const hex = (buf: ArrayBuffer) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, "0")).join("");
+const b64 = (bytes: Uint8Array) => { let out = ""; for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(out); };
+
+async function pagesOf(db: SupabaseClient, job: Job): Promise<PageText[]> {
+  const got = await db.storage.from(BUCKET).download(`${job.id}/pages.json`);
+  if (got.error || !got.data) throw new AiError("The page text of the upload could not be read.", "config", false);
+  const raw = JSON.parse(await got.data.text()) as { page: number; text: string; scanned?: boolean }[];
+  if (!Array.isArray(raw) || !raw.length) throw new AiError("The upload has no pages.", "config", false);
+  return raw.map((p) => ({ page: Number(p.page), text: String(p.text ?? "").slice(0, 40_000), scanned: Boolean(p.scanned) })).filter((p) => Number.isInteger(p.page) && p.page > 0);
+}
+
+async function imagesOf(db: SupabaseClient, job: Job, pages: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  for (const p of pages.slice(0, 12)) {
+    const got = await db.storage.from(BUCKET).download(`${job.id}/page-${p}.jpg`);
+    if (!got.error && got.data) out.set(p, `data:image/jpeg;base64,${b64(new Uint8Array(await got.data.arrayBuffer()))}`);
+  }
+  return out;
+}
+
+function addUsage(job: Job, u: AiUsage | undefined) {
+  const usage = { input_tokens: (job.usage?.input_tokens ?? 0) + (u?.inputTokens ?? 0), output_tokens: (job.usage?.output_tokens ?? 0) + (u?.outputTokens ?? 0), calls: (job.usage?.calls ?? 0) + (u ? 1 : 0) };
+  const cost = costUsd({ inputTokens: usage.input_tokens, outputTokens: usage.output_tokens }, price("EF_ASM_IMPORT_INPUT_USD_PER_MILLION"), price("EF_ASM_IMPORT_OUTPUT_USD_PER_MILLION"));
+  job.usage = { ...usage, cost_usd: cost };
+  return job.usage;
+}
+
+const progressOf = (job: Job, label: string) => {
+  const total = (job.plan?.length ?? 0) + 2;
+  const done = job.outline ? 1 + job.next_chunk : 0;
+  return { label, done, total };
+};
+
+/** One step of one job. Returns true when more work is left. */
+async function step(db: SupabaseClient, job: Job): Promise<boolean> {
+  const save = async (patch: Record<string, unknown>) => {
+    const { error, data } = await db.from("asm_import_jobs").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", job.id).eq("lease", job.lease).select("id");
+    if (error) throw new AiError("The import progress could not be saved.", "config", true);
+    if (!data?.length) throw new AiError("Another worker took over this import.", "config", false);
+  };
+  let ai: StructuredProvider;
+  try { ai = provider(); } catch (e) {
+    await save({ state: "failed", error: e instanceof Error ? e.message : "The AI reader is not configured.", lease: null, lease_until: null, finished_at: new Date().toISOString() });
+    return false;
+  }
+  try {
+    if (!job.outline) {
+      // the upload is what was hashed in the browser (the cache relies on it)
+      const src = await db.storage.from(BUCKET).download(`${job.id}/source.pdf`);
+      if (src.error || !src.data) throw new AiError("The uploaded file could not be read.", "config", false);
+      const bytes = await src.data.arrayBuffer();
+      if (bytes.byteLength !== job.bytes || hex(await crypto.subtle.digest("SHA-256", bytes)) !== job.sha256) throw new AiError("The uploaded file does not match its fingerprint.", "config", false);
+      const pages = await pagesOf(db, job);
+      const req = outlineRequest(job.kind, pages);
+      const scanned = pages.filter((p) => p.scanned).map((p) => p.page);
+      if (scanned.length && scanned.length === pages.length) {
+        const imgs = await imagesOf(db, job, scanned.slice(0, 6));
+        for (const [p, img] of imgs) req.input.push({ kind: "text", text: `Image of page ${p}:` }, { kind: "image", dataUrl: img });
+      }
+      const out = await ai.generate(req);
+      const outline = cleanOutline(out.data as AiOutline, pages);
+      const plan = planChunks(outline);
+      job.outline = outline; job.plan = plan; job.next_chunk = 0;
+      await save({ outline, plan, chunk_results: plan.map(() => null), next_chunk: 0, chunk_attempts: 0, provider: ai.id, model: ai.model, scanned_pages: scanned,
+        usage: addUsage(job, out.usage), progress: progressOf(job, plan.length ? `Reading task 1 of ${outline.tasks.length}` : "Finishing"),
+        summary: { ...summarize([], scanned.length), tasks: outline.tasks.length, unit: outline.unit_code, version: outline.version } });
+      return true;
+    }
+    const plan = job.plan ?? [];
+    const results = job.chunk_results ?? plan.map(() => null);
+    if (job.next_chunk < plan.length) {
+      const chunk = plan[job.next_chunk];
+      const pages = await pagesOf(db, job);
+      const scannedHere = pages.filter((p) => p.scanned && p.page >= chunk.from && p.page <= chunk.to).map((p) => p.page);
+      const out = await ai.generate(taskRequest(job.kind, job.outline, chunk, pages, await imagesOf(db, job, scannedHere)));
+      results[job.next_chunk] = checkChunk(out.data as AiTaskPart, chunk, pages);
+      job.next_chunk += 1;
+      const partial = assemble(job.kind, job.outline, plan, results, { provider: ai.id, model: ai.model, scannedPages: job.scanned_pages?.length ?? 0 });
+      const nextTask = plan[job.next_chunk]?.task;
+      await save({ chunk_results: results, next_chunk: job.next_chunk, chunk_attempts: 0, usage: addUsage(job, out.usage),
+        progress: progressOf(job, nextTask === undefined ? "Finishing" : `Reading task ${nextTask + 1} of ${job.outline.tasks.length}`),
+        summary: { ...partial.summary, unit: job.outline.unit_code, version: job.outline.version } });
+      return true;
+    }
+    const doc = assemble(job.kind, job.outline, plan, results, { provider: job.provider ?? ai.id, model: job.model ?? ai.model, scannedPages: job.scanned_pages?.length ?? 0 });
+    await save({ state: "done", result: doc, summary: { ...doc.summary, unit: doc.unit?.code ?? null, version: doc.version }, progress: { label: "Done", done: plan.length + 2, total: plan.length + 2 },
+      lease: null, lease_until: null, finished_at: new Date().toISOString(), error: null });
+    return false;
+  } catch (e) {
+    const err = e instanceof AiError ? e : new AiError("The AI reader failed.", "provider", true);
+    const usage = (e as { usage?: AiUsage }).usage;
+    if (usage) addUsage(job, usage);
+    // a part too long for one answer: split it and go on
+    if (err.code === "incomplete" && job.outline && job.plan && job.next_chunk < job.plan.length) {
+      const c = job.plan[job.next_chunk];
+      if (c.to > c.from) {
+        const mid = Math.floor((c.from + c.to) / 2);
+        const plan = [...job.plan.slice(0, job.next_chunk), { ...c, to: mid }, { ...c, from: mid + 1 }, ...job.plan.slice(job.next_chunk + 1)];
+        const results = [...(job.chunk_results ?? []).slice(0, job.next_chunk), null, null, ...(job.chunk_results ?? []).slice(job.next_chunk + 1)];
+        await save({ plan, chunk_results: results, usage: job.usage, lease: null, lease_until: null });
+        return true;
+      }
+    }
+    const attempts = job.chunk_attempts + 1;
+    if (err.retry && attempts < MAX_ATTEMPTS) {
+      await save({ chunk_attempts: attempts, usage: job.usage, lease: null, lease_until: new Date(Date.now() + 20_000 * attempts).toISOString(), error: err.message });
+      return true;
+    }
+    await save({ state: "failed", error: err.message, usage: job.usage, lease: null, lease_until: null, finished_at: new Date().toISOString() });
+    return false;
+  }
+}
+
+Deno.serve(async (request) => {
+  if (request.method !== "POST") return new Response(null, { status: 405 });
+  if (!url || !serviceKey) return new Response(null, { status: 503 });
+  const authorization = request.headers.get("Authorization");
+  if (!isServiceCaller(authorization, serviceKey, url)) return new Response(null, { status: 403 });
+  const db = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const claim = await db.rpc("asm_import_claim");
+  if (claim.error) return new Response(null, { status: 500 });
+  const job = claim.data as Job | null;
+  if (!job?.id) return new Response(null, { status: 204 });
+  const work = (async () => {
+    let more = false;
+    try { more = await step(db, job); } catch { more = true; }
+    // release a lease this step did not release (the next call claims the job again)
+    await db.from("asm_import_jobs").update({ lease: null, lease_until: null }).eq("id", job.id).eq("lease", job.lease);
+    if (more) {
+      await fetch(`${url}/functions/v1/asm-import`, { method: "POST", headers: { Authorization: authorization ?? "", "Content-Type": "application/json" }, body: "{}" })
+        .then((r) => r.body?.cancel()).catch(() => undefined);
+    }
+  })();
+  const runtime = (globalThis as { EdgeRuntime?: { waitUntil: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (runtime) { runtime.waitUntil(work); return new Response(null, { status: 202 }); }
+  await work;
+  return new Response(null, { status: 202 });
+});
+

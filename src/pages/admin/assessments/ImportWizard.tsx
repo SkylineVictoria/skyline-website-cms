@@ -13,6 +13,7 @@
  * Answers only ever go to asm_question_keys (assessors), never into the definition.
  */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { BTN_PRIMARY, BTN_SECONDARY, NeedsALook, PdfPreviewDialog, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
 import { checkRows, editCount, markReviewed, numberOf, plainText, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
 import SearchableSelect from "@/components/ui/SearchableSelect";
@@ -501,9 +502,11 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
     </div>
   );
 
-  return (
-    <div className="fixed inset-0 z-[80] flex items-stretch justify-center overflow-y-auto bg-background-200/80 backdrop-blur-sm sm:items-start sm:p-6" role="dialog" aria-modal="true" aria-label="Add assessment">
-      <div className="flex w-full max-w-3xl flex-col bg-white shadow-xl sm:my-4 sm:rounded-2xl">
+  // Rendered at the document root: an ancestor of the page (a transform / filter) would otherwise move "fixed" off the screen's middle.
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-stretch justify-center bg-background-200/80 backdrop-blur-sm sm:items-center sm:p-6" role="dialog" aria-modal="true" aria-label="Add assessment">
+      {/* centred, never shorter than a comfortable working height, never taller than the screen: only the middle scrolls */}
+      <div className="flex h-full w-full max-w-3xl flex-col bg-white shadow-xl sm:h-auto sm:max-h-[calc(100dvh-3rem)] sm:min-h-[min(40rem,calc(100dvh-3rem))] sm:rounded-2xl" data-testid="wizard-panel">
         <header className="flex flex-col gap-3 border-b border-background-200 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-6">
           <div className="min-w-0">
             <h2 className="font-heading text-xl font-bold text-foreground-950">Add assessment</h2>
@@ -512,7 +515,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
           <div className="flex items-center justify-between gap-2"><StepPills steps={steps} current={step} />
             <button type="button" onClick={requestClose} className="cursor-pointer rounded-md p-1 text-foreground-500 hover:bg-background-100 hover:text-foreground-900 sm:ml-2" aria-label="Close"><i className="ri-close-line text-xl" aria-hidden="true" /></button></div>
         </header>
-        <div className="flex-1 px-4 py-4 sm:px-6 sm:py-5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           {step === "upload" ? uploadView : step === "unit" ? unitView : step === "check" ? checkView : doneView}
           {saveError && step !== "done" ? <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{saveError}</p> : null}
         </div>
@@ -532,6 +535,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
           onClose={() => setAsk(null)} onConfirm={() => { setAsk(null); void save(true); }} />
       ) : null}
       {saving ? <div className="fixed inset-0 z-[95] flex items-center justify-center bg-white/60"><p role="status" className="rounded-lg bg-white px-4 py-3 text-sm shadow"><i className="ri-loader-4-line mr-1.5 animate-spin" aria-hidden="true" />Saving…</p></div> : null}
-    </div>
+    </div>,
+    document.body,
   );
 }

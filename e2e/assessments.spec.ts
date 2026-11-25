@@ -447,6 +447,20 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await expect(wizard.getByRole("heading", { name: "Add assessment" })).toBeVisible({ timeout: 20_000 });
     await expect(wizard.getByTestId("drop-workbook")).toBeVisible();
     await expect(wizard.getByTestId("drop-guide")).toBeVisible();
+    // the dialog sits in the middle of the screen at a working height (owner 2026-11-25: it was short and at the top)
+    for (const size of [{ width: 1280, height: 720 }, { width: 1440, height: 1000 }]) {
+      await page.setViewportSize(size);
+      await page.waitForTimeout(200);
+      const box = (await wizard.getByTestId("wizard-panel").boundingBox())!;
+      expect(Math.abs(box.y - (size.height - (box.y + box.height)))).toBeLessThanOrEqual(2);
+      expect(box.height).toBeGreaterThanOrEqual(Math.min(640, size.height - 48) - 1);
+      if (process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, `wizard-centred-${size.width}x${size.height}.png`) });
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    const phone = (await wizard.getByTestId("wizard-panel").boundingBox())!;
+    expect(phone.width).toBeGreaterThanOrEqual(389); // full screen on a phone
+    if (process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, "wizard-phone.png") });
+    await page.setViewportSize({ width: 1280, height: 720 });
     await wizard.getByTestId("start-empty").click();
     await choose(wizard.getByLabel("Qualification"), { label: "RII50520 — Diploma of Civil Construction Design" });
     await choose(wizard.getByLabel("Unit"), { label: "RIICWD525E — Select Pavement surfacing" });

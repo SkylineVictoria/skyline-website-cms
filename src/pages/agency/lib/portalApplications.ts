@@ -612,6 +612,24 @@ export async function listAgentsOfBusiness(businessId: string): Promise<Business
   return (data ?? []).map((r) => toAgentOption(r as Record<string, unknown>));
 }
 
+/** Can be given a student: the agent record is Active (signed in or not yet; owner 2026-11-25: "Invited" agents were hidden). */
+export const agentPickable = (a: BusinessAgentOption) => a.status !== "Inactive";
+
+/** Active agents of every other Active business (SLIT staff pick any agent; owner 2026-11-25), with their business. */
+export async function listActiveAgentsElsewhere(excludeBusinessId: string): Promise<{ agent: BusinessAgentOption; business: { id: string; name: string; status: "Active" } }[]> {
+  const { data, error } = await supabase.from("agents").select("id, profile_id, full_name, email, role, status, business_id")
+    .eq("status", "Active").neq("business_id", excludeBusinessId).order("full_name").limit(500);
+  if (error) throw new Error(error.message);
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const ids = [...new Set(rows.map((r) => str(r.business_id)).filter(Boolean))];
+  if (!ids.length) return [];
+  const { data: biz, error: bizError } = await supabase.from("agencies").select("id, name, status").in("id", ids);
+  if (bizError) throw new Error(bizError.message);
+  const active = new Map(((biz ?? []) as Record<string, unknown>[]).filter((b) => b.status === "Active").map((b) => [str(b.id), str(b.name)]));
+  return rows.filter((r) => active.has(str(r.business_id)))
+    .map((r) => ({ agent: toAgentOption(r), business: { id: str(r.business_id), name: active.get(str(r.business_id)) ?? "", status: "Active" as const } }));
+}
+
 /** The agent record behind a portal login, if any. */
 export async function findAgentByProfile(profileId: string): Promise<BusinessAgentOption | null> {
   const { data, error } = await supabase.from("agents").select("id, profile_id, full_name, email, role, status").eq("profile_id", profileId).maybeSingle();

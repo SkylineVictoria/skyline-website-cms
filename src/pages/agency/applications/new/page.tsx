@@ -12,7 +12,7 @@ import {
   createStudentDraft,
   findAgentByProfile,
   getApplication,
-  listAgentsOfBusiness,
+  agentPickable, listActiveAgentsElsewhere, listAgentsOfBusiness,
   sendApplicationInvitation,
   studentAgencyOptions,
   chooseStudentAgency,
@@ -117,15 +117,22 @@ export default function NewApplicationPage() {
   }, []);
 
   const businessId = chosenBusiness?.id ?? "";
+  const isSlitAdmin = role === "slit_admin";
   const searchAgents = useCallback(async (q: string): Promise<PickOption[]> => {
     if (!businessId) return [];
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return (await listAgentsOfBusiness(businessId))
-      // Only active agents can be chosen.
-      .filter((a) => a.status === "Active")
-      .filter((a) => { const text = `${a.name} ${a.email} ${a.role === "agency_admin" ? "business admin agent" : "agent"}`.toLowerCase(); return words.every((w) => text.includes(w)); })
-      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, a.role === "agency_admin" ? "Business admin agent" : "Agent"].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
-  }, [businessId]);
+    const hit = (text: string) => words.every((w) => text.toLowerCase().includes(w));
+    const roleWord = (a: BusinessAgentOption) => a.role === "agency_admin" ? "Business admin agent" : "Agent";
+    // Every active agent of this business (also those who have not signed in yet), then active agents of other businesses.
+    const own = (await listAgentsOfBusiness(businessId)).filter(agentPickable)
+      .filter((a) => hit(`${a.name} ${a.email} ${roleWord(a)}`))
+      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, roleWord(a)].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
+    const others = isSlitAdmin ? (await listActiveAgentsElsewhere(businessId).catch(() => []))
+      .filter((o) => hit(`${o.agent.name} ${o.agent.email} ${o.business.name}`))
+      .map((o) => ({ id: `other:${o.agent.id}`, label: o.agent.name, meta: [o.agent.email, `${roleWord(o.agent)} at ${o.business.name}`].filter(Boolean).join(", "),
+        tag: <AgentStatusBadge status={o.agent.status} />, raw: { ...o.agent, otherBusiness: o.business } })) : [];
+    return [...own, ...others] as PickOption[];
+  }, [businessId, isSlitAdmin]);
 
   const openWizard = (id: string) => {
     if (authUser?.id) writeSession(authUser.id, id);
@@ -468,7 +475,10 @@ export default function NewApplicationPage() {
               ) : (
                 <SearchPick label="Agent" addNoun="agent" placeholder={`Search or pick an agent at ${chosenBusiness.name}`} resetKey={chosenBusiness.id} autoFocus searchWhenEmpty openOnMount
                   search={searchAgents}
-                  onPick={(option) => setAgent((option as PickOption & { raw: BusinessAgentOption }).raw)}
+                  onPick={(option) => { const raw = (option as PickOption & { raw: BusinessAgentOption & { otherBusiness?: { id: string; name: string; status: "Active" } } }).raw;
+                  // An agent of another business: the student goes to that business.
+                  if (raw.otherBusiness) setBusiness({ id: raw.otherBusiness.id, name: raw.otherBusiness.name, status: raw.otherBusiness.status });
+                  const { otherBusiness: _other, ...agentOnly } = raw; void _other; setAgent(agentOnly); }}
                   onAddNew={role === "slit_admin" ? (name) => { setInitialAgentName(name); setRecordDialogMode("agent"); } : undefined} />
               )}
             </div>

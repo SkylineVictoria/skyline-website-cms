@@ -7,7 +7,7 @@ import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import AddStudentRecordDialog, { type AddStudentRecordValue } from "@/pages/admin/components/AddStudentRecordDialog";
 import StudentDetailsStep, { type StudentDraft } from "@/pages/agency/components/StudentDetailsStep";
 import { activateAgent, listBusinesses, setBusinessStatus, type BusinessStatus } from "@/pages/admin/lib/businessData";
-import { createApplicationForStudent, createStudentDraft, listAgentsOfBusiness, sendApplicationInvitation, type BusinessAgentOption, type StudentMatch } from "@/pages/agency/lib/portalApplications";
+import { createApplicationForStudent, createStudentDraft, agentPickable, listActiveAgentsElsewhere, listAgentsOfBusiness, sendApplicationInvitation, type BusinessAgentOption, type StudentMatch } from "@/pages/agency/lib/portalApplications";
 import { isEmailTakenError } from "@/lib/identity/email";
 
 function newClientKey(): string {
@@ -54,10 +54,17 @@ export default function AddStudentDialog({ open, onClose, onAdded, presetBusines
   const searchAgents = useCallback(async (q: string): Promise<PickOption[]> => {
     if (!businessId) return [];
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    return (await listAgentsOfBusiness(businessId))
-      .filter((a) => a.status === "Active")
-      .filter((a) => { const text = `${a.name} ${a.email} ${a.role === "agency_admin" ? "business admin agent" : "agent"}`.toLowerCase(); return words.every((w) => text.includes(w)); })
-      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, a.role === "agency_admin" ? "Business admin agent" : "Agent"].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
+    const hit = (text: string) => words.every((w) => text.toLowerCase().includes(w));
+    const roleWord = (a: BusinessAgentOption) => a.role === "agency_admin" ? "Business admin agent" : "Agent";
+    // Every active agent of this business (also those who have not signed in yet), then active agents of other businesses.
+    const own = (await listAgentsOfBusiness(businessId)).filter(agentPickable)
+      .filter((a) => hit(`${a.name} ${a.email} ${roleWord(a)}`))
+      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, roleWord(a)].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
+    const others = (await listActiveAgentsElsewhere(businessId).catch(() => []))
+      .filter((o) => hit(`${o.agent.name} ${o.agent.email} ${o.business.name}`))
+      .map((o) => ({ id: `other:${o.agent.id}`, label: o.agent.name, meta: [o.agent.email, `${roleWord(o.agent)} at ${o.business.name}`].filter(Boolean).join(", "),
+        tag: <AgentStatusBadge status={o.agent.status} />, raw: { ...o.agent, otherBusiness: o.business } }));
+    return [...own, ...others] as PickOption[];
   }, [businessId]);
 
   const saveNewRecord = (value: AddStudentRecordValue) => {
@@ -150,7 +157,10 @@ export default function AddStudentDialog({ open, onClose, onAdded, presetBusines
             ) : (
               <SearchPick label="Agent" addNoun="agent" placeholder={`Search or pick an agent at ${business.name}`} resetKey={business.id} autoFocus searchWhenEmpty openOnMount
                 search={searchAgents}
-                onPick={(o) => setAgent((o as PickOption & { raw: BusinessAgentOption }).raw)}
+                onPick={(o) => { const raw = (o as PickOption & { raw: BusinessAgentOption & { otherBusiness?: { id: string; name: string; status: "Active" } } }).raw;
+                  // An agent of another business: the student goes to that business.
+                  if (raw.otherBusiness) setBusiness({ id: raw.otherBusiness.id, name: raw.otherBusiness.name, status: raw.otherBusiness.status });
+                  const { otherBusiness: _other, ...agentOnly } = raw; void _other; setAgent(agentOnly); }}
                 onAddNew={(name) => { setInitialAgentName(name); setRecordDialogMode("agent"); }} />
             )}
           </div>

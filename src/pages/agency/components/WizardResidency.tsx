@@ -1,5 +1,5 @@
-import { FieldError, WIZARD_LABEL as LABEL, WizardTextField } from "@/components/shared/wizard/fields";
-import { IN_AUSTRALIA_ANSWER, PR_ANSWER, isDomesticPassport } from "@/pages/agency/lib/residency";
+import { FieldError, WIZARD_LABEL as LABEL } from "@/components/shared/wizard/fields";
+import { PR_ANSWER, isDomesticPassport } from "@/pages/agency/lib/residency";
 
 function YesNo({ name, label, value, error, onChange }: { name: string; label: string; value: string; error?: string; onChange: (value: string) => void }) {
   return (
@@ -19,7 +19,7 @@ function YesNo({ name, label, value, error, onChange }: { name: string; label: s
 
 /**
  * Shown under the passport once it is uploaded (owner, 2026-11-25): an Australian / New Zealand passport needs no residency
- * questions (Domestic); any other passport is asked about permanent residency, then (not PR) whether the student is in Australia.
+ * question (Domestic); any other passport is asked about permanent residency (Yes: PR evidence next; No: no visa upload).
  */
 export function ResidencyQuestions({ issuingCountry, answers, errors, onChange }: {
   issuingCountry: string;
@@ -35,31 +35,11 @@ export function ResidencyQuestions({ issuingCountry, answers, errors, onChange }
     );
   }
   const pr = answers[PR_ANSWER] ?? "";
-  const inAu = answers[IN_AUSTRALIA_ANSWER] ?? "";
   return (
     <div className="mt-5 space-y-4 rounded-lg border border-background-200 bg-background-100/60 px-4 py-4" data-testid="wizard-residency">
-      <YesNo name={PR_ANSWER} label="Are you an Australian permanent resident?" value={pr} error={errors[PR_ANSWER]}
-        onChange={(value) => { onChange(PR_ANSWER, value); if (value === "Yes" && inAu) onChange(IN_AUSTRALIA_ANSWER, ""); }} />
+      <YesNo name={PR_ANSWER} label="Are you an Australian permanent resident?" value={pr} error={errors[PR_ANSWER]} onChange={(value) => onChange(PR_ANSWER, value)} />
       {pr === "Yes" ? <p className="text-xs text-foreground-600">Next, upload the permanent residency visa grant notice as evidence.</p> : null}
-      {pr === "No" ? (
-        <YesNo name={IN_AUSTRALIA_ANSWER} label="Are you currently in Australia?" value={inAu} error={errors[IN_AUSTRALIA_ANSWER]} onChange={(value) => onChange(IN_AUSTRALIA_ANSWER, value)} />
-      ) : null}
-      {pr === "No" && inAu === "Yes" ? <p className="text-xs text-foreground-600">Next, upload the current Australian visa and enter its details.</p> : null}
-      {pr === "No" && inAu === "No" ? <p className="text-xs text-foreground-600">No visa is needed yet: the CoE is issued first, then the student applies for the visa.</p> : null}
-    </div>
-  );
-}
-
-/** The visa details asked when the student is in Australia on a visa (existing visa_* fields), prefilled from the visa read. */
-export function VisaDetails({ answers, errors, onChange }: { answers: Record<string, string>; errors: Record<string, string>; onChange: (name: string, value: string) => void }) {
-  return (
-    <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3" data-testid="wizard-visa-details">
-      <WizardTextField id="wizard-visa_subclass" name="visa_subclass" label="Visa subclass" value={answers.visa_subclass ?? ""} error={errors.visa_subclass} maxLength={3}
-        placeholder="e.g. 500" inputMode="numeric" onChange={(value) => onChange("visa_subclass", value.replace(/\D/g, ""))} />
-      <WizardTextField id="wizard-visa_grant_number" name="visa_grant_number" label="Visa grant number" value={answers.visa_grant_number ?? ""} error={errors.visa_grant_number} maxLength={40}
-        upper onChange={(value) => onChange("visa_grant_number", value)} />
-      <WizardTextField id="wizard-visa_stay_until" name="visa_stay_until" label="Visa expiry date" type="date" value={answers.visa_stay_until ?? ""} error={errors.visa_stay_until}
-        onChange={(value) => onChange("visa_stay_until", value)} />
+      {pr === "No" ? <p className="text-xs text-foreground-600">No visa upload is needed.</p> : null}
     </div>
   );
 }

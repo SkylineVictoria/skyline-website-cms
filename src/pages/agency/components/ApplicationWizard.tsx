@@ -20,8 +20,8 @@ import { detailRequired, portalSections, staffCourseLabel } from "@/pages/agency
 import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { BORN_IN_PASSPORT_COUNTRY, PASSPORT_COUNTRY_LABEL } from "@/pages/agency/lib/birthCountry";
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
-import { ResidencyQuestions, VisaDetails } from "@/pages/agency/components/WizardResidency";
-import { IN_AUSTRALIA_ANSWER, PR_ANSWER, isDomesticPassport, residencyAnswered, visaDetailProblems, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
+import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
+import { PR_ANSWER, isDomesticPassport, residencyAnswered, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
 import { AVETMISS_EXTRA_FIELDS, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
@@ -328,7 +328,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           if (last >= 0) {
             const docs = wizardDocs(stored);
             const scanned = pick("issuing_country").trim() || docs.filter((doc) => doc.category === "Passport").map((doc) => String(doc.extracted?.issuing_country ?? "").trim()).find(Boolean) || "";
-            const savedNeed = visaNeed(scanned, pick(PR_ANSWER), pick(IN_AUSTRALIA_ANSWER));
+            const savedNeed = visaNeed(scanned, pick(PR_ANSWER));
             const missing = WIZARD_STEPS.findIndex((item, index) => index < last && (item.id === "visa" ? savedNeed !== "none" : item.required) && !docs.some((doc) => doc.category === item.category));
             setStep(missing >= 0 ? missing : last);
           }
@@ -341,9 +341,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             // "Yes, another language" is selected unless an answer was already given.
             language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), language_code: pick("language_code"), usi_number: pick("usi_number"),
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
-            // Residency after the passport (owner, 2026-11-25) and the visa details asked when the student is in Australia.
-            [PR_ANSWER]: pick(PR_ANSWER), [IN_AUSTRALIA_ANSWER]: pick(IN_AUSTRALIA_ANSWER),
-            visa_subclass: pick("visa_subclass"), visa_grant_number: pick("visa_grant_number"), visa_stay_until: pick("visa_stay_until"),
+            // Residency after the passport (owner, 2026-11-25).
+            [PR_ANSWER]: pick(PR_ANSWER),
             course: saved.courseChoice ?? courses[0] ?? "", preferred_intake: saved.intakeLabel ?? pick("preferred_intake"),
             // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
             intake_id: saved.intakeChoice ?? application.courses?.[0]?.intakeId ?? "", intake_join_date: saved.intakeJoin ?? pick("intake_join_date"),
@@ -649,29 +648,14 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     .filter((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && doc.extraction === "done")
     .map((doc) => String(doc.extracted?.issuing_country || doc.extracted?.passport_issuing_country || "").trim())
     .find(Boolean) || "";
-  // Residency (owner, 2026-11-25): the visa step asks for PR evidence, the student visa with its details, or is skipped.
-  const need: VisaNeed = visaNeed(passportCountry, answers[PR_ANSWER] ?? "", answers[IN_AUSTRALIA_ANSWER] ?? "");
-  const residencyDone = residencyAnswered(passportCountry, answers[PR_ANSWER] ?? "", answers[IN_AUSTRALIA_ANSWER] ?? "");
+  // Residency (owner, 2026-11-25): the visa step asks for PR evidence (permanent resident) or is skipped (everyone else).
+  const need: VisaNeed = visaNeed(passportCountry, answers[PR_ANSWER] ?? "");
+  const residencyDone = residencyAnswered(passportCountry, answers[PR_ANSWER] ?? "");
   const skipStep = (item: WizardStep | WizardQuestion | undefined) => item?.id === "visa" && need === "none";
   const stepRequired = (item: WizardStep) => (item.id === "visa" ? need !== "none" : Boolean(item.required));
   /** The step as shown: the visa step reads as PR evidence for a permanent resident. */
-  const shownStep = (item: WizardStep): WizardStep => (item.id !== "visa" ? item : need === "pr"
-    ? { ...item, title: "Permanent residency evidence", short: "PR evidence", noun: "PR evidence", subtitle: "Required. Upload the permanent residency visa grant notice." }
-    : { ...item, subtitle: "Required. Upload the current Australian visa grant notice or VEVO record, then check its details." });
-  // The visa details start from what the visa read gave (never over an answer typed or saved).
-  const visaRead = acceptableVisa.find((doc) => doc.extraction === "done")?.extracted;
-  useEffect(() => {
-    if (need !== "visa" || !visaRead) return;
-    const read: Record<string, string> = {
-      visa_subclass: String(visaRead.visa_subclass ?? "").replace(/\D/g, "").slice(0, 3),
-      visa_grant_number: String(visaRead.visa_grant_number ?? "").trim(),
-      visa_stay_until: String(visaRead.visa_stay_until || visaRead.visa_expiry_date || visaRead.visa_expiry || "").trim().slice(0, 10),
-    };
-    setAnswers((prev) => {
-      const fills = Object.fromEntries(Object.entries(read).filter(([name, value]) => value && !String(prev[name] ?? "").trim() && !touchedRef.current.has(name)));
-      return Object.keys(fills).length ? { ...prev, ...fills } : prev;
-    });
-  }, [need, visaRead]);
+  const shownStep = (item: WizardStep): WizardStep => (item.id !== "visa" || need !== "pr" ? item
+    : { ...item, title: "Permanent residency evidence", short: "PR evidence", noun: "PR evidence", subtitle: "Required. Upload the permanent residency visa grant notice." });
   const firstMissingBefore = (target: number) => WIZARD_STEPS.findIndex((item, index) => index < target && stepRequired(item) && !skipStep(item) && (!stepHasDoc(item) || (item.id === "passport" && ruleBool("admissions.passport_require_expiry_date", false) && documents.some((doc) => doc.category === item.category && doc.extraction === "done" && !getDocumentExpiryStatus("passport", doc.extracted ?? {}).date))));
   // Forward navigation cannot bypass documents marked required by the published admissions rule.
   const goTo = async (index: number, completed = false) => {
@@ -687,9 +671,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   };
 
   /**
-   * Next on a document step. After the passport: saves the residency answers (au_permanent_resident, au_currently_in_australia;
-   * blank for an Australian / New Zealand passport) and holds_visa No when no visa is needed. On the visa step of a student in
-   * Australia: checks and saves the visa subclass, grant number and expiry.
+   * Next on a document step. After the passport: saves the residency answer (au_permanent_resident; blank for an Australian /
+   * New Zealand passport) and holds_visa No when no visa is needed. After the PR evidence: holds_visa Yes.
    */
   const [savingResidency, setSavingResidency] = useState(false);
   const nextFromDocument = async () => {
@@ -697,14 +680,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     if (current.id === "passport" && hasPassport) {
       const domestic = isDomesticPassport(passportCountry);
       const pr = domestic ? "" : answers[PR_ANSWER] ?? "";
-      const inAu = domestic || pr !== "No" ? "" : answers[IN_AUSTRALIA_ANSWER] ?? "";
-      Object.assign(values, { [PR_ANSWER]: pr, [IN_AUSTRALIA_ANSWER]: inAu });
+      values[PR_ANSWER] = pr;
       if (need === "none") values.holds_visa = "No";
-    } else if (current.id === "visa" && need === "visa") {
-      const field = (name: string) => String(answers[name] ?? "").trim();
-      const problems = visaDetailProblems(field("visa_subclass"), field("visa_grant_number"), field("visa_stay_until"), todayIso());
-      if (Object.keys(problems).length) { setAnswerErrors((prev) => ({ ...prev, ...problems })); return; }
-      Object.assign(values, { holds_visa: "Yes", visa_subclass: field("visa_subclass"), visa_grant_number: field("visa_grant_number").toUpperCase(), visa_stay_until: field("visa_stay_until") });
     } else if (current.id === "visa" && need === "pr") {
       values.holds_visa = "Yes";
     }
@@ -1252,9 +1229,6 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         />
         {current.id === "passport" && hasPassport ? (
           <ResidencyQuestions issuingCountry={passportCountry} answers={answers} errors={answerErrors} onChange={(name, value) => { setAnswer(name, value); setAnswerErrors((prev) => ({ ...prev, [name]: "" })); }} />
-        ) : null}
-        {current.id === "visa" && need === "visa" && hasFile ? (
-          <VisaDetails answers={answers} errors={answerErrors} onChange={(name, value) => { setAnswer(name, value); setAnswerErrors((prev) => ({ ...prev, [name]: "" })); }} />
         ) : null}
         {current.id === "english" && AUS_STUDY_STEP && !hasFile && (alternatives.ausStudy || alternatives.cambridge) ? (
           <div className="mt-5 rounded-lg border border-dashed border-background-300 bg-background-100/60 px-4 py-3 text-sm text-foreground-700">

@@ -1,3 +1,4 @@
+import SearchableSelect from "@/components/ui/SearchableSelect";
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -151,16 +152,18 @@ export default function StudentAvetmissPanel({ studentId }: { studentId: string 
         {shown.map((f) => {
           const value = student[f.column] ?? "";
           const key = `col-${f.column}`;
+          // The ASCL language list (avetmiss_codes 'language', 2026-11-25) once it is in the database; a typed 4-digit code before that.
+          const set: AvetmissCodeSet | undefined = f.column === "home_language_code" && codes.language?.length ? "language" : f.set;
           return (
             <div key={f.column} data-testid={`avetmiss-field-${f.column}`}>
               <dt className="text-xs text-foreground-500">{f.label}</dt>
               {editing === key ? (
                 <dd className="mt-1 flex flex-wrap items-center gap-2">
-                  {f.set ? (
-                    <select aria-label={f.label} className={BOX} value={draft} onChange={(e) => setDraft(e.target.value)}>
+                  {set ? (
+                    <SearchableSelect aria-label={f.label} className={BOX} value={draft} onChange={(e) => setDraft(e.target.value)}>
                       <option value="">Not recorded</option>
-                      {avetmissOptions(codes, f.set, value).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
-                    </select>
+                      {avetmissOptions(codes, set, value).map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+                    </SearchableSelect>
                   ) : <input aria-label={f.label} className={`${BOX} w-28`} value={draft} maxLength={4} placeholder={f.hint} onChange={(e) => setDraft(e.target.value.toUpperCase())} />}
                   <Button size="sm" disabled={busy === key || Boolean(draft && f.pattern && !f.pattern.test(draft))} onClick={() => void saveColumn(f.column, draft)}>{busy === key ? "Saving…" : "Save"}</Button>
                   <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
@@ -168,7 +171,7 @@ export default function StudentAvetmissPanel({ studentId }: { studentId: string 
                 </dd>
               ) : (
                 <dd className="flex flex-wrap items-center gap-1 text-foreground-900">
-                  {value ? <span>{f.set ? `${avetmissLabel(codes, f.set, value)}` : value}{f.set ? <span className="ml-1 text-xs text-foreground-500">({value})</span> : null}</span> : <span className="text-foreground-500">Not recorded</span>}
+                  {value ? <span>{set ? `${avetmissLabel(codes, set, value)}` : value}{set ? <span className="ml-1 text-xs text-foreground-500">({value})</span> : null}</span> : <span className="text-foreground-500">Not recorded</span>}
                   {!value ? missingBadge : null}
                   <button type="button" className="ml-1 cursor-pointer rounded p-0.5 text-foreground-500 hover:bg-background-100 hover:text-foreground-900" aria-label={`Edit ${f.label}`}
                     onClick={() => { setEditing(key); setDraft(value); }} data-testid={`avetmiss-edit-${f.column}`}><i className="ri-pencil-line" aria-hidden="true" /></button>

@@ -28,7 +28,7 @@ import type { AddressPick } from "@/components/shared/wizard/AddressSearch";
 import { NO_INTAKES_MESSAGE } from "@/pages/agency/components/IntakeSelect";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
 import { rto, type RtoCourse } from "@/pages/admin/lib/rto";
-import { OTHER_LANGUAGE, WIZARD_QUESTIONS, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { ENGLISH_LANGUAGE_CODE, OTHER_LANGUAGE, WIZARD_QUESTIONS, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import { normalizeUsi, validateUsi } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { emergencyContactProblems } from "../../../../supabase/functions/_shared/validation/person";
 import {
@@ -148,7 +148,7 @@ const isOverseasLicence = (doc: WizardDoc) =>
 const FINISH_FIELDS = Object.values(FINISH_SCREEN_FIELDS).flat();
 const SCREEN_OF_FIELD = new Map(Object.entries(FINISH_SCREEN_FIELDS).flatMap(([screen, names]) => names.map((name) => [name, screen] as const)));
 const OTHER_SCREENS: Record<string, string> = {
-  language_home: "language", language_other: "language", has_usi: "usi", usi_number: "usi", ec_name: "emergency", ec_phone: "emergency", ec_in_au: "emergency",
+  language_home: "language", language_other: "language", language_code: "language", has_usi: "usi", usi_number: "usi", ec_name: "emergency", ec_phone: "emergency", ec_in_au: "emergency",
   courses_of_interest: "course", preferred_intake: "course",
 };
 const USI_CONSENT_TEXT = "I consent to SLIT using/providing my USI for enrolment, reporting and verification purposes where required.";
@@ -331,7 +331,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           if (saved.cambridgeChoice) setCambridge(saved.cambridgeChoice);
           setAnswers({
             // "Yes, another language" is selected unless an answer was already given.
-            language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), usi_number: pick("usi_number"),
+            language_home: pick("language_home") || OTHER_LANGUAGE, language_other: pick("language_other"), language_code: pick("language_code"), usi_number: pick("usi_number"),
             ec_name: pick("ec_name"), ec_phone: pick("ec_phone"), ec_relationship: pick("ec_relationship"),
             course: saved.courseChoice ?? courses[0] ?? "", preferred_intake: saved.intakeLabel ?? pick("preferred_intake"),
             // INT-01: the intake chosen on the course row (an intake typed before the dropdown is not kept: it is chosen again).
@@ -814,6 +814,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       else if (answers.language_home === OTHER_LANGUAGE && !filled("language_other")) errors.language_other = "Enter the language the student speaks.";
       values.language_home = answers.language_home;
       values.language_other = answers.language_home === OTHER_LANGUAGE ? filled("language_other") : "";
+      // AVETMISS language identifier (ASCL): the chosen code, 1201 for English only; blank when typed as text (no list yet).
+      values.language_code = answers.language_home === OTHER_LANGUAGE ? filled("language_code") : ENGLISH_LANGUAGE_CODE;
     } else if (target.id === "usi") {
       const usi = normalizeUsi(answers.usi_number ?? "");
       // Business Rules admissions.usi_required: Required (today) needs a USI here; Optional lets it stay blank ("No USI yet").
@@ -953,7 +955,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (!(await persist())) return false;
       await saveWizardDraft(applicationId, { values, ...patch });
       // AVETMISS-UI: copied to the student's AVETMISS tables when this user may write them (best effort; an agent's stays pending).
-      if (target.id === "identifier" && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
+      if ((target.id === "identifier" || target.id === "language") && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
       return true;
     } catch (error) {
       setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");

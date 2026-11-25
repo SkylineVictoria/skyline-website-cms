@@ -3,8 +3,9 @@ import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel a
 import IntakeSelect from "@/pages/agency/components/IntakeSelect";
 import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import { intakeKey, type OpenIntake } from "@/pages/agency/lib/intakes";
-import { ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
+import { ENGLISH_LANGUAGE_CODE, ENGLISH_ONLY, OTHER_LANGUAGE, type WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 
 /**
  * One answer screen. Inputs are plain form controls named after the application fields; the wizard reads them from the
@@ -30,6 +31,10 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   /** The application (USI screen: Verify / find / create the USI with usi-service). */
   applicationId?: string;
 }) {
+  // AVETMISS-LANGUAGES (owner 2026-11-25): the home language is chosen from the ASCL list (avetmiss_codes 'language'); the code is
+  // saved as language_code and the name as language_other. Until that list is in the database the old text box stays.
+  const { codes } = useAvetmissCodes();
+  const languages = avetmissOptions(codes, "language", answers.language_code).filter((o) => o.code !== ENGLISH_LANGUAGE_CODE);
   const text = (name: string, label: string, props: { placeholder?: string; maxLength?: number; upper?: boolean } = {}) => (
     <WizardTextField id={`wizard-${name}`} name={name} label={label} value={answers[name] ?? ""} error={errors[name]} maxLength={props.maxLength ?? 200}
       placeholder={props.placeholder} upper={props.upper} onChange={(value) => onChange(name, value)} />
@@ -55,7 +60,17 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
             </div>
             <FieldError text={errors.language_home} />
           </fieldset>
-          {answers.language_home === OTHER_LANGUAGE ? text("language_other", "Which language does the student speak?", { placeholder: "e.g. Hindi", maxLength: 100 }) : null}
+          {answers.language_home !== OTHER_LANGUAGE ? null : languages.length ? (
+            <div>
+              <Label htmlFor="wizard-language_code" required>Which language does the student speak?</Label>
+              <SearchableSelect id="wizard-language_code" name="language_code" value={answers.language_code ?? ""} aria-invalid={Boolean(errors.language_other)} className={INPUT}
+                onChange={(e) => { const hit = languages.find((o) => o.code === e.target.value); onChange("language_code", e.target.value); onChange("language_other", hit?.label ?? ""); }}>
+                <option value="">Search for a language</option>
+                {languages.map((o) => <option key={o.code} value={o.code}>{o.label}</option>)}
+              </SearchableSelect>
+              <FieldError text={errors.language_other} />
+            </div>
+          ) : text("language_other", "Which language does the student speak?", { placeholder: "e.g. Hindi", maxLength: 100 })}
         </div>
       ) : null}
 

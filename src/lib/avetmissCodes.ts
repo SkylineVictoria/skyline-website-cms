@@ -7,7 +7,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
  * its label. Loaded once per page load (one small table, readable by everyone).
  */
 export type AvetmissCodeSet =
-  | "commencing" | "disability_type" | "english_proficiency" | "flag" | "funding_source" | "indigenous_status" | "labour_force" | "org_type"
+  | "commencing" | "disability_type" | "english_proficiency" | "flag" | "funding_source" | "indigenous_status" | "labour_force" | "language" | "org_type"
   | "outcome" | "predominant_delivery_mode" | "prior_education" | "prior_education_recognition" | "school_level" | "sex" | "state" | "study_reason";
 
 export interface AvetmissCode { code_set: string; code: string; label: string; sort: number; is_active: boolean }

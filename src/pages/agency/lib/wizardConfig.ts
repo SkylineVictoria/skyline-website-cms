@@ -128,6 +128,8 @@ if (USI_QUESTION) Object.defineProperty(USI_QUESTION, "subtitle", {
 });
 
 export const ENGLISH_ONLY = "No, English only - 1201";
+/** ASCL code for English (AVETMISS language identifier); the "another language" list leaves it out. */
+export const ENGLISH_LANGUAGE_CODE = "1201";
 export const OTHER_LANGUAGE = "Yes, language other than English";
 
 /** Set when the wizard finishes: the full form then opens on its Student declaration page. */

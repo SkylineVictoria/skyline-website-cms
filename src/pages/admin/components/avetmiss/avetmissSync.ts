@@ -8,9 +8,15 @@ import { parseCodeList, parsePriorEducation, priorEducationProblem } from "./ave
  * in the application (data.values) and the CMS student page shows them as "not saved yet" with Save. Never throws.
  * Returns which parts were saved.
  */
-export async function syncApplicationAvetmiss(studentId: string, values: Record<string, unknown>): Promise<{ english: boolean; disabilities: boolean; prior: boolean }> {
-  const saved = { english: false, disabilities: false, prior: false };
+export async function syncApplicationAvetmiss(studentId: string, values: Record<string, unknown>): Promise<{ english: boolean; disabilities: boolean; prior: boolean; language?: boolean }> {
+  const saved: { english: boolean; disabilities: boolean; prior: boolean; language?: boolean } = { english: false, disabilities: false, prior: false };
   try {
+    // AVETMISS-LANGUAGES (2026-11-25): the ASCL home language code from the wizard's Language screen.
+    const language = String(values.language_code ?? "").trim();
+    if (/^\d{4}$/.test(language)) {
+      const { data, error } = await supabase.from("enrollment_students").update({ home_language_code: language }).eq("id", studentId).select("id");
+      saved.language = !error && Array.isArray(data) && data.length > 0;
+    }
     const english = String(values.english_proficiency_code ?? "").trim();
     if (english) {
       const { data, error } = await supabase.from("enrollment_students").update({ english_proficiency_code: english }).eq("id", studentId).select("id");

@@ -18,6 +18,7 @@ import MasterTimetableTab from "@/pages/admin/lms/MasterTimetableTab";
 import { VoeTab } from "@/pages/admin/lms/VoeCalendarEditor";
 import { DailyTimetableTab } from "@/pages/admin/lms/CourseWeeklyTimetable";
 import IntakeGroupPanel from "@/pages/admin/components/rto/IntakeGroupPanel";
+import IntakeBatchesPanel from "@/pages/admin/components/rto/IntakeBatchesPanel";
 import {
   loadIntakeLoads, type StudyLoad, addDays, clashText, feeTotal, money, monthYear, registeredWeeks, rto, rtoHoursCheck, shortDate, timingLines, timingShort, todayIso, weeksOf,
   type BatchStudent, type FeeItem, type HoursCheck, type IntakeDetail, type IntakeStatus, type RtoBatch, type RtoIntake, type ScheduleRow,
@@ -28,9 +29,9 @@ const seatText = (used: number, seats?: number | null) => (seats ? `${used} of $
 const classGroup = (d: IntakeDetail): RtoBatch | null => d.batches.find((b) => b.id === d.intake.id) ?? d.batches.find((b) => b.isActive) ?? d.batches[0] ?? null;
 const hasSetup = (g: RtoBatch) => (g.sessions ?? []).length > 0 || g.classDays.length > 0;
 
-export type SheetTab = "overview" | "timeline" | "classes" | "students" | "group" | "assessments" | "timetables";
+export type SheetTab = "overview" | "timeline" | "classes" | "batches" | "students" | "group" | "assessments" | "timetables";
 const TABS: { id: SheetTab; label: string }[] = [
-  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Weekly timetable" }, { id: "timetables", label: "Weekly and daily calendars" }, { id: "students", label: "Students" }, { id: "group", label: "Group" }, { id: "assessments", label: "Assessments" },
+  { id: "overview", label: "Overview" }, { id: "timeline", label: "Timeline" }, { id: "classes", label: "Weekly timetable" }, { id: "batches", label: "Batches" }, { id: "timetables", label: "Weekly and daily calendars" }, { id: "students", label: "Students" }, { id: "group", label: "Group" }, { id: "assessments", label: "Assessments" },
 ];
 const active = (s: BatchStudent) => s.status === "active" || s.status === "deferred";
 
@@ -156,6 +157,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
                 onSetup={() => { setTab("classes"); setSetup(true); }} />
             ) : null}
             {tab === "timetables" ? <TimetablesPanel intakeId={detail.intake.id} courseId={detail.intake.courseId} courseCode={detail.intake.courseCode} canEdit={canEdit} /> : null}
+            {tab === "batches" ? <IntakeBatchesPanel intakeId={detail.intake.id} canEdit={canEdit} canAssign={canEdit || canEnrol} units={detail.schedule.map((r) => ({ unitId: r.unitId, code: r.code }))} /> : null}
             {tab === "group" ? <IntakeGroupPanel intakeId={intakeId} /> : null}
             {tab === "assessments" ? (group ? <IntakeAssessmentsPanel batchId={group.id} />
               : <Empty icon="ri-file-list-3-line" title="Weekly timetable not selected yet" text="Assessments are assigned to an intake once its classes are set up." />) : null}

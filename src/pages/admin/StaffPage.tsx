@@ -6,7 +6,7 @@ import { HrLink } from "@/pages/admin/components/Recruitment";
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import ResendLinkButton from "@/pages/admin/components/ResendLinkButton";
 import { EMPLOYEE_STATUS_LABEL, formatMobile, listEmployees, type Employee, type EmployeeStatus } from "@/lib/employeesApi";
-import { adminDeleteStaff, adminEditStaff, adminListStaff, type StaffListRow } from "@/lib/staffApi";
+import { adminDeleteStaff, adminEditStaff, adminListStaff, staffAdminActions, type StaffListRow } from "@/lib/staffApi";
 import { STAFF_STATUS_LABEL, STAFF_STATUS_TONE, type StaffStatus } from "@/lib/staffStatus";
 import { staffEmployeePath } from "@/pages/admin/lib/staffRoutes";
 
@@ -30,7 +30,7 @@ export default function StaffPage() {
   const [notice, setNotice] = useState("");
   const [reload, setReload] = useState(0);
   const [editing, setEditing] = useState<StaffListRow | null>(null);
-  const [deleting, setDeleting] = useState<StaffListRow | null>(null);
+  const [deleting, setDeleting] = useState<Pick<StaffListRow, "id" | "name" | "email"> | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
@@ -105,7 +105,7 @@ export default function StaffPage() {
         <Card className="data-table-frame">
           <table className="data-table w-full text-left text-sm" data-testid="employees-table">
             <thead className="border-b border-background-200 text-xs uppercase text-foreground-500"><tr>
-              {["Name", "Email", "Mobile", "Documents", "Status"].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
+              {["Name", "Email", "Mobile", "Documents", "Status", "Sign-in", "Actions"].map((h) => <th key={h} className="px-4 py-3">{h}</th>)}
             </tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.id} className="border-b border-background-100 last:border-0" data-testid={`employee-row-${r.id}`}>
@@ -114,6 +114,12 @@ export default function StaffPage() {
                 <td data-label="Mobile" className="px-4 py-3">{formatMobile(r.phone)}</td>
                 <td data-label="Documents" className="px-4 py-3">{r.documents}</td>
                 <td data-label="Status" className="px-4 py-3"><Badge tone={r.status === "active" ? "success" : "muted"}>{EMPLOYEE_STATUS_LABEL[r.status]}</Badge></td>
+                <td data-label="Sign-in" className="px-4 py-3"><EmployeeSignIn row={r} onDone={(m) => { setNotice(m); setReload((n) => n + 1); }} onError={setError} /></td>
+                {/* Owner 2026-11-24: Active / Inactive employees can be deleted too (same confirmation and rules; never your own record). */}
+                <td data-label="Actions" className="px-4 py-3">
+                  <Button size="sm" variant="danger" icon="ri-delete-bin-line" data-testid={`employee-delete-${r.id}`}
+                    onClick={() => { setDeleteError(""); setDeleting({ id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(" "), email: r.email }); }}>Delete</Button>
+                </td>
               </tr>
             ))}</tbody>
           </table>
@@ -134,7 +140,7 @@ export default function StaffPage() {
             setReload((n) => n + 1);
           }, (e: Error) => setDeleteError(e.message)).finally(() => setDeleteBusy(false));
         }} />
-      {adding ? <EmployeeFormDialog onClose={() => setAdding(false)} onSaved={(id, result) => navigate(staffEmployeePath(id), { state: { message: result?.message ?? "Employee added. Upload their documents below." } })} /> : null}
+      {adding ? <EmployeeFormDialog onClose={() => setAdding(false)} onSaved={(id, result) => navigate(staffEmployeePath(id), { state: { message: result?.message ?? "Employee added. Upload their documents below.", offerDetails: result?.mode === "onboard" } })} /> : null}
     </div>
   );
 }
@@ -169,5 +175,41 @@ function StaffEditDialog({ row, onClose, onSaved }: { row: StaffListRow; onClose
         {error ? <p role="alert" className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * EMPLOYEE-SIGNIN (2026-11-24, owner): the Employees list shows each person's sign-in. "Can sign in" only once they have chosen their
+ * password; "Link sent, no password yet" while the one-time link waits; "Not invited" otherwise. An active employee without a password
+ * gets Send / Resend sign-in link (staff-admin invite_login: one personal link to /staff/welcome where they choose their password).
+ */
+function employeeSignInState(r: Pick<Employee, "hasLogin" | "passwordSet">): { label: string; tone: "success" | "warn" | "muted" } {
+  if (r.hasLogin && r.passwordSet) return { label: "Can sign in", tone: "success" };
+  if (r.hasLogin) return { label: "Link sent, no password yet", tone: "warn" };
+  return { label: "Not invited", tone: "muted" };
+}
+
+function EmployeeSignIn({ row, onDone, onError }: { row: Employee; onDone: (message: string) => void; onError: (message: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const state = employeeSignInState(row);
+  const canSend = row.status === "active" && !(row.hasLogin && row.passwordSet);
+  const send = async () => {
+    const verb = row.hasLogin ? "Resend" : "Send";
+    if (!window.confirm(`${verb} a sign-in link to ${row.email}? They choose their own password from it, then sign in to their workspace.`)) return;
+    setBusy(true);
+    try {
+      const result = await staffAdminActions.inviteLogin(row.id);
+      onDone(result.link ? `Email sending is off. Open ${[row.firstName, row.lastName].filter(Boolean).join(" ") || row.email}'s page to copy the link.`
+        : `Sign-in link ${row.hasLogin ? "sent again" : "sent"} to ${row.email}. Once they choose a password they can sign in.`);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "The sign-in link could not be sent.");
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" data-testid={`employee-signin-${row.id}`}>
+      <Badge tone={state.tone}>{state.label}</Badge>
+      {canSend ? <Button size="sm" variant="outline" icon="ri-login-circle-line" disabled={busy || !row.email} onClick={() => void send()} data-testid={`employee-signin-send-${row.id}`}>
+        {busy ? "Sending…" : row.hasLogin ? "Resend sign-in link" : "Send sign-in link"}</Button> : null}
+    </div>
   );
 }

@@ -83,8 +83,10 @@ export interface EmployeeContext {
 }
 export function employeeActions(c: EmployeeContext): EmployeeAction[] {
   switch (c.status) {
-    case "applied": return ["send_documents_link", "reject"];
-    case "invited": return [...(c.liveDocumentLink ? ["resend_documents_link", "revoke_link"] as const : ["resend_documents_link"] as const), "reject"];
+    // STAFF-OFFER-FULL-PART-TIME: the offer may go first (documents follow once it is signed): offer details, then Send offer.
+    case "applied": return [...(c.payComplete ? ["send_offer", "edit_pay_details"] as const : ["add_pay_details"] as const), "send_documents_link", "reject"];
+    case "invited": return [...(c.payComplete ? ["send_offer", "edit_pay_details"] as const : ["add_pay_details"] as const),
+      ...(c.liveDocumentLink ? ["resend_documents_link", "revoke_link"] as const : ["resend_documents_link"] as const), "reject"];
     case "documents_submitted": {
       const out: EmployeeAction[] = [];
       if (c.rejectedDocuments > 0) out.push("send_reupload_link");
@@ -142,7 +144,7 @@ onHrRules(() => {
 export const EMAIL_KIND_LABEL: Record<string, string> = {
   application_received: "Application received", already_applied: "Already applied", admin_new_application: "New application (to HR)",
   document_invite: "Document link", reupload_invite: "Re-upload link", admin_documents_submitted: "Documents uploaded (to HR)",
-  offer: "Offer and sign-in link", login_link: "Sign-in link", signed_offer: "Signed offer copy", admin_offer_signed: "Offer signed (to HR)", rejected: "Rejection", access_ready: "Staff access ready",
+  offer: "Offer and sign-in link", login_link: "Sign-in link", signed_offer: "Signed offer copy", admin_offer_signed: "Offer signed (to HR)", admin_offer_declined: "Offer declined (to HR)", rejected: "Rejection", access_ready: "Staff access ready",
 };
 
 export const isStaffStatus = (value: unknown): value is StaffStatus => typeof value === "string" && (STAFF_STATUSES as readonly string[]).includes(value);

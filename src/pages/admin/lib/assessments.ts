@@ -14,7 +14,7 @@ export interface VersionSummary { id: string; versionNo: number; status: "draft"
 export interface AssignmentRow {
   id: string; assessmentId: string; versionId: string; batchId: string; batchName: string; intakeId: string; intake: string; courseId: string; courseName: string; assessmentTitle: string; assessmentCode: string | null;
   unitId: string | null; unitCode: string | null; unitName: string | null; versionNo: number; availableFrom: string; dueAt: string; lateUntil: string | null; status: "open" | "closed" | "cancelled";
-  reassignRule: "follow_batch" | "keep"; notes: string; trainers: { staffId: string; name: string; source: "batch" | "assignment" }[];
+  reassignRule: "follow_master" | "keep"; notes: string; trainers: { staffId: string; name: string; source: "batch" | "assignment" }[];
   events: { id: string; kind: string; title: string; startsAt: string; endsAt: string | null; roomId: string | null; trainerStaffId: string | null; notes: string }[]; eligibleCount: number;
   toMark?: number; submitted?: number; final?: number;
 }

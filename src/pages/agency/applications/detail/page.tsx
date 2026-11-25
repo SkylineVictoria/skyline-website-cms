@@ -1,4 +1,5 @@
 import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
+import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useState } from "react";
@@ -210,12 +211,16 @@ export default function ApplicationDetailPage() {
   if (needsInitialWizard(application)) {
     return (
       <div className="space-y-4">
-        <Link to={paths.list} className="text-sm font-medium text-primary-700">All applications</Link>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Link to={paths.list} className="text-sm font-medium text-primary-700">All applications</Link>
+          {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
+        </div>
         <FinishApplicationPanel key={application.id} id={application.id} email={application.studentEmail}
           canInvite={role === "slit_admin" || role === "agency_admin" || role === "agent"} onContinue={openWizard} />
         {wizardOpen ? <ApplicationWizard key={application.id} applicationId={application.id}
           agencyName={application.agencyName || agency?.name || ""}
           onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); void load(); }} /> : null}
+        <Toast message={toast.message} onDismiss={toast.dismiss} />
       </div>
     );
   }
@@ -268,6 +273,7 @@ export default function ApplicationDetailPage() {
             {application.submittedAt ? <span>Submitted {formatDate(application.submittedAt)}</span> : null}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
+            {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Message student" size="sm" /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Message agent" size="sm" /> : null}
             {isSlit ? (

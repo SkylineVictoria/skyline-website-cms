@@ -468,3 +468,32 @@ export async function invokePortalUsers(body: Record<string, unknown>): Promise<
   if (data?.error) throw new Error(String(data.error), { cause: data });
   return (data ?? {}) as Record<string, unknown>;
 }
+
+/** PORTAL-AGENT-INVITES (2026-11-24): the business's agents with their sign-in state, for the business admin agent's Invite / Resend. */
+export interface BusinessAgentRow {
+  id: string; name: string; email: string; role: "agent" | "agency_admin"; status: "Active" | "Inactive" | "Onboarding" | "Declined";
+  hasLogin: boolean;
+  invitation: { id: string; status: "pending" | "accepted"; expiresAt: string; lastSentAt: string; sentCount: number } | null;
+}
+export async function listMyBusinessAgents(agencyId?: string | null): Promise<BusinessAgentRow[]> {
+  const { data, error } = await supabase.rpc("portal_my_business_agents", { p_agency: agencyId ?? null });
+  if (error) throw new Error(error.message || "We could not load your agents.");
+  return (data ?? []) as BusinessAgentRow[];
+}
+/** What the agent's row can do: their sign-in state in words and the one action offered (or why none). */
+export function agentInviteState(a: BusinessAgentRow, now = Date.now()): { label: string; tone: "ok" | "wait" | "warn" | "off"; action: "invite" | "resend" | null } {
+  // Owner 2026-11-24: Active only once they have created their password; Invited until then; Not invited when nothing was sent.
+  if (a.hasLogin) return { label: "Active", tone: "ok", action: null };
+  if (a.status === "Inactive" || a.status === "Declined") return { label: "Inactive", tone: "off", action: null };
+  if (!a.email) return { label: "No email", tone: "warn", action: null };
+  if (a.invitation?.status === "pending") {
+    const expired = Date.parse(a.invitation.expiresAt) < now;
+    return { label: expired ? "Invited (link expired)" : "Invited", tone: expired ? "warn" : "wait", action: "resend" };
+  }
+  return { label: "Not invited", tone: "warn", action: "invite" };
+}
+/** PORTAL-AGENT-DEACTIVATE (2026-11-24): the business admin agent switches an agent off (sign-in, record, waiting invitation) or back on. */
+export async function setBusinessAgentStatus(agentId: string, status: "Active" | "Inactive"): Promise<void> {
+  const { error } = await supabase.rpc("portal_agent_set_status", { p_agent: agentId, p_status: status });
+  if (error) throw new Error(error.message || "We could not change this agent.");
+}

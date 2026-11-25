@@ -11,7 +11,8 @@ import WizardShell, { WIZARD_PRIMARY_CLASS, WizardBackButton, WizardNotice } fro
 import WizardStepper from "@/components/shared/wizard/WizardStepper";
 import { STAFF_WIZARD_STEPS, type WizardExtractionState } from "@/pages/agency/lib/wizardConfig";
 import type { StaffDocument } from "@/lib/staffApi";
-import { FieldError as SaveError, LinkInvalidError, onboarding, takeLinkToken, type OnboardingView } from "@/lib/staffOnboardingApi";
+import SignaturePad from "@/components/signing/SignaturePad";
+import { FieldError as SaveError, LinkInvalidError, myOfferApi, onboarding, takeLinkToken, type OnboardingView } from "@/lib/staffOnboardingApi";
 import { STAFF_WIZARD, detailsOf, isBeingRead, licenceGaveAddress, prefillNote, stepComplete, stepFields, taxSuperRows, wizardProblems, type PrefillField, type StaffWizardStepId } from "@/lib/staffOnboardingWizard";
 import { STAFF_DOC_LABEL, staffDocKinds, todayIso, type StaffDocCategory } from "@/lib/staffStatus";
 import { formatPhone } from "../../../supabase/functions/_shared/validation/identifiers";
@@ -230,6 +231,16 @@ function Wizard({ view, token, onChange, onError }: Props) {
   const [savingBank, setSavingBank] = useState(false);
   const [expiryError, setExpiryError] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
+  // OFFER-SIGN-LAST: with an offer waiting (Offer sent), the last screen signs the offer and submits the documents together.
+  const signsOffer = view.status === "offer_sent";
+  const [signName, setSignName] = useState("");
+  const [signAgreed, setSignAgreed] = useState(false);
+  const [signImage, setSignImage] = useState<string | null>(null);
+  const [consentText, setConsentText] = useState("");
+  useEffect(() => {
+    if (!signsOffer) return;
+    void myOfferApi.open().then((r) => setConsentText(r.consent), () => setConsentText(""));
+  }, [signsOffer]);
   const latest = useRef(details);
   const dirty = useRef(new Set<StaffField>());
   const timer = useRef<number | undefined>(undefined);
@@ -353,9 +364,25 @@ function Wizard({ view, token, onChange, onError }: Props) {
 
   const submit = async () => {
     setSubmitError("");
+    if (signsOffer && (!signName.trim() || !signImage || !signAgreed)) { setSubmitError("Type your full name, draw your signature and tick the box to sign the offer."); return; }
     if (!(await flush())) return;
     setSubmitting(true);
-    try { onChange(await onboarding.submit(token)); try { window.sessionStorage.removeItem(STEP_KEY); } catch { /* storage unavailable */ } }
+    try {
+      const sent = await onboarding.submit(token);
+      try { window.sessionStorage.removeItem(STEP_KEY); } catch { /* storage unavailable */ }
+      if (signsOffer) {
+        // The documents are in; now the offer is signed (the server refuses a signature before the documents).
+        try { await myOfferApi.sign(signName.trim(), signImage); }
+        catch (e) {
+          setSubmitError(`Your details and documents were sent, but the offer could not be signed: ${e instanceof Error ? e.message : "please try again"}. Sign it from My HR.`);
+          window.setTimeout(() => window.location.assign("/staff"), 4000);
+          return;
+        }
+        window.location.assign("/staff");
+        return;
+      }
+      onChange(sent);
+    }
     catch (e) { if (e instanceof LinkInvalidError) onError(e); else setSubmitError(e instanceof Error ? e.message : "Your details could not be sent."); }
     finally { setSubmitting(false); }
   };
@@ -715,6 +742,25 @@ function Wizard({ view, token, onChange, onError }: Props) {
         <ReviewCard icon="ri-file-list-3-line" title="Documents" edit={edits("documents", "Documents")}>
           <div className="mt-3"><Checklist view={view} token={token} onChange={onChange} canReupload={false} /></div>
         </ReviewCard>
+        {signsOffer ? (
+          <section className="rounded-card border border-primary-200 bg-primary-50 p-4" data-testid="staff-sign-offer">
+            <h3 className="font-heading text-base font-bold text-foreground-950">Sign your offer</h3>
+            <p className="mt-1 text-sm text-foreground-700">By signing you accept the offer letter you read on My HR.</p>
+            <label className="mt-3 block max-w-md text-sm">
+              <span className="font-medium text-foreground-800">Your full name</span>
+              <input value={signName} onChange={(e) => setSignName(e.target.value)} autoComplete="name" maxLength={200} className={WIZARD_INPUT} data-testid="staff-sign-name" />
+            </label>
+            <div className="mt-3 text-sm" data-testid="staff-sign-pad">
+              <span className="mb-1 block font-medium text-foreground-800">Your signature</span>
+              <SignaturePad onChange={setSignImage} />
+              <span className="mt-1 block text-xs text-foreground-600">Draw it with your finger, a pen or the mouse. It is printed on your signed offer letter with today&apos;s date.</span>
+            </div>
+            <label className="mt-3 flex cursor-pointer items-start gap-2.5 text-sm text-foreground-800">
+              <input type="checkbox" checked={signAgreed} onChange={(e) => setSignAgreed(e.target.checked)} className="mt-0.5 h-4 w-4" data-testid="staff-sign-agree" />
+              <span>{consentText || "I have read the offer letter and I accept it."}</span>
+            </label>
+          </section>
+        ) : null}
         {submitError ? <p role="alert" className={ALERT}>{submitError}</p> : null}
         <p className="text-xs text-foreground-500">After you send them you cannot change them. If an administrator needs a document again, we email you a new link.</p>
       </div>
@@ -740,7 +786,7 @@ function Wizard({ view, token, onChange, onError }: Props) {
         footerEnd={
           isLast ? (
             <button type="button" onClick={() => void submit()} disabled={submitting || problems.length > 0} className={WIZARD_PRIMARY_CLASS} data-testid="staff-submit">
-              {submitting ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Sending&hellip;</> : <>Send my details and documents <i className="ri-send-plane-line" aria-hidden="true" /></>}
+              {submitting ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Sending&hellip;</> : <>{signsOffer ? "Sign the offer and submit" : "Send my details and documents"} <i className="ri-send-plane-line" aria-hidden="true" /></>}
             </button>
           ) : (
             <button type="button" onClick={next} disabled={savingBank} className={WIZARD_PRIMARY_CLASS} data-testid="staff-next">

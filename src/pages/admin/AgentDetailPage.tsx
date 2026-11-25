@@ -12,7 +12,7 @@ import ApplicationsList from "@/pages/admin/components/ApplicationsList";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
-import { agentOnboardingWords, deactivateAgent, getAgentOverview, resendInvitation, type AgentOverview, awaitingPassword } from "@/pages/admin/lib/businessData";
+import { agentOnboardingWords, deactivateAgent, getAgentOverview, resendInvitation, type AgentOverview, awaitingPassword, agentSignInStatus } from "@/pages/admin/lib/businessData";
 import { groupByStudent } from "@/pages/admin/lib/businessGroups";
 import { formatDate } from "@/pages/agency/lib/portalData";
 
@@ -96,10 +96,10 @@ export default function AgentDetailPage() {
         title={agent.name}
         description={[agent.marn ? `MARN ${agent.marn}` : null, agent.role === "agency_admin" ? "Business admin agent" : "Agent", `with ${agent.business.name}`].filter(Boolean).join(", ")}
         actions={<>
-          <AgentStatusBadge status={agent.status} />
+          <AgentStatusBadge status={agentSignInStatus(agent)} />
           <MessagePersonButton kind="agent" refId={agent.profileId ?? agent.agentId} name={agent.name} />
           {awaitingPassword(agent) && agent.email
-            ? <Button variant="outline" icon="ri-mail-send-line" disabled={busy} onClick={() => void resend()}>{busy ? "Sending…" : "Resend invite"}</Button>
+            ? <Button variant="outline" icon="ri-mail-send-line" disabled={busy} onClick={() => void resend()}>{busy ? "Sending…" : agent.invitationId ? "Resend invite" : "Send invite"}</Button>
             : null}
           {agent.status === "Onboarding"
             ? <Link to={`/admin/businesses/${agent.business.id}`} className="text-sm font-semibold text-primary-700 hover:underline">Open the business&apos;s onboarding</Link>

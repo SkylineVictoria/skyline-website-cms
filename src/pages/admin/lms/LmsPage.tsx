@@ -3,6 +3,7 @@ import IntakesPage from "../IntakesPage";
 import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
 import LmsCompletionPage from "./LmsCompletionPage";
+import LmsResultsPage from "./LmsResultsPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
 import LmsUnitsPage from "./LmsUnitsPage";
@@ -44,6 +45,7 @@ export default function LmsPage() {
   if (area === "room-grid") return <Navigate to="/admin/lms/timetable" replace />;
   if (area === "attendance") return <LmsAttendancePage />;
   if (area === "completion") return <LmsCompletionPage />;
+  if (area === "results") return <LmsResultsPage />;
   const actions: Record<string, { label: string; to: string; note: string }[]> = {
     attendance: [{ label: "Open an intake and its students", to: "/admin/intakes", note: "Student attendance requires a dedicated dated-session register before marking can be enabled." }],
   };

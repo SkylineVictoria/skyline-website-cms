@@ -50,7 +50,7 @@ export const BAD_LINK_WINDOW = 600;
 /** Address searches per link per minute, and the shortest text worth a search (both as in the address-search function). */
 export const ADDRESS_SEARCH_LIMIT = 40;
 export const ADDRESS_SEARCH_MIN = 4;
-export const ACTIONS = ["open", "save", "bank_save", "address_search", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign", "account_open", "account_setup", "my_document_url"] as const;
+export const ACTIONS = ["open", "save", "bank_save", "address_search", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign", "offer_decline", "documents_link", "account_open", "account_setup", "my_document_url"] as const;
 export type OnboardingAction = (typeof ACTIONS)[number];
 
 export interface OnboardingRequest { action: string; token: unknown; ip: string | null; userAgent?: string | null; fields: Record<string, unknown>; file?: File | null;
@@ -151,12 +151,33 @@ export async function handleOnboarding(req: OnboardingRequest, deps: OnboardingD
   if (!(await deps.takeRateLimit(`staff-onboarding:ip:${ipKey}`, 300, 600))) {
     return { status: 429, body: { error: "Please wait a few minutes before trying again." }, headers: { "Retry-After": "600" } };
   }
+  if (action === "documents_link") return documentsLink(req, deps);
   const result = await handleLink(action, req, deps);
   if (result.body.code === "link_invalid") await deps.takeRateLimit(badBucket, BAD_LINK_LIMIT, BAD_LINK_WINDOW);
   return result;
 }
 
-const SESSION_ACTIONS: readonly OnboardingAction[] = ["offer_open", "offer_view_url", "offer_sign", "my_document_url"];
+/**
+ * STAFF-OFFER-FULL-PART-TIME: the signed-in person whose offer is signed opens the document wizard. A new private link is made here
+ * (32 random bytes, base64url, as every emailed link); only its sha256 goes to the database (hr_svc_staff_documents_link), and the
+ * token comes back to this person alone for /staff/onboard#t=. Nothing is emailed.
+ */
+async function documentsLink(req: OnboardingRequest, deps: OnboardingDeps): Promise<OnboardingResult> {
+  if (!req.session) return { status: 401, body: { error: "Sign in to add your documents." } };
+  if (!(await deps.takeRateLimit(`staff-onboarding:docs-link:${req.session.userId}`, 20, 3600))) {
+    return { status: 429, body: { error: "Please wait a while before trying again." }, headers: { "Retry-After": "3600" } };
+  }
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const { data, error } = await deps.rpc("hr_svc_staff_documents_link", { p_user: req.session.userId, p_hash: await deps.hash(token) });
+  if (error) return error.code === "28000" ? { status: 404, body: { error: "There are no documents to add for this login.", code: "no_documents" } } : fromDb(error);
+  // OFFER-SIGN-LAST: the documents are already in and the offer waits: no link was made; the person signs on My HR.
+  if ((data as { purpose?: string } | null)?.purpose === "sign") return { status: 200, body: { purpose: "sign" } };
+  return { status: 200, body: { token, ...(data as Record<string, unknown>) } };
+}
+
+const SESSION_ACTIONS: readonly OnboardingAction[] = ["offer_open", "offer_view_url", "offer_sign", "offer_decline", "my_document_url"];
 
 async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps: OnboardingDeps): Promise<OnboardingResult> {
   let link: string;
@@ -234,6 +255,15 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
       return url ? { status: 200, body: { url } } : { status: 500, body: { error: "The offer could not be opened." } };
     }
     case "offer_sign": return signOffer(req, deps, call);
+    case "documents_link": return documentsLink(req, deps); // handled before the link check; here for completeness
+    case "offer_decline": {
+      // STAFF-OFFER-FULL-PART-TIME: the person turns the offer down (an optional reason, kept on their record for HR).
+      const reason = String(req.fields.reason ?? "").replace(/\s+/g, " ").trim();
+      if (reason.length > 1000) return bad("Keep the reason under 1000 characters.", "reason");
+      if (req.fields.confirm !== true) return bad("Confirm that you want to decline the offer.", "confirm");
+      const { data, error } = await call("hr_svc_offer_decline", { p_reason: reason });
+      return error ? fromDb(error) : { status: 200, body: { view: data, declined: true } };
+    }
     case "open": return view("hr_svc_onboarding_open");
     case "submit": return view("hr_svc_onboarding_submit");
     case "save": {
@@ -357,11 +387,25 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
 
 type Call = (name: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
 
+/** A drawn signature: null when none was sent, false when it is not a PNG of a sensible size, else its bytes. */
+function drawnSignature(value: unknown): Uint8Array | null | false {
+  if (value === undefined || value === null || value === "") return null;
+  const text = typeof value === "string" ? value.replace(/^data:image\/png;base64,/, "") : "";
+  if (!/^[A-Za-z0-9+/]+=*$/.test(text) || text.length < 100 || text.length > 400_000) return false;
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 ? bytes : false;
+}
+
 async function signOffer(req: OnboardingRequest, deps: OnboardingDeps, call: Call): Promise<OnboardingResult> {
   const name = String(req.fields.name ?? "").replace(/\s+/g, " ").trim();
   // eslint-disable-next-line no-control-regex -- a signature name never carries control characters
   if (!name || name.length > 200 || /[\u0000-\u001f\u007f<>]/.test(name)) return bad("Type your full name to sign.", "name");
   if (req.fields.consent !== true) return bad("Tick the box to agree.", "consent");
+  // OFFER-SIGNATURES (owner 2026-11-24): the signature the employee drew (PNG, base64, as the signature pad saves it); optional.
+  const image = drawnSignature(req.fields.signature);
+  if (image === false) return bad("Your signature could not be used. Clear it and draw it again.", "signature");
   const offer = await call("hr_svc_offer_file");
   if (offer.error) return fromDb(offer.error);
   const file = offer.data as { profileId: string; offerId: string; path: string; sha256: string; filename: string };
@@ -372,7 +416,7 @@ async function signOffer(req: OnboardingRequest, deps: OnboardingDeps, call: Cal
   let signed: Uint8Array;
   try {
     signed = await deps.stampOffer(original, { signerName: name, signedAt, ip: req.ip, userAgent: (req.userAgent ?? "").slice(0, 500) || null, consent: OFFER_CONSENT,
-      offerFilename: file.filename, offerSha256: file.sha256 });
+      offerFilename: file.filename, offerSha256: file.sha256, image });
   } catch {
     return { status: 500, body: { error: "The offer could not be signed. Please contact us." } };
   }

@@ -12,6 +12,7 @@ import SenderSettings from "@/pages/admin/components/SenderSettings";
 import EventRecipients from "@/pages/admin/components/EventRecipients";
 import OtherFeesSettings from "@/pages/admin/components/OtherFeesSettings";
 import { useAuth } from "@/pages/admin/lib/authContext";
+import { isSlitAdmin } from "@/pages/admin/lib/businessDelete";
 import { MIN_PASSWORD_LENGTH, passwordProblem } from "@/lib/passwords";
 
 export default function SettingsPage() {
@@ -21,7 +22,7 @@ export default function SettingsPage() {
   const draft = draftApi.value;
   const setDraft = draftApi.setValue;
   const [saving, setSaving] = useState(false);
-  const { verifyAndChangePassword } = useAuth();
+  const { verifyAndChangePassword, user } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -174,6 +175,8 @@ export default function SettingsPage() {
             </Field>
           </div>
         </Card>
+
+        {/* AVETMISS-UI (2026-11-25): Organisation details for NCVER, admins only. */}
 
         {/* Homepage imagery — Issue 1 */}
         <Card className="p-5 xl:col-span-2">

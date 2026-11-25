@@ -62,7 +62,7 @@ export interface AdminDeps {
   /** Auth (service role): removes a login this request created. */
   deleteLogin?(userId: string): Promise<void>;
   /** The filled-in letter as a PDF (pdf-lib). */
-  letterPdf?(input: { title: string; html: string; footer: string }): Promise<{ bytes: Uint8Array; pages: number }>;
+  letterPdf?(input: { title: string; html: string; footer: string; signatory?: string | null }): Promise<{ bytes: Uint8Array; pages: number }>;
   /** The first text the PDF font cannot set as typed (folded or printed as "?"), or null: the letter is refused instead of altered. */
   unsupportedText?(texts: string[]): Promise<string | null>;
   linkUrl(purpose: LinkPurpose, token: string): string;
@@ -265,7 +265,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const prepared = await prepareLetter(typeof body.templateId === "string" && UUID.test(body.templateId) ? body.templateId : null, body.html);
       if (!prepared.ok) return prepared.result;
       let pdf: { bytes: Uint8Array; pages: number };
-      try { pdf = await deps.letterPdf({ title: prepared.title, html: prepared.html, footer: prepared.values.company_name }); }
+      try { pdf = await deps.letterPdf({ title: prepared.title, html: prepared.html, footer: prepared.values.company_name, signatory: prepared.values.signatory_name }); }
       catch (e) { return { status: 400, body: { error: e instanceof Error && /^The letter/.test(e.message) ? e.message : "The letter could not be made into a PDF. Simplify the text and try again." } }; }
       return { status: 200, body: { pdfBase64: toBase64(pdf.bytes), pages: pdf.pages, title: prepared.title, html: prepared.html, edited: prepared.edited, templateName: prepared.template.name } };
     }
@@ -322,7 +322,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const { template, values } = prepared;
       const letter = { subject: prepared.title, html: prepared.html };
       let pdf: { bytes: Uint8Array; pages: number };
-      try { pdf = await deps.letterPdf({ title: letter.subject, html: letter.html, footer: values.company_name }); }
+      try { pdf = await deps.letterPdf({ title: letter.subject, html: letter.html, footer: values.company_name, signatory: values.signatory_name }); }
       catch (e) { return { status: 400, body: { error: e instanceof Error && /^The letter/.test(e.message) ? e.message : "The letter could not be made into a PDF. Simplify the template and try again." } }; }
       // The same checks as an uploaded offer, so signing it later cannot fail on the file.
       const checked = await deps.inspectOffer(pdf.bytes);
@@ -346,7 +346,8 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       const before = await deps.adminRpc("hr_admin_staff_detail", { p_id: profileId });
       if (before.error) return fromDb(before.error);
       const person = (before.data as { profile?: { status?: string; email?: string; first_name?: string; last_name?: string } }).profile ?? {};
-      if (person.status !== "documents_submitted" && person.status !== "offer_sent") return { status: 400, body: { error: "An offer can be sent after the documents are submitted." } };
+      // STAFF-OFFER-FULL-PART-TIME: the offer may go first (Applied / Invited); documents follow in the wizard once it is signed.
+      if (!["applied", "invited", "documents_submitted", "offer_sent"].includes(String(person.status))) return { status: 400, body: { error: "An offer can be sent while the person is being onboarded." } };
       const email = String(person.email ?? "");
       const name = [person.first_name, person.last_name].filter(Boolean).join(" ");
       // The email is checked before anything is created: a template that cannot be filled stops here.
@@ -452,8 +453,9 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       // Admin and state first, with the caller's JWT: a non-admin or a wrong state never gets a file stored.
       const before = await deps.adminRpc("hr_admin_staff_detail", { p_id: profileId });
       if (before.error) return fromDb(before.error);
-      if ((before.data as { profile?: { status?: string } } | null)?.profile?.status !== "documents_submitted") {
-        return { status: 400, body: { error: "Upload an offer once the documents are submitted (withdraw a sent offer first)." } };
+      // OFFER-BEFORE-DOCUMENTS-FIX: an offer may be uploaded before the documents too (Applied / Invited).
+      if (!["applied", "invited", "documents_submitted"].includes(String((before.data as { profile?: { status?: string } } | null)?.profile?.status))) {
+        return { status: 400, body: { error: "Upload an offer while the person is being onboarded (withdraw a sent offer first)." } };
       }
       const checked = await deps.inspectOffer(file.bytes);
       if (!checked.ok) return { status: 400, body: { error: checked.error, field: "file" } };
@@ -496,6 +498,9 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
         p_phone: String(body.phone ?? ""), p_role_type: typeof body.roleType === "string" && body.roleType ? body.roleType : null });
       if (made.error) return fromDb(made.error);
       const newId = (made.data as { profileId: string }).profileId;
+      // STAFF-OFFER-FULL-PART-TIME: "offer first" adds the person without the document email; the offer letter (with their
+      // set-password link) is the first email they get, and the document wizard opens from My HR after they sign.
+      if (body.offerFirst === true) return { status: 200, body: { ok: true, profileId: newId, emailSent: false, offerFirst: true } };
       const sent = await sendLinkFlow("documents", "hr_admin_staff_invite", { p_id: newId, p_purpose: "documents" }, newId);
       return { status: sent.status, body: { ...sent.body, profileId: newId } };
     }

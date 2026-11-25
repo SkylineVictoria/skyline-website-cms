@@ -135,8 +135,6 @@ Deno.serve(async (req) => {
     const { data: ctx, error: ctxErr } = await admin.rpc("portal_actor_context", { p_actor: caller.id });
     if (ctxErr) return json({ error: "Unable to verify your access." }, 503);
     const isSlit = ctx?.slit === true;
-    if (!isSlit && ctx?.role !== "agency_admin") return json({ error: "Organization or agency administrator access required." }, 403);
-
     let parsed: Record<string, unknown> = {};
     try {
       parsed = (await req.json()) as Record<string, unknown>;
@@ -144,6 +142,10 @@ Deno.serve(async (req) => {
       parsed = {};
     }
     const action = String(parsed.action ?? "");
+    // STUDENT-PORTAL-INVITE (2026-11-24): an agent may invite their own students to the portal (or send the invitation again);
+    // the database decides which students are theirs (portal_invitation_create / portal_invitation_resend). Everything else stays admin-only.
+    const agentStudentInvite = ctx?.role === "agent" && ((action === "invite" && parsed.role === "student") || action === "resend");
+    if (!isSlit && ctx?.role !== "agency_admin" && !agentStudentInvite) return json({ error: "Organization or agency administrator access required." }, 403);
     const redirectTo = typeof parsed.redirectTo === "string" ? parsed.redirectTo : undefined;
     const optionalText = (key: string) => (parsed[key] === undefined || parsed[key] === null || parsed[key] === "" ? null : String(parsed[key]).trim());
 

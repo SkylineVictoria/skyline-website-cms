@@ -17,11 +17,11 @@ import { emailHtmlDocument, type RenderedMessage, type TemplateType } from "./hr
 import { setEmailBranding } from "./email-html.ts";
 
 export type HrEmailKind = "application_received" | "already_applied" | "admin_new_application" | "document_invite" | "reupload_invite"
-  | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "rejected" | "access_ready" | "login_link";
+  | "admin_documents_submitted" | "offer" | "signed_offer" | "admin_offer_signed" | "admin_offer_declined" | "rejected" | "access_ready" | "login_link";
 /** Outbox kinds that use an HRMS template when one exists (the built-in text below is the fallback). */
 export const TEMPLATE_FOR_KIND: Partial<Record<HrEmailKind, TemplateType>> = { rejected: "rejection" };
 /** Outbox kinds this module sends. The two signed-offer kinds carry the signed PDF (DrainPort.attachment). */
-export const DRAINABLE_KINDS: readonly HrEmailKind[] = ["application_received", "already_applied", "admin_new_application", "admin_documents_submitted", "rejected", "signed_offer", "admin_offer_signed", "access_ready"];
+export const DRAINABLE_KINDS: readonly HrEmailKind[] = ["application_received", "already_applied", "admin_new_application", "admin_documents_submitted", "rejected", "signed_offer", "admin_offer_signed", "admin_offer_declined", "access_ready"];
 export const ATTACHMENT_KINDS: readonly HrEmailKind[] = ["signed_offer", "admin_offer_signed"];
 const EMAIL = /^[^@\s<>",]+@[^@\s<>",]+\.[^@\s<>",]+$/;
 
@@ -131,6 +131,12 @@ export function renderHrEmail(kind: HrEmailKind, payload: Record<string, unknown
     case "admin_offer_signed":
       return { subject: oneLine(`${name} signed the offer`),
         text: `${name} (${oneLine(payload.email, 254)}) has signed the offer letter. The signed copy is attached.${adminLink}` };
+    case "admin_offer_declined": {
+      // OFFER-DECLINED-EMAIL (2026-11-24): HR is told when a person declines their offer, with their reason when they gave one.
+      const reason = oneLine(payload.reason, 1000);
+      return { subject: oneLine(`${name} declined the offer`),
+        text: `${name} (${oneLine(payload.email, 254)}) has declined the offer letter.\n\nReason: ${reason || "none given"}\n\nTheir record is now under Rejected / Withdrawn; you can reopen it from their page.${adminLink}` };
+    }
     case "offer":
       if (!ctx.link) return null;
       return { subject: "Your offer letter from Skyline",
@@ -169,6 +175,8 @@ export interface DrainPort {
   result(id: number, state: "sent" | "queued" | "failed", messageId?: string, error?: string): Promise<void>;
   /** The HRMS template for this email filled for the person, or null (none, or it cannot be filled): the built-in text is used. */
   template?(row: HrEmailRow, type: TemplateType): Promise<RenderedMessage | null>;
+  /** OFFER-SIGNATURES (owner 2026-11-24): more people who get an admin email (the signed offer: the admin who sent it and the signatory). */
+  extraAdmins?(row: HrEmailRow): Promise<string[]>;
 }
 
 /** Sends queued outbox mail. Off (no provider): nothing is claimed and the rows stay queued. */
@@ -177,7 +185,8 @@ export async function drainHrEmails(port: DrainPort, provider: EmailProvider | n
   if (!provider) return totals;
   const rows = await port.claim(DRAINABLE_KINDS, limit);
   for (const row of rows) {
-    const to = row.audience === "admin" ? config.adminTo.join(", ") : row.to ?? "";
+    const extra = row.audience === "admin" && port.extraAdmins ? await port.extraAdmins(row).catch(() => []) : [];
+    const to = row.audience === "admin" ? [...new Set([...config.adminTo, ...extra.map((a) => a.trim().toLowerCase()).filter((a) => EMAIL.test(a))])].slice(0, 20).join(", ") : row.to ?? "";
     const missing = !config.from ? "EF_HR_EMAIL_FROM is not set" : !to ? (row.audience === "admin" ? "EF_HR_ADMIN_NOTIFY_TO is not set" : "no recipient") : null;
     const builtIn = renderHrEmail(row.kind, row.payload ?? {}, { siteUrl: config.siteUrl, profileId: row.profileId });
     const type = TEMPLATE_FOR_KIND[row.kind];

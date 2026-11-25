@@ -2306,9 +2306,11 @@ test("the TypeScript transition table matches the database function and the stat
 test("Employees actions follow the status and what exists; each one is a legal move with a confirmation", () => {
   const base = { liveDocumentLink: false, rejectedDocuments: 0, allApproved: false, offer: null, activationInvited: false };
   const acts = (status: string, extra: Record<string, unknown> = {}) => status && staffStatusLib.employeeActions({ ...base, ...extra, status } as never);
-  assert.deepEqual(acts("applied"), ["send_documents_link", "reject"]);
-  assert.deepEqual(acts("invited"), ["resend_documents_link", "reject"], "no live link: nothing to revoke");
-  assert.deepEqual(acts("invited", { liveDocumentLink: true }), ["resend_documents_link", "revoke_link", "reject"]);
+  // STAFF-OFFER-FULL-PART-TIME: offer details first, then Send offer, before any document.
+  assert.deepEqual(acts("applied"), ["add_pay_details", "send_documents_link", "reject"]);
+  assert.deepEqual(acts("applied", { payComplete: true }), ["send_offer", "edit_pay_details", "send_documents_link", "reject"]);
+  assert.deepEqual(acts("invited"), ["add_pay_details", "resend_documents_link", "reject"], "no live link: nothing to revoke");
+  assert.deepEqual(acts("invited", { liveDocumentLink: true }), ["add_pay_details", "resend_documents_link", "revoke_link", "reject"]);
   assert.deepEqual(acts("documents_submitted"), ["reject"], "nothing to offer before every document is approved");
   assert.deepEqual(acts("documents_submitted", { rejectedDocuments: 1 }), ["send_reupload_link", "reject"]);
   assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["add_pay_details", "reject"], "pay details come before the offer");
@@ -2334,7 +2336,7 @@ test("Employees actions follow the status and what exists; each one is a legal m
     }
   }
   for (const action of ["reject", "withdraw_offer", "reopen"] as const) assert.equal(staffStatusLib.EMPLOYEE_ACTION[action].note, "required", `${action} needs a note`);
-  for (const kind of ["application_received", "already_applied", "admin_new_application", "document_invite", "reupload_invite", "admin_documents_submitted", "offer", "signed_offer", "admin_offer_signed", "rejected", "access_ready"]) {
+  for (const kind of ["application_received", "already_applied", "admin_new_application", "document_invite", "reupload_invite", "admin_documents_submitted", "offer", "signed_offer", "admin_offer_signed", "admin_offer_declined", "rejected", "access_ready"]) {
     assert.ok(staffStatusLib.EMAIL_KIND_LABEL[kind], `email kind ${kind} has a label for the admin`);
   }
   // Staff > Employees is the simple Active / Inactive page since 20261110170000 (see "simple employees" below).
@@ -3346,7 +3348,8 @@ test("staff-admin offer upload: admin and state first, PDF checked before storag
   assert.deepEqual([r.status, r.body.error, r.body.field], [400, offerPdf.OFFER_ENCRYPTED, "file"], "the admin is told why");
   assert.ok(!run.names().includes("upload"), "nothing is stored");
 
-  run = adminDeps({ file, db: { hr_admin_staff_detail: { data: { profile: { status: "invited" } } } } });
+  // OFFER-BEFORE-DOCUMENTS-FIX: Invited may get an offer now; a sent offer still cannot be replaced by an upload.
+  run = adminDeps({ file, db: { hr_admin_staff_detail: { data: { profile: { status: "offer_sent" } } } } });
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_upload", profileId: PROFILE }, run.deps)).status, 400);
   assert.ok(!run.names().includes("upload"), "wrong state: nothing stored");
   run = adminDeps({ file, db: { hr_admin_staff_detail: { error: { code: "42501", message: "Only an administrator can do this." } } } });
@@ -3741,7 +3744,7 @@ const submissionLib = await load.import<typeof import("../supabase/functions/_sh
 test("onboarding: only the step that is next is offered, and every stage has its label and banner", () => {
   const base = { liveDocumentLink: false, rejectedDocuments: 0, allApproved: false, offer: null, activationInvited: false };
   const acts = (st: string, extra: Record<string, unknown> = {}) => staffStatusLib.employeeActions({ ...base, ...extra, status: st } as never);
-  assert.deepEqual(acts("applied", { openJobApplication: true }), ["send_documents_link", "reject"], "a Careers applicant gets the document link from the employee page too");
+  assert.deepEqual(acts("applied", { openJobApplication: true }), ["add_pay_details", "send_documents_link", "reject"], "a Careers applicant gets the document link from the employee page too");
   assert.deepEqual(acts("documents_submitted", { allApproved: true }), ["add_pay_details", "reject"], "documents approved: pay details are next, not the offer");
   assert.deepEqual(acts("documents_submitted", { allApproved: true, payComplete: true }), ["send_offer", "edit_pay_details", "reject"]);
   assert.deepEqual(acts("documents_submitted", { rejectedDocuments: 1, payComplete: true }), ["send_reupload_link", "reject"], "no offer while a document is rejected");
@@ -4133,7 +4136,7 @@ test("staff-admin offer_send_login: a failed email undoes everything; a refusal 
   assert.ok(!resend.names().includes("admin:hr_admin_onboarding_offer_unsend"), "an offer that is out is never silently unsent");
   assert.deepEqual(resend.calls.find(([n]) => n === "admin:hr_admin_staff_invite_cancel")![1], { p_id: PROFILE, p_invite: "inv-acct" });
 
-  const wrongStage = flowDeps({ db: { hr_admin_staff_detail: { data: { profile: { ...DETAIL_READY.profile, status: "invited" } } } } });
+  const wrongStage = flowDeps({ db: { hr_admin_staff_detail: { data: { profile: { ...DETAIL_READY.profile, status: "active" } } } } });
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, wrongStage.deps as never)).status, 400);
   const notAdmin = flowDeps({ db: { hr_admin_staff_detail: { error: { code: "42501", message: "Only an administrator can do this." } } } });
   assert.equal((await staffAdmin.handleAdmin({ action: "offer_send_login", profileId: PROFILE }, notAdmin.deps as never)).status, 403);
@@ -4896,4 +4899,181 @@ test("OMARA: Brave / Tavily request shapes, hits filtered to the register, one G
   assert.ok(!/from\("agents"\)|\.from\('agents'\)|insert into public\.agents/.test(read("supabase/functions/omara-discovery/index.ts") + read("supabase/functions/omara-discovery/core.ts") + read("supabase/functions/_shared/omara.ts")));
   assert.ok(read("src/pages/admin/components/OmaraAgentsPanel.tsx").includes("not for marketing"));
   assert.ok(read("supabase/config.toml").includes("[functions.omara-discovery]\n# OMARA-DISCOVERY") && /\[functions\.omara-discovery\][\s\S]*?verify_jwt = true/.test(read("supabase/config.toml")));
+});
+
+test("Business Documents tab (2026-11-24): upload / view / resend / change email checked and logged in the database, never a certificate", () => {
+  const sql = read("supabase/migrations/20261124203517_business_document_actions.sql").replace(/\r\n/g, "\n");
+  // Every new staff function starts with the SLIT administrator check (server-side, not hidden buttons).
+  for (const fn of ["admin_business_document_add", "admin_business_document_status", "admin_business_resend_prepare", "admin_business_signed_copy_logged", "admin_business_contact_email_change"]) {
+    const body = sql.slice(sql.indexOf(`function public.${fn}(`));
+    assert.match(body.slice(0, 1500), /perform public\.admin_business_require\(\);/, `${fn} checks the administrator`);
+  }
+  assert.match(sql, /check \(kind in \('agent_agreement', 'id', 'insurance', 'other'\)\)/);
+  for (const event of ["document_uploaded", "application_resent", "signed_copy_sent", "email_changed"]) assert.ok(sql.includes(`'${event}'`), `event ${event} logged`);
+  // Resend: same request (no new one), expired link rotated, cooldown from a Business Rule; the signed copy never includes a certificate.
+  assert.ok(!/insert into hr\.sign_requests/.test(sql) && sql.includes("delete from hr.sign_tokens where recipient_id = c.id"));
+  assert.ok(sql.includes("'agents.document_resend_cooldown_minutes'") && sql.includes("Sent a moment ago."));
+  const edge = read("supabase/functions/document-signing/onboarding.ts");
+  const resend = edge.slice(edge.indexOf("export async function resendBusinessApplication"), edge.indexOf("export async function changeBusinessContactEmail"));
+  assert.ok(resend.includes('"form"') && resend.includes('"agreement"') && !/certificate"|certificate_content/.test(resend));
+  // Change email: unique among agents only; the login moves first and back again if the database refuses.
+  assert.match(sql, /'This email is already in use'/);
+  assert.ok(!/from public\.(students|enrollment_students|cms_users) [a-z]+ where lower/.test(sql.slice(sql.indexOf("admin_business_contact_email_change"))));
+  const change = edge.slice(edge.indexOf("export async function changeBusinessContactEmail"));
+  assert.ok(change.indexOf("p_apply: false") < change.indexOf("changeEmail(check.authUserId, check.new)") && change.includes("changeEmail(check.authUserId!, check.old)"));
+  assert.ok(read("supabase/functions/document-signing/index.ts").includes("updateUserById(authUserId, { email, email_confirm: true })"));
+  // Screens: 60-second links, View only for PDF / pictures, the bucket's types and size checked first, every certificate kind still refused by the RPC.
+  const data = read("src/pages/admin/lib/businessData.ts");
+  assert.ok(data.includes("createSignedUrl(path, 60,") && data.includes('["pdf", "png", "jpg", "jpeg"].includes(extensionOf(name))'));
+  for (const ext of ["pdf", "png", "jpg", "jpeg", "doc", "docx"]) assert.ok(data.includes(`${ext}: "`), ext);
+  const ui = read("src/pages/admin/components/BusinessDocumentActions.tsx");
+  assert.ok(ui.includes("Resend application") && ui.includes("Email signed copy") && ui.includes("Last sent") && ui.includes("Other documents") && ui.includes('aria-label="Change email"'));
+  assert.ok(read("src/pages/admin/lib/agentOnboarding.ts").includes("export async function viewOnboardingFile"));
+});
+
+test("Business Documents tab: Send for signature to the business (agency admin filled in as the signer; one-time PDF when no agency template)", () => {
+  const tab = read("src/pages/admin/components/BusinessOnboarding.tsx");
+  assert.ok(tab.includes('<SubjectSigningPanel type="agency" id={business.id}') && tab.includes("alsoAgentId={contact?.agentId}") && tab.includes('buttonLabel="Send for signature"'));
+  const panel = read("src/pages/admin/components/signing/SubjectSigningPanel.tsx");
+  assert.ok(panel.includes('setSource(list.some((t) => t.status === "active" && t.kind !== "email" && (t.audience === "any" || t.audience === type)) ? "template" : "upload")'));
+  assert.ok(panel.includes('initialSource={source}') && read("src/pages/admin/components/signing/ComposeRequest.tsx").includes('useState<"template" | "upload">(initialSource)'));
+  // The signer fills in from the record (subject_values), so nobody types the agency admin's email.
+  assert.ok(read("src/pages/admin/components/signing/ComposeRequest.tsx").includes("i === 0 && !r.name && !r.email ? { ...r, name: s.name, email: s.email } : r"));
+});
+
+test("Portal: the business admin agent invites their own agents (Users › Your agents); Onboarding agents of an active business can be invited, Inactive cannot", () => {
+  const sql = read("supabase/migrations/20261124213517_portal_agent_invites.sql").replace(/\r\n/g, "\n");
+  assert.match(sql, /elsif c->>'role' = 'agency_admin' then v_agency := \(c->>'agencyId'\)::uuid;\n else raise exception 'Only the business admin agent can invite agents\.'/);
+  assert.ok(sql.includes("g.status in ('Inactive', 'Declined')") && sql.includes("where business_id = v_agency and email = v_email and status = 'Onboarding'"));
+  // The business must still be operational (signed agreement) before anyone is invited.
+  assert.ok(sql.includes("public.agency_effective_status(a) = 'Active'") && sql.includes("hint = 'business_not_operational'"));
+  assert.ok(sql.includes("and (inv.invited_by = p_actor or inv.role in ('agent', 'agency_admin'))"));
+  const data = read("src/pages/agency/lib/portalData.ts");
+  assert.ok(data.includes('if (a.hasLogin) return { label: "Active"') && data.includes('return { label: "Not invited", tone: "warn", action: "invite" }'));
+  assert.ok(read("src/pages/agency/users/page.tsx").includes("{!isSlit ? <BusinessAgentInvites"));
+});
+
+test("Agent status (2026-11-24): Active only once the agent has created a password; Invited while the invitation waits; Not invited otherwise", async () => {
+  const src = read("src/pages/admin/lib/businessData.ts");
+  const fn = src.slice(src.indexOf("export function agentSignInStatus"), src.indexOf("export function awaitingPassword"));
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  const agentSignInStatus = new Function("agent", fn.replace(/^export function agentSignInStatus\([^)]*\)[^{]*\{/, "").replace(/\}\s*$/, "").replace(/ as AgentStatus/g, "")) as (a: Record<string, unknown>) => string;
+  assert.equal(agentSignInStatus({ status: "Active", profileId: "p1", invitationId: null }), "Active");
+  assert.equal(agentSignInStatus({ status: "Active", profileId: null, invitationId: "i1" }), "Invited");
+  assert.equal(agentSignInStatus({ status: "Invited", profileId: null, invitationId: "i1" }), "Invited");
+  assert.equal(agentSignInStatus({ status: "Active", profileId: null, invitationId: null }), "Not invited");
+  for (const s of ["Inactive", "Onboarding", "Declined"]) assert.equal(agentSignInStatus({ status: s, profileId: null, invitationId: "i1" }), s);
+  for (const f of ["src/pages/admin/BusinessDetailPage.tsx", "src/pages/admin/AgentsPage.tsx", "src/pages/admin/AgentDetailPage.tsx"]) assert.ok(read(f).includes("agentSignInStatus("), f);
+  assert.ok(!read("src/pages/admin/BusinessDetailPage.tsx").includes('r.status === "Invited" && business.status === "Active" ? "Active"'), "Invited is no longer shown as Active");
+});
+
+test("Portal: the business admin agent deactivates / reactivates their agents; SLIT too; the agent record follows a portal sign-in switched off", () => {
+  const sql = read("supabase/migrations/20261124223517_portal_agent_deactivate.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("raise exception 'You can only manage agents of your own business.'") && sql.includes("raise exception 'You cannot change your own access.'")
+    && sql.includes("raise exception 'Only SLIT can change another business admin agent.'"));
+  // Inactive switches off the record, the sign-in and the waiting invitation (as the CMS Deactivate does).
+  assert.ok(sql.includes("update public.agency_invitations set status = 'revoked'") && sql.includes("update public.agency_memberships set status = p_status"));
+  assert.ok(sql.includes("where profile_id = p_profile and business_id = m.agency_id and status in ('Active', 'Inactive') and status <> v_status"));
+  const ui = read("src/pages/agency/components/BusinessAgentInvites.tsx");
+  assert.ok(ui.includes('a.role === "agent" && a.email.toLowerCase() !== myEmail') && ui.includes('"Deactivate" : "Reactivate"'));
+  // The invitation link opens the workspace's own page, where the agent creates their password.
+  assert.ok(read("supabase/functions/portal-admin-users/index.ts").includes("/agency/accept-invite#t=${token}"));
+});
+
+test("Students (2026-11-24): the finish-application link asks for a password; agents, business admin agents and SLIT invite a student to the portal", () => {
+  const sql = read("supabase/migrations/20261124233517_student_portal_invite.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("create or replace function public.portal_my_password_set()") && sql.includes("u.encrypted_password"));
+  // An agent may invite only their own student (role student); the helper is internal.
+  assert.ok(sql.includes("c->>'role' = 'agent' and p_role = 'student' and public.portal_student_is_mine(p_actor, p_student)"));
+  assert.ok(sql.includes("revoke all on function public.portal_student_is_mine(uuid, uuid) from public, anon, authenticated;"));
+  assert.ok(sql.includes("c->>'role' = 'agent' and inv.role = 'student'"));
+  // Active only once the student has created a password.
+  assert.ok(sql.includes("case when coalesce(v_pw, false) then 'active' else 'no_password' end"));
+  const fn = read("supabase/functions/portal-admin-users/index.ts");
+  assert.ok(fn.includes('ctx?.role === "agent" && ((action === "invite" && parsed.role === "student") || action === "resend")'));
+  const page = read("src/pages/agency/application-invite/page.tsx");
+  assert.ok(page.includes('supabase.rpc("portal_my_password_set")') && page.includes("supabase.auth.updateUser({ password })") && page.includes("passwordProblem(password, confirm)"));
+  const detail = read("src/pages/agency/applications/detail/page.tsx");
+  assert.equal((detail.match(/<StudentPortalInvite /g) ?? []).length, 2, "both the incomplete and the full application views");
+  const ui = read("src/pages/agency/components/StudentPortalInvite.tsx");
+  assert.ok(ui.includes('action: "invite", role: "student", studentId') && ui.includes("portalPasswordResetUrl()"));
+});
+
+test("Employees list (2026-11-24): a Sign-in column; Can sign in only once a password is chosen; active staff without one get Send / Resend sign-in link", () => {
+  const page = read("src/pages/admin/StaffPage.tsx");
+  assert.ok(page.includes('"Status", "Sign-in", "Actions"]') && page.includes("<EmployeeSignIn row={r}"));
+  assert.ok(page.includes('if (r.hasLogin && r.passwordSet) return { label: "Can sign in"') && page.includes('return { label: "Not invited", tone: "muted" }'));
+  assert.ok(page.includes('row.status === "active" && !(row.hasLogin && row.passwordSet)') && page.includes("staffAdminActions.inviteLogin(row.id)"));
+});
+
+test("Staff offer first (2026-11-24): Full time / Part time letters, offer before documents, accept or decline, documents after signing", () => {
+  const sql = read("supabase/migrations/20261124235517_staff_offer_full_part_time.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("('Staff Offer Letter - Full time', 'Full time'") && sql.includes("('Staff Offer Letter - Part time', 'Part time'"));
+  assert.ok(sql.includes("Run 20261124001517_staff_offer_variables first"));
+  assert.ok(sql.includes("or (p_from in ('applied', 'invited') and p_to = 'offer_sent') or (p_from = 'offer_sent' and p_to = 'invited')"));
+  assert.ok(sql.includes("if p.status not in ('applied', 'invited', 'documents_submitted') then raise exception 'Offer details are added"));
+  assert.ok(sql.includes("create or replace function public.hr_svc_offer_decline") && sql.includes("update hr.staff_profiles set status = 'rejected' where id = p.id;"));
+  assert.ok(sql.includes("else v_status in ('invited', 'offer_signed') end") && sql.includes("if p.status = 'invited' then update hr.staff_profiles set status = 'documents_submitted'"));
+  assert.ok(sql.includes("create or replace function public.hr_svc_staff_documents_link") && sql.includes("grant execute on function public.hr_svc_staff_documents_link(uuid, text) to service_role;"));
+  const onboarding = read("supabase/functions/staff-onboarding/core.ts");
+  assert.ok(onboarding.includes('case "offer_decline"') && onboarding.includes('if (action === "documents_link") return documentsLink(req, deps);'));
+  const admin = read("supabase/functions/staff-admin/core.ts");
+  assert.ok(admin.includes('if (body.offerFirst === true) return') && admin.includes('["applied", "invited", "documents_submitted", "offer_sent"].includes'));
+  assert.ok(read("src/pages/staff/components/OfferPanel.tsx").includes("api.decline(reason.trim())"));
+  assert.ok(read("src/pages/staff/StaffHomePage.tsx").includes("{me.status === \"offer_signed\" ? <DocumentsWizardButton /> : null}"));
+  assert.ok(read("src/pages/admin/components/EmployeeFormDialog.tsx").includes("offerFirst: true"));
+});
+
+test("Offer declined (2026-11-24): HR is emailed with the person's reason", () => {
+  const sql = read("supabase/migrations/20261124235917_offer_declined_email.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("'admin_offer_declined']::text[]") && sql.includes("perform hr.queue_email(p.id, 'admin_offer_declined', 'admin'"));
+  assert.ok(hrMail.DRAINABLE_KINDS.includes("admin_offer_declined"));
+  const mail = hrMail.renderHrEmail("admin_offer_declined", { name: "Ann Lee", email: "ann@example.test", reason: "Took another role" }, { siteUrl: "https://site.example", profileId: "p-1" } as never)!;
+  assert.equal(mail.subject, "Ann Lee declined the offer");
+  assert.ok(mail.text.includes("Reason: Took another role") && mail.text.includes("https://site.example/admin/staff/employees/p-1"));
+  assert.ok(hrMail.renderHrEmail("admin_offer_declined", { name: "Ann", email: "a@x.test" }, {} as never)!.text.includes("Reason: none given"));
+  assert.ok(read("supabase/functions/staff-onboarding/index.ts").includes('action === "offer_decline") && result.status === 200'));
+});
+
+test("Offer before documents fix (2026-11-24): the letter is made from Applied / Invited without approved documents", () => {
+  const sql = read("supabase/migrations/20261125000517_offer_before_documents_fix.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("v_problem := case when v_status in ('applied', 'invited') then hr.onboarding_pay_problem(p_id)"));
+  assert.ok(sql.includes("if p.status not in ('applied', 'invited', 'documents_submitted') then raise exception 'Prepare an offer"));
+  assert.ok(read("supabase/functions/staff-admin/core.ts").includes('if (!["applied", "invited", "documents_submitted"].includes(String((before.data'));
+});
+
+test("Offer signatures (2026-11-24): CEO signature and date under the closing line, the employee's drawn signature on the signed copy", () => {
+  const letter = read("supabase/functions/_shared/offer-letter-pdf.ts");
+  assert.ok(letter.includes("CLOSING.test(") && letter.includes("image: signature }, { spans: [{ text: `Date: ${date}` }]"));
+  assert.ok(read("supabase/functions/staff-admin/index.ts").includes("signature: await signatorySignature(service, signatory)"));
+  assert.ok(read("supabase/functions/_shared/letterhead.ts").includes("export async function signatorySignature("));
+  const onboarding = read("supabase/functions/staff-onboarding/core.ts");
+  assert.ok(onboarding.includes("const image = drawnSignature(req.fields.signature);") && onboarding.includes("offerSha256: file.sha256, image });"));
+  assert.ok(read("supabase/functions/_shared/offer-pdf.ts").includes('label: "Employee signature"'));
+  assert.ok(read("src/pages/staff/StaffOnboardingPage.tsx").includes("<SignaturePad onChange={setSignImage} />"));
+  assert.ok(read("src/pages/staff/components/OfferPanel.tsx").includes("api.sign(name.trim(), signature)"));
+  assert.ok(read("supabase/migrations/20261125003517_offer_signatory_ceo.sql").includes("('hrms.offer_signatory_name', 'Hardik Amin')"));
+  // The signed copy also goes to the admin who sent the offer and to the signatory (owner: "Admin and hardik all").
+  assert.ok(read("supabase/functions/_shared/hr-mail-drain.ts").includes('service.rpc("hr_svc_offer_mail_people", { p_offer: offerId })'));
+  assert.ok(read("supabase/functions/_shared/hr-mail.ts").includes("...extra.map((a) => a.trim().toLowerCase()).filter((a) => EMAIL.test(a))"));
+  assert.ok(read("supabase/migrations/20261125004517_offer_signed_copy_people.sql").includes("join public.cms_users u on u.auth_user_id = o.sent_by"));
+});
+
+test("Offer signed last (2026-11-24): Accept and continue opens the wizard; its last screen signs the offer and submits", () => {
+  const sql = read("supabase/migrations/20261125001517_offer_sign_after_documents.sql").replace(/\r\n/g, "\n");
+  assert.ok(sql.includes("else v_status in ('invited', 'offer_sent', 'offer_signed') end"));
+  assert.ok(sql.includes("raise exception 'Add your details and documents first; you sign the offer on the last screen.'"));
+  assert.ok(sql.includes("elsif p.status = 'offer_sent' then return jsonb_build_object('purpose', 'sign');"));
+  assert.ok(read("supabase/functions/staff-onboarding/core.ts").includes('?.purpose === "sign") return { status: 200, body: { purpose: "sign" } };'));
+  const panel = read("src/pages/staff/components/OfferPanel.tsx");
+  assert.ok(panel.includes('data-testid="offer-accept-continue"') && panel.includes("window.location.assign(`/staff/onboard#t=${link.token}`)"));
+  const wizard = read("src/pages/staff/StaffOnboardingPage.tsx");
+  assert.ok(wizard.includes('const signsOffer = view.status === "offer_sent";') && wizard.includes("await myOfferApi.sign(signName.trim(), signImage)") && wizard.includes('"Sign the offer and submit"'));
+  assert.ok(read("src/pages/staff/StaffHomePage.tsx").includes("acceptViaWizard"));
+});
+
+test("Employees Active / Inactive (2026-11-24): Delete with the same confirmation as the other tabs", () => {
+  const page = read("src/pages/admin/StaffPage.tsx");
+  assert.ok(page.includes('"Status", "Sign-in", "Actions"]') && page.includes("data-testid={`employee-delete-${r.id}`}"));
+  assert.ok(page.includes("setDeleting({ id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(\" \"), email: r.email })"));
 });

@@ -102,6 +102,8 @@ export const EVENT_LABEL: Record<string, string> = {
   resubmitted: "Corrected and signed again", referee_corrected: "Referee details corrected: new referee check", approved: "Approved: business active",
   draft_created: "Application prepared (draft, not sent)", draft_saved: "Draft saved by SLIT staff", signed_once: "Signed once: application form and agreement", witness_recorded: "Witness added by the agency admin",
   agreement_issued: "Agreement countersigned and issued",
+  document_uploaded: "Document uploaded by SLIT staff", application_resent: "Application form emailed again", signed_copy_sent: "Signed copies emailed to the agency admin",
+  email_changed: "Agency admin's email changed",
 };
 /** Stages that are still in progress (one at a time per business). */
 export const ACTIVE_STAGES: OnboardingStage[] = ["draft", "application_sent", "application_signed", "references_pending", "references_received", "references_approved", "agreement_sent", "correction_requested", "resubmitted"];
@@ -132,8 +134,11 @@ export async function openApplicationAttachment(onboardingId: string, kind: stri
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-/** Opens a signed PDF kept in the database in a new tab (a blob of this page; nothing is stored in the browser). */
-/** The signed file as a blob URL, for the in-page viewer (DocumentViewer); the caller frees it. */
+/**
+ * View in the browser (2026-11-24): the signed application form / agreement in a new tab, inline. agency_onboarding_file checks the caller
+ * and never returns a certificate. The tab opens inside the tap so phones allow it.
+ */
+/** The signed file as a blob URL, for the in-page viewer (DocumentViewer); the viewer frees it. */
 export async function onboardingFileUrl(id: string, kind: OnboardingFileKind): Promise<{ url: string; name: string }> {
   const file = await onboardingFile(id, kind);
   const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
@@ -141,6 +146,18 @@ export async function onboardingFileUrl(id: string, kind: OnboardingFileKind): P
   return { url: URL.createObjectURL(new Blob([bytes], { type: "application/pdf" })), name };
 }
 
+export async function viewOnboardingFile(id: string, kind: OnboardingFileKind): Promise<void> {
+  const tab = window.open("", "_blank");
+  try {
+    const file = await onboardingFile(id, kind);
+    const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    if (tab) { tab.opener = null; tab.location.href = url; } else window.location.assign(url);
+    setTimeout(() => URL.revokeObjectURL(url), 10 * 60000);
+  } catch (e) { tab?.close(); throw e; }
+}
+
+/** Opens a signed PDF kept in the database in a new tab (a blob of this page; nothing is stored in the browser). */
 export async function openOnboardingFile(id: string, kind: OnboardingFileKind): Promise<void> {
   const file = await onboardingFile(id, kind);
   const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));

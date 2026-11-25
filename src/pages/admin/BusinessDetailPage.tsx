@@ -15,19 +15,20 @@ import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivat
 import { useToast } from "@/pages/admin/components/toastContext";
 import { ApplicationsTab, DetailsTab } from "@/pages/admin/AgencyDetailPage";
 import { portalLoginState, type PortalLoginState } from "@/pages/admin/lib/businessData";
-import { agentOnboardingWords, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
+import AddStudentDialog from "@/pages/admin/components/AddStudentDialog";
+import { agentOnboardingWords, agentSignInStatus, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
 import { formatDate, getAgency, type AgencySummary } from "@/pages/agency/lib/portalData";
 import { activateBusinessOnboarding } from "@/lib/signingApi";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
-import AddStudentDialog from "@/pages/admin/components/AddStudentDialog";
 import { businessDeleteCheck, isSlitAdmin } from "@/pages/admin/lib/businessData";
 import OmaraAgentsPanel from "@/pages/admin/components/OmaraAgentsPanel";
 import { listOnboarding } from "@/pages/admin/lib/agentOnboarding";
 import { BusinessOfficesCard } from "@/pages/admin/components/OfficeLocations";
+import BusinessCommissions from "@/pages/admin/components/commissions/BusinessCommissions";
 
-type Tab = "details" | "documents" | "agents" | "students" | "applications";
-const TAB_IDS: Tab[] = ["details", "documents", "agents", "students", "applications"];
+type Tab = "details" | "documents" | "agents" | "students" | "applications" | "commissions";
+const TAB_IDS: Tab[] = ["details", "documents", "agents", "students", "applications", "commissions"];
 
 /** Agencies > Businesses > {name}: the business, its agents, their students and the students' applications. The tab lives in the URL. */
 export default function BusinessDetailPage() {
@@ -135,6 +136,8 @@ export default function BusinessDetailPage() {
     { id: "agents", label: "Agents", count: people + c.inactiveAgents },
     { id: "students", label: "Students", count: c.students },
     { id: "applications", label: "Applications", count: c.applications },
+    // AVETMISS-UI (2026-11-25): agent commissions, admins only (agent_commissions RLS is cms_is_admin).
+    ...(isAdmin ? [{ id: "commissions" as Tab, label: "Commissions" }] : []),
   ];
 
   return (
@@ -201,10 +204,11 @@ export default function BusinessDetailPage() {
         <Button size="sm" icon={tab === "students" ? "ri-user-add-line" : "ri-file-add-line"} disabled={business.status !== "Active"} title={business.status !== "Active" ? "The business must be Active" : undefined}
           onClick={() => setAddingStudent(true)} data-testid="business-add-student">{tab === "students" ? "Add student" : "New application"}</Button>
       </div> : null}
-      {tab === "students" ? <StudentsTable key={`students:${addedCount}`} businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
-      {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}:${addedCount}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
       <AddStudentDialog open={addingStudent} onClose={() => setAddingStudent(false)} onAdded={() => { setAddedCount((n) => n + 1); void load(); }}
         presetBusiness={addingStudent ? presetBusiness : undefined} />
+      {tab === "students" ? <StudentsTable key={`students:${addedCount}`} businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
+      {tab === "commissions" && isAdmin ? <BusinessCommissions agencyId={business.id} /> : null}
+      {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}:${addedCount}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
 
       <ConfirmDialog
         open={confirm}
@@ -260,6 +264,8 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
   const [rows, setRows] = useState<DirectoryAgent[] | null>(null);
   const [logins, setLogins] = useState<Record<string, PortalLoginState>>({});
   const loginOf = (r: DirectoryAgent): PortalLoginState | undefined => logins[r.email.toLowerCase()];
+  /** Active once a password exists, also one created while signing the application (not yet linked until the first sign-in). */
+  const signIn = (r: DirectoryAgent) => { const st = agentSignInStatus(r); return st === "Invited" && loginOf(r)?.passwordSet ? "Active" : st; };
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [activating, setActivating] = useState<AgentToActivate | null>(null);
@@ -282,7 +288,7 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
     listBusinessAgents(business.id).then((r) => {
       if (!active) return;
       setRows(r);
-      // A login made with the password chosen at signing is linked to the agent only at the first sign-in: ask Auth directly.
+      // A login made with the password chosen at signing is linked to the agent only at the first sign-in: ask Auth directly (2026-11-24).
       void portalLoginState(r.map((x) => x.email.toLowerCase())).then((m) => { if (active) setLogins(m); }).catch(() => undefined);
     }).catch((e) => { if (active) setError(e instanceof Error ? e.message : "We could not load agents."); });
     return () => { active = false; };
@@ -347,15 +353,16 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td><Link to={`/admin/agents/${r.agentId}`} className="font-bold text-foreground-900 hover:text-primary-700">{r.students}</Link></td>
                   <td>{Object.keys(r.statusCounts).length ? <ApplicationStatusPills counts={r.statusCounts} limit={3} /> : <span className="text-xs text-foreground-500">None</span>}</td>
                   {/* Owner 2026-11-24: once the business is Active its admin agent shows Active; what is still open is a sub-status under it. */}
-                  <td><AgentStatusBadge status={r.status === "Invited" && business.status === "Active" ? "Active" : r.status} />
-                    {(r.status === "Invited" || (r.status === "Active" && !r.profileId)) && !loginOf(r)?.passwordSet ? <p className="mt-1 text-2xs font-medium text-amber-700">Sign-in invitation sent, waiting for password</p> : null}
+                  {/* Owner 2026-11-24: Active only once the agent has created their password; Invited until then; Not invited when none was sent. */}
+                  <td><AgentStatusBadge status={signIn(r)} />
+                    {signIn(r) === "Invited" ? <p className="mt-1 text-2xs font-medium text-amber-700">Waiting for them to create a password</p> : null}
                     {!r.profileId && loginOf(r)?.passwordSet ? <p className="mt-1 text-2xs font-medium text-emerald-700" data-testid="agent-password-set">{loginOf(r)?.setAtSigning ? "Password created at signing" : "Password set"}{loginOf(r)?.lastSignInAt ? `, last signed in ${new Date(loginOf(r)!.lastSignInAt!).toLocaleDateString()}` : ", not signed in yet"}</p> : null}
                     {(r.status === "Active" || r.status === "Invited") && r.role === "agency_admin" && refsPending > 0 ? <p className="mt-1 text-2xs font-medium text-sky-800" data-testid="agent-refs-pending">Reference check pending ({refsPending})</p> : null}
                     {r.status === "Onboarding" ? <p className={`mt-1 text-2xs font-medium ${r.onboarding?.ready ? "text-emerald-700" : "text-sky-800"}`} data-testid="agent-onboarding-words">{agentOnboardingWords(r.onboarding)}</p> : null}
                     {r.status === "Declined" ? <p className="mt-1 text-2xs font-medium text-red-700">Rejected; no sign-in</p> : null}</td>
                   <td>
                     <div className="flex flex-wrap justify-end gap-1.5">
-                      {awaitingPassword(r) && r.email && !loginOf(r)?.passwordSet ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
+                      {awaitingPassword(r) && r.email && !loginOf(r)?.passwordSet ? <Button size="sm" variant={r.invitationId ? "outline" : "primary"} icon="ri-mail-send-line" disabled={busyId === r.agentId} onClick={() => void resend(r)} data-testid={`send-invite-${r.agentId}`}>{busyId === r.agentId ? "Sending…" : r.invitationId ? "Resend invite" : "Send invite"}</Button> : null}
                       {r.status === "Onboarding" ? <span className="text-xs text-foreground-500">Sent at Activate</span>
                         : r.status === "Inactive" || r.status === "Declined"
                         ? !business.operational ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>

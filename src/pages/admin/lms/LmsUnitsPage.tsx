@@ -11,6 +11,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { ruleObject } from "@/lib/businessRules";
 import { UnitDetail } from "./UnitTgaList";
 import UnitPrerequisitesPicker from "./UnitPrerequisitesPicker";
+import UnitAvetmissFields from "./UnitAvetmissFields";
 
 import { bulkAdmin, categories, categoryLabel, listResources, splitCategoryTitle, type ImportFile, type ImportJob, type Resource } from "@/pages/admin/lib/bulkResources";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
@@ -310,6 +311,7 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
           </div>
           {editingSettings && draft.id && selectedCourse ? <UnitPrerequisitesPicker key={draft.id} unitId={draft.id} canEdit={canEdit} needs={needs}
             courseUnits={details.find(d => d.course.id === selectedCourse.id)?.units ?? []} onSaved={setNeeds} /> : null}
+          {editingSettings && draft.id ? <UnitAvetmissFields key={`avetmiss-${draft.id}`} unitId={draft.id} canEdit={canEdit} /> : null}
           {editingSettings && draft.id ? <div className="space-y-3 border-t border-background-200 pt-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Hours</h3>

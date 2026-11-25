@@ -9,7 +9,9 @@ export const OFFER_UNREADABLE = "This file could not be read as a PDF. Export th
 /** The consent the applicant agrees to. Fixed here (never taken from the browser) and stored with the signature. */
 export const OFFER_CONSENT = "I have read this offer letter and accept it. I agree that typing my full name and selecting Sign is my electronic signature.";
 
-export interface Signature { signerName: string; signedAt: string; ip: string | null; userAgent: string | null; consent: string; offerFilename: string; offerSha256: string }
+export interface Signature { signerName: string; signedAt: string; ip: string | null; userAgent: string | null; consent: string; offerFilename: string; offerSha256: string;
+  /** OFFER-SIGNATURES (owner 2026-11-24): the employee's drawn signature (PNG bytes), printed on the signature page; none = the typed name only. */
+  image?: Uint8Array | null }
 
 /** A safe PDF file name for a letter: "Offer of employment - Asha Patel.pdf". */
 export function letterFileName(title: string, person: string): string {

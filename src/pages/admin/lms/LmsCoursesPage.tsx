@@ -78,7 +78,7 @@ const PURGE_LABELS: Record<string, string> = {
   "intake_enrolment_units": "student unit placement", "intake_units": "intake unit", "intake_class_times": "weekly class time", "intake_trainers": "intake trainer",
   "unit_contents": "learning content item", "lms_unit_resources": "unit resource", "asm_assessments": "assessment", "asm_submissions": "submission",
   "asm_unit_outcomes": "unit result", "course_completions": "certificate / statement", "class_attendance": "attendance mark", "attendance_marks": "attendance mark",
-  "course_fee_items": "fee line", "course_fee_setups": "fee setup", "course_master_units": "master timetable row", "enrollment_application_courses": "application course choice",
+  "course_fee_items": "fee line", "course_fee_setups": "fee setup", "course_coe_units": "CoE master timetable row", "course_voe_units": "VoE master timetable row", "intake_batches": "class batch", "batch_students": "batch membership", "enrollment_application_courses": "application course choice",
   "rto_enrolment_units": "student unit", "lms_intake_students": "intake allocation", "course_term_breaks": "term break", "intake_groups": "intake group",
 };
 /** Our own labels are singular ("class" -> "classes"); labels made from a table name are already plural and stay as they are. */

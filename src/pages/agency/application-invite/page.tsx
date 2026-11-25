@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { Button } from "@/pages/admin/components/ui";
+import { passwordProblem } from "@/lib/passwords";
 
 export default function ApplicationInvitePage() {
   const { authUser, authLoading, reloadIdentity, signOut } = usePortalAuth();
@@ -14,6 +15,39 @@ export default function ApplicationInvitePage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  // STUDENT-PASSWORD (2026-11-24, owner): a student who opens the finish-application link creates a password before the application
+  // opens, so they can sign in to their workspace afterwards (null = still checking).
+  const [hasPassword, setHasPassword] = useState<boolean | null>(null);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  useEffect(() => {
+    if (!authUser) { setHasPassword(null); return; }
+    let active = true;
+    supabase.rpc("portal_my_password_set").then(({ data, error: failure }) => {
+      // Until the database function exists, behave as before (no password step).
+      if (active) setHasPassword(failure ? true : data === true);
+    });
+    return () => { active = false; };
+  }, [authUser]);
+
+  const savePassword = async () => {
+    const problem = passwordProblem(password, confirm);
+    if (problem) { setError(problem); return; }
+    setBusy(true); setError("");
+    try {
+      const { error: failure } = await supabase.auth.updateUser({ password });
+      if (failure) throw new Error(failure.message || "The password could not be saved. Try another one.");
+      setHasPassword(true); setPassword(""); setConfirm("");
+      setNotice("Password saved. Next time, sign in to your SLIT workspace with your email and this password.");
+      await accept();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "The password could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.slice(1));
@@ -82,6 +116,22 @@ export default function ApplicationInvitePage() {
         <h1 className="font-heading text-xl font-semibold">Complete your SLIT application</h1>
         {authLoading ? <p role="status">Checking your sign-in…</p> : !token ? (
           <p>Open the newest SLIT application invitation from your email in this browser. Contact SLIT Admissions if you need a new link.</p>
+        ) : authUser && hasPassword === null ? <p role="status">Checking your account…</p> : authUser && !hasPassword ? (
+          <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void savePassword(); }} data-testid="application-invite-password">
+            <p>Signed in as {authUser.email}. Create your password first: you will use it to sign in to your SLIT workspace.</p>
+            <label className="block text-sm" htmlFor="application-invite-password">New password</label>
+            <input id="application-invite-password" type={showPassword ? "text" : "password"} autoComplete="new-password" required
+              className="w-full rounded-md border border-background-300 px-3 py-2" value={password} onChange={(event) => setPassword(event.target.value)} />
+            <label className="block text-sm" htmlFor="application-invite-confirm">Confirm password</label>
+            <input id="application-invite-confirm" type={showPassword ? "text" : "password"} autoComplete="new-password" required
+              className="w-full rounded-md border border-background-300 px-3 py-2" value={confirm} onChange={(event) => setConfirm(event.target.value)} />
+            {password ? <p className="text-xs text-foreground-600">{passwordProblem(password, confirm || undefined) ?? "Looks good."}</p> : null}
+            <label className="flex items-center gap-2 text-xs text-foreground-600"><input type="checkbox" checked={showPassword} onChange={(event) => setShowPassword(event.target.checked)} className="h-4 w-4" />Show password</label>
+            <div className="flex flex-wrap gap-3">
+              <Button type="submit" disabled={busy || !!passwordProblem(password, confirm)}>Save password and open application</Button>
+              <Button type="button" variant="outline" disabled={busy} onClick={() => void signOut()}>Use a different email</Button>
+            </div>
+          </form>
         ) : authUser ? (
           <>
             <p>Signed in as {authUser.email}.</p>

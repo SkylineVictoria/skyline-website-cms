@@ -2,7 +2,7 @@
  * This file deliberately does not modify Master Data, CRM or HRMS.
  * All references resolve through existing authoritative APIs.
  */
-export type LmsArea = "courses" | "units" | "intakes" | "attendance" | "completion" | "assessments" | "timetable" | "timetable-create" | "timetable-settings" | "room-availability" | "trainer-availability" | "timetable-templates" | "term-breaks" | "locations"
+export type LmsArea = "courses" | "units" | "intakes" | "attendance" | "completion" | "assessments" | "timetable" | "timetable-create" | "timetable-settings" | "room-availability" | "trainer-availability" | "timetable-templates" | "term-breaks" | "locations" | "results"
   // Timetable views (LMS > Timetable tabs, ?view=), listed under Timetable in the sidebar.
   | "tt-calendar" | "tt-trainers" | "tt-rooms" | "tt-students" | "tt-intakes" | "tt-setup";
 export type LmsDependency = "course" | "intake" | "unit" | "unitDelivery" | "session";
@@ -32,6 +32,8 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "tt-students", label: "Student availability", route: "/admin/lms/timetable?view=students", icon: "ri-group-line", dependencies: [], parent: "timetable" },
   { id: "timetable-settings", label: "Settings", route: "/admin/lms/timetable-settings", icon: "ri-settings-3-line", dependencies: [], parent: "timetable" },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "session"], primaryAction: "Mark Attendance" },
+  // AVETMISS-UI (2026-11-25): each student's AVETMISS outcome per unit (outcome, actual dates, delivery, location, RPL evidence).
+  { id: "results", label: "Results", route: "/admin/lms/results", icon: "ri-medal-line", dependencies: ["course", "intake", "unit"] },
   { id: "completion", label: "Completion", route: "/admin/lms/completion", icon: "ri-award-line", dependencies: ["course", "intake"] },
   { id: "assessments", label: "Assessments", route: "/admin/lms/assessments", icon: "ri-file-list-3-line", dependencies: ["course", "intake", "unit"], primaryAction: "Add Assessment" },
 ] as const;

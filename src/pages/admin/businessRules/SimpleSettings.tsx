@@ -1,6 +1,10 @@
 import { useMemo, useRef, useState } from "react";
 import { Button, Card, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
 import type { Definition, Rule, Snapshot } from "./model";
+import AvetmissOrgSettings from "@/pages/admin/components/AvetmissOrgSettings";
+
+/** Owner (2026-11-25): the AVETMISS / NCVER organisation details live here as their own area (saved by their own Save button). */
+const AVETMISS_AREA = "AVETMISS settings";
 
 /*
  * Settings (owner, 2026-11-22): the everyday choices from Business Rules in plain words, grouped by area. Each one is an existing
@@ -148,6 +152,7 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
 
   const [area, setArea] = useState(SECTIONS[0].title);
   const section = SECTIONS.find(x => x.title === area) ?? SECTIONS[0];
+  const avetmiss = area === AVETMISS_AREA;
 
   return <div className="space-y-4">
     <div className="flex flex-wrap gap-2" role="tablist" aria-label="Area">
@@ -155,8 +160,12 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
         className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${x.title === area ? "border-primary-500 bg-primary-50 font-semibold text-primary-800" : "border-background-300 text-foreground-700 hover:bg-background-100"}`}>
         <i className={x.icon} aria-hidden="true" />{x.title}
       </button>)}
+      <button type="button" role="tab" aria-selected={avetmiss} onClick={() => { setArea(AVETMISS_AREA); setSaved(""); setEdits({}); }} data-testid="settings-area-avetmiss"
+        className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${avetmiss ? "border-primary-500 bg-primary-50 font-semibold text-primary-800" : "border-background-300 text-foreground-700 hover:bg-background-100"}`}>
+        <i className="ri-government-line" aria-hidden="true" />{AVETMISS_AREA}
+      </button>
     </div>
-    <Card className="overflow-hidden p-0">
+    {avetmiss ? <AvetmissOrgSettings /> : <Card className="overflow-hidden p-0">
       <ul className="divide-y divide-background-100">{section.settings.map(s => {
         const rule = byId.get(s.id);
         const current = rule ? liveDefinition(rule) : undefined;
@@ -186,8 +195,8 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
           </span>
         </li>;
       })}</ul>
-    </Card>
-    <p className="text-xs text-foreground-500">Changes save by themselves and apply from today. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={showAdvanced}>All rules (for developers)</button></p>
+    </Card>}
+    {avetmiss ? null : <p className="text-xs text-foreground-500">Changes save by themselves and apply from today. <button type="button" className="font-medium text-primary-700 hover:underline" onClick={showAdvanced}>All rules (for developers)</button></p>}
   </div>;
 }
 

@@ -9,7 +9,7 @@ import { approveAgency, changeReferee, rejectOnboarding, sendAgentAgreement, sen
 import F04ReviewDialog from "@/pages/admin/components/F04ReviewDialog";
 import F04PresendDialog from "@/pages/admin/components/F04PresendDialog";
 import { OnboardingStatusPill } from "@/pages/admin/components/AgencyStatus";
-import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection, type OnboardingRevision, formatAuDate, listOnboarding, onboardingFileUrl, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
+import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection, type OnboardingRevision, formatAuDate, listOnboarding, openOnboardingFile, onboardingFileUrl, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
 import { AGENT_ONBOARDING_FIELDS, commissionText, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
@@ -33,6 +33,8 @@ export default function AgentOnboardingPanel({ business, onChanged, view = "full
   const [dialog, setDialog] = useState<"agreement" | "approve" | "review" | "decline" | "presend" | null>(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("prepare") === "1" ? "presend" : null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [busy, setBusy] = useState("");
+  // View in place (owner 2026-11-24: not in another tab), with Download inside the viewer.
+  const [viewing, setViewing] = useState<ViewerDoc | null>(null);
   const [changing, setChanging] = useState<OnboardingReferee | null>(null);
   const [history, setHistory] = useState(false);
   const load = useCallback(async () => {
@@ -43,13 +45,9 @@ export default function AgentOnboardingPanel({ business, onChanged, view = "full
   const refresh = async () => { await Promise.all([load(), onChanged().catch(() => undefined)]); };
   const act = async (key: string, work: () => Promise<string>) => {
     setBusy(key);
-    try { const msg = await work(); if (msg) { push(msg); await refresh(); } } catch (e) { push(e instanceof Error ? e.message : "That did not work.", "error"); } finally { setBusy(""); }
+    try { push(await work()); await refresh(); } catch (e) { push(e instanceof Error ? e.message : "That did not work.", "error"); } finally { setBusy(""); }
   };
-  // View in place (owner 2026-11-24), with Download inside the viewer.
-  const [viewing, setViewing] = useState<ViewerDoc | null>(null);
-  const download = (row: OnboardingRow, kind: OnboardingFileKind, label: string) => act(`${row.id}:${kind}`, async () => {
-    const f = await onboardingFileUrl(row.id, kind); setViewing({ url: f.url, name: f.name || `${label}.pdf`, revoke: true }); return "";
-  });
+  const download = (row: OnboardingRow, kind: OnboardingFileKind, label: string) => act(`${row.id}:${kind}`, async () => { await openOnboardingFile(row.id, kind); return `${label} downloaded.`; });
   const remind = (request: RequestSummary, who: string) => act(`remind:${request.id}`, async () => {
     if (!request.recipientId) throw new Error("Nobody to remind.");
     await signingAction({ action: "resend", id: request.id, recipientId: request.recipientId }); return `Reminder sent to ${who}.`;
@@ -102,9 +100,13 @@ export default function AgentOnboardingPanel({ business, onChanged, view = "full
           return <div key={group} className="rounded-lg border border-background-200 p-3">
             <p className="text-sm font-medium text-foreground-900">{title} ({list.length})</p>
             <p className="text-xs text-foreground-500">{hint}</p>
-            {list.length ? <ul className="mt-2 divide-y divide-background-200">{list.map((d) => <li key={`${d.row.id}:${d.kind}`} className="flex items-center justify-between gap-3 py-1.5 text-sm">
-              <span className="min-w-0 truncate"><i className="ri-file-pdf-2-line mr-1 text-red-600" aria-hidden="true" />{d.label}<span className="text-xs text-foreground-500"> · {new Date(d.when).toLocaleDateString("en-AU")}</span></span>
-              <Button size="sm" variant="ghost" icon="ri-eye-line" disabled={busy === `${d.row.id}:${d.kind}`} onClick={() => void download(d.row, d.kind, d.label)}>View</Button>
+            {list.length ? <ul className="mt-2 divide-y divide-background-200">{list.map((d) => <li key={`${d.row.id}:${d.kind}`} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-1.5 text-sm">
+              <span className="min-w-0 flex-1 truncate"><i className="ri-file-pdf-2-line mr-1 text-red-600" aria-hidden="true" />{d.label}<span className="text-xs text-foreground-500"> · {new Date(d.when).toLocaleDateString("en-AU")}</span></span>
+              <span className="flex shrink-0 gap-1">
+                {/* View opens the PDF in a new tab (inline); agency_onboarding_file checks the caller and never returns a certificate. */}
+                <Button size="sm" variant="ghost" icon="ri-eye-line" onClick={() => void onboardingFileUrl(d.row.id, d.kind).then((f) => setViewing({ url: f.url, name: f.name || `${d.label}.pdf`, revoke: true })).catch((e: Error) => push(e.message, "error"))} data-testid={`view-${d.kind}`}>View</Button>
+                <Button size="sm" variant="ghost" icon="ri-download-2-line" disabled={busy === `${d.row.id}:${d.kind}`} onClick={() => void download(d.row, d.kind, d.label)}>Download</Button>
+              </span>
             </li>)}</ul> : <p className="mt-2 text-xs text-foreground-500">{group === "reference" ? "No referee has replied yet." : "Nothing signed yet."}</p>}
           </div>;
         })}

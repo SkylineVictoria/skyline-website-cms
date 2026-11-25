@@ -12,7 +12,7 @@ import MyLeave from "./components/MyLeave";
 import HolidaysList from "./components/HolidaysList";
 import OptionalHolidays from "./components/OptionalHolidays";
 import OfferPanel from "./components/OfferPanel";
-import { myDocumentUrl, myOfferApi, myOnboarding, type MyOnboarding } from "@/lib/staffOnboardingApi";
+import { myDocumentUrl, myDocumentsLink, myOfferApi, myOnboarding, type MyOnboarding } from "@/lib/staffOnboardingApi";
 import { STAFF_DOC_LABEL, type StaffDocCategory } from "@/lib/staffStatus";
 import { JOB_TYPE_LABEL, PAY_TYPE_LABEL } from "../../../supabase/functions/_shared/hr-template";
 import MySigningDocuments from "@/components/signing/MySigningDocuments";
@@ -125,14 +125,15 @@ export default function StaffHomePage() {
           <div data-testid="staff-preactive">
             <p className="mt-2 text-sm text-foreground-700" data-testid="staff-home-status">
               {me.status === "offer_signed"
-                ? "Thank you for signing your offer. We will let you know when your staff account is active; the rest of My HR opens then."
-                : `Your offer${onboarding?.position ? ` for ${onboarding.position}` : ""} is ready. Read it and sign it below.`}
+                ? "Thank you for signing your offer. Next, add your details and documents below; we will let you know when your staff account is active."
+                : `Your offer${onboarding?.position ? ` for ${onboarding.position}` : ""} is ready. Read it, then accept and add your details and documents; you sign on the last screen.`}
             </p>
             <Section title="Your offer letter" testId="staff-preactive-offer">
               {noOffer ? <p className="text-sm text-foreground-700" data-testid="staff-no-offer">There is no offer letter for your account right now. Please contact us if you were expecting one.</p>
-                : <OfferPanel api={myOfferApi} heading={false} onInvalid={() => setNoOffer(true)}
+                : <OfferPanel api={myOfferApi} heading={false} acceptViaWizard onInvalid={() => setNoOffer(true)}
                     onSigned={() => { setMe((current) => (current ? { ...current, status: "offer_signed" } : current)); }} />}
             </Section>
+            {me.status === "offer_signed" ? <DocumentsWizardButton /> : null}
             <Section title="Your documents" testId="staff-preactive-documents">
               {onboarding?.documents?.length ? (
                 <ul className="divide-y divide-background-200">
@@ -231,6 +232,34 @@ export default function StaffHomePage() {
           </>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * STAFF-OFFER-FULL-PART-TIME: documents come after the signed offer. Opens the same document wizard as the emailed link, with a new
+ * private link made for the signed-in person (staff-onboarding documents_link); also used when HR asks for a document again.
+ */
+function DocumentsWizardButton() {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const open = async () => {
+    setBusy(true); setMessage("");
+    try {
+      const { token } = await myDocumentsLink();
+      if (!token) throw new Error("The document wizard could not be opened. Please try again.");
+      window.location.assign(`/staff/onboard#t=${token}`);
+    } catch (e) { setMessage(e instanceof Error ? e.message : "The document wizard could not be opened."); setBusy(false); }
+  };
+  return (
+    <div className="mt-4 rounded-card border border-primary-200 bg-primary-50 p-4" data-testid="staff-documents-wizard">
+      <p className="text-sm font-semibold text-foreground-950">Add your details and documents</p>
+      <p className="mt-1 text-sm text-foreground-700">Your personal details, passport and any other documents we need. You can save and come back.</p>
+      <button type="button" disabled={busy} onClick={() => void open()} data-testid="staff-documents-wizard-open"
+        className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-md bg-primary-500 px-4 py-2 text-sm font-semibold text-background-50 hover:bg-primary-600 disabled:opacity-60">
+        <i className="ri-file-upload-line" aria-hidden="true" />{busy ? "Opening…" : "Open the document wizard"}
+      </button>
+      {message ? <p role="status" className="mt-2 text-sm text-foreground-700">{message}</p> : null}
     </div>
   );
 }

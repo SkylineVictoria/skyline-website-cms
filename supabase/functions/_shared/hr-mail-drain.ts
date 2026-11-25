@@ -45,6 +45,15 @@ export async function drainHrOutbox(service: any, env: Record<string, string | u
       const rendered = renderMessage(mail.template, templateValues(mail.values ?? {}, { login_url: config.siteUrl ? `${config.siteUrl}/login` : "" }));
       return rendered.missing.length || rendered.unknown.length ? null : rendered;
     },
+    // OFFER-SIGNATURES (owner 2026-11-24): the signed offer also goes to the admin who sent it and to the signatory (Business Rule
+    // hrms.offer_signatory_name, matched by name to an active CMS user; hr_svc_offer_mail_people), as well as EF_HR_ADMIN_NOTIFY_TO.
+    extraAdmins: async (row) => {
+      if (row.kind !== "admin_offer_signed") return [];
+      const offerId = String(row.payload?.offerId ?? "");
+      if (!/^[0-9a-f-]{36}$/i.test(offerId)) return [];
+      const { data, error } = await service.rpc("hr_svc_offer_mail_people", { p_offer: offerId });
+      return !error && Array.isArray(data) ? (data as unknown[]).map(String) : [];
+    },
     result: async (id, state, messageId, error) => {
       await service.rpc("hr_svc_email_result", { p_id: id, p_state: state, p_message_id: messageId ?? null, p_error: error ?? null });
     },

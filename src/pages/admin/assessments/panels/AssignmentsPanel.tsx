@@ -6,6 +6,16 @@ import { Empty } from "@/pages/admin/components/rto/overlay";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { fmtDateTime, fromLocalInput, STATE_LABEL, toLocalInput } from "@/lib/assessment/api";
 import { ruleNumber } from "@/lib/businessRules";
+import { supabase } from "@/pages/admin/lib/supabase";
+
+/** LMS-BATCHES (2026-11-25): an assignment's window comes from the intake's Master unit dates (CoE / VoE), not class sessions. */
+type MasterWindow = { intake_unit_id: string; opens_at: string; closes_at: string; master_kind: string | null; master_cycle: number | null; start_date: string; end_date: string };
+async function masterWindow(assessmentId: string, intakeId: string): Promise<MasterWindow | null> {
+  const { data, error } = await supabase.rpc("asm_master_window", { p_assessment: assessmentId, p_intake: intakeId });
+  if (error) return null;
+  return ((data as MasterWindow[] | null) ?? [])[0] ?? null;
+}
+const windowText = (w: MasterWindow | null | undefined) => (w ? `${fmtDateTime(w.opens_at)} – ${fmtDateTime(w.closes_at)} (${(w.master_kind ?? "coe").toUpperCase()} Master${w.master_cycle ? `, cycle ${w.master_cycle}` : ""})` : "No Master dates for this unit in the intake");
 import { asmAdmin, type AssignmentRow, type AssignmentStudent, type BatchOption, type StaffOption } from "@/pages/admin/lib/assessments";
 
 const fail = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong.");
@@ -45,31 +55,42 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
   const [availableFrom, setAvailableFrom] = useState(toLocalInput(new Date().toISOString()));
   const [dueAt, setDueAt] = useState(toLocalInput(new Date(Date.now() + ruleNumber("lms.assessment_assignment_default_days", 7) * 86400000).toISOString()));
   const [lateUntil, setLateUntil] = useState("");
-  const [rule, setRule] = useState<"follow_batch" | "keep">("follow_batch");
+  const [rule, setRule] = useState<"follow_master" | "keep">("follow_master");
+  const [useMaster, setUseMaster] = useState(true);
+  const [windows, setWindows] = useState<Record<string, MasterWindow | null>>({});
   const [notes, setNotes] = useState("");
   const [events, setEvents] = useState<{ kind: string; title: string; startsAt: string; endsAt: string }[]>([]);
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   useEffect(() => { void asmAdmin<BatchOption[]>("batch_list", { courseId }).then(setBatches).catch(() => setBatches([])); void asmAdmin<StaffOption[]>("staff_list").then(setStaff).catch(() => setStaff([])); }, [courseId]);
+  useEffect(() => {
+    for (const id of picked) if (!(id in windows)) void masterWindow(assessmentId, batches.find((b) => b.id === id)?.intakeId ?? id).then((w) => setWindows((x) => ({ ...x, [id]: w })));
+  }, [picked, assessmentId, batches, windows]);
+  const missingMaster = useMaster && picked.some((id) => windows[id] === null);
   const submit = async () => {
     setBusy(true); setError("");
     try {
-      const out = await asmAdmin<{ ok: boolean; created: number; errors: { message: string }[] }>("assignment_create", { assessmentId, batchIds: picked, availableFrom: fromLocalInput(availableFrom), dueAt: fromLocalInput(dueAt), lateUntil: fromLocalInput(lateUntil), trainerStaffIds: trainers, reassignRule: rule, notes, events: events.filter((e) => e.startsAt).map((e) => ({ ...e, startsAt: fromLocalInput(e.startsAt), endsAt: fromLocalInput(e.endsAt) })) });
+      const out = await asmAdmin<{ ok: boolean; created: number; errors: { message: string }[] }>("assignment_create", { assessmentId, batchIds: picked, availableFrom: useMaster ? undefined : fromLocalInput(availableFrom), dueAt: useMaster ? undefined : fromLocalInput(dueAt), lateUntil: fromLocalInput(lateUntil), trainerStaffIds: trainers, reassignRule: rule, notes, events: events.filter((e) => e.startsAt).map((e) => ({ ...e, startsAt: fromLocalInput(e.startsAt), endsAt: fromLocalInput(e.endsAt) })) });
       if (out.errors?.length) setError(out.errors.map((e) => e.message).join(" "));
       if (out.created > 0) onDone();
     } catch (e) { setError(fail(e)); } finally { setBusy(false); }
   };
   return (
-    <Drawer open title="Assign to intakes" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || !dueAt} onClick={() => void submit()}>Assign</Button></>}>
+    <Drawer open title="Assign to intakes" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || (!useMaster && !dueAt) || missingMaster} onClick={() => void submit()}>Assign</Button></>}>
       <div className="space-y-4">
         <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Intakes on this course</span>
           {batches.length === 0 ? <p className="text-sm text-foreground-600">No intakes on this course yet (Courses › Intakes).</p> : <ul className="grid gap-1 sm:grid-cols-2">{batches.map((b) => <li key={b.id}><label className="flex items-center gap-2 rounded-md border border-background-200 px-2 py-1.5 text-sm"><input type="checkbox" checked={picked.includes(b.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, b.id] : picked.filter((x) => x !== b.id))} /><span className="min-w-0 flex-1 truncate">{b.name}</span><span className="text-xs text-foreground-500">{b.students}</span></label></li>)}</ul>}</div>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-md border border-background-200 bg-background-50 p-3" data-testid="assignment-master-window">
+          <label className="flex items-center gap-2 text-sm font-medium text-foreground-900"><input type="checkbox" checked={useMaster} onChange={(e) => setUseMaster(e.target.checked)} /> Use the Master unit dates (opens on the unit's start, due at the end of its last day)</label>
+          {picked.length ? <ul className="mt-2 space-y-0.5 text-xs text-foreground-700">{picked.map((id) => <li key={id}><span className="font-medium">{batches.find((b) => b.id === id)?.name ?? "Intake"}:</span> {id in windows ? windowText(windows[id]) : "Loading…"}</li>)}</ul> : <p className="mt-1 text-xs text-foreground-600">Pick intakes to see their Master window.</p>}
+          {missingMaster ? <p className="mt-1 text-xs text-red-700">An intake has no Master dates for this unit: untick to type the dates.</p> : null}
+        </div>
+        {useMaster ? null : <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Available from"><TextInput type="datetime-local" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} /></Field>
           <Field label="Due" required><TextInput type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></Field>
           <Field label="Late submissions until" hint="Only matters when the institution blocks late work"><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} /></Field>
-        </div>
+        </div>}
         <Field label="Extra assessors (the intake's trainers are always assessors)"><Select multiple size={4} value={trainers} onChange={(e) => setTrainers([...e.target.selectedOptions].map((o) => o.value))}>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}{s.isTrainer ? "" : " (no trainer role)"}</option>)}</Select></Field>
-        <Field label="When a student leaves or joins the intake"><Select value={rule} onChange={(e) => setRule(e.target.value as "follow_batch" | "keep")}><option value="follow_batch">Follow the student's intake: leavers lose open drafts, joiners are added and told</option><option value="keep">Keep: existing attempts stay as they are</option></Select></Field>
+        <Field label="When a student leaves or joins the intake"><Select value={rule} onChange={(e) => setRule(e.target.value as "follow_master" | "keep")}><option value="follow_master">Follow the Master: dates move with the Master unit dates; leavers lose open drafts, joiners are added and told</option><option value="keep">Keep: existing attempts stay as they are</option></Select></Field>
         <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Practical / observation sessions (calendar)</span>
           <ul className="space-y-1.5">{events.map((ev, i) => <li key={i} className="grid gap-1.5 sm:grid-cols-[7rem_1fr_1fr_1fr_auto]"><Select value={ev.kind} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, kind: e.target.value } : x)))}><option value="practical">Practical</option><option value="observation">Observation</option><option value="other">Other</option></Select><TextInput placeholder="Title" value={ev.title} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, title: e.target.value } : x)))} /><TextInput type="datetime-local" value={ev.startsAt} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, startsAt: e.target.value } : x)))} /><TextInput type="datetime-local" value={ev.endsAt} onChange={(e) => setEvents(events.map((x, k) => (k === i ? { ...x, endsAt: e.target.value } : x)))} /><Button size="sm" variant="ghost" icon="ri-delete-bin-line" aria-label="Remove" onClick={() => setEvents(events.filter((_, k) => k !== i))} /></li>)}</ul>
           <Button size="sm" variant="outline" icon="ri-add-line" className="mt-2" onClick={() => setEvents([...events, { kind: "practical", title: "", startsAt: "", endsAt: "" }])}>Add session</Button></div>
@@ -87,6 +108,8 @@ export function AssignmentDrawer({ assignment: a, onClose, onChanged, onOpenAtte
   const [lateUntil, setLateUntil] = useState(toLocalInput(a.lateUntil));
   const [status, setStatus] = useState(a.status);
   const [error, setError] = useState("");
+  const [win, setWin] = useState<MasterWindow | null | undefined>(undefined);
+  useEffect(() => { void masterWindow(a.assessmentId, a.intakeId).then(setWin); }, [a.assessmentId, a.intakeId]);
   const load = () => asmAdmin<AssignmentStudent[]>("assignment_students", { id: a.id }).then(setStudents).catch((e) => setError(fail(e)));
   useEffect(() => { void load(); }, [a.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async () => { try { await asmAdmin("assignment_update", { id: a.id, dueAt: fromLocalInput(dueAt), lateUntil: fromLocalInput(lateUntil), status }); push("Assignment saved."); onChanged(); } catch (e) { setError(fail(e)); } };
@@ -99,6 +122,7 @@ export function AssignmentDrawer({ assignment: a, onClose, onChanged, onOpenAtte
           <Field label="Late until"><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} /></Field>
           <Field label="Status"><Select value={status} onChange={(e) => setStatus(e.target.value as AssignmentRow["status"])}><option value="open">Open</option><option value="closed">Closed</option><option value="cancelled">Cancelled</option></Select></Field>
         </div>
+        <p className="text-xs text-foreground-700" data-testid="assignment-master-line">Master window: {win === undefined ? "Loading…" : windowText(win)}{a.reassignRule === "follow_master" ? " · follows the Master" : " · kept as set"}</p>
         <p className="text-xs text-foreground-600">Assessors: {a.trainers.map((t) => t.name).join(", ") || "none (add trainers to the intake's class setup)"}. Version {a.versionNo}.</p>
         {error ? <p className="text-sm text-primary-700" role="alert">{error}</p> : null}
         <div>

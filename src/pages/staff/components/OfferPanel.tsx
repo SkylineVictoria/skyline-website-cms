@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { formatSignedAt } from "@/lib/signedTime";
-import { LinkInvalidError, NoOfferError, type OfferApi, type OfferView } from "@/lib/staffOnboardingApi";
+import SignaturePad from "@/components/signing/SignaturePad";
+import { LinkInvalidError, NoOfferError, myDocumentsLink, type OfferApi, type OfferView } from "@/lib/staffOnboardingApi";
 
 const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900";
 
@@ -10,15 +11,25 @@ const ALERT = "rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text
  * sign. Afterwards it shows the signed copy. Used by /staff/offer (a private link, `api` carries the token) and by the signed-in
  * person's page before they are Active (`api` uses their session). The staff-onboarding function re-checks every call.
  */
-export default function OfferPanel({ api, onInvalid, onSigned, heading = true }: { api: OfferApi; onInvalid: () => void; onSigned?: (view: OfferView) => void; heading?: boolean }) {
+export default function OfferPanel({ api, onInvalid, onSigned, heading = true, acceptViaWizard = false }: {
+  api: OfferApi; onInvalid: () => void; onSigned?: (view: OfferView) => void; heading?: boolean;
+  /** OFFER-SIGN-LAST: the signed-in person accepts here, adds their details and documents in the wizard, and signs on its last screen. */
+  acceptViaWizard?: boolean;
+}) {
   const [view, setView] = useState<OfferView | null>(null);
   const [consentText, setConsentText] = useState("");
   const [error, setError] = useState("");
   const [pdfUrl, setPdfUrl] = useState("");
   const [name, setName] = useState("");
+  const [signature, setSignature] = useState<string | null>(null);
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [fieldError, setFieldError] = useState<{ name?: string; consent?: string }>({});
+  const [fieldError, setFieldError] = useState<{ name?: string; consent?: string; signature?: string }>({});
+  // STAFF-OFFER-FULL-PART-TIME: Accept (sign) or Decline (optional reason, confirmed once).
+  const [declining, setDeclining] = useState(false);
+  const [reason, setReason] = useState("");
+  const [declined, setDeclined] = useState(false);
+  const [showSign, setShowSign] = useState(false);
 
   const handle = useCallback((e: unknown) => {
     if (e instanceof LinkInvalidError || e instanceof NoOfferError) { onInvalid(); return; }
@@ -37,24 +48,65 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
   const sign = async (event: FormEvent) => {
     event.preventDefault();
     if (busy) return;
-    const problems: { name?: string; consent?: string } = {};
+    const problems: { name?: string; consent?: string; signature?: string } = {};
     if (!name.trim()) problems.name = "Type your full name to sign.";
+    if (!signature) problems.signature = "Draw your signature.";
     if (!agreed) problems.consent = "Tick the box to agree.";
     setFieldError(problems);
-    if (problems.name || problems.consent) return;
+    if (problems.name || problems.consent || problems.signature) return;
     setBusy(true);
     setError("");
     try {
-      const r = await api.sign(name.trim());
+      const r = await api.sign(name.trim(), signature);
       setView(r.view);
       loadPdf(r.view);
       onSigned?.(r.view);
     } catch (e) { handle(e); } finally { setBusy(false); }
   };
 
+  const decline = async () => {
+    if (busy) return;
+    if (!window.confirm("Decline this offer? This cannot be undone from here: we will be told that you declined.")) return;
+    setBusy(true); setError("");
+    try { await api.decline(reason.trim()); setDeclined(true); }
+    catch (e) { handle(e); } finally { setBusy(false); }
+  };
+
+  // Accept and continue: open the document wizard (its last screen signs the offer). When the documents are already in, sign here.
+  const accept = async () => {
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const link = await myDocumentsLink();
+      if (link.purpose === "sign" || !link.token) { setShowSign(true); setBusy(false); return; }
+      window.location.assign(`/staff/onboard#t=${link.token}`);
+    } catch (e) { handle(e); setBusy(false); }
+  };
+
+  if (declined || view?.offer.declinedAt) {
+    return (
+      <section className="rounded-card border border-background-200 bg-background-50 p-6" data-testid="offer-declined">
+        <h1 className="font-heading text-xl font-bold text-foreground-950">You declined the offer</h1>
+        <p className="mt-2 text-sm text-foreground-700">Thank you for letting us know. We have recorded your decision and the HR team can see it. If this was a mistake, please contact us.</p>
+      </section>
+    );
+  }
+
   if (!view) return error ? <p role="alert" className={ALERT}>{error}</p> : <p className="text-sm text-foreground-600" role="status">Opening your offer…</p>;
 
   const signed = Boolean(view.offer.signedAt);
+  const declineForm = (
+    <div className="mt-4 max-w-xl rounded-md border border-background-300 p-4" data-testid="offer-decline-form">
+      <Field label="Reason (optional)" hint="Shared with the HR team only.">
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} rows={3}
+          className="w-full rounded-md border border-background-300 px-3 py-2 text-sm" data-testid="offer-decline-reason" />
+      </Field>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button type="button" variant="danger" disabled={busy} onClick={() => void decline()} data-testid="offer-decline-confirm">{busy ? "Sending…" : "Decline the offer"}</Button>
+        <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(false)}>Cancel</Button>
+      </div>
+    </div>
+  );
   return (
     <>
       {heading ? <>
@@ -91,7 +143,17 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
         <button type="button" onClick={() => loadPdf(view)} className="mt-2 cursor-pointer text-xs text-foreground-600 hover:text-foreground-900">Letter not showing? Load it again</button>
       </section>
 
-      {signed || view.readOnly ? null : (
+      {signed || view.readOnly ? null : acceptViaWizard && !showSign ? (
+        <section className="mt-6 rounded-card border border-background-200 bg-background-50 p-6" data-testid="offer-accept-block">
+          <h2 className="font-heading text-lg font-bold text-foreground-950">Accept or decline</h2>
+          <p className="mt-1 text-sm text-foreground-700">To accept, continue to add your details and documents (passport and the others we need). You sign the offer on the last screen, together with your documents.</p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Button type="button" disabled={busy} onClick={() => void accept()} data-testid="offer-accept-continue">{busy ? "Opening…" : "Accept and continue"}</Button>
+            {!declining ? <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(true)} data-testid="offer-decline-open">Decline the offer</Button> : null}
+          </div>
+          {declining ? declineForm : null}
+        </section>
+      ) : (
         <form onSubmit={(e) => void sign(e)} className="mt-6 rounded-card border border-background-200 bg-background-50 p-6" data-testid="offer-sign-form" noValidate>
           <h2 className="font-heading text-lg font-bold text-foreground-950">Sign the offer</h2>
           <div className="mt-4 max-w-md">
@@ -100,12 +162,21 @@ export default function OfferPanel({ api, onInvalid, onSigned, heading = true }:
             </Field>
             {fieldError.name ? <p className="mt-1 text-xs text-primary-700" role="alert">{fieldError.name}</p> : null}
           </div>
+          <div className="mt-4 text-sm" data-testid="offer-sign-pad">
+            <span className="mb-1 block font-medium text-foreground-800">Your signature</span>
+            <SignaturePad onChange={setSignature} />
+            {fieldError.signature ? <p className="mt-1 text-xs text-primary-700" role="alert">{fieldError.signature}</p> : null}
+          </div>
           <label className="mt-4 flex cursor-pointer items-start gap-2.5 text-sm text-foreground-800">
             <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-background-400 text-primary-600 focus:ring-primary-200" />
             <span>{consentText}</span>
           </label>
           {fieldError.consent ? <p className="mt-1 text-xs text-primary-700" role="alert">{fieldError.consent}</p> : null}
-          <Button type="submit" className="mt-6" disabled={busy}>{busy ? "Signing…" : "Sign the offer"}</Button>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            <Button type="submit" disabled={busy} data-testid="offer-accept">{busy ? "Signing…" : "Accept and sign the offer"}</Button>
+            {!declining ? <Button type="button" variant="outline" disabled={busy} onClick={() => setDeclining(true)} data-testid="offer-decline-open">Decline the offer</Button> : null}
+          </div>
+          {declining ? declineForm : null}
         </form>
       )}
     </>

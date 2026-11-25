@@ -3,7 +3,10 @@ import { Link } from "react-router-dom";
 import { Badge, Button, Field, PageHeader, Select, TextInput } from "@/pages/admin/components/ui";
 import { Drawer } from "@/pages/admin/components/rto/shared";
 import { downloadCsv } from "@/pages/admin/lib/assessments";
-import { financeOptions, financePayments, financeStatus, stripeDashboardUrl, type FinanceFilters, type FinanceOptions, type FinancePage, type FinancePaymentRow } from "@/pages/admin/lib/finance";
+import { FEE_TYPES, PAYMENT_SOURCES, feeTypeLabel, financeOptions, financePayments, financeStatus, sourceLabel, stripeDashboardUrl, type FeeType, type FinanceFilters, type FinanceOptions, type FinancePage, type FinancePaymentRow, type PaymentSource } from "@/pages/admin/lib/finance";
+import { AddPaymentModal, PaymentEditFields } from "@/pages/admin/finance/PaymentEditor";
+import { useAuth } from "@/pages/admin/lib/authContext";
+import { isSlitAdmin } from "@/pages/admin/lib/businessData";
 import { formatMoney } from "@/lib/signingApi";
 import { sendDepositReminder } from "@/pages/agency/lib/portalApplications";
 import { depositReminderText } from "@/pages/agency/lib/admissionsRules";
@@ -25,8 +28,13 @@ function presetRange(preset: Preset, custom: { from: string; to: string }): { fr
 const when = (value: string | null) => (value ? new Date(value).toLocaleString("en-AU", { dateStyle: "medium", timeStyle: "short" }) : "");
 const TONE = { paid: "success", pending: "warn", failed: "primary", refunded: "muted" } as const;
 
-/** Finance › Payments: every Stripe payment (the offer letters' initial deposits today) with who paid it, for what, and where it stands. */
+/** Finance › Payments: every payment (Stripe deposits from signed offer letters, and manual payments taken outside Stripe) with who paid it, for what, and where it stands. */
 export default function PaymentsPage() {
+  // AVETMISS-UI (2026-11-25): fee type / source filters and columns; admins edit a payment and add manual payments (finance_payment_save).
+  const { user } = useAuth();
+  const isAdmin = isSlitAdmin(user?.role);
+  const [feeType, setFeeType] = useState<FeeType | "none" | "">(""); const [source, setSource] = useState<PaymentSource | "">("");
+  const [adding, setAdding] = useState(false);
   const [preset, setPreset] = useState<Preset>("month");
   const [custom, setCustom] = useState({ from: "", to: "" });
   const [status, setStatus] = useState(""); const [courseId, setCourseId] = useState(""); const [agencyId, setAgencyId] = useState(""); const [q, setQ] = useState("");
@@ -49,11 +57,17 @@ export default function PaymentsPage() {
       if (err.code === "P0024" || /less than \d+ hours?/i.test(err.message)) setForceFor(row); else setReminderNote({ id: row.id, tone: "warn", text: err.message || "The reminder could not be sent." });
     } finally { setReminding(null); }
   };
-  const filters = useMemo<FinanceFilters>(() => ({ ...presetRange(preset, custom), status: status || undefined, courseId: courseId || undefined, agencyId: agencyId || undefined, q: q || undefined, sort, dir, page, pageSize: PAGE_SIZE }),
-    [preset, custom, status, courseId, agencyId, q, sort, dir, page]);
+  const filters = useMemo<FinanceFilters>(() => ({ ...presetRange(preset, custom), status: status || undefined, courseId: courseId || undefined, agencyId: agencyId || undefined, q: q || undefined,
+    feeType: feeType || undefined, source: source || undefined, sort, dir, page, pageSize: PAGE_SIZE }),
+    [preset, custom, status, courseId, agencyId, q, feeType, source, sort, dir, page]);
   const load = useCallback(async () => {
     setBusy(true); setError("");
-    try { setData(await financePayments(filters)); } catch (e) { setError(e instanceof Error ? e.message : "The payments could not be loaded."); } finally { setBusy(false); }
+    try {
+      const next = await financePayments(filters);
+      setData(next);
+      // The open drawer shows the saved values after an edit.
+      setOpen((prev) => (prev ? next.rows.find((r) => r.id === prev.id) ?? prev : prev));
+    } catch (e) { setError(e instanceof Error ? e.message : "The payments could not be loaded."); } finally { setBusy(false); }
   }, [filters]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { void financeOptions().then(setOptions).catch(() => setOptions({ courses: [], agencies: [], statuses: [] })); }, []);
@@ -70,7 +84,8 @@ export default function PaymentsPage() {
         const chunk = await financePayments({ ...filters, page: p, pageSize: 500 });
         for (const r of chunk.rows) rows.push({ date_paid: r.paid_at ?? "", created: r.created_at, student: r.student_name, student_email: r.student_email, application: r.application_reference ?? "",
           course: [r.course_code, r.course_title].filter(Boolean).join(" "), agency: r.agency_name ?? "", amount: (r.amount_cents / 100).toFixed(2), amount_paid: r.amount_paid_cents != null ? (r.amount_paid_cents / 100).toFixed(2) : "",
-          currency: r.currency.toUpperCase(), purpose: r.description, status: financeStatus(r.status).label, mode: r.livemode === false ? "test" : r.livemode ? "live" : "", stripe_payment: r.stripe_payment_intent_id ?? "",
+          currency: r.currency.toUpperCase(), purpose: r.description, fee_type: feeTypeLabel(r.fee_type), source: sourceLabel(r.source), reference: r.external_reference ?? "",
+          student_number: r.student_number ?? "", refunded: r.amount_refunded_cents ? (r.amount_refunded_cents / 100).toFixed(2) : "", status: financeStatus(r.status).label, mode: r.livemode === false ? "test" : r.livemode ? "live" : "", stripe_payment: r.stripe_payment_intent_id ?? "",
           receipt: r.receipt_url ?? "", signing_reference: r.request_reference ?? "", failure: r.failure_reason ?? "" });
         if (chunk.rows.length < 500 || rows.length >= chunk.total) break;
       }
@@ -82,7 +97,8 @@ export default function PaymentsPage() {
   const summary = data?.summary;
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   return <div className="space-y-5" data-testid="finance-payments">
-    <PageHeader title="Payments" description="Stripe payments received through Skyline: the initial deposits paid with signed offer letters, and any other payment taken on a signing request." />
+    <PageHeader title="Payments" description="Payments received: Stripe deposits paid with signed offer letters, other payments taken on a signing request, and manual payments taken outside Stripe."
+      actions={isAdmin ? <Button icon="ri-add-line" onClick={() => setAdding(true)} data-testid="finance-add-payment">Add payment</Button> : undefined} />
     {error ? <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p> : null}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-testid="finance-summary">
       {[["Total collected", summary ? formatMoney(summary.collectedCents - summary.refundedCents, "AUD") : "…", summary?.refundedCents ? `${formatMoney(summary.refundedCents, "AUD")} refunded` : "paid, less refunds"],
@@ -99,29 +115,35 @@ export default function PaymentsPage() {
       <Field label="Status"><Select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }} data-testid="finance-status"><option value="">All</option><option value="paid">Paid</option><option value="pending">Pending</option><option value="failed">Failed</option><option value="refunded">Refunded</option></Select></Field>
       <Field label="Course"><Select value={courseId} onChange={(e) => { setCourseId(e.target.value); setPage(1); }}><option value="">All courses</option>{options?.courses.map((c) => <option key={c.id} value={c.id}>{c.code} {c.title}</option>)}</Select></Field>
       <Field label="Agency"><Select value={agencyId} onChange={(e) => { setAgencyId(e.target.value); setPage(1); }}><option value="">All agencies</option>{options?.agencies.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</Select></Field>
+      <Field label="Fee type"><Select value={feeType} onChange={(e) => { setFeeType(e.target.value as FeeType | "none" | ""); setPage(1); }} data-testid="finance-fee-type">
+        <option value="">All</option>{FEE_TYPES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}<option value="none">Not set</option></Select></Field>
+      <Field label="Source"><Select value={source} onChange={(e) => { setSource(e.target.value as PaymentSource | ""); setPage(1); }} data-testid="finance-source">
+        <option value="">All</option>{PAYMENT_SOURCES.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}</Select></Field>
       <Field label="Search"><TextInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Student, email or reference" data-testid="finance-search" /></Field>
       <span className="flex-1" />
       <Button variant="outline" disabled={busy} onClick={() => void load()}>Refresh</Button>
       <Button variant="outline" icon="ri-download-2-line" disabled={busy || !data?.total} onClick={() => void exportCsv()} data-testid="finance-export">Export CSV</Button>
     </div>
     {!data ? <p role="status">Loading payments…</p> : !data.rows.length ? <p className="rounded-lg border border-dashed border-background-300 p-6 text-center text-sm text-foreground-600">No payments match these filters.</p>
-      : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[960px] text-left text-sm" data-testid="finance-table">
+      : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[1120px] text-left text-sm" data-testid="finance-table">
         <thead className="bg-background-100 text-xs text-foreground-600"><tr>
           <th className="px-3 py-2"><button type="button" className="font-semibold" onClick={() => sortBy("date")}>Date paid {arrow("date")}</button></th>
           <th className="px-3"><button type="button" className="font-semibold" onClick={() => sortBy("student")}>Student {arrow("student")}</button></th>
           <th className="px-3">Application</th><th className="px-3">Course</th><th className="px-3">Agency</th>
           <th className="px-3 text-right"><button type="button" className="font-semibold" onClick={() => sortBy("amount")}>Amount {arrow("amount")}</button></th>
-          <th className="px-3">Purpose</th>
+          <th className="px-3">Purpose</th><th className="px-3">Fee type</th><th className="px-3">Source</th>
           <th className="px-3"><button type="button" className="font-semibold" onClick={() => sortBy("status")}>Status {arrow("status")}</button></th>
           <th className="px-3">Stripe</th><th className="px-3">Receipt</th><th className="px-3">Reminders</th></tr></thead>
         <tbody>{data.rows.map((r) => { const s = financeStatus(r.status); const dash = stripeDashboardUrl(r); return <tr key={r.id} className="cursor-pointer border-t border-background-200 hover:bg-background-100" onClick={() => setOpen(r)} data-testid="finance-row">
           <td className="px-3 py-2 whitespace-nowrap">{r.paid_at ? when(r.paid_at) : <span className="text-foreground-500">not paid · created {when(r.created_at)}</span>}</td>
-          <td className="px-3"><p className="font-medium text-foreground-900">{r.student_name || "—"}</p><p className="text-xs text-foreground-500">{r.student_email}</p></td>
+          <td className="px-3"><p className="font-medium text-foreground-900">{r.student_name || "—"}</p><p className="text-xs text-foreground-500">{[r.student_number, r.student_email].filter(Boolean).join(" · ")}</p></td>
           <td className="px-3">{r.application_id ? <Link to={`/admin/applications/${r.application_id}`} onClick={(e) => e.stopPropagation()} className="text-primary-700 hover:underline">{r.application_reference || "Application"}</Link> : <span className="text-foreground-500">{r.request_reference ?? "—"}</span>}</td>
           <td className="px-3">{r.course_code ? <><b className="text-foreground-900">{r.course_code}</b> <span className="text-foreground-700">{r.course_title}</span></> : "—"}</td>
           <td className="px-3">{r.agency_name ?? "—"}</td>
           <td className="px-3 text-right whitespace-nowrap">{formatMoney(r.status === "paid" && r.amount_paid_cents != null ? r.amount_paid_cents : r.amount_cents, r.currency)}{r.amount_refunded_cents ? <span className="block text-xs text-foreground-500">−{formatMoney(r.amount_refunded_cents, r.currency)} refunded</span> : null}</td>
-          <td className="px-3">{r.description}</td>
+          <td className="px-3">{r.description}{r.external_reference ? <span className="block text-xs text-foreground-500">Ref {r.external_reference}</span> : null}</td>
+          <td className="px-3">{r.fee_type ? feeTypeLabel(r.fee_type) : <span className="text-xs text-amber-700">Not set</span>}</td>
+          <td className="px-3">{sourceLabel(r.source)}</td>
           <td className="px-3"><Badge tone={TONE[s.tone]}>{s.label}</Badge>{r.livemode === false ? <span className="ml-1 rounded border border-amber-300 bg-amber-50 px-1 text-2xs font-semibold uppercase text-amber-900">Test</span> : null}</td>
           <td className="px-3">{dash ? <a href={dash} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-xs text-primary-700 hover:underline">{r.stripe_payment_intent_id}</a> : <span className="text-xs text-foreground-500">—</span>}</td>
           <td className="px-3">{r.receipt_url ? <a href={r.receipt_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-primary-700 hover:underline">Receipt</a> : <span className="text-xs text-foreground-500">—</span>}</td>
@@ -152,8 +174,11 @@ export default function PaymentsPage() {
           ["Reminders", open.offer_letter_id ? `${open.reminder_count ?? 0} sent${open.last_reminder_at ? ` · last ${when(open.last_reminder_at)}` : ""}${open.deposit_auto_remind ? " · automatic reminders on" : ""}` : "—"],
           ["Stripe", stripeDashboardUrl(open) ? <a href={stripeDashboardUrl(open)!} target="_blank" rel="noreferrer" className="font-mono text-xs text-primary-700 underline">{open.stripe_payment_intent_id}</a> : "—"],
           ["Receipt", open.receipt_url ? <a href={open.receipt_url} target="_blank" rel="noreferrer" className="text-primary-700 underline">Open the Stripe receipt</a> : "—"],
+          ["Fee type", feeTypeLabel(open.fee_type) || "Not set"], ["Source", sourceLabel(open.source)], ["Reference", open.external_reference ?? "—"],
           ["Failure", open.failure_reason ?? "—"]] as Array<[string, React.ReactNode]>).map(([k, v]) => <div key={k}><dt className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{k}</dt><dd className="mt-0.5">{v}</dd></div>)}
+        {isAdmin ? <PaymentEditFields key={`${open.id}:${open.fee_type}:${open.student_id}:${open.course_id}:${open.external_reference}:${open.amount_refunded_cents}`} row={open} options={options} onSaved={() => void load()} /> : null}
       </dl> : null}
     </Drawer>
+    <AddPaymentModal open={adding} options={options} onClose={() => setAdding(false)} onSaved={() => void load()} />
   </div>;
 }

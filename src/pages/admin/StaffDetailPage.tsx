@@ -8,6 +8,7 @@ import { Badge, Button, Card, Modal, PageHeader } from "@/pages/admin/components
 import EmployeeFormDialog from "@/pages/admin/components/EmployeeFormDialog";
 import PaySetupCard from "@/pages/admin/components/hrms/PaySetupCard";
 import BankDetailsCard from "@/pages/admin/components/hrms/BankDetailsCard";
+import EmployeeMessages from "@/pages/admin/components/hrms/EmployeeMessages";
 import StaffOnboardingDetail from "@/pages/admin/StaffOnboardingDetail";
 import EmployeeDocumentsUpload from "@/pages/admin/components/EmployeeDocumentsUpload";
 import EmploymentDialog from "@/pages/admin/components/hrms/EmploymentDialog";
@@ -38,6 +39,7 @@ export default function StaffDetailPage() {
 /** Staff > Employees > one employee: their details, Active / Inactive, and the documents an Admin uploads for them. */
 function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }) {
   const { id = "" } = useParams();
+  const [params, setParams] = useSearchParams();
   const location = useLocation();
   const [employee, setEmployee] = useState<EmployeeDetail | null>(null);
   const [error, setError] = useState("");
@@ -78,10 +80,30 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
   }
 
   const active = employee.status === "active";
+  // EMPLOYEE-PAGE-LAYOUT (2026-11-24, owner: "look like the business page"): back link, header with status and actions, a summary
+  // strip, then tabs (Details, Documents, Pay and bank, Signing) in the business page's style.
+  const tab = (["details", "documents", "pay", "signing", "messages"] as const).find((t) => t === params.get("tab")) ?? "details";
+  const goTab = (next: string) => setParams(next === "details" ? {} : { tab: next });
+  const signIn = employee.hasLogin && employee.passwordSet ? "Can sign in" : employee.hasLogin ? "Link sent" : "No login yet";
+  const tabs: Array<{ id: string; label: string; count?: number }> = [
+    { id: "details", label: "Details" },
+    { id: "documents", label: "Documents", count: employee.documentList.length },
+    { id: "pay", label: "Pay and bank" },
+    { id: "signing", label: "Signing" },
+    { id: "messages", label: "Messages" },
+  ];
+  const row = (label: string, value: React.ReactNode) => (
+    <div><dt className="text-xs text-foreground-500">{label}</dt><dd className="mt-1 break-words text-sm text-foreground-900">{value || "—"}</dd></div>
+  );
   return (
     <div>
-      <PageHeader breadcrumb="HRMS › Employees" title={fullName(employee)}
+      <Link to={STAFF_EMPLOYEES_PATH} className="mb-3 inline-flex items-center gap-1 text-sm font-medium text-foreground-600 hover:text-foreground-900">
+        <i className="ri-arrow-left-line" aria-hidden="true" /> Employees
+      </Link>
+      <PageHeader title={fullName(employee)}
+        description={[employee.employment?.jobTitle, employee.email, `since ${date(employee.createdAt)}`].filter(Boolean).join(", ")}
         actions={<>
+          <Badge tone={active ? "success" : "muted"}>{EMPLOYEE_STATUS_LABEL[employee.status]}</Badge>
           <MessagePersonButton kind="staff" refId={employee.id} name={fullName(employee)} />
           <Button variant="outline" onClick={() => setEditing(true)} icon="ri-pencil-line" data-testid="employee-edit">Edit</Button>
           <Link to="?view=onboarding" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-3 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100" data-testid="employee-onboarding">
@@ -89,66 +111,91 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
           <Button variant="outline" onClick={() => setConfirmStatus(true)} data-testid="employee-status">{active ? "Make inactive" : "Make active"}</Button>
           {active && !(employee.hasLogin && employee.passwordSet) ? <Button onClick={() => setConfirmLink(true)} icon="ri-login-circle-line" data-testid="employee-login-link">{employee.hasLogin ? "Resend sign-in link" : "Send sign-in link"}</Button> : null}
         </>} />
-      <p className="mb-4"><Link to={STAFF_EMPLOYEES_PATH} className="text-sm font-medium text-primary-700 hover:underline">← All employees</Link></p>
       {notice ? <p role="status" className="mb-4 rounded-md border border-secondary-300 bg-secondary-50 px-3 py-2 text-sm text-foreground-900">{notice}</p> : null}
       {error ? <p role="alert" className="mb-4 rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">{error}</p> : null}
 
-      <Card className="mb-4 p-5">
-        <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
-          <div><dt className="text-xs uppercase text-foreground-500">Status</dt><dd className="mt-1"><Badge tone={active ? "success" : "muted"}>{EMPLOYEE_STATUS_LABEL[employee.status]}</Badge></dd></div>
-          <div><dt className="text-xs uppercase text-foreground-500">Email</dt><dd className="mt-1 break-all">{employee.email}</dd></div>
-          <div><dt className="text-xs uppercase text-foreground-500">Mobile</dt><dd className="mt-1">{formatMobile(employee.phone)}</dd></div>
-          <div><dt className="text-xs uppercase text-foreground-500">Added</dt><dd className="mt-1">{date(employee.createdAt)}</dd></div>
-          <div><dt className="text-xs uppercase text-foreground-500">My HR login</dt><dd className="mt-1" data-testid="employee-login-state">
-            {employee.hasLogin && employee.passwordSet ? <Badge tone="success">Can sign in</Badge> : employee.hasLogin ? <Badge tone="warn">Link sent, password not chosen</Badge> : <Badge tone="muted">No login yet</Badge>}
-          </dd></div>
-        </dl>
-        {active && !(employee.hasLogin && employee.passwordSet) ? <p className="mt-3 text-xs text-foreground-600">Until {employee.firstName || "this person"} has a login they cannot punch in or out or see their timesheet. Send them a sign-in link.</p> : null}
-      </Card>
+      <dl className="mb-6 grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-background-200 bg-background-200 lg:grid-cols-4" data-testid="employee-summary">
+        <div className="bg-background-50 px-4 py-3"><dt className="text-xs text-foreground-500">Status</dt><dd className="mt-1 font-heading text-xl font-bold text-foreground-950">{EMPLOYEE_STATUS_LABEL[employee.status]}</dd></div>
+        <div className="bg-background-50 px-4 py-3"><dt className="text-xs text-foreground-500">My HR sign-in</dt><dd className="mt-1 font-heading text-xl font-bold text-foreground-950" data-testid="employee-login-state">{signIn}</dd>
+          {active && !(employee.hasLogin && employee.passwordSet) ? <p className="mt-0.5 text-xs font-medium text-amber-700">Cannot punch in or see their timesheet yet.</p> : null}</div>
+        <div className="bg-background-50 px-4 py-3"><dt className="text-xs text-foreground-500">Documents</dt><dd className="mt-1">
+          <button type="button" onClick={() => goTab("documents")} className="font-heading text-xl font-bold tabular-nums text-foreground-950 hover:text-primary-700">{employee.documentList.length}</button></dd></div>
+        <div className="bg-background-50 px-4 py-3"><dt className="text-xs text-foreground-500">Start date</dt><dd className="mt-1 font-heading text-xl font-bold text-foreground-950">{employee.employment?.joiningDate ? date(`${employee.employment.joiningDate}T00:00:00`) : "—"}</dd></div>
+      </dl>
 
-      <Card className="mb-4 p-5"><div data-testid="employee-employment">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-base font-semibold text-foreground-950">Employment</h2>
-          <Button size="sm" variant="outline" onClick={() => setEditingEmployment(true)} data-testid="employee-employment-edit">{employee.employment ? "Edit employment" : "Add employment details"}</Button>
+      <nav className="mb-5 flex flex-wrap gap-1 border-b border-background-200" aria-label="Employee sections">
+        {tabs.map((item) => (
+          <button key={item.id} type="button" aria-current={tab === item.id ? "page" : undefined} onClick={() => goTab(item.id)} data-testid={`employee-tab-${item.id}`}
+            className={`-mb-px cursor-pointer border-b-2 px-4 py-2.5 text-sm font-medium ${tab === item.id ? "border-primary-500 text-primary-700" : "border-transparent text-foreground-600 hover:text-foreground-900"}`}>
+            {item.label}
+            {item.count !== undefined ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 py-0.5 text-2xs tabular-nums text-foreground-700">{item.count}</span> : null}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "details" ? (
+        <div className="space-y-4">
+          <Card className="p-5">
+            <h2 className="mb-3 text-base font-semibold text-foreground-950">Contact</h2>
+            <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {row("Email", <span className="break-all">{employee.email}</span>)}
+              {row("Mobile", formatMobile(employee.phone))}
+              {row("Added", date(employee.createdAt))}
+              {row("Status", <Badge tone={active ? "success" : "muted"}>{EMPLOYEE_STATUS_LABEL[employee.status]}</Badge>)}
+            </dl>
+          </Card>
+          <Card className="p-5"><div data-testid="employee-employment">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base font-semibold text-foreground-950">Employment</h2>
+              <Button size="sm" variant="outline" onClick={() => setEditingEmployment(true)} data-testid="employee-employment-edit">{employee.employment ? "Edit employment" : "Add employment details"}</Button>
+            </div>
+            {employee.employment ? (
+              <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {row("Job title", employee.employment.jobTitle)}
+                {row("Job type", employee.employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employee.employment.employmentType] : "")}
+                {row("Work location", employee.employment.workLocation)}
+                {row("Pay type", employee.employment.payType ? PAY_TYPE_LABEL[employee.employment.payType] : "Set in Pay setup")}
+                {row("Department", employee.employment.department)}
+                {row("Manager", employee.employment.managerName)}
+                {row("Start date", employee.employment.joiningDate ? date(`${employee.employment.joiningDate}T00:00:00`) : "")}
+              </dl>
+            ) : <p className="text-sm text-foreground-500">No employment details yet: job title, job type, work location and manager.</p>}
+          </div></Card>
         </div>
-        {employee.employment ? (
-          <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <div><dt className="text-xs uppercase text-foreground-500">Job title</dt><dd className="mt-1">{employee.employment.jobTitle || "—"}</dd></div>
-            <div><dt className="text-xs uppercase text-foreground-500">Job type</dt><dd className="mt-1">{employee.employment.employmentType ? EMPLOYMENT_TYPE_LABEL[employee.employment.employmentType] : "—"}</dd></div>
-            <div><dt className="text-xs uppercase text-foreground-500">Work location</dt><dd className="mt-1">{employee.employment.workLocation || "—"}</dd></div>
-            <div><dt className="text-xs uppercase text-foreground-500">Pay type</dt><dd className="mt-1">{employee.employment.payType ? PAY_TYPE_LABEL[employee.employment.payType] : "Set in Pay setup"}</dd></div>
-            <div><dt className="text-xs uppercase text-foreground-500">Department</dt><dd className="mt-1">{employee.employment.department || "—"}</dd></div>
-            <div><dt className="text-xs uppercase text-foreground-500">Manager</dt><dd className="mt-1">{employee.employment.managerName || "—"}</dd></div>
-            <div><dt className="text-xs uppercase text-foreground-500">Start date</dt><dd className="mt-1">{employee.employment.joiningDate ? date(`${employee.employment.joiningDate}T00:00:00`) : "—"}</dd></div>
-          </dl>
-        ) : <p className="text-sm text-foreground-500">No employment details yet: job title, job type, work location and manager.</p>}
-      </div></Card>
+      ) : null}
 
-      <Card className="mb-4 p-5">
-        <h2 className="mb-3 text-base font-semibold text-foreground-950">Documents</h2>
-        <EmployeeDocumentsUpload employeeId={employee.id} onUploaded={(message) => { setNotice(message); setError(""); void load(); }} />
-        {employee.documentList.length ? (
-          <ul className="divide-y divide-background-200 rounded-md border border-background-200" data-testid="employee-documents">
-            {employee.documentList.map((d) => (
-              <li key={d.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
-                <i className="ri-file-text-line text-foreground-500" aria-hidden="true" />
-                <span className="min-w-0 flex-1"><span className="font-medium text-foreground-950">{d.category}</span>
-                  <span className="ml-2 break-all text-foreground-600">{d.filename}</span>
-                  <span className="ml-2 text-xs text-foreground-500">{size(d.size)} · {date(d.uploadedAt)}</span></span>
-                <Button size="sm" variant="ghost" onClick={() => void view(d.storagePath)}>View</Button>
-                {d.removable ? <Button size="sm" variant="ghost" disabled={busy}
-                  onClick={() => { if (window.confirm(`Remove ${d.category} (${d.filename})?`)) void act(() => removeEmployeeDocument(d.id), `${d.category} removed.`); }}>Remove</Button> : null}
-              </li>
-            ))}
-          </ul>
-        ) : <p className="text-sm text-foreground-500">No documents yet. Choose or drop the files above, check each type, then Upload.</p>}
-        <p className="mt-2 text-xs text-foreground-500">Uploading a new file of the same type replaces the current one.</p>
-      </Card>
+      {tab === "documents" ? (
+        <Card className="p-5">
+          <h2 className="mb-3 text-base font-semibold text-foreground-950">Documents</h2>
+          <EmployeeDocumentsUpload employeeId={employee.id} onUploaded={(message) => { setNotice(message); setError(""); void load(); }} />
+          {employee.documentList.length ? (
+            <ul className="mt-3 divide-y divide-background-200 rounded-md border border-background-200" data-testid="employee-documents">
+              {employee.documentList.map((d) => (
+                <li key={d.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+                  <i className="ri-file-text-line text-foreground-500" aria-hidden="true" />
+                  <span className="min-w-0 flex-1"><span className="font-medium text-foreground-950">{d.category}</span>
+                    <span className="ml-2 break-all text-foreground-600">{d.filename}</span>
+                    <span className="ml-2 text-xs text-foreground-500">{size(d.size)} · {date(d.uploadedAt)}</span></span>
+                  <Button size="sm" variant="ghost" onClick={() => void view(d.storagePath)}>View</Button>
+                  {d.removable ? <Button size="sm" variant="ghost" disabled={busy}
+                    onClick={() => { if (window.confirm(`Remove ${d.category} (${d.filename})?`)) void act(() => removeEmployeeDocument(d.id), `${d.category} removed.`); }}>Remove</Button> : null}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="mt-3 text-sm text-foreground-500">No documents yet. Choose or drop the files above, check each type, then Upload.</p>}
+          <p className="mt-2 text-xs text-foreground-500">Uploading a new file of the same type replaces the current one.</p>
+        </Card>
+      ) : null}
 
-      <div className="mb-4"><SubjectSigningPanel type="employee" id={employee.id} name={fullName(employee)} /></div>
+      {tab === "pay" ? (
+        <div className="space-y-4">
+          <BankDetailsCard key={`bank-${employee.id}-${bankVersion}`} profileId={employee.id} />
+          <PaySetupCard profileId={employee.id} hasEmployment />
+        </div>
+      ) : null}
 
-      <BankDetailsCard key={`bank-${employee.id}-${bankVersion}`} profileId={employee.id} />
-      <PaySetupCard profileId={employee.id} hasEmployment />
+      {tab === "signing" ? <SubjectSigningPanel type="employee" id={employee.id} name={fullName(employee)} /> : null}
+      {tab === "messages" ? <EmployeeMessages profileId={employee.id} /> : null}
 
       {editingEmployment ? <EmploymentDialog profileId={employee.id} employment={(employee.employment ?? null) as StaffEmployment | null} onClose={() => setEditingEmployment(false)}
         onSaved={() => { setEditingEmployment(false); setNotice("The employment details were saved."); void load(); }} /> : null}

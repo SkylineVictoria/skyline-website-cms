@@ -112,12 +112,12 @@ export function ApplicantStatusBanner({ application, history, onChanged }: { app
           <i className="ri-error-warning-line text-xl leading-none text-amber-600" aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-foreground-950">This application needs action</p>
-            <p className="text-xs text-foreground-700" data-testid="action-required-note">{actionRequiredNote(history) || "Correct the application, then resubmit it."}</p>
+            <p className="text-xs text-foreground-700" data-testid="action-required-note">{actionRequiredNote(history) || (role === "student" ? "Correct the application, then sign and resubmit it." : "Correct the application, then send it to the student to sign and resubmit.")}</p>
           </div>
           {/* Resubmitting checks the form first: the button opens Review, where Resubmit application is. */}
           <button type="button" onClick={() => navigate({ search: "?stage=review" })} data-testid="resubmit-application"
             className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-primary-500 px-3 text-sm font-medium text-background-50 hover:bg-primary-600">
-            <i className="ri-send-plane-line" aria-hidden="true" />Review &amp; resubmit
+            <i className="ri-send-plane-line" aria-hidden="true" />{role === "student" ? "Review & sign" : "Review & send to student"}
           </button>
         </div>
       )}

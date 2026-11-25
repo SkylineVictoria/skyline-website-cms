@@ -1,4 +1,6 @@
 import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
+import { AgentHandoffPanel, StudentHandoffNotice } from "@/pages/agency/components/ApplicationHandoff";
+import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
@@ -68,6 +70,8 @@ export default function ApplicationDetailPage() {
   const paths = useApplicationPaths();
   const navigate = useNavigate();
   const { role, profile, agency } = usePortalAuth();
+  // APPLICATION-STUDENT-SIGNS: who has the application (the database enforces it; this keeps the screens in step).
+  const { handoff, reload: reloadHandoff } = useHandoff(id);
 
   const [application, setApplication] = useState<ApplicationDetail | null>(null);
   const [history, setHistory] = useState<StatusHistoryRow[]>([]);
@@ -236,7 +240,10 @@ export default function ApplicationDetailPage() {
   if (!workflow.ready) return <PortalLoading label="Loading application…" />;
   // SLIT administrators are not inherently read-only. Status alone controls
   // whether a record is editable; RLS separately determines who may edit it.
-  const readOnly = !isEditableStatus(workflow, application.status);
+  const handoffBlocks = role === "student"
+    ? ["with_agent", "change_requested", "waiting_guardian"].includes(handoff?.state ?? "")
+    : ["with_student", "waiting_guardian"].includes(handoff?.state ?? "");
+  const readOnly = !isEditableStatus(workflow, application.status) || handoffBlocks;
   const nextHint = statusInfo(workflow, application.status).hint;
   const agentName = application.agentName || profile?.fullName || "";
   const agencyName = application.agencyName || agency?.name || "";
@@ -311,6 +318,9 @@ export default function ApplicationDetailPage() {
         </p>
       </header>
 
+      {handoff?.state && role !== "student" ? <div className="mt-4"><AgentHandoffPanel applicationId={application.id} handoff={handoff}
+        onChanged={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1); }} /></div> : null}
+      {role === "student" ? <div className="mt-4"><StudentHandoffNotice applicationId={application.id} handoff={handoff} onChanged={() => void reloadHandoff()} /></div> : null}
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
       {/* OFFER-DEPOSIT: acceptance and deposit at a glance; staff and the agent remind, staff set the automatic reminders. */}
       <OfferDepositCard applicationId={application.id} canRemind={isSlit || role === "agent" || role === "agency_admin"} canConfigure={isSlit} refreshKey={application.status} />
@@ -372,6 +382,8 @@ export default function ApplicationDetailPage() {
             auditAccess={isSlit}
             reviewBar={isSlit ? (issues: number) => <ReviewIssuesReporter count={issues} onCount={setReviewIssues} /> : undefined}
             onSaved={refreshAfterSave}
+            onSentToStudent={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1);
+              toast.show(role === "student" ? "Signed. Your parent or guardian signs next." : "Sent to the student to review and sign."); }}
             onSubmitted={(reference, studentName) =>
               navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName, submittedPath: paths.detail(application.id) } })}
           />

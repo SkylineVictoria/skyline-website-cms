@@ -732,17 +732,21 @@ export async function assignApplicationAgent(applicationId: string, agentProfile
   if (error) throw new Error(error.message);
 }
 
+/**
+ * APPLICATION-STUDENT-SIGNS: only the student signs and submits (the database refuses anyone else). consent = { declarations:
+ * { key: hash of the text shown } }. A student under 18 waits for their parent / guardian (waitingGuardian, no reference yet).
+ */
 export async function submitApplication(
   applicationId: string,
-  snapshot: Record<string, unknown>,
-): Promise<string> {
+  consent: { declarations: Record<string, string> },
+): Promise<{ reference: string; waitingGuardian: boolean }> {
   const key = "submission:" + applicationId + ":" + (draftVersions.get(applicationId) ?? "unknown");
   const { data, error } = await supabase.rpc("portal_submit_v2", {
     p_application_id: applicationId, p_expected_version: draftVersions.get(applicationId),
-    p_request_key: key, p_consent: snapshot.consent,
+    p_request_key: key, p_consent: consent,
   });
   if (error) throw new Error(error.message);
-  return String(data?.reference ?? "");
+  return { reference: String(data?.reference ?? ""), waitingGuardian: data?.state === "waiting_guardian" };
 }
 
 export async function setApplicationStatus(applicationId: string, status: string, note = ""): Promise<void> {
@@ -852,9 +856,8 @@ export async function openOfferLetter(letterId: string): Promise<void> {
 }
 /** Accept offer: the student or agent confirms (no signature); the application moves to Offer accepted. */
 export const acceptOffer = (applicationId: string) => rpcOrThrow<void>("portal_offer_accept", { p_application: applicationId });
-/** Resubmit: the student or agent sends a corrected application back from Action required. */
-/** Resubmit (Action required → Submitted), with the declaration recorded again when it is given (as on the first submission). */
-export const resubmitApplication = (applicationId: string, note = "", consent: Record<string, unknown> | null = null) =>
+/** Resubmit (Action required → Submitted): the student signs the declarations again ({ declarations: { key: hash } }); only the student. */
+export const resubmitApplication = (applicationId: string, note = "", consent: { declarations: Record<string, string> } | null = null) =>
   rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note, p_consent: consent });
 /** Send reminder: emails the student or agent what Action required still asks for. */
 export const sendActionReminder = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_reminder", { p_application: applicationId, p_note: note });

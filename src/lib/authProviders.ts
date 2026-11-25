@@ -31,10 +31,12 @@ export function oauthReturnUrl(): string {
   return `${publicSiteOrigin()}${base ? `/${base}` : ""}/login`;
 }
 
-export async function signInWithProvider(provider: "google" | "facebook"): Promise<void> {
+/** returnPath: a page of this site to come back to instead of /login (the student application invite). */
+export async function signInWithProvider(provider: "google" | "facebook", returnPath?: string): Promise<void> {
+  const redirectTo = returnPath && /^\/[A-Za-z0-9/_-]*$/.test(returnPath) ? `${window.location.origin}${returnPath}` : oauthReturnUrl();
   const { error } = await supabase.auth.signInWithOAuth({
     provider,
-    options: { redirectTo: oauthReturnUrl(), scopes: provider === "facebook" ? "email public_profile" : undefined },
+    options: { redirectTo, scopes: provider === "facebook" ? "email public_profile" : undefined },
   });
   if (error) throw new Error(`We could not open ${provider === "google" ? "Google" : "Facebook"}. Please try again.`);
 }

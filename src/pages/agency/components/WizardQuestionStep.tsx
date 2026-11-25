@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import EmergencyContactFields from "@/components/shared/wizard/EmergencyContactFields";
 import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
 import IntakeSelect from "@/pages/agency/components/IntakeSelect";
@@ -12,7 +13,7 @@ import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
  * surrounding form when Next is pressed, so the phone control keeps its own formatting and validation. The label, input,
  * error line and the emergency contact fields are the shared wizard components (also used by staff onboarding).
  */
-export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0, applicationId, defaultLoad }: {
+export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0, applicationId, defaultLoad, lockedNote }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
@@ -30,6 +31,8 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   intakeReload?: number;
   /** CoE for an international student (picked to start with on the intake). */
   defaultLoad?: "coe" | "voe";
+  /** APPLICATION-STUDENT-SIGNS: the student sees the course and intake their agent set, view-only, with this (Request a change). */
+  lockedNote?: ReactNode;
   /** The application (USI screen: Verify / find / create the USI with usi-service). */
   applicationId?: string;
 }) {
@@ -91,7 +94,15 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
           onChange={(field, value) => onChange(field === "name" ? "ec_name" : "ec_relationship", value)} />
       ) : null}
 
-      {question.id === "course" ? (
+      {question.id === "course" && lockedNote ? (
+        <div className="space-y-3" data-testid="wizard-course-locked">
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-lg border border-background-200 bg-background-100/60 p-4 text-sm">
+            <dt className="text-foreground-500">Course</dt><dd className="font-medium text-foreground-900">{answers.course || "—"}</dd>
+            <dt className="text-foreground-500">Intake</dt><dd className="font-medium text-foreground-900">{answers.preferred_intake || "—"}</dd>
+          </dl>
+          <p className="text-xs text-foreground-600"><i className="ri-lock-line" aria-hidden="true" /> Your agent set the agency, course, intake and fees. {lockedNote}</p>
+        </div>
+      ) : question.id === "course" ? (
         <div className="grid grid-cols-1 gap-4">
           <div>
             <Label htmlFor="wizard-course">Course</Label>

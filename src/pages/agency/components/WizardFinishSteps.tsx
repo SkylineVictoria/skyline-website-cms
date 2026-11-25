@@ -1,10 +1,10 @@
 import { ruleBool } from "@/lib/businessRules";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import AddressFields from "@/components/shared/wizard/AddressFields";
 import AddressSearch, { type AddressPick } from "@/components/shared/wizard/AddressSearch";
 import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel as Label, WizardTextField } from "@/components/shared/wizard/fields";
-import { DECLARATION_TERMS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import BirthCountryField from "@/pages/agency/components/BirthCountryField";
@@ -12,6 +12,7 @@ import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 import { OTHER_LANGUAGE } from "@/pages/agency/lib/wizardConfig";
 import { PriorEducationInput } from "@/pages/admin/components/avetmiss/AvetmissInputs";
 import { parseCodeList, parsePriorEducation, serializeCodeList, serializePriorEducation } from "@/pages/admin/components/avetmiss/avetmissValues";
+import { DeclarationTicks } from "@/pages/agency/components/ApplicationHandoff";
 
 const PERSONAL_LABELS: Record<string, string> = {
   title: "Title", gender: "Gender", first_name: "Given name", middle_name: "Middle name", last_name: "Surname", dob: "Date of birth",
@@ -25,7 +26,7 @@ const PERSONAL_FIELDS = Object.keys(PERSONAL_LABELS);
  * About the student (AVETMISS), Study details and Declaration and submit. Options come from the application form's own fields
  * (portalSections), so the wizard and the form always offer the same answers and the database's submission check accepts them.
  */
-export default function WizardFinishSteps({ question, answers, errors, onChange, onAddress, summary, studentRole, onEdit, version = 0, passportCountry = "" }: {
+export default function WizardFinishSteps({ question, answers, errors, onChange, onAddress, summary, studentRole, onEdit, version = 0, passportCountry = "", onDeclarations, extraActions }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
@@ -41,6 +42,10 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   version?: number;
   /** The issuing country read from the passport scan ("" when the scan gave none). */
   passportCountry?: string;
+  /** APPLICATION-STUDENT-SIGNS: the student's ticked declarations ({ key: hash of the text shown }, complete when all ticked). */
+  onDeclarations?: (ticked: Record<string, string>, complete: boolean) => void;
+  /** Shown under the summary (the student's Request a change). */
+  extraActions?: ReactNode;
 }) {
   const v = (name: string) => answers[name] ?? "";
   const { codes, error: codesError } = useAvetmissCodes();
@@ -215,32 +220,23 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
               ))}
             </div>
           </div>
-          <div>
-            <p className={LABEL}>Student declaration</p>
-            <ul className="max-h-48 list-disc space-y-1.5 overflow-y-auto rounded-lg border border-background-200 bg-background-50 py-3 pl-8 pr-4 text-xs leading-relaxed text-foreground-700">
-              {DECLARATION_TERMS.map((term) => <li key={term}>{term}</li>)}
-            </ul>
-          </div>
-          {/* One tick agrees, confirms and signs (owner, 2026-11-23: no name typed again, no second or third tick). */}
-          {(() => {
-            const signer = v("declaration_name") || summary.name;
-            const agreed = v("declaration_read") === "Yes" && v("consent_confirmed") === "Yes" && v("consent_authorised") === "Yes";
-            const set = (on: boolean) => {
-              const yes = on ? "Yes" : "";
-              onChange("declaration_read", yes); onChange("consent_confirmed", yes); onChange("consent_authorised", yes);
-              onChange("declaration_name", signer); onChange("digital_signature", on ? signer : "");
-            };
-            return <div className="rounded-lg border border-primary-200 bg-primary-50/50 p-4">
-              <label className="flex items-start gap-3 text-sm text-foreground-900">
-                <input type="checkbox" name="declaration_read" checked={agreed} onChange={(e) => set(e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 accent-primary-500" data-testid="wizard-agree" />
-                <span className="leading-snug">{studentRole
-                  ? "I have read and agree to the declaration, and the information and documents in this application are my own and true."
-                  : "The student has read and agrees to the declaration, the information and documents are theirs and true, and I am authorised to submit this application for them."}</span>
-              </label>
-              <p className="mt-2 pl-8 text-xs text-foreground-600">Signed electronically as <strong className="font-medium text-foreground-900">{signer || "the student"}</strong> on {v("declaration_date")}.</p>
+          {extraActions ? <div>{extraActions}</div> : null}
+          {/* APPLICATION-STUDENT-SIGNS (owner, 2026-11-25): only the student signs, each declaration ticked on its own; the text
+              shown comes from the server and its hash is recorded with the signature. */}
+          {studentRole ? (
+            <div className="space-y-2">
+              <p className={LABEL}>Read and sign</p>
+              <DeclarationTicks who="student" onChange={(ticked, complete) => onDeclarations?.(ticked, complete)} />
+              <p className="text-xs text-foreground-600">Signed electronically as <strong className="font-medium text-foreground-900">{v("declaration_name") || summary.name || "you"}</strong> on {v("declaration_date") || new Date().toISOString().slice(0, 10)}.
+                If you are under 18, a parent or guardian signs next.</p>
               <FieldError text={errors.declaration_read || errors.consent} />
-            </div>;
-          })()}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-sky-200 bg-sky-50/60 p-4 text-sm text-sky-950" data-testid="wizard-student-signs">
+              <i className="ri-quill-pen-line" aria-hidden="true" /> Only the student can sign: next, the application is sent to them to review, change what is theirs
+              to change, and read and sign the declarations (with a parent or guardian if they are under 18). It is view-only for you while they have it.
+            </div>
+          )}
         </div>
       ) : null}
     </div>

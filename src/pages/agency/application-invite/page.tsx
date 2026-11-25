@@ -4,6 +4,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { Button } from "@/pages/admin/components/ui";
 import { passwordProblem } from "@/lib/passwords";
+import { signInWithProvider } from "@/lib/authProviders";
 
 export default function ApplicationInvitePage() {
   const { authUser, authLoading, reloadIdentity, signOut } = usePortalAuth();
@@ -22,15 +23,23 @@ export default function ApplicationInvitePage() {
   const [confirm, setConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
+  // APPLICATION-STUDENT-SIGNS: a portal account is required (a password, or Google with the invited email); a link alone never opens it.
+  const [signInPassword, setSignInPassword] = useState("");
+  const [viaGoogle, setViaGoogle] = useState(false);
+  useEffect(() => {
+    if (!authUser) { setViaGoogle(false); return; }
+    void supabase.auth.getUser().then(({ data }) => setViaGoogle(Boolean(data.user?.identities?.some((identity) => identity.provider === "google"))));
+  }, [authUser]);
   useEffect(() => {
     if (!authUser) { setHasPassword(null); return; }
+    if (viaGoogle) { setHasPassword(true); return; }
     let active = true;
     supabase.rpc("portal_my_password_set").then(({ data, error: failure }) => {
       // Until the database function exists, behave as before (no password step).
       if (active) setHasPassword(failure ? true : data === true);
     });
     return () => { active = false; };
-  }, [authUser]);
+  }, [authUser, viaGoogle]);
 
   const savePassword = async () => {
     const problem = passwordProblem(password, confirm);
@@ -92,12 +101,34 @@ export default function ApplicationInvitePage() {
     }
   };
 
+  const passwordSignIn = async () => {
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const { error: failure } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password: signInPassword });
+      if (failure) throw new Error("That email and password do not match. Try again, or email yourself a sign-in link to set a password.");
+      setSignInPassword("");
+      await reloadIdentity();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : "Sign-in failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const google = async () => {
+    setBusy(true); setError("");
+    try { await signInWithProvider("google", "/agency/application-invite"); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "Google sign-in could not start."); setBusy(false); }
+  };
+
   const accept = async () => {
     setBusy(true); setError("");
     try {
       const { data, error: failure } = await supabase.rpc("portal_wizard_invite_accept", { p_token: token });
       if (failure?.code === "42501") {
-        throw new Error("Open the newest SLIT application invitation and sign in with the email address that received it. If it still won't open, contact SLIT Admissions.");
+        throw new Error(failure.message.startsWith("Create your password")
+          ? "Create your password (or sign in with Google using the invited email) before opening the application."
+          : "Open the newest SLIT application invitation and sign in with the email address that received it. If it still won't open, contact SLIT Admissions.");
       }
       if (failure || typeof data !== "string") throw new Error("The application could not be opened. Try again.");
       try { sessionStorage.removeItem(storeKey); } catch { /* The database already consumed the invitation. */ }
@@ -141,13 +172,23 @@ export default function ApplicationInvitePage() {
             </div>
           </>
         ) : (
-          <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void sendSignIn(); }}>
-            <label className="block" htmlFor="application-invite-email">Enter the email address that received your invitation.</label>
-            <input id="application-invite-email" type="email" autoComplete="email" required maxLength={254}
-              className="w-full rounded-md border border-background-300 px-3 py-2" value={email}
-              onChange={(event) => setEmail(event.target.value)} />
-            <Button type="submit" disabled={busy}>Email me a secure sign-in link</Button>
-          </form>
+          <div className="space-y-4">
+            <p className="text-sm text-foreground-700">Sign in with the email address that received your invitation. Your application opens in your SLIT student account.</p>
+            <Button variant="outline" disabled={busy} onClick={() => void google()} data-testid="invite-google"><i className="ri-google-fill" aria-hidden="true" /> Continue with Google</Button>
+            <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void (signInPassword ? passwordSignIn() : sendSignIn()); }}>
+              <label className="block text-sm" htmlFor="application-invite-email">Email</label>
+              <input id="application-invite-email" type="email" autoComplete="email" required maxLength={254}
+                className="w-full rounded-md border border-background-300 px-3 py-2" value={email}
+                onChange={(event) => setEmail(event.target.value)} />
+              <label className="block text-sm" htmlFor="application-invite-signin-password">Password (if you already have one)</label>
+              <input id="application-invite-signin-password" type="password" autoComplete="current-password"
+                className="w-full rounded-md border border-background-300 px-3 py-2" value={signInPassword}
+                onChange={(event) => setSignInPassword(event.target.value)} />
+              <div className="flex flex-wrap gap-3">
+                <Button type="submit" disabled={busy}>{signInPassword ? "Sign in" : "Email me a link to create my password"}</Button>
+              </div>
+            </form>
+          </div>
         )}
         {notice ? <p role="status" className="text-sm">{notice}</p> : null}
         {error ? <p role="alert" className="text-sm text-red-800">{error}</p> : null}

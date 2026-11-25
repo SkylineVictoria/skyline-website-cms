@@ -8,14 +8,13 @@ import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
 import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import "@/pages/agency/lib/admissionsRules"; // Business Rules: expiry warning months, English result validity
+import { DeclarationTicks } from "@/pages/agency/components/ApplicationHandoff";
 import { qualificationDetail, qualificationTitle, submittedQualifications, type Qualification } from "@/pages/agency/lib/qualifications";
 
+/** APPLICATION-STUDENT-SIGNS: the student's ticked declarations ({ key: hash of the exact text shown }); complete when all ticked. */
 export interface ConsentState {
-  method: string;
-  confirmed: boolean;
-  authorised: boolean;
-  fileName: string;
-  file: null | File;
+  declarations: Record<string, string>;
+  complete: boolean;
 }
 
 // Field types and answers that are not shown as values: notes, tables, terms, files, and answers the form keeps itself.
@@ -47,6 +46,7 @@ export default function ApplicationReview({
   readOnly = false,
   canSubmit = true,
   resubmit = false,
+  studentSigns = false,
 }: {
   values: DraftValues;
   courses: string[];
@@ -73,6 +73,8 @@ export default function ApplicationReview({
   canSubmit?: boolean;
   /** Action required: corrected, the application is resubmitted with the button below (the declaration is confirmed again). */
   resubmit?: boolean;
+  /** APPLICATION-STUDENT-SIGNS: the signed-in person is the student (only they sign; agents send it to them). */
+  studentSigns?: boolean;
 }) {
   const flat: Record<string, string> = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")]));
   const val = (key: string): string => {
@@ -136,19 +138,17 @@ export default function ApplicationReview({
             </ul>
           )}
         </div>
-      ) : canSubmit ? (
+      ) : canSubmit && studentSigns ? (
         <fieldset className="mt-4 space-y-2">
-          <legend className="sr-only">Declaration</legend>
-          <label className="flex cursor-pointer items-start gap-2 text-sm text-foreground-700">
-            <input type="checkbox" checked={consent.confirmed} onChange={(event) => onConsentChange({ confirmed: event.target.checked })} className="mt-0.5 h-4 w-4 accent-primary-500" />
-            <span className="leading-snug">I confirm the student has reviewed this application and authorised its submission. The student&rsquo;s own declaration and signature are recorded in the form.</span>
-          </label>
-          <label className="flex cursor-pointer items-start gap-2 text-sm text-foreground-700">
-            <input type="checkbox" checked={consent.authorised} onChange={(event) => onConsentChange({ authorised: event.target.checked })} className="mt-0.5 h-4 w-4 accent-primary-500" />
-            <span className="leading-snug">I confirm I am the agent handling this application and am authorised to submit it on the student&rsquo;s behalf.</span>
-          </label>
-          <p className="text-xs text-foreground-500">Prepared by {agentName || "the agency"} &middot; Declaration version 1.0 &middot; Consent recorded against your account.</p>
+          <legend className="text-sm font-semibold text-foreground-900">Read and sign</legend>
+          <DeclarationTicks who="student" onChange={(declarations, complete) => onConsentChange({ declarations, complete })} />
+          <p className="text-xs text-foreground-500">Your signature is recorded with the exact text above, the date and time, and this device. If you are under 18, a parent or guardian signs next.</p>
         </fieldset>
+      ) : canSubmit ? (
+        <p className="mt-4 rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-sm text-sky-950" data-testid="review-student-signs">
+          <i className="ri-quill-pen-line" aria-hidden="true" /> Only the student can sign{resubmit ? " and resubmit" : ""}: send it to them to review and sign
+          (with a parent or guardian if they are under 18). It is view-only for you while they have it.
+        </p>
       ) : resubmit ? (
         <p className="mt-4 text-xs text-foreground-600" data-testid="resubmit-hint">
           Fix what was asked, then press Resubmit application: it goes back to Submitted and SLIT admissions reviews it again.

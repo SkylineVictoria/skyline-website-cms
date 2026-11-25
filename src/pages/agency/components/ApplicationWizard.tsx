@@ -12,6 +12,8 @@ import {
   queueDocumentExtraction,
   saveWizardDraft,
   submitApplication,
+  sendApplicationInvitation,
+  getWizardSummary,
   uploadApplicationDocument,
   type ApplicationCourseRow,
   type DocumentRow,
@@ -52,6 +54,9 @@ import { englishAlternatives, usiRequired } from "@/pages/agency/lib/admissionsR
 import EnglishAlternative, { ENGLISH_PATHWAY, EnglishNotMetDialog, type AusStudyAnswer, type CambridgeAnswer } from "@/pages/agency/components/EnglishAlternative";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
+import { GuardianRequestForm, RequestChangeButton, StudentHandoffNotice } from "@/pages/agency/components/ApplicationHandoff";
+import { useHandoff } from "@/pages/agency/lib/handoff";
+import { declarationConsent } from "@/pages/agency/lib/handoff";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
@@ -249,12 +254,29 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   /** AVETMISS-UI: the application's student, for copying the AVETMISS answers to the student's tables. */
   const studentIdRef = useRef<string | null>(null);
   const [submittedRef, setSubmittedRef] = useState("");
+  // APPLICATION-STUDENT-SIGNS (owner, 2026-11-25): agents send the application to the student; only the student signs, each
+  // declaration ticked on its own (a parent / guardian too when the student is under 18).
+  const { handoff, reload: reloadHandoff } = useHandoff(applicationId);
+  const signsHere = role === "student";
+  const studentLocked = signsHere && Boolean(handoff?.state);
+  const declarationsRef = useRef<{ ticked: Record<string, string>; complete: boolean }>({ ticked: {}, complete: false });
+  const [sentToStudent, setSentToStudent] = useState(false);
+  const [waitingGuardian, setWaitingGuardian] = useState(false);
   // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
   const [hydrated, setHydrated] = useState(0);
 
   useEffect(() => {
     documentsRef.current = documents;
   }, [documents]);
+
+  // APPLICATION-STUDENT-SIGNS: a student opening what their agent filled starts on the review summary (the declaration screen,
+  // with Edit per section); otherwise the wizard resumes at the first incomplete step as before.
+  const reviewOpened = useRef(false);
+  useEffect(() => {
+    if (reviewOpened.current || !signsHere || handoff?.state !== "with_student" || loading) return;
+    reviewOpened.current = true;
+    void getWizardSummary(applicationId).then((summary) => { if (summary?.status === "Ready for Submission") setStep(LAST_STEP); }, () => undefined);
+  }, [signsHere, handoff?.state, loading, applicationId]);
 
   useEffect(() => {
     if (!inputVersion) return;
@@ -567,11 +589,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     try {
       await flushApplicationEdits(applicationId);
       const application = await getApplication(applicationId, false);
-      const receipt = await submitApplication(applicationId, {
-        consent: { method: "electronic", confirmed: true, authorised: true, declarationVersion: "1.0", signedDocumentRef: "" },
-      });
+      if (!signsHere) {
+        // Agents and staff never sign: the application goes to the student to review and sign.
+        await sendApplicationInvitation(applicationId);
+        try { window.localStorage.removeItem(wizardStepKey(applicationId)); } catch { /* storage unavailable */ }
+        setSentToStudent(true);
+        window.setTimeout(() => leaveOnce.current(), 2600);
+        return;
+      }
+      const receipt = await submitApplication(applicationId, declarationConsent(declarationsRef.current.ticked));
       try { window.localStorage.removeItem(wizardStepKey(applicationId)); } catch { /* storage unavailable */ }
-      setSubmittedRef(receipt || application?.reference || "Submitted");
+      if (receipt.waitingGuardian) { setWaitingGuardian(true); void reloadHandoff(); return; }
+      setSubmittedRef(receipt.reference || application?.reference || "Submitted");
       // A student reads the thank-you message and closes it; agents and staff move on by themselves.
       if (role !== "student") window.setTimeout(() => leaveOnce.current(), 2200);
     } catch (error) {
@@ -585,7 +614,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       setFinishing(false);
       completingRef.current = false;
     }
-  }, [applicationId, role]);
+  }, [applicationId, role, signsHere, reloadHandoff]);
 
   const busy = pending.some((item) => !item.error) || documents.some((doc) => isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
   useEffect(() => {
@@ -984,20 +1013,21 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
       // One tick agrees and signs: the name is the student's own (from Personal details), never typed again.
       const signer = filled("declaration_name") || [filled("first_name"), filled("middle_name"), filled("last_name")].filter(Boolean).join(" ");
-      if (filled("declaration_read") !== "Yes" || filled("consent_confirmed") !== "Yes" || filled("consent_authorised") !== "Yes")
-        errors.declaration_read = "Tick the box to agree and sign.";
+      if (signsHere && !declarationsRef.current.complete) errors.declaration_read = "Read and tick each declaration to sign.";
       else if (!signer) errors.declaration_read = "Add the student's name on Personal details first.";
       // What the full form used to fill itself: the checklist, USI consent, the agent block and the visa answer.
       const application = await getApplication(applicationId, false).catch(() => null);
       const stored = (application?.data.values ?? {}) as Record<string, unknown>;
       const empty = (name: string) => !String(stored[name] ?? "").trim();
       Object.assign(values, {
-        declaration_name: signer, digital_signature: signer, declaration_date: todayIso(),
-        checklist: CHECKLIST_OPTIONS, usi_consent: [USI_CONSENT_TEXT], address_type: "Australian Address", au_country: "Australia",
-        ...(empty("via_agent") ? { via_agent: "Yes" } : {}),
-        ...(empty("agent_agency") && (application?.agencyName || agencyName) ? { agent_agency: application?.agencyName || agencyName } : {}),
+        declaration_name: signer, ...(signsHere ? { digital_signature: signer, declaration_date: todayIso(), usi_consent: [USI_CONSENT_TEXT] } : {}),
+        checklist: CHECKLIST_OPTIONS, address_type: "Australian Address", au_country: "Australia",
+        // The agency / agent block is the agent's: a student on an application their agent sent never writes it (view-only).
+        ...(!studentLocked && empty("via_agent") ? { via_agent: "Yes" } : {}),
+        ...(!studentLocked && empty("agent_agency") && (application?.agencyName || agencyName) ? { agent_agency: application?.agencyName || agencyName } : {}),
         // The agent's own details come from the application's assigned agent, else the signed-in agent: never typed.
         ...(() => {
+          if (studentLocked) return {};
           const self = role === "agent" || role === "agency_admin";
           const agentName = application?.agentName || (self ? profile?.fullName ?? "" : "");
           const agentEmail = application?.agentEmail || (self ? profile?.email ?? "" : "");
@@ -1010,6 +1040,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         })(),
         ...(empty("holds_visa") ? { holds_visa: documentsRef.current.some((doc) => doc.category === "Visa") ? "Yes" : "No" } : {}),
       });
+    } else if (studentLocked) {
+      // Course and intake are the agent's (Request a change): nothing to check or save here.
     } else {
       if (!filled("course")) errors.course = "Choose the course.";
       const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
@@ -1124,6 +1156,22 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         </div>
       );
     }
+    if (sentToStudent) {
+      return (
+        <div className="py-8 text-center" role="status" data-testid="wizard-sent-to-student">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-sky-600 text-background-50"><i className="ri-mail-send-line text-3xl" aria-hidden="true" /></span>
+          <h3 className="mt-4 font-heading text-lg font-semibold text-foreground-950">Sent to the student to review and sign</h3>
+          <p className="mt-1 text-sm text-foreground-600">They get an email link, sign in with a password or Google, check the application and sign it. It is view-only for you until they sign or you take it back.</p>
+          <button type="button" onClick={() => leaveOnce.current()} className={`${primaryClass} mt-5`}>Continue</button>
+        </div>
+      );
+    }
+    if (waitingGuardian || (signsHere && handoff?.state === "waiting_guardian")) {
+      return <div className="py-4"><GuardianRequestForm applicationId={applicationId} handoff={handoff} onSent={() => void reloadHandoff()} /></div>;
+    }
+    if (signsHere && handoff?.state && handoff.state !== "with_student" && handoff.state !== "submitted") {
+      return <div className="py-4"><StudentHandoffNotice applicationId={applicationId} handoff={handoff} onChanged={() => void reloadHandoff()} /></div>;
+    }
     if (submittedRef) {
       return (
         <div className="py-8 text-center" role="status" data-testid="wizard-submitted">
@@ -1151,11 +1199,14 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           <form ref={questionFormRef} noValidate onSubmit={(event) => { event.preventDefault(); void nextFromQuestion(); }}>
             {finishScreen ? (
               <WizardFinishSteps question={question} answers={answers} errors={answerErrors} onChange={setAnswer} onAddress={pickAddress} summary={summary} version={hydrated} passportCountry={passportCountry}
-                studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }} />
+                studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }}
+                onDeclarations={(ticked, complete) => { declarationsRef.current = { ticked, complete }; if (complete) setAnswerErrors((prev) => ({ ...prev, declaration_read: "" })); }}
+                extraActions={studentLocked ? <RequestChangeButton applicationId={applicationId} onDone={() => void reloadHandoff()} label="Something your agent set is wrong? Request a change" /> : null} />
             ) : (
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
                 onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId}
-                defaultLoad={kind === "international" ? "coe" : undefined} />
+                defaultLoad={kind === "international" ? "coe" : undefined}
+                lockedNote={studentLocked ? <RequestChangeButton applicationId={applicationId} onDone={() => void reloadHandoff()} /> : undefined} />
             )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>
@@ -1300,19 +1351,19 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <>
                 {finishing ? (
                   <button type="button" onClick={() => void complete()} className="cursor-pointer text-xs font-semibold text-primary-700 underline">
-                    Submit now
+                    {signsHere ? "Submit now" : "Send now"}
                   </button>
                 ) : null}
                 <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers} className={primaryClass}>
                   {finishing ? (
                     <>
                       <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
-                      Submitting&hellip;
+                      {signsHere ? "Signing" : "Sending"}&hellip;
                     </>
                   ) : (
                     <>
-                      Submit application
-                      <i className="ri-send-plane-line" aria-hidden="true" />
+                      {signsHere ? "Sign and submit" : "Send to student to review & sign"}
+                      <i className={signsHere ? "ri-quill-pen-line" : "ri-send-plane-line"} aria-hidden="true" />
                     </>
                   )}
                 </button>

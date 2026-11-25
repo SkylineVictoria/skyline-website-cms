@@ -5170,3 +5170,30 @@ test("AVETMISS unit location from the timetable (2026-11-25, 20261125153850): mo
   const rpc = read("supabase/migrations/20261125180517_avetmiss_unit_results_location_auto.sql");
   assert.ok(rpc.includes("'locationIsAuto', coalesce(l.location_is_auto, false),") && !/alter table/i.test(rpc), "the flag is returned, no column added");
 });
+
+test("Agent fills, student signs (2026-11-25, 20261125190517): only the student (or a guardian for under 18) consents and submits; agents send it to the student", () => {
+  const sql = read("supabase/migrations/20261125190517_application_student_signs.sql").replace(/\r\n/g, "\n");
+  // Server: submit and resubmit refuse anyone but the student's own portal account; each declaration recorded with its text hash.
+  assert.ok(sql.includes("if not skyline_private.is_application_student(a.id) then\n  raise exception 'Only the student can sign and submit this application."));
+  assert.ok(sql.includes("raise exception 'Only the student can sign and resubmit this application."));
+  assert.ok(sql.includes("signer_role, signer_user_id, declaration_key, text_version, text_hash, ip, user_agent, guardian_name, guardian_relationship, guardian_email"));
+  assert.ok(sql.includes("new.hash := encode(sha256(convert_to(new.body, 'UTF8')), 'hex')"), "the hash is made from the stored text, never supplied");
+  // Locks: the agent is view-only while the student has it; every save path goes through portal_lock_draft / portal_can_edit_application.
+  assert.ok(sql.includes("and not skyline_private.handoff_blocks_edit(app_id);") && sql.includes("if skyline_private.handoff_blocks_edit(a.id) then"));
+  assert.ok(sql.includes("'Your agent set the agency, course, intake and fees. Use Request a change to ask for a change'"));
+  // Invites need a portal account (password or Google), and the daily limit is now exact.
+  assert.ok(sql.includes("if coalesce(u.encrypted_password, '') = '' and not exists(select 1 from auth.identities d where d.user_id = u.id and d.provider = 'google'"));
+  assert.ok(sql.includes("and created_at >= statement_timestamp() - interval '1 day') >= send_limit then"));
+  // Under 18: the guardian verifies a code (5 tries, 10 minutes) and signs; then the application is submitted.
+  assert.ok(sql.includes("then 'waiting_guardian' else state end") && sql.includes("clock_timestamp() + interval '10 minutes'") && sql.includes("if c.attempts >= 5 then"));
+  // Frontend: no agent consent ticks or consent uploads left in the submit path; agents send to the student.
+  const review = read("src/pages/agency/components/ApplicationReview.tsx");
+  assert.ok(!review.includes("authorised to submit it on the student") && review.includes("<DeclarationTicks who=\"student\""));
+  const workspace = read("src/pages/agency/components/ApplicationWorkspace.tsx");
+  assert.ok(!workspace.includes("uploadConsentDocument(") && workspace.includes("await sendApplicationInvitation(application.id);"));
+  const wizard = read("src/pages/agency/components/ApplicationWizard.tsx");
+  assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked)"));
+  assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
+  // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(58);"));
+});

@@ -32,10 +32,12 @@ import {
   listApplicationDocuments,
   queueDocumentExtraction,
   uploadApplicationDocument,
-  uploadConsentDocument,
+  sendApplicationInvitation,
   type ApplicationDetail,
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
+import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
+import { declarationConsent } from "@/pages/agency/lib/handoff";
 import { documentCategoryForField, extractionStatus } from "@/pages/agency/lib/documentAttachments";
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
@@ -184,7 +186,6 @@ function sentenceCase(text: string): string {
   return lower.replace(/(^|[.!?]\s+)([a-z])/g, (_, start: string, letter: string) => start + letter.toUpperCase());
 }
 const DEBOUNCE_MS = 1200;
-const DECLARATION_VERSION = "1.0";
 
 interface WorkspaceProps {
   application: ApplicationDetail;
@@ -198,6 +199,8 @@ interface WorkspaceProps {
   onSaved?: () => void;
   /** Called once the application is submitted (e.g. to go back to the list). */
   onSubmitted?: (reference: string, studentName: string) => void;
+  /** APPLICATION-STUDENT-SIGNS: sent to the student to review and sign (agent), or signed and waiting for the parent / guardian. */
+  onSentToStudent?: () => void;
   /** Staff: the status, what is needed next and Take action, at the bottom of Review. */
   reviewBar?: ReactNode | ((reviewIssues: number) => ReactNode);
 }
@@ -215,6 +218,7 @@ export default function ApplicationWorkspace({
   auditAccess = false,
   onSaved,
   onSubmitted,
+  onSentToStudent,
   reviewBar,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
@@ -356,13 +360,9 @@ export default function ApplicationWorkspace({
   });
   const [showErrors, setShowErrors] = useState(false);
   const [reviewValues, setReviewValues] = useState<DraftValues | null>(null);
-  const [consent, setConsent] = useState<ConsentState>({
-    method: "electronic",
-    confirmed: false,
-    authorised: false,
-    fileName: "",
-    file: null,
-  });
+  const [consent, setConsent] = useState<ConsentState>({ declarations: {}, complete: false });
+  // APPLICATION-STUDENT-SIGNS: only the student signs; an agent or staff member sends it to the student instead.
+  const studentSigns = usePortalAuth().role === "student";
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submittedRef, setSubmittedRef] = useState<string | null>(null);
@@ -1380,9 +1380,9 @@ export default function ApplicationWorkspace({
       openSection(wrongDocumentPage);
       return;
     }
-    // The declaration is confirmed again on a resubmission, as on the first submission.
-    if (!consent.method || !consent.confirmed || !consent.authorised) {
-      setSubmitError("Please record the student consent method and both confirmations before submitting.");
+    // The declaration is signed again on a resubmission, as on the first submission (by the student only).
+    if (studentSigns && !consent.complete) {
+      setSubmitError("Read and tick each declaration to sign.");
       return;
     }
     setSubmitting(true);
@@ -1390,12 +1390,18 @@ export default function ApplicationWorkspace({
       // Always save once more: the server checks the saved draft, which must carry the derived answers (e.g. ec_in_au).
       dirtyRef.current = true;
       await flushSave();
+      if (!studentSigns) {
+        // Agents and staff never sign: the application goes to the student to review and sign.
+        await sendApplicationInvitation(application.id);
+        setSubmitError("");
+        onSaved?.();
+        onSentToStudent?.();
+        return;
+      }
       if (resubmitHere) {
-        // Action required, corrected: the form is saved (above), the declaration recorded again, then back to Submitted through the resubmit
+        // Action required, corrected: the form is saved (above), the student signs again, then back to Submitted through the resubmit
         // command (history, audit, email).
-        const signedRef = consent.file ? await uploadConsentDocument(application.id, consent.file) : "";
-        await resubmitApplication(application.id, "Resubmitted after corrections",
-          { method: consent.method, confirmed: consent.confirmed, authorised: consent.authorised, declarationVersion: DECLARATION_VERSION, signedDocumentRef: signedRef });
+        await resubmitApplication(application.id, "Resubmitted after corrections", declarationConsent(consent.declarations));
         const snapshot = collectSnapshot();
         setSubmittedRef(application.reference);
         const done = () => onSubmitted?.(application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
@@ -1404,19 +1410,10 @@ export default function ApplicationWorkspace({
         onSaved?.();
         return;
       }
-      const signedDocumentRef = consent.file ? await uploadConsentDocument(application.id, consent.file) : "";
       const snapshot = collectSnapshot();
-      const reference = await submitApplication(application.id, {
-        consent: { method: consent.method, confirmed: consent.confirmed, authorised: consent.authorised, declarationVersion: DECLARATION_VERSION, signedDocumentRef },
-        values: snapshot?.values ?? {},
-        courses: snapshot?.courses ?? [],
-        meta: {
-          preparedBy: agentName,
-          agency: agencyName,
-          consentMethod: consent.method,
-          submittedThrough: "agency_portal",
-        },
-      });
+      const receipt = await submitApplication(application.id, declarationConsent(consent.declarations));
+      if (receipt.waitingGuardian) { onSaved?.(); onSentToStudent?.(); return; }
+      const reference = receipt.reference;
       setSubmittedRef(reference || application.reference);
       // The success screen (its check animation) shows for a moment before the caller moves on; Continue skips the wait.
       const done = () => onSubmitted?.(reference || application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
@@ -1930,13 +1927,13 @@ export default function ApplicationWorkspace({
           isReview
             ? !readOnly && canSubmitHere
               ? {
-                label: resubmitHere ? "Resubmit application" : "Submit application",
+                label: !studentSigns ? "Send to student to review & sign" : resubmitHere ? "Sign and resubmit" : "Sign and submit",
                 icon: "ri-send-plane-line",
                 onClick: () => void handleSubmit(),
                 // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document; the same for a resubmission.
-                disabled: missingNow.length > 0 || consent.method === "" || !consent.confirmed || !consent.authorised || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
+                disabled: missingNow.length > 0 || (studentSigns && !consent.complete) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
                 busy: submitting,
-                busyLabel: resubmitHere ? "Resubmitting…" : "Submitting…",
+                busyLabel: !studentSigns ? "Sending…" : resubmitHere ? "Resubmitting…" : "Submitting…",
                 testId: "submit-application",
               }
               : null
@@ -1987,6 +1984,7 @@ export default function ApplicationWorkspace({
               readOnly={readOnly}
               canSubmit={canSubmitHere}
               resubmit={resubmitHere}
+              studentSigns={studentSigns}
             />
           </div>
         ) : null}

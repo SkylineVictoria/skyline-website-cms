@@ -5145,3 +5145,28 @@ test("Funding onshore only (2026-11-25): AVETMISS funding source 32 (offshore) s
   assert.ok(sql.includes("lms_unit_students_funding_onshore_only check (funding_source_code is distinct from '32')"));
   assert.ok(read("src/lib/avetmissCodes.ts").includes("all.filter((c) => c.is_active || c.code === current)"), "inactive codes are not offered");
 });
+
+test("AVETMISS unit location from the timetable (2026-11-25, 20261125153850): most face-to-face scheduled hours, theory first on a tie, then batch room, then intake classroom; manual locations kept; Results shows the source", () => {
+  const sql = read("supabase/migrations/20261125153850_avetmiss_location_from_class_sessions.sql").replace(/\r\n/g, "\n");
+  // a) the timetable: the student's batch sessions for that intake + unit, scheduled, face to face, in a room with a location
+  assert.ok(sql.includes("where s.intake_id = p_intake and s.unit_id = p_unit\n       and s.status = 'scheduled' and s.delivery = 'face_to_face'"), "cancelled and online sessions are ignored");
+  assert.ok(sql.includes("join classrooms c on c.id = s.room_id and c.location_id is not null"));
+  assert.ok(sql.includes("order by sum(secs) desc, bool_or(session_type = 'theory') desc, location_id"), "most hours, then theory, then location_id");
+  // b) then the batch's room, c) then the intake's classroom, in that order inside one coalesce
+  const order = ["from sessions", "join intake_batches b on b.id = mb.batch_id", "join classrooms c on c.id = ci.classroom_id"].map((s) => sql.indexOf(s));
+  assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2], "timetable, then batch room, then intake classroom");
+  // statement-level triggers with transition tables; manual locations never overwritten
+  for (const op of ["ins", "upd", "del"]) assert.ok(sql.includes(`CREATE TRIGGER class_sessions_avetmiss_location_${op} AFTER `) && sql.includes(`FOR EACH STATEMENT EXECUTE FUNCTION class_sessions_avetmiss_location_${op}()`), `${op} trigger per statement`);
+  assert.ok(sql.includes("REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows"), "the update trigger sees old and new rooms");
+  assert.equal(sql.split("(u.location_id is null or u.location_is_auto)").length - 1, 3, "each trigger touches automatic or empty locations only");
+  assert.ok(sql.trimEnd().endsWith("where u.location_id is null or u.location_is_auto;"), "the backfill at the end skips manual locations");
+  // Behaviour is proven by the SQL suite on the installed code (U1 60 h / 40 h, equal hours, fallbacks, cancelled / online, moves).
+  const suite = read("supabase/tests/avetmiss_unit_location.sql");
+  assert.ok(suite.includes("select plan(17);") && suite.includes("pg_get_functiondef(r.oid)") && suite.includes("'a manual location is not overwritten on update'"));
+  // Results page: the source of a saved location, the empty choice goes back to automatic, manual override unchanged.
+  const page = read("src/pages/admin/lms/LmsResultsPage.tsx");
+  assert.ok(page.includes("From timetable</>") && page.includes("Set by hand</>") && page.includes('const AUTO_LOCATION = "Automatic (from timetable)";'));
+  assert.ok(page.includes('edit(r, { locationId: e.target.value })'), "a picked location is still saved (and made manual by the database)");
+  const rpc = read("supabase/migrations/20261125180517_avetmiss_unit_results_location_auto.sql");
+  assert.ok(rpc.includes("'locationIsAuto', coalesce(l.location_is_auto, false),") && !/alter table/i.test(rpc), "the flag is returned, no column added");
+});

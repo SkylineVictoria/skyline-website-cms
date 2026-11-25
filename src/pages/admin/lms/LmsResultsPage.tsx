@@ -18,6 +18,9 @@ interface ResultRow {
   assignedStart: string | null; assignedEnd: string | null; actualStart: string | null; actualEnd: string | null; outcome: string | null;
   deliveryMode: string | null; deliveryIdentifier: string | null; locationId: string | null; evidenceNote: string | null; evidencePath: string | null;
   recordedAt: string | null; recordedBy: string | null;
+  /** The location was set automatically from the timetable (else the batch's room, else the intake's classroom), not picked by hand.
+   *  Absent until migration 20261125180517 is applied; then no label is shown. */
+  locationIsAuto?: boolean;
 }
 interface Location { id: string; name: string; is_active: boolean }
 type Draft = Partial<Pick<ResultRow, "outcome" | "actualStart" | "actualEnd" | "deliveryMode" | "deliveryIdentifier" | "locationId" | "evidenceNote" | "evidencePath">>;
@@ -27,6 +30,9 @@ const WITHDRAWN = "40";
 const EVIDENCE_OUTCOMES = new Set(["51", "52", "60"]);
 const FLAGS = [["classroom", "Classroom"], ["online", "Online"], ["workplace", "Workplace"]] as const;
 const keyOf = (r: Pick<ResultRow, "studentId">) => r.studentId;
+/** The empty location choice: no hand-picked location, so the timetable rule fills it (20261125153850). */
+const AUTO_LOCATION = "Automatic (from timetable)";
+const AUTO_LOCATION_HELP = "Set automatically from where this unit's classes are timetabled (most face-to-face hours; else the batch's room, else the intake's classroom). Pick a location to override it.";
 const day = (value: string | null) => (value ? new Date(`${value}T00:00:00`).toLocaleDateString("en-AU", { day: "2-digit", month: "short", year: "numeric" }) : "—");
 
 /** A database or RPC error in plain words. */
@@ -170,7 +176,7 @@ export default function LmsResultsPage() {
                     <option value="">Not set</option>{modeOptions().map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}</Select>
                     : k === "deliveryIdentifier" ? <FlagBoxes value={bulk.deliveryIdentifier ?? "YNN"} onChange={(v) => setBulk((b) => ({ ...b, deliveryIdentifier: v, apply: { ...b.apply, deliveryIdentifier: true } }))} />
                       : <Select value={bulk.locationId ?? ""} onChange={(e) => setBulk((b) => ({ ...b, locationId: e.target.value, apply: { ...b.apply, locationId: true } }))}>
-                        <option value="">Not set</option>{activeLocations().map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>}
+                        <option value="">{AUTO_LOCATION}</option>{activeLocations().map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>}
             </div>)}
         </div>
         <div className="flex flex-wrap gap-2"><Button size="sm" disabled={busy === "bulk"} onClick={() => void applyBulk()} data-testid="results-bulk-save">{busy === "bulk" ? "Saving…" : `Save for ${selected.size}`}</Button>
@@ -200,8 +206,11 @@ export default function LmsResultsPage() {
               <td className="space-y-1 px-3 py-2"><Select value={value(r, "deliveryMode") ?? ""} onChange={(e) => edit(r, { deliveryMode: e.target.value })}>
                 <option value="">Not set</option>{modeOptions(value(r, "deliveryMode")).map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}</Select>
                 <FlagBoxes value={value(r, "deliveryIdentifier") ?? "YNN"} onChange={(v) => edit(r, { deliveryIdentifier: v })} /></td>
-              <td className="px-3 py-2"><Select value={value(r, "locationId") ?? ""} onChange={(e) => edit(r, { locationId: e.target.value })}>
-                <option value="">Not set</option>{activeLocations(value(r, "locationId")).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select></td>
+              <td className="px-3 py-2"><Select value={value(r, "locationId") ?? ""} onChange={(e) => edit(r, { locationId: e.target.value })} data-testid="results-location">
+                <option value="">{AUTO_LOCATION}</option>{activeLocations(value(r, "locationId")).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</Select>
+                {/* The saved location's source; hidden while the row has an unsaved location change. */}
+                {!("locationId" in (drafts[k] ?? {})) && r.locationId && r.locationIsAuto !== undefined ? <span className="mt-1 block text-2xs text-foreground-500" title={r.locationIsAuto ? AUTO_LOCATION_HELP : "Picked by hand; the timetable does not change it. Choose \"Automatic (from timetable)\" to go back."} data-testid="results-location-source">
+                  {r.locationIsAuto ? <><i className="ri-calendar-line" aria-hidden="true" /> From timetable</> : <><i className="ri-edit-line" aria-hidden="true" /> Set by hand</>}</span> : null}</td>
               <td className="space-y-1 px-3 py-2">
                 {needsEvidence || value(r, "evidenceNote") || evidencePath ? <>
                   <TextArea rows={2} maxLength={2000} placeholder="What the RPL / credit transfer is based on" value={value(r, "evidenceNote") ?? ""} onChange={(e) => edit(r, { evidenceNote: e.target.value })} data-testid="results-evidence-note" />

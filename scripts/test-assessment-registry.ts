@@ -412,5 +412,160 @@ else {
   check("docx: the declaration is kept", qs.some((q) => q.type === "declaration" && /my own/.test(String(q.config?.text))), qs.map((q) => q.type));
 }
 
+// ------------------------------------------------------------------ ASM-AI-IMPORT (2026-11-25): numbering, verbatim, matching, checks
+{
+  const { normalizeNumber, normalizePart } = await import("../supabase/functions/_shared/asm-import/numbering.ts");
+  const { checkVerbatim, normText, similarity } = await import("../supabase/functions/_shared/asm-import/verbatim.ts");
+  const { matchGuide, checkDocuments, bumpVersion } = await import("../supabase/functions/_shared/asm-import/match.ts");
+  const { checkChunk, cleanOutline, planChunks, assemble, mockAnswer, outlineRequest, taskRequest } = await import("../supabase/functions/_shared/asm-import/pipeline.ts");
+  const { createProvider, AiError, costUsd } = await import("../supabase/functions/_shared/asm-import/provider.ts");
+  type AiOutline = import("../supabase/functions/_shared/asm-import/schema.ts").AiOutline;
+  type AiTaskPart = import("../supabase/functions/_shared/asm-import/schema.ts").AiTaskPart;
+
+  const n = (raw: string) => normalizeNumber(raw)?.canonical ?? null;
+  const table: [string, string | null][] = [
+    ["1.1", "1.1"], ["Q1.1", "1.1"], ["Question 1.1", "1.1"], ["Q 1.1.", "1.1"], ["1.1)", "1.1"], ["question 1.1:", "1.1"],
+    ["1.1a", "1.1a"], ["1.1(a)", "1.1a"], ["1.1 a)", "1.1a"], ["1.1.a", "1.1a"], ["Q1.1-A", "1.1a"], ["1.1(iv)", "1.1iv"],
+    ["2.1.3", "2.1.3"], ["Q2.1.3", "2.1.3"], ["A.1", "A.1"], ["a-1", "A.1"], ["A1", "A.1"], ["Section A.1", "A.1"], ["01.02", "1.2"],
+    ["1", "1"], ["Q1", "1"], ["Task 2", "2"], ["Explain Ohm's law", null], ["", null],
+  ];
+  const wrong = table.filter(([raw, want]) => n(raw) !== want).map(([raw, want]) => `${raw} -> ${n(raw)} (want ${want})`);
+  check("ai numbering: every provider's numbering normalises (1.1, Q1.1, Question 1.1, 1.1a, 1.1(a), 2.1.3, A.1, A1 …)", wrong.length === 0, wrong);
+  check("ai numbering: base and part are split (1.2(c) -> base 1.2, part c)", normalizeNumber("1.2(c)")?.base === "1.2" && normalizeNumber("1.2(c)")?.part === "c");
+  check("ai numbering: part labels on their own (a, (b), c), ii.)", ["a", "(b)", "c)", "ii."].map(normalizePart).join(",") === "a,b,c,ii" && normalizePart("1.2") === null);
+
+  // verbatim: the PDF reads table cells line by line; another column's words sit between the question's words
+  const page = "No. | Question | Satisfactory\n1.1 | Explain Ohm’s law and how it is used to | S / NS\nfind the current in a simple circuit.\n1.2 | Describe the PPE needed for cutting concrete.";
+  check("ai verbatim: the exact words, split by another column and smart quotes, are verbatim", checkVerbatim("Explain Ohm's law and how it is used to find the current in a simple circuit.", [page]).status === "exact");
+  check("ai verbatim: whitespace and line breaks do not matter", checkVerbatim("Describe  the PPE\nneeded for cutting concrete.", [page]).status === "exact");
+  const para = checkVerbatim("Explain Ohm's law and how you use it to work out the current in a basic circuit.", [page]);
+  check("ai verbatim: a reworded question is not verbatim, and the PDF wording is offered", para.status !== "exact" && Boolean(para.pdfText && /Ohm's law/.test(para.pdfText)), para);
+  const small = checkVerbatim("Describe the PPE needed for cutting the concrete.", [page]);
+  check("ai verbatim: one word added -> close (on the Check this list), not exact", small.status === "close", small);
+  check("ai verbatim: text that is not in the PDF at all -> missing", checkVerbatim("List three hazards of working at heights on a scaffold.", [page]).status === "missing");
+  check("ai verbatim: normText folds quotes, dashes, bullets and ligatures", normText("“ﬁre” – • safe…") === "\"fire\" - safe...", normText("“ﬁre” – • safe…"));
+  check("ai similarity: same question in other words scores high, another question low", similarity("Explain Ohm's law and how it finds current", "Explain how Ohm's law is used to find the current") > 0.6 && similarity("Explain Ohm's law", "List two hazards on site") < 0.2);
+
+  // the checks on a model answer (one chunk): paraphrase, low confidence, drawing, scanned page, evidence title, numbers
+  const pages = [{ page: 4, text: page, scanned: false }, { page: 5, text: "2.1 | Upload a photo of the completed test bench setup.\nFigure 3 Wiring diagram of the test circuit", scanned: false }, { page: 6, text: "", scanned: true }];
+  const raw: AiTaskPart = { title: "Task 1", number: "1", instructions: null, sections: [{ title: "Written questions", items: [
+    { kind: "question", number: "Q1.1", text: "Explain Ohm's law and how it is used to find the current in a simple circuit.", parts: [], table: null, pages: [4], confidence: 0.95, reason: null, answer: null, look_for: null },
+    { kind: "question", number: "Question 1.2", text: "Describe the protective equipment you need when cutting concrete.", parts: [], table: null, pages: [4], confidence: 0.9, reason: null, answer: null, look_for: null },
+    { kind: "evidence", number: "2.1", text: "Upload a photo of the completed test bench setup.", parts: [], table: null, pages: [5], confidence: 0.6, reason: "Question type guessed", answer: null, look_for: null },
+    { kind: "drawing", number: null, text: "Figure 3 Wiring diagram of the test circuit", parts: [], table: null, pages: [5], confidence: 0.9, reason: null, answer: null, look_for: null },
+    { kind: "question", number: "2.2", text: "Record the readings shown on the meter.", parts: [], table: null, pages: [6], confidence: 0.9, reason: null, answer: null, look_for: null },
+  ] }] };
+  const checked = checkChunk(raw, { task: 0, from: 4, to: 6 }, pages)[0].items;
+  check("ai check: numbers normalised (Q1.1 -> 1.1, Question 1.2 -> 1.2)", checked[0].canonical === "1.1" && checked[1].canonical === "1.2");
+  check("ai check: a verbatim question has no flags", checked[0].verbatim === "exact" && checked[0].flags.length === 0, checked[0]);
+  check("ai check: the reworded question goes on Check this with the PDF's wording", checked[1].flags.some((f) => /PDF/.test(f)) && Boolean(checked[1].pdfText), checked[1]);
+  check("ai check: low confidence carries the model's reason", checked[2].flags.includes("Question type guessed"), checked[2].flags);
+  check("ai check: a drawing is flagged to check its placement", checked[3].flags.includes("Drawing found, check its placement"));
+  check("ai check: every item from a scanned page is flagged", checked[4].verbatim === "scanned" && checked[4].flags.includes("Read from a scanned page"));
+
+  // the outline: codes must be printed; ranges inside the document; overlaps cut; no tasks -> one
+  const docPages = [{ page: 1, text: "Unit Code | AURETR112 Qualification | AUR30620 Version 1.0", scanned: false }, { page: 2, text: "Task 1", scanned: false }, { page: 3, text: "Task 2", scanned: false }];
+  const o = cleanOutline({ document_kind: "workbook", title: "WB", qualification_code: "AUR30620", qualification_name: "Cert III", unit_code: "AURETR999", unit_name: "Made up", version: "Version 1.0",
+    tasks: [{ number: "1", title: "Written", kind: "written", first_page: 2, last_page: 3 }, { number: "2", title: "Project", kind: "project", first_page: 3, last_page: 9 }] } as AiOutline, docPages);
+  check("ai outline: a unit code not printed in the document is dropped; a printed one kept", o.unit_code === null && o.qualification_code === "AUR30620", o);
+  check("ai outline: version number kept as digits; overlapping and out-of-range pages fixed", o.version === "1.0" && o.tasks[0].last_page === 2 && o.tasks[1].first_page === 3 && o.tasks[1].last_page === 3, o.tasks);
+  check("ai outline: no tasks found -> the whole document is one task", cleanOutline({ document_kind: "other", title: null, qualification_code: null, qualification_name: null, unit_code: null, unit_name: null, version: null, tasks: [] }, docPages).tasks.length === 1);
+  const chunks = planChunks({ ...o, tasks: [{ number: "1", title: "Long", kind: "project", first_page: 1, last_page: 20 }] }, 8);
+  check("ai plan: a long task is read 8 pages at a time (1-8, 9-16, 17-20)", JSON.stringify(chunks.map((c) => [c.from, c.to])) === "[[1,8],[9,16],[17,20]]");
+  const tr = taskRequest("guide", o, { task: 0, from: 2, to: 2 }, docPages, new Map());
+  check("ai request: the next page is context only, and the guide request asks for answers", /context only/.test((tr.input[0] as { text: string }).text) && /ANSWER GUIDE/.test(tr.instructions));
+  check("ai request: the verbatim rule is part of every task request", /word for word/.test(taskRequest("workbook", o, { task: 0, from: 2, to: 2 }, docPages, new Map()).instructions));
+  check("ai request: the outline names no provider's headings", !/Assessment Tasks*-|Occasion|SLIT|Skyline/i.test(outlineRequest("workbook", docPages).instructions));
+
+  // the provider interface: unknown provider / missing key refused; mock answers; cost only when priced
+  let refused = 0;
+  try { createProvider({ provider: "openai", model: "x" }); } catch (e) { if (e instanceof AiError && e.code === "config") refused += 1; }
+  try { createProvider({ provider: "other", model: "x", apiKey: "k" }); } catch (e) { if (e instanceof AiError) refused += 1; }
+  check("ai provider: no key / unknown provider refused before any call", refused === 2);
+  let sent = "";
+  const fake = createProvider({ provider: "openai", model: "m-1", apiKey: "sk-test", fetch: (async (_u: string, init: RequestInit) => { sent = String(init.body); return new Response(JSON.stringify({ id: "r1", status: "completed", output_text: "{\"ok\":true}", usage: { input_tokens: 1000, output_tokens: 200 } }), { status: 200 }); }) as typeof fetch });
+  const got = await fake.generate({ name: "t", schema: { type: "object" }, instructions: "i", input: [{ kind: "text", text: "hello" }, { kind: "image", dataUrl: "data:image/jpeg;base64,AA" }], maxOutputTokens: 10, timeoutMs: 1000 });
+  const body = JSON.parse(sent);
+  check("ai provider: OpenAI structured output (json_schema, strict), store off, image as input_image", body.text.format.type === "json_schema" && body.text.format.strict === true && body.store === false && body.input[0].content[1].type === "input_image" && (got.data as { ok: boolean }).ok === true);
+  check("ai provider: usage counted, cost only with prices", got.usage.inputTokens === 1000 && costUsd(got.usage) === null && costUsd(got.usage, 2, 8) === 0.0036, [got.usage, costUsd(got.usage, 2, 8)]);
+  const broke = createProvider({ provider: "openai", model: "m", apiKey: "k", fetch: (async () => new Response("{}", { status: 503 })) as typeof fetch });
+  let retry = false; try { await broke.generate({ name: "t", schema: {}, instructions: "", input: [], maxOutputTokens: 1, timeoutMs: 100 }); } catch (e) { retry = e instanceof AiError && e.retry; }
+  check("ai provider: a 5xx is a retryable failure (the browser falls back if it keeps failing)", retry);
+
+  // the answer guide: by number, part by part, whole question, guide split into parts, content suggestion (flagged), missing
+  const qs = [
+    { id: "q11", number: "Q1.1", text: "Explain Ohm's law and how it is used to find the current in a simple circuit.", parts: [] },
+    { id: "q12", number: "1.2", text: "For each of the following, describe it.", parts: [{ id: "q12a", label: "a", text: "Series circuit" }, { id: "q12b", label: "b", text: "Parallel circuit" }, { id: "q12c", label: "c", text: "Voltage drop" }] },
+    { id: "q13", number: "1.3", text: "Describe the protective equipment for cutting concrete.", parts: [] },
+    { id: "q14", number: "1.4", text: "List the steps to isolate a circuit before testing.", parts: [{ id: "q14a", label: "a", text: "Step one" }] },
+    { id: "q21", number: "2.1", text: "Upload a photo of the test bench.", parts: [] },
+    { id: "q22", number: "2.2", text: "Record the meter readings for each load in the series circuit.", parts: [] },
+  ];
+  const guide = [
+    { number: "Question 1.1", questionText: null, answer: "Current equals voltage over resistance (I = V / R).", lookFor: null, parts: [] },
+    { number: "1.2(a)", questionText: null, answer: "One path for current.", lookFor: null, parts: [] },
+    { number: "1.2 b)", questionText: null, answer: "Several paths.", lookFor: null, parts: [] },
+    { number: "1.3a", questionText: null, answer: "Gloves.", lookFor: null, parts: [] },
+    { number: "1.3b", questionText: null, answer: "Respirator.", lookFor: null, parts: [] },
+    { number: "1.4", questionText: null, answer: "Isolate, tag, test for dead.", lookFor: null, parts: [] },
+    { number: "2.1", questionText: null, answer: null, lookFor: "Photo shows the meter connected in series.", parts: [] },
+    { number: "B.7", questionText: "Record the readings on the meter for each load in the series circuit", answer: "Readings within 5 %.", lookFor: null, parts: [] },
+  ];
+  const mo = matchGuide(qs, guide);
+  const key = (id: string) => mo.keys.find((k) => k.questionId === id);
+  check("ai match: Question 1.1 in the guide answers Q1.1 in the workbook", key("q11")?.via === "number" && /I = V \/ R/.test(key("q11")?.modelAnswer ?? ""));
+  check("ai match: parts match part by part (1.2(a), 1.2 b)); part c has none", key("q12a")?.modelAnswer === "One path for current." && key("q12b")?.modelAnswer === "Several paths." && !key("q12c"));
+  check("ai match: a guide that answers the whole question attaches to the question (1.4)", key("q14")?.modelAnswer === "Isolate, tag, test for dead." && !key("q14a"));
+  check("ai match: a guide split into parts for a one-part question is put together, for review (1.3)", /Gloves/.test(key("q13")?.modelAnswer ?? "") && /Respirator/.test(key("q13")?.modelAnswer ?? "") && Boolean(key("q13")?.review));
+  check("ai match: a project benchmark becomes What to look for (assessor guidance)", key("q21")?.assessorGuidance === "Photo shows the meter connected in series." && !key("q21")?.modelAnswer);
+  check("ai match: numbering that does not line up is matched by content and always flagged", key("q22")?.via === "content" && /check it/.test(key("q22")?.review ?? ""), key("q22"));
+  check("ai match: counts (answers matched / questions) and nothing left over", mo.matched === 6 && mo.total === 6 && mo.unused.length === 0 && mo.missing.length === 0, [mo.matched, mo.total, mo.missing, mo.unused.length]);
+  const lone = matchGuide([{ id: "x", number: "3.1", text: "Explain torque.", parts: [] }], guide);
+  check("ai match: a question the guide does not answer is listed as missing", lone.missing.includes("x") && lone.matched === 0);
+
+  check("ai documents: same unit, same version -> ok", JSON.stringify(checkDocuments({ unitCode: "AURETR112", version: "1.0" }, { unitCode: "auretr112", version: "Version 1" })) === JSON.stringify({ unit: "same", version: "same", block: false, messages: [] }));
+  const diff = checkDocuments({ unitCode: "AURETR112", version: "1.0" }, { unitCode: "AURETR113", version: "2.0" });
+  check("ai documents: a different unit blocks; a different version warns", diff.block && diff.unit === "different" && diff.version === "different" && diff.messages.length === 2, diff);
+  check("ai documents: a guide without a unit code is a warning, not a block", !checkDocuments({ unitCode: "AURETR112", version: null }, { unitCode: null, version: null }).block);
+  check("ai version: edits bump 1.0 -> 1.1, 1.9 -> 1.10, 2 -> 2.1, none -> 1.1", [bumpVersion("1.0"), bumpVersion("1.9"), bumpVersion("2"), bumpVersion(null)].join(" ") === "1.1 1.10 2.1 1.1");
+
+  // a second, different layout (synthetic until the owner sends a second provider's workbook): lettered sections, "Question n" numbering
+  const otherPages = [
+    { page: 1, text: "ASSESSMENT TOOL\nUnit: BSBWHS411 Implement and monitor WHS policies\nCourse: BSB40120 Certificate IV in Business\nDocument version 3.2", scanned: false },
+    { page: 2, text: "Part A Knowledge\nQuestion A1: Name the WHS legislation that applies in your state.\nQuestion A2: Describe two consultation processes:\n(a) health and safety representatives\n(b) WHS committees", scanned: false },
+  ];
+  const otherOutline = cleanOutline({ document_kind: "workbook", title: "ASSESSMENT TOOL", qualification_code: "BSB40120", qualification_name: "Certificate IV in Business", unit_code: "BSBWHS411", unit_name: "Implement and monitor WHS policies", version: "Document version 3.2", tasks: [{ number: "A", title: "Part A Knowledge", kind: "written", first_page: 2, last_page: 2 }] } as AiOutline, otherPages);
+  const otherChunk = checkChunk({ title: "Part A", number: "A", instructions: null, sections: [{ title: "Part A Knowledge", items: [
+    { kind: "question", number: "Question A1", text: "Name the WHS legislation that applies in your state.", parts: [], table: null, pages: [2], confidence: 0.92, reason: null, answer: null, look_for: null },
+    { kind: "multipart", number: "Question A2", text: "Describe two consultation processes:", parts: [{ label: "(a)", text: "health and safety representatives", answer: null }, { label: "(b)", text: "WHS committees", answer: null }], table: null, pages: [2], confidence: 0.9, reason: null, answer: null, look_for: null },
+  ] }] }, { task: 0, from: 2, to: 2 }, otherPages);
+  const otherDoc = assemble("workbook", otherOutline, [{ task: 0, from: 2, to: 2 }], [otherChunk], { provider: "test", model: "fixture", scannedPages: 0 });
+  check("ai layout 2: codes, version and lettered numbering read from another provider's layout", otherDoc.unit?.code === "BSBWHS411" && otherDoc.qualification?.code === "BSB40120" && otherDoc.version === "3.2"
+    && otherChunk[0].items.map((i) => i.canonical).join(",") === "A.1,A.2" && otherChunk[0].items[1].parts.map((p) => p.part).join("") === "ab" && otherDoc.summary.flagged === 0, [otherDoc.unit, otherDoc.version, otherChunk[0].items.map((i) => [i.canonical, i.flags])]);
+  console.log("PENDING - ai layout 2 with a real second provider's workbook (the owner sends one)");
+  console.log("PENDING - ai answer guide matching with a real answer guide (the owner sends one)");
+
+  // the RIICWD525E workbook through the AI pipeline with the lab's stand-in model, and a synthetic answer guide from its numbering
+  if (workbookPath) {
+    const { pageTextsFromPdf } = await import("../src/lib/assessment/pageText");
+    const pdf = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const doc = await pdf.getDocument({ data: new Uint8Array(readFileSync(workbookPath)), verbosity: 0 }).promise;
+    const texts = await pageTextsFromPdf(doc as unknown as PdfDocLike);
+    const mock = createProvider({ provider: "mock", model: "lab", mock: mockAnswer });
+    const outline = cleanOutline((await mock.generate(outlineRequest("workbook", texts))).data as AiOutline, texts);
+    const plan = planChunks(outline);
+    const results = [];
+    for (const c of plan) results.push(checkChunk((await mock.generate(taskRequest("workbook", outline, c, texts, new Map()))).data as AiTaskPart, c, texts));
+    const rd = assemble("workbook", outline, plan, results, { provider: "mock", model: "lab", scannedPages: 0 });
+    const items = rd.tasks.flatMap((t) => t.sections.flatMap((s) => s.items));
+    console.log(`  ai pipeline (stand-in model): ${JSON.stringify(rd.summary)} unit ${rd.unit?.code} version ${rd.version} chunks ${plan.length}`);
+    check("ai pipeline: RIICWD525E unit and version read and confirmed in the text", rd.unit?.code === "RIICWD525E" && rd.version === "1.0", [rd.unit, rd.version]);
+    check("ai pipeline: RIICWD525E text pages are not scanned; the stand-in's copied lines all pass the verbatim check", texts.every((p) => !p.scanned) && items.length > 10 && items.every((i) => i.verbatim === "exact"), items.filter((i) => i.verbatim !== "exact").slice(0, 3));
+    const questions = items.filter((i) => i.canonical).map((i, k) => ({ id: `q${k}`, number: i.number, text: i.text, parts: [] }));
+    const synthetic = questions.map((q) => ({ number: `Question ${q.number?.replace(/^Q/i, "")}`, questionText: q.text, answer: `Model answer for ${q.number}`, lookFor: null, parts: [] }));
+    const sm = matchGuide(questions, synthetic);
+    check("ai match: a synthetic answer guide numbered from RIICWD525E matches every question by number", sm.matched === questions.length && sm.keys.every((k) => k.via === "number"), [sm.matched, questions.length]);
+  }
+}
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

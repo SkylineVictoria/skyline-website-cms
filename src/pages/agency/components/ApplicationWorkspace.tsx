@@ -331,7 +331,8 @@ export default function ApplicationWorkspace({
   const [stage, setStage] = useState(() => {
     if (openedOnDeclaration) return stageOf(declarationIndex);
     // The review page opened from the URL shows the saved answers until the form is read again.
-    return stageInUrl(location.search) ?? 0;
+    // Owner 2026-11-25 (clean view): a submitted (read-only) application opens on the one-page review of every section.
+    return stageInUrl(location.search) ?? (readOnly ? reviewStage : 0);
   });
   // Steps opened on the page (the rest are one-line summaries), the stages left with Next, the soft notice, and where to put the
   // cursor once a stage has opened.

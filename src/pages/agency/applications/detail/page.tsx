@@ -3,15 +3,16 @@ import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useState } from "react";
-import { formatPhone } from "../../../../../supabase/functions/_shared/validation/identifiers";
+
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { formatDate } from "@/pages/agency/lib/portalData";
-import { isEditableStatus, useApplicationStatuses } from "@/lib/applicationStatuses";
+import { isEditableStatus, statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import StatusBadge from "@/components/shared/application-status/StatusBadge";
+import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
 import Toast from "@/components/shared/application-form/Toast";
 import { useToast } from "@/components/shared/application-form/useToast";
-import { AgentMetaEditor, ApplicantStatusBanner, OfferDepositCard, OfferLettersList, StaffReviewBar } from "@/pages/agency/components/ApplicationStatusPanels";
+import { AgentMetaEditor, ApplicantStatusBanner, OfferDepositCard, OfferLettersList } from "@/pages/agency/components/ApplicationStatusPanels";
 import {
   assignApplicationAgent,
   deleteApplicationDocument,
@@ -38,6 +39,12 @@ import ApplicationMessages from "@/pages/agency/components/ApplicationMessages";
 import { PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
+
+/** Reports the Review step’s open problems to the page (the header’s Take action asks for an override note while there are any). */
+function ReviewIssuesReporter({ count, onCount }: { count: number; onCount: (n: number) => void }) {
+  useEffect(() => { onCount(count); }, [count, onCount]);
+  return null;
+}
 
 type Tab = "form" | "documents" | "history" | "messages" | "notifications";
 
@@ -67,6 +74,7 @@ export default function ApplicationDetailPage() {
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [tab, setTab] = useState<Tab>("form");
+  const [reviewIssues, setReviewIssues] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -229,6 +237,7 @@ export default function ApplicationDetailPage() {
   // SLIT administrators are not inherently read-only. Status alone controls
   // whether a record is editable; RLS separately determines who may edit it.
   const readOnly = !isEditableStatus(workflow, application.status);
+  const nextHint = statusInfo(workflow, application.status).hint;
   const agentName = application.agentName || profile?.fullName || "";
   const agencyName = application.agencyName || agency?.name || "";
   const outstanding =
@@ -236,86 +245,70 @@ export default function ApplicationDetailPage() {
 
   return (
     <div>
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <Link
-            to={isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground-500 hover:text-primary-600"
-          >
-            <i className="ri-arrow-left-line" aria-hidden="true" />
-            All applications
-          </Link>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <h1 className="font-heading text-xl font-bold text-foreground-950 md:text-2xl">
-              {application.studentName || "New application"}
-            </h1>
-            <StatusBadge status={application.status} />
-            {application.isTest ? (
-              <span className="rounded-full bg-accent-100 px-2.5 py-1 text-2xs font-semibold uppercase text-accent-900">
-                Test data
-              </span>
-            ) : null}
-          </div>
-          {/* One compact meta row: reference, agency, agent (editable in a popover), dates. */}
-          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-500" data-testid="application-meta">
-            <span className="inline-flex items-center gap-1.5 font-mono font-semibold text-foreground-800">
-              <i className="ri-hashtag" aria-hidden="true" />
-              {application.reference || "Draft"}
-            </span>
-            {agencyName ? <span>Agency: <span className="font-medium text-foreground-800">{agencyName}</span></span> : null}
-            {canManageAssignment ? (
-              <AgentMetaEditor agentId={application.agentId} agentName={application.agentName} agents={agents} busy={busy} onAssign={(profileId) => void handleReassign(profileId)} />
-            ) : application.agentName ? <span>Agent: <span className="font-medium text-foreground-800">{application.agentName}</span></span> : null}
-            {isSlit && application.agentEmail ? <span>{application.agentEmail}</span> : null}
-            {isSlit && application.agentPhone ? <span>{formatPhone(application.agentPhone)}</span> : null}
-            <span>Created {formatDate(application.createdAt)}</span>
-            <span>Updated {formatDate(application.updatedAt)}</span>
-            {application.submittedAt ? <span>Submitted {formatDate(application.submittedAt)}</span> : null}
-            {isSlit ? <span className="font-medium text-foreground-800">{application.completion}% complete</span> : null}
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
+      {/* Owner 2026-11-25 (clean view): one header line with the name, one status badge and the actions (Take action for SLIT staff);
+          one details line underneath with what is needed next. */}
+      <header>
+        <Link
+          to={isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground-500 hover:text-primary-600"
+        >
+          <i className="ri-arrow-left-line" aria-hidden="true" />
+          All applications
+        </Link>
+        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="min-w-0 font-heading text-xl font-bold text-foreground-950 md:text-2xl">
+            {application.studentName || "New application"}
+          </h1>
+          <StatusBadge status={application.status} />
+          {application.isTest ? (
+            <span className="rounded-full bg-accent-100 px-2.5 py-1 text-2xs font-semibold uppercase text-accent-900">Test data</span>
+          ) : null}
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
-            {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Message student" size="sm" /> : null}
-            {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Message agent" size="sm" /> : null}
+            {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Student" size="sm" variant="ghost" /> : null}
+            {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Agent" size="sm" variant="ghost" /> : null}
             {isSlit ? (
               <button
                 type="button"
+                title="Download the application as a PDF"
                 onClick={() => { setActionError(""); void logAdminAccess(application.id, "pdf_exported").then(() => downloadApplicationPdf(application)).catch((e) => setActionError(e instanceof Error ? e.message : "The PDF could not be created.")); }}
-                className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3.5 py-2 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700"
+                className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-semibold text-foreground-700 hover:bg-background-100 hover:text-primary-700"
               >
-                <i className="ri-file-pdf-2-line" aria-hidden="true" />
-                Download PDF
+                <i className="ri-file-pdf-2-line text-sm" aria-hidden="true" />
+                PDF
               </button>
             ) : null}
             {!readOnly ? (
               <button
                 type="button"
                 onClick={openWizard}
-                className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3.5 py-2 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700"
+                className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md border border-background-300 bg-background-50 px-3 py-1.5 text-xs font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700"
               >
                 <i className="ri-magic-line" aria-hidden="true" />
                 Document upload wizard
               </button>
             ) : null}
+            {isSlit ? (
+              <TakeActionMenu align="right" size="md" onStatus={() => undefined} onDone={() => void load()} reviewIssues={reviewIssues}
+                onResult={(message, _ok, action) => toast.show(message, action, action ? 5000 : undefined)}
+                application={{ id: application.id, status: application.status, reference: application.reference, studentName: application.studentName, studentId: application.studentId,
+                  course: application.courses[0] ? { title: application.courses[0].title, code: application.courses[0].code } : null, intake: application.intake }} />
+            ) : null}
           </div>
         </div>
-        {/* Owner 2026-11-25: staff change the status from the top of the page (same Take action menu as the list and the
-            Review step); completion moved into the details line. */}
-        {isSlit ? (
-          <div className="w-full shrink-0 rounded-card border border-background-200 bg-background-50 px-4 py-3 lg:w-auto lg:min-w-[22rem]" data-testid="header-status">
-            <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-foreground-600">Status</p>
-            <StaffReviewBar application={application} history={history} onDone={() => void load()}
-              onResult={(message, _ok, action) => toast.show(message, action, action ? 5000 : undefined)} />
-          </div>
-        ) : (
-          <div className="shrink-0 rounded-card border border-background-200 bg-background-50 px-5 py-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Completion</p>
-            <p className="mt-1 font-heading text-2xl font-bold text-foreground-950">{application.completion}%</p>
-            <div className="mt-2 h-1.5 w-32 overflow-hidden rounded-full bg-background-200">
-              <div className="h-full rounded-full bg-accent-500" style={{ width: `${application.completion}%` }} />
-            </div>
-          </div>
-        )}
+        <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-500" data-testid="application-meta">
+          <span className="inline-flex items-center gap-1 font-mono font-semibold text-foreground-800">
+            <i className="ri-hashtag" aria-hidden="true" />
+            {application.reference || "Draft"}
+          </span>
+          {agencyName ? <span>Agency: <span className="font-medium text-foreground-800">{agencyName}</span></span> : null}
+          {canManageAssignment ? (
+            <AgentMetaEditor agentId={application.agentId} agentName={application.agentName} agents={agents} busy={busy} onAssign={(profileId) => void handleReassign(profileId)} />
+          ) : application.agentName ? <span>Agent: <span className="font-medium text-foreground-800">{application.agentName}</span></span> : null}
+          {application.submittedAt ? <span>Submitted {formatDate(application.submittedAt)}</span> : <span>Created {formatDate(application.createdAt)}</span>}
+          <span>{application.completion}% complete</span>
+          {isSlit && nextHint ? <span className="font-medium text-foreground-800">Next: {nextHint}</span> : null}
+        </p>
       </header>
 
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
@@ -377,10 +370,7 @@ export default function ApplicationDetailPage() {
             agencyName={agencyName}
             readOnly={readOnly}
             auditAccess={isSlit}
-            reviewBar={isSlit ? (reviewIssues: number) => (
-              <StaffReviewBar application={application} history={history} reviewIssues={reviewIssues} onDone={() => void load()}
-                onResult={(message, _ok, action) => toast.show(message, action, action ? 5000 : undefined)} />
-            ) : undefined}
+            reviewBar={isSlit ? (issues: number) => <ReviewIssuesReporter count={issues} onCount={setReviewIssues} /> : undefined}
             onSaved={refreshAfterSave}
             onSubmitted={(reference, studentName) =>
               navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName, submittedPath: paths.detail(application.id) } })}

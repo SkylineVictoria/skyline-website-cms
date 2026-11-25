@@ -4326,11 +4326,15 @@ test("shared rules: the student forms and the staff wizard call the same functio
     "src/pages/staff/StaffOnboardingPage.tsx", "supabase/functions/staff-onboarding/core.ts"]) {
     assert.match(read(file), /_shared\/validation\/(person|staff-onboarding)/, `${file} uses the shared rules`);
   }
-  // Both wizards are built from the same components.
+  // Both wizards are built from the same components: the shared shell and one of the shared steppers (the application wizard shows
+  // its steps as grouped stages, WizardStages; the staff wizard one pill per step, WizardStepper), never a stepper of their own.
   for (const file of ["src/pages/agency/components/ApplicationWizard.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) {
     const text = read(file);
-    for (const part of ["WizardShell", "WizardStepper"]) assert.ok(text.includes(`@/components/shared/wizard/${part}`), `${file} uses the shared ${part}`);
+    assert.ok(text.includes("@/components/shared/wizard/WizardShell"), `${file} uses the shared WizardShell`);
+    assert.ok(["WizardStepper", "WizardStages"].some((part) => text.includes(`@/components/shared/wizard/${part}`)), `${file} uses a shared stepper`);
+    assert.ok(!/function\s+\w*(Stepper|Stages)\s*\(/.test(text), `${file} defines no stepper of its own`);
   }
+  assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("@/components/shared/wizard/WizardStages"), "the application wizard shows grouped stages");
   assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("@/components/shared/wizard/WizardDocumentStep"));
   assert.ok(read("src/components/shared/wizard/DocumentWizard.tsx").includes("@/components/shared/wizard/WizardDocumentStep"), "staff uploads use the student upload screen");
   for (const file of ["src/pages/agency/components/WizardQuestionStep.tsx", "src/pages/staff/StaffOnboardingPage.tsx"]) {

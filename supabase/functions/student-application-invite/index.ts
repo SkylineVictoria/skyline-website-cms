@@ -75,6 +75,129 @@ async function lookupMailbox(graph: Graph, address: string) {
     lookup, matched: matches.length === 1 && result["@odata.nextLink"] === undefined ? "address" : null, aliasLookup: aliases.status };
 }
 
+type Brand = { field: (key: string) => string; brand: string; contact: string; primaryOk: boolean };
+function brandOf(template: Record<string, unknown>): Brand {
+  const field = (key: string) => typeof template?.[key] === "string" ? (template[key] as string).trim() : "";
+  return { field, brand: field("brand"), contact: field("contact"), primaryOk: /^#[0-9a-f]{6}$/i.test(field("primary")) };
+}
+
+/** Sends one message through Microsoft Graph from the configured mailbox (an alias resolved once on a 404). */
+async function sendMail(ports: Ports, sender: string, recipient: string, subject: string, text: string, html: string) {
+  const boundary = `slit-${crypto.randomUUID()}`;
+  const mime = [
+    `From: ${sender}`, `To: ${recipient}`, `Subject: =?UTF-8?B?${encode(subject)}?=`,
+    "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
+    `--${boundary}`, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(text),
+    `--${boundary}`, "Content-Type: text/html; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(html),
+    `--${boundary}--`, "",
+  ].join("\r\n");
+  const graph = graphFor(ports, await appToken(ports));
+  // Graph accepts an RFC 5322 message as base64 MIME and returns 202 when accepted for delivery.
+  const send = (mailbox: string) => graph("POST", `/users/${encodeURIComponent(mailbox)}/sendMail`,
+    base64(new TextEncoder().encode(mime)), { "Content-Type": "text/plain" }, "raw");
+  let response = await send(sender);
+  let code = response.ok ? "" : await providerCode(response);
+  // rule-policy: technical invitation-graph-address Resolve a configured alias only after Graph explicitly returns a missing sender.
+  if (response.status === 404 && code !== "ErrorMailboxNotEnabledForRESTAPI") {
+    const mailbox = await lookupMailbox(graph, sender);
+    if (mailbox.id && mailbox.matched === "address") {
+      response = await send(mailbox.id);
+      code = response.ok ? "" : await providerCode(response);
+    }
+  }
+  // rule-policy: technical invitation-graph-acceptance Microsoft Graph confirms queue acceptance with HTTP 202.
+  const accepted = response.status === 202;
+  if (!accepted) console.warn("student_invitation_mail_rejected", response.status, code);
+  return { accepted, message: accepted ? "" : providerMessage(code, response.status) };
+}
+
+const newToken = () => base64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+const tokenShape = /^[A-Za-z0-9_-]{43}$/;
+const clientIp = (request: Request) => (request.headers.get("cf-connecting-ip") ?? request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "")
+  .split(",")[0].trim().slice(0, 64);
+
+/**
+ * APPLICATION-STUDENT-SIGNS: a student under 18 asks a parent / guardian to sign. guardian_send (the student signed in) emails the
+ * link; guardian_open / guardian_code / guardian_verify / guardian_sign are called from the guardian's page (no account: the link
+ * token, a one-time code by email). Every check is in the database; this only makes tokens and codes and sends the emails.
+ */
+// deno-lint-ignore no-explicit-any
+async function guardian(action: string, body: any, request: Request, admin: any, caller: any, ports: Ports): Promise<Response> {
+  const dbError = (error: { code?: string; message?: string } | null, fallback: string) => {
+    const known = error && ["22023", "42501", "PT409"].includes(error.code ?? "");
+    return json({ error: known ? error!.message : fallback }, error?.code === "42501" ? 403 : 400);
+  };
+  if (action === "guardian_send") {
+    if (typeof body.applicationId !== "string" || !uuid.test(body.applicationId)) return json({ error: "Choose a valid application." }, 400);
+    const token = newToken();
+    const { data: req, error } = await caller.rpc("portal_guardian_request_begin", {
+      p_application: body.applicationId, p_name: String(body.name ?? ""), p_relationship: String(body.relationship ?? ""),
+      p_email: String(body.email ?? ""), p_mobile: String(body.mobile ?? ""), p_hash: await sha256Hex(token),
+    });
+    if (error || !req) return dbError(error, "The request could not be prepared.");
+    let accepted = false;
+    let message = "The email to your parent or guardian could not be sent. Try again.";
+    try {
+      const brand = brandOf(req.template);
+      const site = httpsUrl(brand.field("siteUrl"));
+      const link = new URL("/guardian-sign", site);
+      link.hash = new URLSearchParams({ t: token }).toString();
+      const subject = `Please sign ${req.studentName}'s application to ${brand.brand}`;
+      const paragraphs = [`Hello ${req.guardianName},`,
+        `${req.studentName} is under 18 and has applied to study with ${brand.brand}. As their parent or guardian, please read the declarations and sign the application too. It is submitted only once you have signed.`,
+        "To check it is you, we will email a one-time code to this address when you open the link."];
+      const note = `The link is personal to you. If you were not expecting this email, you can ignore it.\n\n${brand.field("signature")}`;
+      const text = [...paragraphs, `Open and sign: ${link}`, note, brand.contact].join("\r\n\r\n");
+      const html = simpleEmailHtml({ brand: brand.brand, heading: subject, paragraphs, button: { label: "Open and sign", url: link.href }, note,
+        footer: brand.contact, primary: brand.primaryOk ? brand.field("primary") : "#ea6619", logo: { url: httpsUrl(brand.field("logoUrl")).href, alt: brand.brand } });
+      const sent = await sendMail(ports, req.sender, req.recipient, subject, text, html);
+      accepted = sent.accepted;
+      if (!accepted) message = sent.message;
+    } catch { /* recorded below */ }
+    const { data: recorded, error: trackError } = await admin.rpc("portal_guardian_request_delivered", { p_request: req.id, p_accepted: accepted });
+    if (trackError || recorded !== true) return json({ error: "The email status could not be confirmed. Check before sending again." }, 503);
+    return accepted ? json({ ok: true }) : json({ error: message }, 502);
+  }
+  if (typeof body.token !== "string" || !tokenShape.test(body.token)) return json({ error: "This link is invalid, expired, or no longer available." }, 403);
+  const hash = await sha256Hex(body.token);
+  if (action === "guardian_open") {
+    const { data, error } = await admin.rpc("portal_guardian_open", { p_hash: hash });
+    return error ? dbError(error, "This link could not be opened.") : json(data);
+  }
+  if (action === "guardian_code") {
+    const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, "0");
+    const { data: req, error } = await admin.rpc("portal_guardian_code_issue", { p_hash: hash, p_code: code });
+    if (error || !req) return dbError(error, "A code could not be sent.");
+    try {
+      const brand = brandOf(req.template);
+      const subject = `Your ${brand.brand} code: ${code}`;
+      const paragraphs = [`Hello ${req.guardianName},`, `Your code to sign ${req.studentName}'s application is ${code}. It works for 10 minutes.`];
+      const html = simpleEmailHtml({ brand: brand.brand, heading: "Your one-time code", paragraphs, code, note: "If you did not ask for this code, you can ignore this email.",
+        footer: brand.contact, primary: brand.primaryOk ? brand.field("primary") : "#ea6619", logo: { url: httpsUrl(brand.field("logoUrl")).href, alt: brand.brand } });
+      const sent = await sendMail(ports, req.sender, req.recipient, subject, paragraphs.join("\r\n\r\n"), html);
+      return sent.accepted ? json({ ok: true }) : json({ error: sent.message }, 502);
+    } catch {
+      return json({ error: "The code could not be sent. Try again in a minute." }, 502);
+    }
+  }
+  if (action === "guardian_verify") {
+    if (typeof body.code !== "string" || !/^[0-9]{6}$/.test(body.code)) return json({ ok: false, error: "Enter the 6-digit code." });
+    const { data, error } = await admin.rpc("portal_guardian_code_verify", { p_hash: hash, p_code: body.code });
+    return error ? dbError(error, "The code could not be checked.") : json(data);
+  }
+  if (action === "guardian_sign") {
+    if (!body.declarations || typeof body.declarations !== "object") return json({ error: "Tick each declaration before signing." }, 400);
+    const { data, error } = await admin.rpc("portal_guardian_sign", { p_hash: hash, p_declarations: body.declarations,
+      p_ip: clientIp(request), p_user_agent: (request.headers.get("user-agent") ?? "").slice(0, 500) });
+    return error ? dbError(error, "The signature could not be saved.") : json(data);
+  }
+  return json({ error: "Unknown action." }, 400);
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { headers });
   if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
@@ -106,6 +229,10 @@ Deno.serve(async (request) => {
       return json({ error: "Office 365 mailbox lookup failed." }, 502);
     }
   }
+  if (typeof body?.action === "string" && body.action.startsWith("guardian_")) {
+    const caller = createClient(url, anon, { ...config, global: { headers: { Authorization: authorization } } });
+    return guardian(body.action, body, request, admin, caller, ports);
+  }
   const retry = body?.action === "retry";
   // rule-policy: security invitation-service-retry Restrict recovery to the service caller and a stored failed invitation ID.
   if (retry && !isServiceCaller(authorization, service, url)) return json({ error: "Service access required." }, 403);
@@ -124,9 +251,8 @@ Deno.serve(async (request) => {
     }
   }
 
-  const token = base64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
-  const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const token = newToken();
+  const hash = await sha256Hex(token);
   const { data: invitation, error: beginError } = retry
     ? await admin.rpc("portal_wizard_retry_failed_invite", { p_failed_invitation: body.failedInvitationId, p_hash: hash })
     : await caller.rpc("portal_wizard_invite_begin", {
@@ -141,57 +267,30 @@ Deno.serve(async (request) => {
   let message = "Office 365 could not accept the invitation. Try sending it again.";
   try {
     const template = invitation.template as Record<string, unknown>;
-    const field = (key: string) => typeof template[key] === "string" ? (template[key] as string).trim() : "";
+    const brand = brandOf(template);
+    const field = brand.field;
     const subject = field("subject");
-    const brand = field("brand");
     const button = field("button");
-    const contact = field("contact");
     let link: URL;
-    let logo: URL;
     try {
       link = new URL("/agency/application-invite", httpsUrl(field("siteUrl")));
-      logo = httpsUrl(field("logoUrl"));
-      if (/\r|\n/.test(subject) || !subject || !brand || !button || !field("greeting") || !field("body") ||
-        !field("note") || !field("signature") || !contact || !/^#[0-9a-f]{6}$/i.test(field("primary"))) throw new Error("Incomplete");
+      if (/\r|\n/.test(subject) || !subject || !brand.brand || !button || !field("greeting") || !field("body") ||
+        !field("note") || !field("signature") || !brand.contact || !brand.primaryOk) throw new Error("Incomplete");
+      httpsUrl(field("logoUrl"));
     } catch {
       message = "Complete the published invitation template and branding in Business Rules & Policies.";
       throw new Error("Invalid invitation template");
     }
     link.hash = new URLSearchParams({ t: token }).toString();
-    const text = [field("greeting"), field("body"), `${button}: ${link}`, field("note"), field("signature"), contact].join("\r\n\r\n");
+    const text = [field("greeting"), field("body"), `${button}: ${link}`, field("note"), field("signature"), brand.contact].join("\r\n\r\n");
     const html = simpleEmailHtml({
-      brand, heading: subject, paragraphs: [field("greeting"), field("body")],
+      brand: brand.brand, heading: subject, paragraphs: [field("greeting"), field("body")],
       button: { label: button, url: link.href }, note: `${field("note")}\n\n${field("signature")}`,
-      footer: contact, primary: field("primary"), logo: { url: logo.href, alt: brand },
+      footer: brand.contact, primary: field("primary"), logo: { url: httpsUrl(field("logoUrl")).href, alt: brand.brand },
     });
-    const boundary = `slit-${crypto.randomUUID()}`;
-    const mime = [
-      `From: ${invitation.sender}`, `To: ${invitation.recipient}`, `Subject: =?UTF-8?B?${encode(subject)}?=`,
-      "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "",
-      `--${boundary}`, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(text),
-      `--${boundary}`, "Content-Type: text/html; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(html),
-      `--${boundary}--`, "",
-    ].join("\r\n");
-    const graph = graphFor(ports, await appToken(ports));
-    // Graph accepts an RFC 5322 message as base64 MIME and returns 202 when accepted for delivery.
-    const send = (mailbox: string) => graph("POST", `/users/${encodeURIComponent(mailbox)}/sendMail`,
-      base64(new TextEncoder().encode(mime)), { "Content-Type": "text/plain" }, "raw");
-    let response = await send(invitation.sender);
-    let code = response.ok ? "" : await providerCode(response);
-    // rule-policy: technical invitation-graph-address Resolve a configured alias only after Graph explicitly returns a missing sender.
-    if (response.status === 404 && code !== "ErrorMailboxNotEnabledForRESTAPI") {
-      const mailbox = await lookupMailbox(graph, invitation.sender);
-      if (mailbox.id && mailbox.matched === "address") {
-        response = await send(mailbox.id);
-        code = response.ok ? "" : await providerCode(response);
-      }
-    }
-    // rule-policy: technical invitation-graph-acceptance Microsoft Graph confirms queue acceptance with HTTP 202.
-    accepted = response.status === 202;
-    if (!accepted) {
-      message = providerMessage(code, response.status);
-      console.warn("student_invitation_mail_rejected", response.status, code);
-    }
+    const sent = await sendMail(ports, invitation.sender, invitation.recipient, subject, text, html);
+    accepted = sent.accepted;
+    if (!accepted) message = sent.message;
   } catch { /* Record the failure through the database. */ }
 
   const { data: recorded, error: trackingError } = await admin.rpc("portal_wizard_invite_delivered", {

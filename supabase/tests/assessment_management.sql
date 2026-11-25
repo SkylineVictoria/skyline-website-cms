@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(384);
+select plan(391);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -200,6 +200,18 @@ select pg_temp.as_postgres();
 select is(public.asm_start_attempt(pg_temp.v('assignment'), (select student_id from public.asm_attempts where id = pg_temp.v('attempt')), null)::text, pg_temp.s('attempt'), 'open race: a start while an attempt is open returns that attempt');
 select throws_ok(format($$select public.asm_next_attempt('%s', '%s', now(), null, false)$$, pg_temp.v('assignment'), (select student_id from public.asm_attempts where id = pg_temp.v('attempt'))), '23505', 'The student already has an open attempt', 'open race: a staff reassessment still refuses a second open attempt');
 select throws_ok(format($$insert into public.asm_attempts(assignment_id, version_id, student_id, attempt_no, due_at) select assignment_id, version_id, student_id, attempt_no + 1, due_at from public.asm_attempts where id = '%s'$$, pg_temp.v('attempt')), '23505', null, 'open race: the database refuses a second open attempt (asm_attempts_one_open)');
+-- ASM-AI-IMPORT stage 3: signatures on an attempt (asm_sign / asm_signatures, migration 20261125120517)
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select is(public.asm_sign(pg_temp.v('attempt'), 'student_declaration', 'typed', null, 'I declare this work is my own.')->>'kind', 'student_declaration', 'SIG the student signs the declaration on a draft attempt');
+select is((public.asm_sign(pg_temp.v('attempt'), 'student_declaration', 'typed', null, 'again')->>'statement'), 'I declare this work is my own.', 'SIG signing again returns the first signature (never replaced)');
+select throws_ok(format($$select public.asm_sign('%s', 'student_acknowledgement', 'typed', null, '')$$, pg_temp.v('attempt')), '22023', null, 'SIG no acknowledgement before there are results');
+select is(jsonb_array_length(public.asm_signatures(pg_temp.v('attempt'))), 1, 'SIG the student reads their own signatures');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select throws_ok(format($$select public.asm_sign('%s', 'student_declaration', 'typed', null, '')$$, pg_temp.v('attempt')), '42501', null, 'SIG a classmate cannot sign someone else''s attempt');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select throws_ok(format($$select public.asm_sign('%s', 'assessor_signoff', 'typed', null, '')$$, pg_temp.v('attempt')), '22023', null, 'SIG the assessor signs off only a marked attempt');
+select pg_temp.as_postgres();
+select throws_ok(format($$update public.asm_attempt_signatures set signer_name = 'x' where attempt_id = '%s'$$, pg_temp.v('attempt')), '42501', null, 'SIG a signature is never changed');
 select ok(not has_function_privilege('authenticated', 'public.asm_start_attempt(uuid,uuid,uuid)', 'execute') and not has_function_privilege('anon', 'public.asm_start_attempt(uuid,uuid,uuid)', 'execute'), 'open race: asm_start_attempt is called by asm_student only, not by users');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
 select is(public.asm_jsonb_forbidden_key(pg_temp.s('open')::jsonb), null, 'the student payload carries no key, model answer or assessor guidance');

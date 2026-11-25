@@ -5133,3 +5133,11 @@ test("Full form country of birth (2026-11-25): the same AVETMISS country search 
   assert.ok(field.includes('import CountrySearch from "@/components/shared/CountrySearch";'), "the wizard uses the same search");
   assert.ok(read("src/lib/countrySearch.ts").includes('supabase.rpc("avetmiss_code_search", { p_set: "country"'));
 });
+
+test("Funding onshore only (2026-11-25): AVETMISS funding source 32 (offshore) switched off and refused; visa holders default to 31", () => {
+  const sql = read("supabase/migrations/20261125160517_funding_onshore_only.sql");
+  assert.ok(sql.includes("set is_active = false\n where code_set = 'funding_source' and code = '32'"));
+  assert.ok(sql.includes("intake_enrolments_funding_onshore_only check (funding_source_code is distinct from '32')"));
+  assert.ok(sql.includes("lms_unit_students_funding_onshore_only check (funding_source_code is distinct from '32')"));
+  assert.ok(read("src/lib/avetmissCodes.ts").includes("all.filter((c) => c.is_active || c.code === current)"), "inactive codes are not offered");
+});

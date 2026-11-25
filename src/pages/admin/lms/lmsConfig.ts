@@ -2,7 +2,7 @@
  * This file deliberately does not modify Master Data, CRM or HRMS.
  * All references resolve through existing authoritative APIs.
  */
-export type LmsArea = "courses" | "units" | "intakes" | "attendance" | "completion" | "assessments" | "timetable" | "timetable-create" | "timetable-settings" | "room-availability" | "trainer-availability" | "timetable-templates" | "term-breaks" | "locations" | "results"
+export type LmsArea = "courses" | "units" | "intakes" | "batches" | "attendance" | "completion" | "assessments" | "timetable" | "timetable-create" | "timetable-settings" | "room-availability" | "trainer-availability" | "timetable-templates" | "term-breaks" | "locations" | "results"
   // Timetable views (LMS > Timetable tabs, ?view=), listed under Timetable in the sidebar.
   | "tt-calendar" | "tt-trainers" | "tt-rooms" | "tt-students" | "tt-intakes" | "tt-setup";
 export type LmsDependency = "course" | "intake" | "unit" | "unitDelivery" | "session";
@@ -21,6 +21,8 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "units", label: "Units", route: "/admin/lms/units", icon: "ri-stack-line", dependencies: ["course"] },
   // An intake is the class group (room, trainer, class times, students).
   { id: "intakes", label: "Intakes", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
+  // LMS-BATCHES (owner 2026-11-25): the class batches B1 / B2 / B3 of an intake on their own page.
+  { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-2-line", dependencies: ["course", "intake"] },
   // Timetable: three links (owner, 2026-11-19: less clutter). Trainers, rooms, students and the intakes timeline are tabs of the
   // calendar; term breaks, locations and saved course timetables are tabs of Settings. Old addresses still open.
   { id: "tt-calendar", label: "Calendar", route: "/admin/lms/timetable", icon: "ri-calendar-2-line", dependencies: [], parent: "timetable" },

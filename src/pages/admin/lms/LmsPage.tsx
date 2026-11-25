@@ -4,6 +4,7 @@ import { LMS_MENU, type LmsArea } from "./lmsConfig";
 import LmsAttendancePage from "./LmsAttendancePage";
 import LmsCompletionPage from "./LmsCompletionPage";
 import LmsResultsPage from "./LmsResultsPage";
+import LmsBatchesPage from "./LmsBatchesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
 import LmsUnitsPage from "./LmsUnitsPage";
@@ -34,7 +35,8 @@ export default function LmsPage() {
   if (area === "assessment-allocation") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "submissions") return <Navigate to="/admin/lms/courses" replace />;
   // An intake is the class group; the old batch screens redirect to Intakes.
-  if (area === "batches" || area === "batch-allocation" || area === "unit-delivery") return <Navigate to="/admin/lms/intakes" replace />;
+  if (area === "batches") return <LmsBatchesPage />;
+  if (area === "batch-allocation" || area === "unit-delivery") return <Navigate to="/admin/lms/intakes" replace />;
   if (area === "timetable") return <LmsTimetableHub />;
   if (area === "timetable-create") return <CreateTimetablePage />;
   if (area === "timetable-settings") return <TimetableSettingsPage />;

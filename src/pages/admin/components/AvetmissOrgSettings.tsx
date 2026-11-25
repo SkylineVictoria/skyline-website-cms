@@ -66,24 +66,33 @@ export default function AvetmissOrgSettings() {
     setLooking(true); setLookupNote("");
     try {
       const r = await lookupAbnDetails(abnDigits);
-      if ("reason" in r) { setLookupNote(r.reason === "not_configured" ? "ABN Lookup is not set up yet (Integrations): fill the details in by hand." : r.message); return; }
-      const d = r.details;
-      const place = r.places?.ok ? r.places.place : undefined;
-      const state = STATE_CODE[(place?.state || d.state || "").toUpperCase()] ?? "";
+      // The register answer (needs the ABR GUID) and Google Maps are separate: without the GUID the function still searches Google Maps
+      // (names from the public ABN Lookup page) and returns it beside reason not_configured, so both halves are read independently.
+      const d = "details" in r ? r.details : null;
+      const places = r.places;
+      const place = places?.ok ? places.place : undefined;
+      if (!d && !place && "reason" in r && r.reason !== "not_configured") { setLookupNote(r.message); return; }
+      const state = STATE_CODE[(place?.state || d?.state || "").toUpperCase()] ?? "";
       const found: Partial<Values> = {
-        avetmiss_legal_name: cut(d.entityName, MAX.avetmiss_legal_name),
+        avetmiss_legal_name: cut(d?.entityName ?? "", MAX.avetmiss_legal_name),
         avetmiss_address_line1: cut(place?.street ?? "", MAX.avetmiss_address_line1),
         avetmiss_suburb: cut(place?.suburb ?? "", MAX.avetmiss_suburb),
-        avetmiss_postcode: (place?.postcode || d.postcode || "").replace(/\D/g, "").slice(0, 4),
+        avetmiss_postcode: (place?.postcode || d?.postcode || "").replace(/\D/g, "").slice(0, 4),
         avetmiss_state_code: state,
         avetmiss_contact_phone: cut(place?.phone ?? "", MAX.avetmiss_contact_phone),
       };
       const filled = Object.entries(found).filter(([, v]) => v) as [Key, string][];
       setValues((x) => ({ ...x, ...Object.fromEntries(filled) }));
-      setAbn(d.abn || abn);
-      const notes = [`${filled.length} detail${filled.length === 1 ? "" : "s"} filled from the ABN register${place ? " and Google Maps" : ""}. Check them, then Save.`];
-      if (!d.active) notes.push(`The register shows this ABN as ${d.abnStatus || "not active"}.`);
-      if (!place) notes.push(r.places?.configured ? "No office found on Google Maps: enter the street address by hand." : "Google Maps is not connected, so the street address is not filled.");
+      if (d?.abn) setAbn(d.abn);
+      const sources = [d ? "the ABN register" : "", place ? "Google Maps" : ""].filter(Boolean).join(" and ");
+      const notes = [filled.length ? `${filled.length} detail${filled.length === 1 ? "" : "s"} filled from ${sources}${place ? ` (${place.name}, ${place.matchPercent}% match)` : ""}. Check them, then Save.` : "Nothing found to fill."];
+      if (d && !d.active) notes.push(`The register shows this ABN as ${d.abnStatus || "not active"}.`);
+      if (!d) notes.push("ABN Lookup (register) is not set up on the server, so the legal name is not filled.");
+      if (!place) {
+        if (!places) notes.push("Google Maps was not searched (switched off in Business Rules, or no business name found for this ABN).");
+        else if (!places.configured) notes.push("Google Maps has no key on the server (Integrations › Connections › Google Maps).");
+        else notes.push(`Google Maps: ${places.message || "no matching office found"}${places.cached ? " (remembered from an earlier search)" : ""}.`);
+      }
       setLookupNote(notes.join(" "));
     } catch (e) {
       setLookupNote(e instanceof Error ? e.message : "The ABN lookup failed.");

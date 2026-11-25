@@ -1,7 +1,7 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ACTIVE_STAGES, STAGE_LABEL, type OnboardingStage } from "@/pages/admin/lib/agentOnboarding";
 import { Button, Card, ConfirmDialog, PageHeader } from "@/pages/admin/components/ui";
@@ -14,11 +14,13 @@ import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import { toActivate, type AgentToActivate } from "@/pages/admin/lib/agentActivation";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { ApplicationsTab, DetailsTab } from "@/pages/admin/AgencyDetailPage";
+import { portalLoginState, type PortalLoginState } from "@/pages/admin/lib/businessData";
 import { agentOnboardingWords, awaitingPassword, changeBusinessStatus, deactivateAgent, getBusiness, resendInvitation, listBusinessAgents, type BusinessDetail, type BusinessStatus, type DirectoryAgent } from "@/pages/admin/lib/businessData";
 import { formatDate, getAgency, type AgencySummary } from "@/pages/agency/lib/portalData";
 import { activateBusinessOnboarding } from "@/lib/signingApi";
 import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
+import AddStudentDialog from "@/pages/admin/components/AddStudentDialog";
 import { businessDeleteCheck, isSlitAdmin } from "@/pages/admin/lib/businessData";
 import OmaraAgentsPanel from "@/pages/admin/components/OmaraAgentsPanel";
 import { listOnboarding } from "@/pages/admin/lib/agentOnboarding";
@@ -44,6 +46,10 @@ export default function BusinessDetailPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [addingStudent, setAddingStudent] = useState(false);
+  const [addedCount, setAddedCount] = useState(0);
+  const presetId = business?.id ?? "", presetName = business?.name ?? "", presetStatus = business?.status;
+  const presetBusiness = useMemo(() => presetStatus ? { id: presetId, name: presetName, status: presetStatus } : undefined, [presetId, presetName, presetStatus]);
 
   // Reloads can overlap (opening the page, closing Prepare application, Send): only the latest one's answer is shown, so an older,
   // slower answer never puts the header back to an earlier status ("Not sent yet" after Send, 2026-11-20).
@@ -189,8 +195,16 @@ export default function BusinessDetailPage() {
       {tab === "details" ? <BusinessOfficesCard agencyId={business.id} businessName={business.name} /> : null}
       {tab === "details" ? <OmaraAgentsPanel mode="linked" agencyId={business.id} /> : null}
       {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null, holding: !operational && business.status === "Onboarding" && stage !== "declined" }} onChanged={load} /> : null}
-      {tab === "students" ? <StudentsTable businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
-      {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
+      {/* Owner 2026-11-24: add a student (with their first application) for this business from its own page. */}
+      {tab === "students" || tab === "applications" ? <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-card border border-background-200 bg-white px-4 py-3">
+        <p className="text-sm text-foreground-600">{tab === "students" ? "Add a student for one of this business’s agents; their first application opens straight after." : "A new application starts with the student: pick the agent and the student, then the application opens."}</p>
+        <Button size="sm" icon={tab === "students" ? "ri-user-add-line" : "ri-file-add-line"} disabled={business.status !== "Active"} title={business.status !== "Active" ? "The business must be Active" : undefined}
+          onClick={() => setAddingStudent(true)} data-testid="business-add-student">{tab === "students" ? "Add student" : "New application"}</Button>
+      </div> : null}
+      {tab === "students" ? <StudentsTable key={`students:${addedCount}`} businessId={business.id} emptyText="Students appear here when this business’s agents add them." /> : null}
+      {tab === "applications" ? <ApplicationsTab key={`${agency.id}:${params.get("status") ?? ""}:${addedCount}`} agencyId={agency.id} initialStatus={params.get("status") ?? ""} /> : null}
+      <AddStudentDialog open={addingStudent} onClose={() => setAddingStudent(false)} onAdded={() => { setAddedCount((n) => n + 1); void load(); }}
+        presetBusiness={addingStudent ? presetBusiness : undefined} />
 
       <ConfirmDialog
         open={confirm}
@@ -244,6 +258,8 @@ function DetailsSection({ agencyId, onSaved }: { agencyId: string; onSaved: () =
 function AgentsSection({ business, onChanged }: { business: { id: string; name: string; status: BusinessStatus; operational: boolean; gateReason: string | null; holding: boolean }; onChanged: () => Promise<void> }) {
   const { push } = useToast();
   const [rows, setRows] = useState<DirectoryAgent[] | null>(null);
+  const [logins, setLogins] = useState<Record<string, PortalLoginState>>({});
+  const loginOf = (r: DirectoryAgent): PortalLoginState | undefined => logins[r.email.toLowerCase()];
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
   const [activating, setActivating] = useState<AgentToActivate | null>(null);
@@ -263,7 +279,12 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
   useEffect(() => {
     let active = true;
     setError("");
-    listBusinessAgents(business.id).then((r) => { if (active) setRows(r); }).catch((e) => { if (active) setError(e instanceof Error ? e.message : "We could not load agents."); });
+    listBusinessAgents(business.id).then((r) => {
+      if (!active) return;
+      setRows(r);
+      // A login made with the password chosen at signing is linked to the agent only at the first sign-in: ask Auth directly.
+      void portalLoginState(r.map((x) => x.email.toLowerCase())).then((m) => { if (active) setLogins(m); }).catch(() => undefined);
+    }).catch((e) => { if (active) setError(e instanceof Error ? e.message : "We could not load agents."); });
     return () => { active = false; };
   }, [business.id, reload]);
   const refresh = () => { setReload((n) => n + 1); void onChanged(); };
@@ -327,13 +348,14 @@ function AgentsSection({ business, onChanged }: { business: { id: string; name: 
                   <td>{Object.keys(r.statusCounts).length ? <ApplicationStatusPills counts={r.statusCounts} limit={3} /> : <span className="text-xs text-foreground-500">None</span>}</td>
                   {/* Owner 2026-11-24: once the business is Active its admin agent shows Active; what is still open is a sub-status under it. */}
                   <td><AgentStatusBadge status={r.status === "Invited" && business.status === "Active" ? "Active" : r.status} />
-                    {r.status === "Invited" || (r.status === "Active" && !r.profileId) ? <p className="mt-1 text-2xs font-medium text-amber-700">Sign-in invitation sent, waiting for password</p> : null}
+                    {(r.status === "Invited" || (r.status === "Active" && !r.profileId)) && !loginOf(r)?.passwordSet ? <p className="mt-1 text-2xs font-medium text-amber-700">Sign-in invitation sent, waiting for password</p> : null}
+                    {!r.profileId && loginOf(r)?.passwordSet ? <p className="mt-1 text-2xs font-medium text-emerald-700" data-testid="agent-password-set">{loginOf(r)?.setAtSigning ? "Password created at signing" : "Password set"}{loginOf(r)?.lastSignInAt ? `, last signed in ${new Date(loginOf(r)!.lastSignInAt!).toLocaleDateString()}` : ", not signed in yet"}</p> : null}
                     {(r.status === "Active" || r.status === "Invited") && r.role === "agency_admin" && refsPending > 0 ? <p className="mt-1 text-2xs font-medium text-sky-800" data-testid="agent-refs-pending">Reference check pending ({refsPending})</p> : null}
                     {r.status === "Onboarding" ? <p className={`mt-1 text-2xs font-medium ${r.onboarding?.ready ? "text-emerald-700" : "text-sky-800"}`} data-testid="agent-onboarding-words">{agentOnboardingWords(r.onboarding)}</p> : null}
                     {r.status === "Declined" ? <p className="mt-1 text-2xs font-medium text-red-700">Rejected; no sign-in</p> : null}</td>
                   <td>
                     <div className="flex flex-wrap justify-end gap-1.5">
-                      {awaitingPassword(r) && r.email ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
+                      {awaitingPassword(r) && r.email && !loginOf(r)?.passwordSet ? <Button size="sm" variant="outline" disabled={busyId === r.agentId} onClick={() => void resend(r)}>Resend invite</Button> : null}
                       {r.status === "Onboarding" ? <span className="text-xs text-foreground-500">Sent at Activate</span>
                         : r.status === "Inactive" || r.status === "Declined"
                         ? !business.operational ? null : <Button size="sm" onClick={() => openDialog(toActivate(r))}>Activate</Button>

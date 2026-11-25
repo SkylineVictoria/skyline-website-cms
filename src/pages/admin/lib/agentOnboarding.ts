@@ -133,6 +133,14 @@ export async function openApplicationAttachment(onboardingId: string, kind: stri
 }
 
 /** Opens a signed PDF kept in the database in a new tab (a blob of this page; nothing is stored in the browser). */
+/** The signed file as a blob URL, for the in-page viewer (DocumentViewer); the caller frees it. */
+export async function onboardingFileUrl(id: string, kind: OnboardingFileKind): Promise<{ url: string; name: string }> {
+  const file = await onboardingFile(id, kind);
+  const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
+  const name = /\.pdf$/i.test(file.name) ? file.name : `${file.name}.pdf`;
+  return { url: URL.createObjectURL(new Blob([bytes], { type: "application/pdf" })), name };
+}
+
 export async function openOnboardingFile(id: string, kind: OnboardingFileKind): Promise<void> {
   const file = await onboardingFile(id, kind);
   const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));

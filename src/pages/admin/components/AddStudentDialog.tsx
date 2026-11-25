@@ -22,7 +22,9 @@ type Business = { id: string; name: string; status: BusinessStatus };
  * email. The student and an application draft are saved together
  * (/admin/applications/:id?wizard=1), as before.
  */
-export default function AddStudentDialog({ open, onClose, onAdded }: { open: boolean; onClose: () => void; onAdded?: () => void }) {
+export default function AddStudentDialog({ open, onClose, onAdded, presetBusiness }: { open: boolean; onClose: () => void; onAdded?: () => void;
+  /** Opened from a business page (2026-11-24): that business is already chosen. */
+  presetBusiness?: Business }) {
   const { push } = useToast();
   const navigate = useNavigate();
   const [business, setBusiness] = useState<Business | null>(null);
@@ -36,8 +38,8 @@ export default function AddStudentDialog({ open, onClose, onAdded }: { open: boo
 
   useEffect(() => {
     if (!open) return;
-    setBusiness(null); setAgent(null); setRecordDialogMode(null); setInitialAgentName(""); setError("");
-  }, [open]);
+    setBusiness(presetBusiness ?? null); setAgent(null); setRecordDialogMode(null); setInitialAgentName(""); setError("");
+  }, [open, presetBusiness]);
 
   const searchBusinesses = useCallback(async (q: string): Promise<PickOption[]> => {
     // Only active businesses and active agents can be chosen.

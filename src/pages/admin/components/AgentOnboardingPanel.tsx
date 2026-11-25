@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, Card, Field, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import RequestDetail from "@/pages/admin/components/signing/RequestDetail";
+import DocumentViewer, { type ViewerDoc } from "@/pages/admin/components/DocumentViewer";
 import SignaturePad from "@/components/signing/SignaturePad";
 import { ruleNumber, ruleText } from "@/lib/businessRules";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -8,7 +9,7 @@ import { approveAgency, changeReferee, rejectOnboarding, sendAgentAgreement, sen
 import F04ReviewDialog from "@/pages/admin/components/F04ReviewDialog";
 import F04PresendDialog from "@/pages/admin/components/F04PresendDialog";
 import { OnboardingStatusPill } from "@/pages/admin/components/AgencyStatus";
-import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection, type OnboardingRevision, formatAuDate, listOnboarding, openOnboardingFile, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
+import { ACTIVE_STAGES, EVENT_LABEL, openRevisionFile, type OnboardingCorrection, type OnboardingRevision, formatAuDate, listOnboarding, onboardingFileUrl, prepareOnboarding, PROFILE_LABELS, REFEREE_LABELS, stageWords, todayIso, ONBOARDING_FILE_LABEL, APPLICATION_ATTACHMENT_LABEL, listApplicationAttachments, openApplicationAttachment, type ApplicationAttachment,
   type OnboardingFileKind, type OnboardingPrepared, type OnboardingReferee, type OnboardingRow, type OnboardingStage, type RequestSummary } from "@/pages/admin/lib/agentOnboarding";
 import type { BusinessDetail } from "@/pages/admin/lib/businessData";
 import { AGENT_ONBOARDING_FIELDS, commissionText, OMARA_REGISTER_URL } from "../../../../supabase/functions/_shared/agent-onboarding";
@@ -42,9 +43,13 @@ export default function AgentOnboardingPanel({ business, onChanged, view = "full
   const refresh = async () => { await Promise.all([load(), onChanged().catch(() => undefined)]); };
   const act = async (key: string, work: () => Promise<string>) => {
     setBusy(key);
-    try { push(await work()); await refresh(); } catch (e) { push(e instanceof Error ? e.message : "That did not work.", "error"); } finally { setBusy(""); }
+    try { const msg = await work(); if (msg) { push(msg); await refresh(); } } catch (e) { push(e instanceof Error ? e.message : "That did not work.", "error"); } finally { setBusy(""); }
   };
-  const download = (row: OnboardingRow, kind: OnboardingFileKind, label: string) => act(`${row.id}:${kind}`, async () => { await openOnboardingFile(row.id, kind); return `${label} opened.`; });
+  // View in place (owner 2026-11-24), with Download inside the viewer.
+  const [viewing, setViewing] = useState<ViewerDoc | null>(null);
+  const download = (row: OnboardingRow, kind: OnboardingFileKind, label: string) => act(`${row.id}:${kind}`, async () => {
+    const f = await onboardingFileUrl(row.id, kind); setViewing({ url: f.url, name: f.name || `${label}.pdf`, revoke: true }); return "";
+  });
   const remind = (request: RequestSummary, who: string) => act(`remind:${request.id}`, async () => {
     if (!request.recipientId) throw new Error("Nobody to remind.");
     await signingAction({ action: "resend", id: request.id, recipientId: request.recipientId }); return `Reminder sent to ${who}.`;
@@ -87,6 +92,7 @@ export default function AgentOnboardingPanel({ business, onChanged, view = "full
   // The register's facts kept when the application form was sent (or first opened): read-only.
   const abrFacts = abrFactLines(((business.profile ?? {}) as Record<string, unknown>).abr_facts as Partial<AbrFacts> | null);
   if (view === "documents") return <Card className="p-5" data-testid="business-onboarding-documents">
+    <DocumentViewer doc={viewing} onClose={() => setViewing(null)} />
     <h2 className="font-heading text-base font-semibold text-foreground-950">Onboarding documents</h2>
     {rows === null ? <p className="mt-2 text-sm text-foreground-500">{error || "Loading…"}</p> : !documents.length ? <p className="mt-2 text-sm text-foreground-500">Nothing signed yet.</p> : null}
       {documents.length ? <div className="mt-4 grid gap-3 md:grid-cols-2" data-testid="onboarding-documents">
@@ -98,7 +104,7 @@ export default function AgentOnboardingPanel({ business, onChanged, view = "full
             <p className="text-xs text-foreground-500">{hint}</p>
             {list.length ? <ul className="mt-2 divide-y divide-background-200">{list.map((d) => <li key={`${d.row.id}:${d.kind}`} className="flex items-center justify-between gap-3 py-1.5 text-sm">
               <span className="min-w-0 truncate"><i className="ri-file-pdf-2-line mr-1 text-red-600" aria-hidden="true" />{d.label}<span className="text-xs text-foreground-500"> · {new Date(d.when).toLocaleDateString("en-AU")}</span></span>
-              <Button size="sm" variant="ghost" icon="ri-external-link-line" disabled={busy === `${d.row.id}:${d.kind}`} onClick={() => void download(d.row, d.kind, d.label)}>Open</Button>
+              <Button size="sm" variant="ghost" icon="ri-eye-line" disabled={busy === `${d.row.id}:${d.kind}`} onClick={() => void download(d.row, d.kind, d.label)}>View</Button>
             </li>)}</ul> : <p className="mt-2 text-xs text-foreground-500">{group === "reference" ? "No referee has replied yet." : "Nothing signed yet."}</p>}
           </div>;
         })}

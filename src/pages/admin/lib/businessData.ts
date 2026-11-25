@@ -254,11 +254,23 @@ export async function uploadBusinessDocument(businessId: string, file: File, kin
 
 export const removeBusinessDocument = (id: string) => call<{ ok: boolean }>("admin_business_document_remove", { p_id: id }, "We could not remove this document.");
 
+/** A short-lived signed link to an uploaded document, for the in-page viewer. */
+export async function businessDocumentUrl(path: string): Promise<string> {
+  const { data, error } = await supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(path, 600);
+  if (error || !data?.signedUrl) throw new Error("We could not open this document.");
+  return data.signedUrl;
+}
+
 export async function openBusinessDocument(path: string) {
   const { data, error } = await supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(path, 120);
   if (error || !data?.signedUrl) throw new Error("We could not open this document.");
   window.open(data.signedUrl, "_blank", "noopener");
 }
+
+/** Per email: a portal login with a password exists (e.g. created while signing the application), and the last sign-in (migration 20261124191517). */
+export interface PortalLoginState { passwordSet: boolean; setAtSigning: boolean; lastSignInAt: string | null }
+export const portalLoginState = (emails: string[]) =>
+  call<Record<string, PortalLoginState>>("admin_portal_login_state", { p_emails: emails.filter(Boolean).slice(0, 200) }, "We could not read the sign-in state.");
 
 export const listBusinessAgents = (id: string) => call<DirectoryAgent[]>("admin_business_agents", { p_business: id }, "We could not load this business’s agents.");
 

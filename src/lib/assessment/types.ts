@@ -64,7 +64,27 @@ export interface Question {
   importMeta?: ImportMeta;
 }
 
-export interface ImportMeta { page?: number | null; confidence: "high" | "low"; note?: string }
+export interface ImportMeta {
+  page?: number | null;
+  confidence: "high" | "low";
+  note?: string;
+  /** ASM-AI-IMPORT: the reasons this item is on the "Check this" list (empty / missing = looks good). */
+  flags?: string[];
+  /** The question number as printed, normalised ("1.2", "1.2a", "A.1"). */
+  number?: string | null;
+  /** Which reader built it. */
+  via?: "ai" | "parser";
+  /** The text as imported, kept when the admin edits it ("Show original"). */
+  original?: string;
+  /** The PDF's own wording when the AI's text was not word for word. */
+  pdfText?: string | null;
+  /** Who changed the imported text, and when (traceability). */
+  editedBy?: string | null;
+  editedByName?: string | null;
+  editedAt?: string | null;
+  /** The admin looked at a flagged item and left it as it is. */
+  reviewedAt?: string | null;
+}
 
 export interface Section { id: string; title: string; description?: string; showIf?: Condition; questions: Question[] }
 export interface Task { id: string; title: string; instructions?: string; sections: Section[] }

@@ -12,6 +12,7 @@ import { rasteriseLogo } from "@/pages/agency/lib/applicationPdf";
 import { buildWorkbookPdf, type WorkbookAttempt, type WorkbookInstitution } from "./workbookPdf";
 import type { AttemptHistory } from "./resultsSheet";
 import type { Definition } from "./types";
+import type { AttemptSignature } from "./api";
 
 /** The Skyline logo shipped with the site: "Use current Skyline logo", and the header while none is set. */
 export const DEFAULT_WORKBOOK_HEADER = "/templates/image.png";
@@ -93,7 +94,13 @@ export async function blankWorkbookPdf(definition: Definition, title: string): P
   return buildWorkbookPdf({ definition, title, institution, history, blank: true, attempt: { attemptNo: 1, responses: {}, assessorResponses: {}, results: [], evidence: [], submittedAt: null } });
 }
 
-export async function downloadWorkbookPdf(args: { definition: Definition; attempt: WorkbookAttempt; history: AttemptHistory; title: string; maxAttempts?: number }): Promise<void> {
+/** A marked submission as the workbook PDF (bytes), for the sign-off's Preview PDF. */
+export async function workbookPdfBytes(args: { definition: Definition; attempt: WorkbookAttempt; history: AttemptHistory; title: string; maxAttempts?: number; signatures?: AttemptSignature[] }): Promise<Uint8Array> {
+  const institution = await workbookInstitution();
+  return buildWorkbookPdf({ ...args, institution });
+}
+
+export async function downloadWorkbookPdf(args: { definition: Definition; attempt: WorkbookAttempt; history: AttemptHistory; title: string; maxAttempts?: number; signatures?: AttemptSignature[] }): Promise<void> {
   const institution = await workbookInstitution();
   const bytes = await buildWorkbookPdf({ ...args, institution });
   const who = (args.history.student?.name || "student").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "");

@@ -36,7 +36,6 @@ export default function StudentAssessmentsPage() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (tab === "progress") void asmStudent<Progress>("progress").then(setProgress).catch(() => setProgress(null)); }, [tab]);
   const toAcknowledge = (rows ?? []).flatMap((a) => a.attempts.filter((t) => (t.state === "returned" || t.state === "final") && !t.acknowledgedAt).map((t) => ({ a, t })));
-  const acknowledge = async (attemptId: string) => { try { await asmStudent("result_acknowledge", { attemptId }); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Not recorded."); } };
   return (
     <div>
       <PageHeading eyebrow="Assessments" title="My assessments" description="Complete your assessments online, upload evidence, submit with your declaration and read your assessor's feedback." />
@@ -45,7 +44,7 @@ export default function StudentAssessmentsPage() {
       {tab === "assessments" && toAcknowledge.length ? (
         <div role="status" className="mt-4 rounded-card border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-medium">Results to acknowledge ({toAcknowledge.length})</p>
-          <ul className="mt-2 space-y-1">{toAcknowledge.map(({ a, t }) => <li key={t.id} className="flex flex-wrap items-center justify-between gap-2"><span>{a.title}: attempt {t.attemptNo} is {t.outcome ? OUTCOME_LABEL[t.outcome as keyof typeof OUTCOME_LABEL] : STATE_LABEL[t.state] ?? t.state}</span><Button size="sm" variant="outline" icon="ri-check-line" onClick={() => void acknowledge(t.id)}>I have read this result</Button></li>)}</ul>
+          <ul className="mt-2 space-y-1">{toAcknowledge.map(({ a, t }) => <li key={t.id} className="flex flex-wrap items-center justify-between gap-2"><span>{a.title}: attempt {t.attemptNo} is {t.outcome ? OUTCOME_LABEL[t.outcome as keyof typeof OUTCOME_LABEL] : STATE_LABEL[t.state] ?? t.state}</span><Link to={`/agency/assessments/${a.assignmentId}?results=${t.id}`}><Button size="sm" variant="outline" icon="ri-quill-pen-line">Read and sign</Button></Link></li>)}</ul>
         </div>
       ) : null}
       {tab === "assessments" ? (rows === null ? <PortalLoading label="Loading your assessments…" /> : rows.length === 0 ? <PortalEmpty icon="ri-file-list-3-line" title="No assessments yet" message="When your trainer assigns an assessment to your intake it appears here." /> : (

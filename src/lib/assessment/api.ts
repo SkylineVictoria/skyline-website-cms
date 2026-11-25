@@ -84,3 +84,32 @@ export function fromLocalInput(local: string): string | null {
 }
 export const STATE_LABEL: Record<string, string> = { draft: "In progress", submitted: "Submitted", marking: "Being marked", returned: "Returned", final: "Final", void: "Void" };
 export const OUTCOME_LABEL: Record<string, string> = { S: "Satisfactory", NYS: "Not Yet Satisfactory", C: "Competent", NYC: "Not Yet Competent" };
+
+/* ASM-AI-IMPORT stage 3: signatures on an attempt (migration 20261125120517) and a person's saved signature. */
+export type SignatureKind = "student_declaration" | "assessor_signoff" | "student_acknowledgement";
+export type SignatureMethod = "drawn" | "uploaded" | "saved" | "typed";
+export interface AttemptSignature { id: string; attemptId: string; attemptNo?: number; kind: SignatureKind; signerRole: "student" | "assessor"; signerName: string; method: SignatureMethod; signaturePng: string | null; statement: string; signedAt: string; signerUser: string }
+async function rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.rpc(fn, args);
+  if (error) throw new Error(error.message || "The request failed.");
+  return data as T;
+}
+export const asmSign = (attemptId: string, kind: SignatureKind, method: SignatureMethod, png: string | null, statement = "") =>
+  rpc<AttemptSignature>("asm_sign", { p_attempt: attemptId, p_kind: kind, p_method: method, p_png: png, p_statement: statement });
+/** Every signature of this student on this assignment (all attempts); [] while the database does not have them yet. */
+export async function asmSignatures(attemptId: string): Promise<AttemptSignature[]> {
+  try { return await rpc<AttemptSignature[]>("asm_signatures", { p_attempt: attemptId }); } catch { return []; }
+}
+export interface SavedSignature { signaturePng: string | null; name: string | null; updatedAt: string | null }
+export async function mySignature(): Promise<SavedSignature> {
+  try { return await rpc<SavedSignature>("asm_my_signature", {}); } catch { return { signaturePng: null, name: null, updatedAt: null }; }
+}
+export const saveMySignature = (png: string | null, method: "drawn" | "uploaded" = "drawn") => rpc<SavedSignature>("asm_my_signature_save", { p_png: png, p_method: method });
+
+export interface SignatureValue { method: SignatureMethod; png: string | null; /** Keep it as the person's saved signature once signed. */ keep?: boolean }
+
+/** After a successful signature: keeps a new drawing / picture as the person's saved signature when they ticked it. */
+export async function keepSignature(v: SignatureValue | null): Promise<void> {
+  if (v?.keep && v.png && (v.method === "drawn" || v.method === "uploaded")) { try { await saveMySignature(v.png, v.method); } catch { /* the signature itself is recorded; saving it for next time is optional */ } }
+}
+

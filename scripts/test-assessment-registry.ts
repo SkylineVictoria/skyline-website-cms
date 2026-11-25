@@ -567,5 +567,71 @@ else {
     check("ai match: a synthetic answer guide numbered from RIICWD525E matches every question by number", sm.matched === questions.length && sm.keys.every((k) => k.via === "number"), [sm.matched, questions.length]);
   }
 }
+// ------------------------------------------------------------------ ASM-AI-IMPORT stage 2: the draft, the guide, the reader used
+{
+  const { definitionFromAi, applyGuide, chooseImportPath, matchQuestions, guideAnswersFromAi, guideAnswersFromParser } = await import("../src/lib/assessment/aiDraft");
+  type CheckedDocument = import("../src/lib/assessment/aiDraft").CheckedDocument;
+  type ImportStatus = import("../src/lib/assessment/aiDraft").ImportStatus;
+  const item = (o: Partial<CheckedDocument["tasks"][0]["sections"][0]["items"][0]>) => ({ kind: "question" as const, number: null, canonical: null, text: "", parts: [], table: null, pages: [3], confidence: 0.95, answer: null, lookFor: null, verbatim: "exact" as const, pdfText: null, flags: [], ...o });
+  const doc: CheckedDocument = {
+    kind: "workbook", documentKind: "workbook", title: "Test and repair basic electrical circuits", qualification: { code: "AUR30620", name: "Cert III" }, unit: { code: "AURETR112", name: "Test and repair basic electrical circuits" }, version: "1.0",
+    provider: "test", model: "fixture", summary: { tasks: 1, questions: 3, evidence: 1, drawings: 1, tables: 1, flagged: 2, answers: 0, scannedPages: 0 },
+    tasks: [{ number: "1", title: "Written assessment", kind: "written", instructions: null, firstPage: 3, lastPage: 6, sections: [{ title: "Questions", items: [
+      item({ kind: "instruction", text: "Answer in your own words, 50-150 words each." }),
+      item({ number: "Q1.1", canonical: "1.1", text: "Explain Ohm's law and how it is used to find the current in a simple circuit." }),
+      item({ kind: "multipart", number: "1.2", canonical: "1.2", text: "For each of the following, describe what it is.", parts: [
+        { label: "a", part: "a", text: "Series circuit", answer: null, verbatim: "exact", pdfText: null }, { label: "b", part: "b", text: "Parallel circuit", answer: null, verbatim: "close", pdfText: "Parallel circuits" }] }),
+      item({ kind: "table", number: "1.3", canonical: "1.3", text: "Record your readings.", table: { columns: ["Load", "Voltage"], rows: [["Lamp 1", ""], ["Lamp 2", ""]] }, flags: ["Table may be split across pages"] }),
+      item({ kind: "evidence", number: "1.4", canonical: "1.4", text: "Upload a photo of the completed test bench." }),
+      item({ kind: "drawing", text: "Wiring diagram of the test circuit", pages: [5], flags: ["Drawing found, check its placement"] }),
+    ] }] }],
+  };
+  const def = definitionFromAi(doc, [{ page: 5, x: 0, top: 500, bottom: 300, width: 200, height: 200, src: "data:image/jpeg;base64,QQ==" }]);
+  const qs = def.tasks[0].sections[0].questions;
+  check("ai draft: item kinds become question types (instruction, long answer, parts, table, upload, drawing)", qs.map((q) => q.type).join(",") === "instruction,long_answer,case_study,table_grid,file_upload,instruction", qs.map((q) => q.type));
+  check("ai draft: text kept word for word, printed number kept, original stored for traceability", qs[1].label === doc.tasks[0].sections[0].items[1].text && qs[1].importMeta?.number === "1.1" && qs[1].importMeta?.original === qs[1].label && qs[1].importMeta?.via === "ai");
+  check("ai draft: parts are child questions numbered 1.2a / 1.2b; the reworded part is flagged with the PDF wording", qs[2].children?.map((c) => c.importMeta?.number).join(",") === "1.2a,1.2b" && Boolean(qs[2].children?.[1].importMeta?.flags?.length) && qs[2].children?.[1].importMeta?.pdfText === "Parallel circuits");
+  check("ai draft: the table keeps its columns and rows", JSON.stringify((qs[3].config?.columns as { label: string }[]).map((c) => c.label)) === "[\"Load\",\"Voltage\"]" && (qs[3].config?.rows as unknown[]).length === 2);
+  check("ai draft: the drawing carries the workbook's picture from its page and is flagged", /<img src="data:image\/jpeg/.test(String(qs[5].config?.html)) && qs[5].importMeta?.flags?.[0] === "Drawing found, check its placement");
+  check("ai draft: no answer or guidance in the definition", forbiddenKey(def) === null && def.source?.unit?.code === "AURETR112" && def.source?.version === "1.0");
+  check("ai draft: the PDF export numbers questions as printed", workbookNumbering(def).get(qs[1].id)?.number === "1.1");
+  const mq = matchQuestions(def);
+  check("ai draft: the matcher sees 1.1, 1.2 (parts a, b), 1.3, 1.4", mq.map((q) => `${q.number}:${q.parts.map((p) => p.label).join("")}`).join(" ") === "1.1: 1.2:ab 1.3: 1.4:", mq.map((q) => `${q.number}:${q.parts.map((p) => p.label).join("")}`));
+
+  const guideDoc: CheckedDocument = { ...doc, kind: "guide", documentKind: "answer_guide", tasks: [{ ...doc.tasks[0], sections: [{ title: "Answers", items: [
+    item({ number: "Question 1.1", canonical: "1.1", text: "Explain Ohm's law", answer: "I = V / R" }),
+    item({ kind: "multipart", number: "1.2", canonical: "1.2", text: "Describe", parts: [{ label: "a", part: "a", text: "Series", answer: "One path", verbatim: "exact", pdfText: null }, { label: "b", part: "b", text: "Parallel", answer: "Many paths", verbatim: "exact", pdfText: null }] }),
+    item({ kind: "evidence", number: "1.4", canonical: "1.4", text: "Photo", lookFor: "The meter is connected in series." }),
+  ] }] }] };
+  const answers = guideAnswersFromAi(guideDoc);
+  const ok = applyGuide(def, { unitCode: "AURETR112", version: "1.0", answers });
+  const k = (id: string | undefined) => ok.keys.find((x) => x.questionId === id);
+  check("ai guide: answers attach by number and part by part; the benchmark is What to look for", k(qs[1].id)?.modelAnswer === "I = V / R" && k(qs[2].children?.[0].id)?.modelAnswer === "One path" && k(qs[2].children?.[1].id)?.modelAnswer === "Many paths" && k(qs[4].id)?.assessorGuidance === "The meter is connected in series.");
+  check("ai guide: 1.3 has no answer -> listed as missing; counts 3 of 4", ok.outcome.missing.includes(qs[3].id) && ok.outcome.matched === 3 && ok.outcome.total === 4, [ok.outcome.matched, ok.outcome.total]);
+  const blocked = applyGuide(def, { unitCode: "AURETR113", version: "1.0", answers });
+  check("ai guide: a guide for another unit is blocked (no keys at all)", blocked.check.block && blocked.keys.length === 0 && /AURETR113/.test(blocked.check.messages[0]));
+  check("ai guide: a different version is a warning only", applyGuide(def, { unitCode: "AURETR112", version: "2.0", answers }).keys.length === ok.keys.length && applyGuide(def, { unitCode: "AURETR112", version: "2.0", answers }).check.version === "different");
+
+  const st = (o: Partial<ImportStatus>): ImportStatus => ({ id: "j", kind: "workbook", state: "done", fileName: "f.pdf", pages: 2, progress: { label: "", done: 1, total: 1 }, summary: {}, error: null, usage: {}, provider: "openai", model: "m", cached: false, result: doc, ...o });
+  check("fallback: the AI's result is used when it finished", chooseImportPath({ status: st({}), timedOut: false }).path === "ai");
+  check("fallback: failed / timed out / could not start / skipped -> the standard reader, with the reason shown", [
+    chooseImportPath({ status: st({ state: "failed", result: null, error: "The AI reader answered 503." }), timedOut: false }),
+    chooseImportPath({ status: st({ state: "running", result: null }), timedOut: true }),
+    chooseImportPath({ status: null, timedOut: false }),
+    chooseImportPath({ status: null, timedOut: false, skipped: true }),
+  ].every((c) => c.path === "parser" && Boolean(c.reason)) && /503/.test(chooseImportPath({ status: st({ state: "failed", result: null, error: "The AI reader answered 503." }), timedOut: false }).reason ?? ""));
+  if (workbookPath) {
+    // the standard reader (fallback) on RIICWD525E, with a synthetic answer guide made from its own numbering
+    const pdf = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdoc = await pdf.getDocument({ data: new Uint8Array(readFileSync(workbookPath)), verbosity: 0 }).promise;
+    const { lines, version } = await linesFromPdf(pdoc as unknown as PdfDocLike);
+    const fb = buildFromLines(lines, { fileName: "RIICWD525E.pdf", version });
+    const fq = matchQuestions(fb.definition);
+    const synthetic = fq.map((q) => ({ number: `Q${q.number}`, questionText: q.text, answer: `Model answer ${q.number}`, lookFor: null, parts: q.parts.map((p) => ({ label: p.label, answer: `Part ${p.label}` })) }));
+    const fbApplied = applyGuide({ ...fb.definition, source: { unit: fb.unit, version: fb.version } }, { unitCode: "RIICWD525E", version: "1.0", answers: synthetic });
+    check("fallback path: the standard reader's RIICWD525E draft takes a synthetic guide by number, every question matched", fq.length > 20 && fbApplied.outcome.matched === fq.length && !fbApplied.check.block, [fbApplied.outcome.matched, fq.length]);
+    check("fallback path: the parser's own keys become guide answers (assessor version input)", Array.isArray(guideAnswersFromParser(fb)));
+  }
+}
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

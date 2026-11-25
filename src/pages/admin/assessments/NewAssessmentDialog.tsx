@@ -1,6 +1,6 @@
 /**
  * ASM-ONE-FLOW (owner, 2026-11-23): the only way to add an assessment. Every "New assessment" / "Add assessment" button opens this
- * dialog, which loads the courses (and the units of the pre-selected course) and shows the AssessmentWizard:
+ * dialog, which loads the courses (and the units of the pre-selected course) and shows the ImportWizard (Upload -> Check -> Publish):
  *   - LMS > Assessments and LMS > Units > a unit > Assessments: course and unit pre-selected, so Qualification & unit is skipped
  *     (unless an uploaded workbook names another unit);
  *   - Master Data > Assessments: nothing pre-selected, so the wizard shows Qualification & unit.
@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { WizardLock } from "@/components/shared/wizard/WizardShell";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
-import AssessmentWizard from "./AssessmentWizard";
+import ImportWizard from "./ImportWizard";
 
 export default function NewAssessmentDialog({ courseId = "", unitId = "", courses: givenCourses, units: givenUnits, onClose, onSaved }: {
   courseId?: string;
@@ -45,5 +45,5 @@ export default function NewAssessmentDialog({ courseId = "", unitId = "", course
     </div>
   );
   if (!courses || !units) return <div className="fixed inset-0 z-[80] bg-foreground-950/30"><WizardLock>Loading courses…</WizardLock></div>;
-  return <AssessmentWizard courses={courses} pageCourseId={courseId} pageUnitId={unitId} pageUnits={units} onClose={onClose} onSaved={onSaved} />;
+  return <ImportWizard courses={courses} pageCourseId={courseId} pageUnitId={unitId} pageUnits={units} onClose={onClose} onSaved={onSaved} />;
 }

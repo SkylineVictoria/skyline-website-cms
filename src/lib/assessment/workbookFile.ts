@@ -16,7 +16,7 @@ interface RenderablePage {
 }
 
 /** Renders each region's page once and cuts the regions out as JPEG data URLs; a region that cannot be drawn is left out. */
-async function renderRegions(doc: { getPage: (n: number) => Promise<unknown> }, regions: Omit<WbImage, "src">[]): Promise<WbImage[]> {
+export async function renderRegions(doc: { getPage: (n: number) => Promise<unknown> }, regions: Omit<WbImage, "src">[]): Promise<WbImage[]> {
   const out: WbImage[] = [];
   const byPage = new Map<number, Omit<WbImage, "src">[]>();
   for (const r of regions.slice(0, MAX_PICTURES)) byPage.set(r.page, [...(byPage.get(r.page) ?? []), r]);

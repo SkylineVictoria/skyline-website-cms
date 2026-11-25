@@ -50,7 +50,9 @@ export function workbookNumbering(definition: Definition): Map<string, QuestionN
       for (const q of s.questions) {
         if (CONTENT_TYPES.has(q.type)) continue;
         const markable = isMarkable(q);
-        const number = q.type === "declaration" ? "Student declaration" : q.type === "adjustment_record" ? "Trainer / assessor record" : `${prefix}.${++n}`;
+        // ASM-AI-IMPORT: a question read by the AI keeps the number printed in the workbook
+        const computed = q.type === "declaration" ? "Student declaration" : q.type === "adjustment_record" ? "Trainer / assessor record" : `${prefix}.${++n}`;
+        const number = q.importMeta?.via === "ai" && q.importMeta.number && !["declaration", "adjustment_record"].includes(q.type) ? q.importMeta.number : computed;
         map.set(q.id, { seq: markable ? ++seq : null, number, markable });
       }
     }

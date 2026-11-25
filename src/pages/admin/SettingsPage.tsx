@@ -12,7 +12,6 @@ import SenderSettings from "@/pages/admin/components/SenderSettings";
 import EventRecipients from "@/pages/admin/components/EventRecipients";
 import OtherFeesSettings from "@/pages/admin/components/OtherFeesSettings";
 import { useAuth } from "@/pages/admin/lib/authContext";
-import AvetmissOrgSettings from "@/pages/admin/components/AvetmissOrgSettings";
 import { isSlitAdmin } from "@/pages/admin/lib/businessDelete";
 import { MIN_PASSWORD_LENGTH, passwordProblem } from "@/lib/passwords";
 
@@ -178,7 +177,6 @@ export default function SettingsPage() {
         </Card>
 
         {/* AVETMISS-UI (2026-11-25): Organisation details for NCVER, admins only. */}
-        {isSlitAdmin(user?.role) ? <AvetmissOrgSettings /> : null}
 
         {/* Homepage imagery — Issue 1 */}
         <Card className="p-5 xl:col-span-2">

@@ -4,6 +4,8 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 import { lookupAbnDetails } from "@/lib/signingApi";
+import { invokePortalUsers } from "@/pages/agency/lib/portalData";
+import type { AgencyAbnDetails } from "../../../../supabase/functions/_shared/validation/abn";
 
 /**
  * AVETMISS-UI (2026-11-25): Settings › Organisation › AVETMISS / NCVER. The training organisation details the NCVER files carry
@@ -66,15 +68,25 @@ export default function AvetmissOrgSettings() {
     setLooking(true); setLookupNote("");
     try {
       const r = await lookupAbnDetails(abnDigits);
+      // No ABR GUID on the server: the legal name, state, postcode and status come from the public ABN Lookup page (portal-admin-users
+      // lookup_agency_abn, SLIT administrators; the same lookup Add business falls back to).
+      let pageDetails: AgencyAbnDetails | null = null;
+      let pageError = "";
+      if (!("details" in r)) {
+        try { pageDetails = ((await invokePortalUsers({ action: "lookup_agency_abn", abn: abnDigits })).business as AgencyAbnDetails | undefined) ?? null; }
+        catch (e) { pageError = e instanceof Error ? e.message : "The public ABN page could not be read."; }
+      }
       // The register answer (needs the ABR GUID) and Google Maps are separate: without the GUID the function still searches Google Maps
       // (names from the public ABN Lookup page) and returns it beside reason not_configured, so both halves are read independently.
-      const d = "details" in r ? r.details : null;
+      const d = "details" in r ? { abn: r.details.abn, legalName: r.details.entityName, state: r.details.state, postcode: r.details.postcode, active: r.details.active, abnStatus: r.details.abnStatus }
+        : pageDetails ? { abn: pageDetails.abn, legalName: pageDetails.legalName, state: pageDetails.state, postcode: pageDetails.postcode, active: /^active/i.test(pageDetails.abnStatus.trim()), abnStatus: pageDetails.abnStatus }
+        : null;
       const places = r.places;
       const place = places?.ok ? places.place : undefined;
-      if (!d && !place && "reason" in r && r.reason !== "not_configured") { setLookupNote(r.message); return; }
+      if (!d && !place) { setLookupNote(pageError || ("reason" in r ? r.message : "Nothing found for this ABN.")); return; }
       const state = STATE_CODE[(place?.state || d?.state || "").toUpperCase()] ?? "";
       const found: Partial<Values> = {
-        avetmiss_legal_name: cut(d?.entityName ?? "", MAX.avetmiss_legal_name),
+        avetmiss_legal_name: cut(d?.legalName ?? "", MAX.avetmiss_legal_name),
         avetmiss_address_line1: cut(place?.street ?? "", MAX.avetmiss_address_line1),
         avetmiss_suburb: cut(place?.suburb ?? "", MAX.avetmiss_suburb),
         avetmiss_postcode: (place?.postcode || d?.postcode || "").replace(/\D/g, "").slice(0, 4),
@@ -84,10 +96,10 @@ export default function AvetmissOrgSettings() {
       const filled = Object.entries(found).filter(([, v]) => v) as [Key, string][];
       setValues((x) => ({ ...x, ...Object.fromEntries(filled) }));
       if (d?.abn) setAbn(d.abn);
-      const sources = [d ? "the ABN register" : "", place ? "Google Maps" : ""].filter(Boolean).join(" and ");
+      const sources = [d ? ("details" in r ? "the ABN register" : "the public ABN page") : "", place ? "Google Maps" : ""].filter(Boolean).join(" and ");
       const notes = [filled.length ? `${filled.length} detail${filled.length === 1 ? "" : "s"} filled from ${sources}${place ? ` (${place.name}, ${place.matchPercent}% match)` : ""}. Check them, then Save.` : "Nothing found to fill."];
       if (d && !d.active) notes.push(`The register shows this ABN as ${d.abnStatus || "not active"}.`);
-      if (!d) notes.push("ABN Lookup (register) is not set up on the server, so the legal name is not filled.");
+      if (!d) notes.push(`The legal name could not be read from the public ABN page${pageError ? `: ${pageError}` : ""}.`);
       if (!place) {
         if (!places) notes.push("Google Maps was not searched (switched off in Business Rules, or no business name found for this ABN).");
         else if (!places.configured) notes.push("Google Maps has no key on the server (Integrations › Connections › Google Maps).");
@@ -129,8 +141,8 @@ export default function AvetmissOrgSettings() {
       <div data-testid="avetmiss-org-settings">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h2 className="font-heading text-base font-semibold text-foreground-950">AVETMISS / NCVER</h2>
-            <p className="text-sm text-foreground-500">The training organisation details reported to NCVER. Saved separately from the website settings.</p>
+            <h2 className="font-heading text-base font-semibold text-foreground-950">AVETMISS settings</h2>
+            <p className="text-sm text-foreground-500">The training organisation details reported to NCVER (AVETMISS). Saved with their own Save button.</p>
           </div>
           <div className="flex items-center gap-2">
             {missing ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">{missing} missing</span> : null}

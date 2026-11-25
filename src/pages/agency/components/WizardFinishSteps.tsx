@@ -7,6 +7,7 @@ import { FieldError, WIZARD_INPUT as INPUT, WIZARD_LABEL as LABEL, WizardLabel a
 import { DECLARATION_TERMS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import type { WizardQuestion } from "@/pages/agency/lib/wizardConfig";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import BirthCountryField from "@/pages/agency/components/BirthCountryField";
 import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
 import { OTHER_LANGUAGE } from "@/pages/agency/lib/wizardConfig";
 import { PriorEducationInput } from "@/pages/admin/components/avetmiss/AvetmissInputs";
@@ -24,7 +25,7 @@ const PERSONAL_FIELDS = Object.keys(PERSONAL_LABELS);
  * About the student (AVETMISS), Study details and Declaration and submit. Options come from the application form's own fields
  * (portalSections), so the wizard and the form always offer the same answers and the database's submission check accepts them.
  */
-export default function WizardFinishSteps({ question, answers, errors, onChange, onAddress, summary, studentRole, onEdit, version = 0 }: {
+export default function WizardFinishSteps({ question, answers, errors, onChange, onAddress, summary, studentRole, onEdit, version = 0, passportCountry = "" }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
@@ -38,6 +39,8 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   onEdit: (screen: string) => void;
   /** Changes when the answers were refilled from the draft (the phone box remounts to show the stored number). */
   version?: number;
+  /** The issuing country read from the passport scan ("" when the scan gave none). */
+  passportCountry?: string;
 }) {
   const v = (name: string) => answers[name] ?? "";
   const { codes, error: codesError } = useAvetmissCodes();
@@ -95,7 +98,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
       {question.id === "personal" ? (
         <div className="space-y-4">
           {/* Only what is missing is asked; what the passport and the student record filled is not shown again. */}
-          {PERSONAL_FIELDS.every((name) => !ask(name) || name === "middle_name" || name === "place_of_birth") ? (
+          {PERSONAL_FIELDS.every((name) => !ask(name) || name === "middle_name" || name === "place_of_birth" || name === "birth_country") ? (
             <p className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-sm text-emerald-900" data-testid="wizard-personal-done">
               <i className="ri-checkbox-circle-line" aria-hidden="true" /> Nothing else is needed here. Press Next.
             </p>
@@ -110,10 +113,11 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
             {ask("email") ? text("email", "Email", { type: "email" }) : null}
             {ask("nationality") ? select("nationality", "Nationality") : null}
             {ask("citizenship") ? select("citizenship", "Country of citizenship") : null}
-            {ask("birth_country") ? select("birth_country", "Country of birth") : null}
             {ask("place_of_birth") && !prefilled.size ? text("place_of_birth", "Town / city of birth", { required: false, placeholder: "As on the passport" }) : null}
             {ask("passport_number") ? text("passport_number", "Passport number", { upper: true, maxLength: 20 }) : null}
             {ask("passport_expiry") ? text("passport_expiry", "Passport expiry date", { type: "date" }) : null}
+            {/* Owner 2026-11-25: always asked; "Were you born in {passport country}?" when the passport gave its issuing country. */}
+            <BirthCountryField passportCountry={passportCountry} answers={answers} errors={errors} onChange={onChange} />
           </div>
         </div>
       ) : null}

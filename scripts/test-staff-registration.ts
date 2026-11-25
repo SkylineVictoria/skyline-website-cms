@@ -5077,3 +5077,43 @@ test("Employees Active / Inactive (2026-11-24): Delete with the same confirmatio
   assert.ok(page.includes('"Status", "Sign-in", "Actions"]') && page.includes("data-testid={`employee-delete-${r.id}`}"));
   assert.ok(page.includes("setDeleting({ id: r.id, name: [r.firstName, r.lastName].filter(Boolean).join(\" \"), email: r.email })"));
 });
+
+test("Birth country from the passport (2026-11-25): Were you born in {issuing country}? Yes = that AVETMISS label, No = a searched country, not the passport's", async () => {
+  const lib = await load.import<typeof import("../src/pages/agency/lib/birthCountry.ts")>("../src/pages/agency/lib/birthCountry.ts");
+  // avetmiss_code_search('country', 'India', 5) and an alias hit, as Postgres returned them for the migration's codes.
+  assert.equal(lib.pickPassportCountry("India", [{ code: "7103", label: "India" }]), "India");
+  assert.equal(lib.pickPassportCountry("india", [{ code: "7103", label: "India" }, { code: "9999", label: "British Indian Ocean Territory" }]), "India");
+  assert.equal(lib.pickPassportCountry("Turkey", [{ code: "4215", label: "Türkiye" }]), "Türkiye", "the only hit (alias)");
+  assert.equal(lib.pickPassportCountry("Korea", [{ code: "6202", label: "Korea, Democratic People's Republic of (North)" }, { code: "6203", label: "Korea, Republic of (South)" }]), "", "unsure: the search field only");
+  assert.equal(lib.pickPassportCountry("", [{ code: "7103", label: "India" }]), "");
+  const field = read("src/pages/agency/components/BirthCountryField.tsx"), wizard = read("src/pages/agency/components/ApplicationWizard.tsx"), steps = read("src/pages/agency/components/WizardFinishSteps.tsx");
+  assert.ok(field.includes('supabase.rpc("avetmiss_code_search", { p_set: "country", p_query: query, p_limit: limit })'));
+  assert.ok(field.includes('if (answer === "Yes") onChange("birth_country", label);') && field.includes('else if (value === label) onChange("birth_country", "");'), "Yes sets the label, No starts empty");
+  assert.ok(field.includes("{!label || born === \"No\" ? ("), "the search shows on No, or without a passport country");
+  assert.ok(!wizard.includes('fill("birth_country", next.citizenship'), "no longer copied from the citizenship");
+  assert.ok(wizard.includes('errors[BORN_IN_PASSPORT_COUNTRY] = "Choose Yes or No."') && wizard.includes('filled("birth_country") === passportLabel'));
+  assert.ok(steps.includes("<BirthCountryField passportCountry={passportCountry}") && !steps.includes('select("birth_country"'));
+});
+
+test("Residency after the passport (2026-11-25): AU / NZ Domestic (no visa), PR -> PR evidence, not PR + in Australia -> visa copy and details, offshore -> no visa", async () => {
+  const r = await load.import<typeof import("../src/pages/agency/lib/residency.ts")>("../src/pages/agency/lib/residency.ts");
+  assert.ok(r.isDomesticPassport("Australia") && r.isDomesticPassport("new zealand") && !r.isDomesticPassport("India"));
+  assert.equal(r.visaNeed("Australia", "", ""), "none");
+  assert.equal(r.visaNeed("New Zealand", "No", "Yes"), "none", "domestic ignores stale answers");
+  assert.equal(r.visaNeed("India", "Yes", ""), "pr");
+  assert.equal(r.visaNeed("India", "No", "Yes"), "visa");
+  assert.equal(r.visaNeed("India", "No", "No"), "none", "offshore: the CoE comes first");
+  assert.equal(r.visaNeed("", "", ""), "none");
+  assert.ok(r.residencyAnswered("Australia", "", "") && r.residencyAnswered("India", "Yes", "") && r.residencyAnswered("India", "No", "No"));
+  assert.ok(!r.residencyAnswered("India", "", "") && !r.residencyAnswered("India", "No", "") && !r.residencyAnswered("", "", ""), "an unread passport country is asked too");
+  assert.deepEqual(r.visaDetailProblems("500", "ABC123", "2027-06-30", "2026-11-25"), {});
+  assert.deepEqual(Object.keys(r.visaDetailProblems("50", "", "", "2026-11-25")).sort(), ["visa_grant_number", "visa_stay_until", "visa_subclass"]);
+  assert.match(r.visaDetailProblems("500", "X", "2026-01-01", "2026-11-25").visa_stay_until, /expired/);
+  assert.equal(r.PR_ANSWER, "au_permanent_resident");
+  const wizard = read("src/pages/agency/components/ApplicationWizard.tsx"), ui = read("src/pages/agency/components/WizardResidency.tsx");
+  assert.ok(ui.includes("Are you an Australian permanent resident?") && ui.includes("Are you currently in Australia?"));
+  assert.ok(wizard.includes('const stepRequired = (item: WizardStep) => (item.id === "visa" ? need !== "none" : Boolean(item.required));'));
+  assert.ok(wizard.includes("if (skipStep(ALL_STEPS[next]) && next !== step)"), "the visa step is passed over when not needed");
+  assert.ok(wizard.includes("Object.assign(values, { [PR_ANSWER]: pr, [IN_AUSTRALIA_ANSWER]: inAu });") && wizard.includes('holds_visa: "Yes", visa_subclass: field("visa_subclass")'));
+  assert.ok(!wizard.includes("issuing_country:"), "issuing_country is saved as before (not written by the wizard)");
+});

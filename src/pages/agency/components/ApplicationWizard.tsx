@@ -778,12 +778,12 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       const gender = next.gender ?? "";
       if (!next.title) fill("title", gender === "Male" ? "Mr" : gender === "Female" ? "Miss" : "");
       if (!next.citizenship) fill("citizenship", next.nationality ?? "");
-      if (!next.birth_country) fill("birth_country", next.citizenship || next.nationality || "");
+
       if (!next.au_country) fill("au_country", "Australia");
-      if (!next.atsi) fill("atsi", "No");
-      if (!next.disability) fill("disability", "No");
-      if (!next.employment) fill("employment", "Unemployed - Seeking Part-Time Work - 07");
-      if (!next.secondary_enrolled) fill("secondary_enrolled", "No");
+
+
+
+
       if (!next.prior_ed && hasAcademic) fill("prior_ed", "Yes");
       if (!next.study_reason) fill("study_reason", "For personal interest or self-development - 09");
       if (!next.rpl) fill("rpl", "No");
@@ -872,7 +872,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // AVETMISS-UI: English proficiency when another language is spoken at home, disability types, prior qualifications.
       const otherLanguage = String(answers.language_home ?? "") === OTHER_LANGUAGE;
       if (otherLanguage && !filled("english_proficiency_code")) errors.english_proficiency_code = "Choose how well the student speaks English.";
-      if (filled("disability") === "Yes" && !parseCodeList(filled("disability_types")).length) errors.disability_types = "Choose at least one type.";
+
       const priorRows = parsePriorEducation(filled("prior_education")).filter((r) => r.code || r.recognition || r.name.trim());
       if (filled("prior_ed") === "Yes" && priorEducationProblem(priorRows)) errors.prior_education = priorEducationProblem(priorRows);
       values.english_proficiency_code = otherLanguage ? filled("english_proficiency_code") : "";

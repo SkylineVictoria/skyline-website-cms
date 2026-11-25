@@ -142,10 +142,10 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
               <FieldError text={errors.english_proficiency_code} />
             </div>
           ) : null}
-          {radios("disability", "Does the student have a disability that may affect their participation in the course?")}
+          {radios("disability", "Do you consider yourself to have a disability, impairment or long-term condition?")}
           {v("disability") === "Yes" ? (
             <fieldset>
-              <legend className={LABEL}>Which types of disability? <span className="text-primary-600">*</span></legend>
+              <legend className={LABEL}>Which types of disability? (Optional)</legend>
               <DisabilityTypesInput codes={codes} value={parseCodeList(v("disability_types"))} idPrefix="wizard-disability" onChange={(next) => onChange("disability_types", serializeCodeList(next))} />
               <FieldError text={errors.disability_types} />
             </fieldset>

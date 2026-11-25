@@ -271,6 +271,7 @@ export default function ApplicationDetailPage() {
             <span>Created {formatDate(application.createdAt)}</span>
             <span>Updated {formatDate(application.updatedAt)}</span>
             {application.submittedAt ? <span>Submitted {formatDate(application.submittedAt)}</span> : null}
+            {isSlit ? <span className="font-medium text-foreground-800">{application.completion}% complete</span> : null}
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
@@ -298,13 +299,23 @@ export default function ApplicationDetailPage() {
             ) : null}
           </div>
         </div>
-        <div className="shrink-0 rounded-card border border-background-200 bg-background-50 px-5 py-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Completion</p>
-          <p className="mt-1 font-heading text-2xl font-bold text-foreground-950">{application.completion}%</p>
-          <div className="mt-2 h-1.5 w-32 overflow-hidden rounded-full bg-background-200">
-            <div className="h-full rounded-full bg-accent-500" style={{ width: `${application.completion}%` }} />
+        {/* Owner 2026-11-25: staff change the status from the top of the page (same Take action menu as the list and the
+            Review step); completion moved into the details line. */}
+        {isSlit ? (
+          <div className="w-full shrink-0 rounded-card border border-background-200 bg-background-50 px-4 py-3 lg:w-auto lg:min-w-[22rem]" data-testid="header-status">
+            <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wide text-foreground-600">Status</p>
+            <StaffReviewBar application={application} history={history} onDone={() => void load()}
+              onResult={(message, _ok, action) => toast.show(message, action, action ? 5000 : undefined)} />
           </div>
-        </div>
+        ) : (
+          <div className="shrink-0 rounded-card border border-background-200 bg-background-50 px-5 py-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-foreground-700">Completion</p>
+            <p className="mt-1 font-heading text-2xl font-bold text-foreground-950">{application.completion}%</p>
+            <div className="mt-2 h-1.5 w-32 overflow-hidden rounded-full bg-background-200">
+              <div className="h-full rounded-full bg-accent-500" style={{ width: `${application.completion}%` }} />
+            </div>
+          </div>
+        )}
       </header>
 
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
@@ -325,6 +336,9 @@ export default function ApplicationDetailPage() {
           >
             <i className={item.icon} aria-hidden="true" />
             {item.label}
+            {item.id === "documents" && documents.length ? (
+              <span className="rounded-full bg-background-200 px-1.5 text-2xs font-semibold text-foreground-800">{documents.length}</span>
+            ) : null}
           </button>
         ))}
       </nav>

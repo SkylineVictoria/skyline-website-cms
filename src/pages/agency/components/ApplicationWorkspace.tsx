@@ -1945,7 +1945,9 @@ export default function ApplicationWorkspace({
         {readOnly ? (
           <p className="mb-3 flex items-center gap-1.5 text-xs text-foreground-600">
             <i className="ri-lock-line text-base leading-none" aria-hidden="true" />
-            Submitted and read-only. Contact SLIT admissions if a correction is required.
+            {auditAccess
+              ? "Submitted, so the answers are locked. To change them, use Take action at the top and send it back for correction."
+              : "Submitted and read-only. Contact SLIT admissions if a correction is required."}
           </p>
         ) : null}
         {documentMessage ? <p className="mb-3 text-xs text-foreground-500" role="status">{documentMessage}</p> : null}

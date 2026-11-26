@@ -5,6 +5,8 @@ import {
   HANDOFF_EVENT_LABEL, HANDOFF_STATE_LABEL, type Declaration, type Handoff, type HandoffDiff,
 } from "@/pages/agency/lib/handoff";
 import { sendApplicationInvitation } from "@/pages/agency/lib/portalApplications";
+import { hasPortalLogin } from "@/pages/agency/lib/handoff";
+import { passwordProblem } from "@/lib/passwords";
 
 const when = (value: string | null | undefined) => (value ? new Date(value).toLocaleString() : "—");
 
@@ -221,5 +223,43 @@ export function StudentHandoffNotice({ applicationId, handoff, onChanged }: { ap
           : <>Your agent is making changes. You will get an email when it is ready for you again. What you saved is kept, and anything you had not saved stays on this device as a draft.</>}
       </p>
     </section>
+  );
+}
+
+/** The password a guest student creates when signing (needed: the account has no password or Google yet). */
+export interface SignPassword { needed: boolean; password: string; valid: boolean }
+
+/**
+ * APPLICATION-INVITE-GUEST-START (owner, 2026-11-26): a student who opened the application from the link alone creates their
+ * password at the signature, so they can sign in to their SLIT account later. Shows nothing when the account already has one.
+ */
+export function SignPasswordFields({ onChange }: { onChange: (value: SignPassword) => void }) {
+  const [needed, setNeeded] = useState<boolean | null>(null);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void hasPortalLogin().then((has) => { if (live) { setNeeded(!has); onChange({ needed: !has, password: "", valid: has }); } });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- checked once
+  }, []);
+  if (!needed) return null;
+  const update = (next: string, again: string) => {
+    setPassword(next); setConfirm(again);
+    onChange({ needed: true, password: next, valid: !passwordProblem(next, again) });
+  };
+  const input = "mt-1 w-full rounded-md border border-background-300 px-3 py-2 text-sm";
+  return (
+    <div className="space-y-2 rounded-lg border border-primary-200 bg-primary-50/40 p-4" data-testid="sign-password">
+      <p className="text-sm font-semibold text-foreground-900">Create your password</p>
+      <p className="text-xs text-foreground-600">You will use it to sign in to your SLIT account to follow your application.</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-sm">Password<input type={show ? "text" : "password"} autoComplete="new-password" value={password} onChange={(e) => update(e.target.value, confirm)} className={input} data-testid="sign-password-new" /></label>
+        <label className="text-sm">Confirm password<input type={show ? "text" : "password"} autoComplete="new-password" value={confirm} onChange={(e) => update(password, e.target.value)} className={input} data-testid="sign-password-confirm" /></label>
+      </div>
+      {password ? <p className="text-xs text-foreground-600">{passwordProblem(password, confirm || undefined) ?? "Looks good."}</p> : null}
+      <label className="flex items-center gap-2 text-xs text-foreground-600"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="h-4 w-4" />Show password</label>
+    </div>
   );
 }

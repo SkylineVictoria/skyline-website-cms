@@ -8,13 +8,15 @@ import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
 import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import "@/pages/agency/lib/admissionsRules"; // Business Rules: expiry warning months, English result validity
-import { DeclarationTicks } from "@/pages/agency/components/ApplicationHandoff";
+import { DeclarationTicks, SignPasswordFields, type SignPassword } from "@/pages/agency/components/ApplicationHandoff";
 import { qualificationDetail, qualificationTitle, submittedQualifications, type Qualification } from "@/pages/agency/lib/qualifications";
 
 /** APPLICATION-STUDENT-SIGNS: the student's ticked declarations ({ key: hash of the exact text shown }); complete when all ticked. */
 export interface ConsentState {
   declarations: Record<string, string>;
   complete: boolean;
+  /** A guest student's new password, created at the signature (needed false when the account already has one). */
+  password: SignPassword;
 }
 
 // Field types and answers that are not shown as values: notes, tables, terms, files, and answers the form keeps itself.
@@ -142,6 +144,7 @@ export default function ApplicationReview({
         <fieldset className="mt-4 space-y-2">
           <legend className="text-sm font-semibold text-foreground-900">Read and sign</legend>
           <DeclarationTicks who="student" onChange={(declarations, complete) => onConsentChange({ declarations, complete })} />
+          <SignPasswordFields onChange={(password) => onConsentChange({ password })} />
           <p className="text-xs text-foreground-500">Your signature is recorded with the exact text above, the date and time, and this device. If you are under 18, a parent or guardian signs next.</p>
         </fieldset>
       ) : canSubmit ? (

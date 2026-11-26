@@ -26,7 +26,7 @@ const PERSONAL_FIELDS = Object.keys(PERSONAL_LABELS);
  * About the student (AVETMISS), Study details and Declaration and submit. Options come from the application form's own fields
  * (portalSections), so the wizard and the form always offer the same answers and the database's submission check accepts them.
  */
-export default function WizardFinishSteps({ question, answers, errors, onChange, onAddress, summary, studentRole, onEdit, version = 0, passportCountry = "", onDeclarations, extraActions }: {
+export default function WizardFinishSteps({ question, answers, errors, onChange, onAddress, summary, studentRole, onEdit, version = 0, passportCountry = "", onDeclarations, extraActions, signExtras }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
@@ -46,6 +46,8 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   onDeclarations?: (ticked: Record<string, string>, complete: boolean) => void;
   /** Shown under the summary (the student's Request a change). */
   extraActions?: ReactNode;
+  /** Shown under the declarations (a guest student's Create your password). */
+  signExtras?: ReactNode;
 }) {
   const v = (name: string) => answers[name] ?? "";
   const { codes, error: codesError } = useAvetmissCodes();
@@ -227,6 +229,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
             <div className="space-y-2">
               <p className={LABEL}>Read and sign</p>
               <DeclarationTicks who="student" onChange={(ticked, complete) => onDeclarations?.(ticked, complete)} />
+              {signExtras}
               <p className="text-xs text-foreground-600">Signed electronically as <strong className="font-medium text-foreground-900">{v("declaration_name") || summary.name || "you"}</strong> on {v("declaration_date") || new Date().toISOString().slice(0, 10)}.
                 If you are under 18, a parent or guardian signs next.</p>
               <FieldError text={errors.declaration_read || errors.consent} />

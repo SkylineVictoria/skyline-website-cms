@@ -37,7 +37,7 @@ import {
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import { declarationConsent } from "@/pages/agency/lib/handoff";
+import { declarationConsent, saveSignPassword } from "@/pages/agency/lib/handoff";
 import { documentCategoryForField, extractionStatus } from "@/pages/agency/lib/documentAttachments";
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
@@ -360,7 +360,7 @@ export default function ApplicationWorkspace({
   });
   const [showErrors, setShowErrors] = useState(false);
   const [reviewValues, setReviewValues] = useState<DraftValues | null>(null);
-  const [consent, setConsent] = useState<ConsentState>({ declarations: {}, complete: false });
+  const [consent, setConsent] = useState<ConsentState>({ declarations: {}, complete: false, password: { needed: false, password: "", valid: true } });
   // APPLICATION-STUDENT-SIGNS: only the student signs; an agent or staff member sends it to the student instead.
   const studentSigns = usePortalAuth().role === "student";
   const [submitting, setSubmitting] = useState(false);
@@ -1385,6 +1385,10 @@ export default function ApplicationWorkspace({
       setSubmitError("Read and tick each declaration to sign.");
       return;
     }
+    if (studentSigns && !consent.password.valid) {
+      setSubmitError("Create your password (both boxes the same) to sign.");
+      return;
+    }
     setSubmitting(true);
     try {
       // Always save once more: the server checks the saved draft, which must carry the derived answers (e.g. ec_in_au).
@@ -1398,6 +1402,7 @@ export default function ApplicationWorkspace({
         onSentToStudent?.();
         return;
       }
+      await saveSignPassword(consent.password);
       if (resubmitHere) {
         // Action required, corrected: the form is saved (above), the student signs again, then back to Submitted through the resubmit
         // command (history, audit, email).
@@ -1931,7 +1936,7 @@ export default function ApplicationWorkspace({
                 icon: "ri-send-plane-line",
                 onClick: () => void handleSubmit(),
                 // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document; the same for a resubmission.
-                disabled: missingNow.length > 0 || (studentSigns && !consent.complete) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
+                disabled: missingNow.length > 0 || (studentSigns && (!consent.complete || !consent.password.valid)) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
                 busy: submitting,
                 busyLabel: !studentSigns ? "Sending…" : resubmitHere ? "Resubmitting…" : "Submitting…",
                 testId: "submit-application",

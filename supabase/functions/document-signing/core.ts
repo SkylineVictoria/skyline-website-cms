@@ -10,6 +10,7 @@ import { institutionTimeZone, setInstitutionTimeZoneFrom, TIME_ZONE_RULE } from 
 import { checkRecipients, fillHtmlVariables, fillSigningTemplate, renderSigningCodeEmail, renderSigningEmail, sampleFill, signingHtml, signingNameValid, signingToday, signingVariables, templateVariables, SIGNING_CONSENT,
   type SigningMailJob } from "../_shared/signing.ts";
 import { toBase64 } from "../_shared/notification/attachment.ts";
+import { newCode, newLinkToken, sendText, sha256Hex as sha256Text } from "../_shared/contact-links.ts";
 import { PLACEHOLDERS, placeholderLabels, renderTemplate, sanitizeTemplateHtml, templatePlaceholders, templateText, templateValues, type TemplatePerson } from "../_shared/hr-template.ts";
 
 import { isTokenFieldLabel } from "../_shared/template-variables.ts";
@@ -350,6 +351,11 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         }
       };
       const record = await linkCall("open", { ip: call.ip });
+      // CONTACT-VERIFY (2026-11-26): the email and the text carry different links. Opened from the text: the mobile is proven and the
+      // signer confirms their email with a code before signing (the page shows its code step: requireCode below).
+      const contact = ports.serviceRpc
+        ? await ports.serviceRpc("sign_link_opened", { p_hash: hash }).catch(() => null) as { via?: string; emailPending?: boolean } | null : null;
+      const emailPending = contact?.emailPending === true && record.require_code !== true;
       if (action === "download") {
         // The signing page's Download button (2026-11-20): a new short-lived link on every click, so the page never holds a stale one.
         // The same document "open" shows (the signed PDF once signed); never the completion certificate.
@@ -404,6 +410,23 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         return await ports.serviceRpc!("agency_onboarding_attachment_save", { p_request: record.id, p_recipient: record.recipient.id, p_kind: kind,
           p_data: { name, contentType, base64: toBase64(call.upload.bytes) } });
       }
+      if (action === "code_send" && emailPending) {
+        const { provider, config } = ports.mail;
+        if (!provider || !config.from) throw new SigningError("The code cannot be emailed right now. Please try again later or contact admissions.", 503);
+        const code = newCode();
+        let issued: { to: string };
+        try { issued = await ports.serviceRpc!("link_code_issue", { p_scope: "sign", p_subject: record.recipient.id, p_code: code }) as { to: string }; }
+        catch (error) { throw new SigningError(String((error as RpcError).message ?? "A code could not be sent."), 429); }
+        const message = renderSigningCodeEmail({ name: record.recipient?.name, code, title: record.title, minutes: 10 });
+        const outcome = outcomeState(await provider.send({ deliveryId: `sign-contact-${record.recipient.id}-${Date.now()}`, from: config.from, to: issued.to, subject: message.subject, textBody: message.text, htmlBody: message.html }));
+        if (outcome.state !== "sent") throw new SigningError("The code could not be emailed. Please try again in a minute.", 502);
+        return { sent: true, to: maskEmail(issued.to), minutes: 10 };
+      }
+      if (action === "code_verify" && emailPending) {
+        const result = await ports.serviceRpc!("link_code_verify", { p_scope: "sign", p_subject: record.recipient.id, p_code: String(body.code ?? "").replace(/\D/g, "").slice(0, 6) }) as
+          { ok?: boolean; reason?: string; remaining?: number };
+        return { ok: result.ok === true, session: result.ok === true ? "email-confirmed" : null, reason: result.reason ?? null, remaining: result.remaining ?? null };
+      }
       if (action === "code_send") {
         const { provider, config } = ports.mail;
         if (!provider || !config.from) throw new SigningError("The code cannot be emailed right now. Please try again later or contact admissions.", 503);
@@ -423,6 +446,7 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
         return { declined: true, state: after.state };
       }
       if (action === "sign") {
+        if (emailPending) throw new SigningError("Confirm your email with the code we send you before signing.", 403);
         const name = typeof body.name === "string" ? body.name.trim() : "";
         if (body.agreed !== true || !signingNameValid(name)) throw new SigningError("Enter your full name and tick the agreement.");
         const kind = ["typed", "drawn", "uploaded"].includes(String(body.signatureKind)) ? String(body.signatureKind) : "typed";
@@ -655,7 +679,8 @@ export async function handleSigning(call: SigningCall, ports: SigningPorts): Pro
       const expected = done ? record.signed_hash : record.current_hash ?? record.original_hash;
       return { id: record.id, reference: record.reference, title: record.title, state: record.state, message: record.message, expiresAt: record.expires_at, signedAt: record.signed_at,
         recipient: record.recipient, fields, signers: record.signers, consent: SIGNING_CONSENT, documentHash: record.original_hash,
-        requireCode: record.require_code === true, offer: record.offer ?? null, onboarding: record.onboarding ?? null, application, codeTo: record.require_code === true ? maskEmail(record.recipient?.email ?? "") : null,
+        requireCode: record.require_code === true || emailPending, offer: record.offer ?? null, onboarding: record.onboarding ?? null, application,
+        codeTo: record.require_code === true || emailPending ? maskEmail(record.recipient?.email ?? "") : null,
         // Only the signed document: the completion certificate (audit record: IP, browser, history) never goes to a link holder (owner 2026-11-20).
         url: await fileUrl(path, expected, `${safeName(record.title)}${done ? "-signed" : ""}.pdf`) };
     }
@@ -1012,11 +1037,34 @@ export async function drainSigningMail(ports: SigningPorts, limit = 20): Promise
       }
       const outcome = outcomeState(await provider.send({ deliveryId: `sign-${job.id}`, from: config.from, to, subject: message.subject, textBody: message.text, ...(attachments ? { attachments } : {}) }));
       await result(outcome.state, outcome.messageId, outcome.error);
+      // CONTACT-VERIFY: the signer's invitation / reminder also goes by text, with its own link (only after the email went out).
+      if (outcome.state === "sent" && job.audience !== "admin" && job.token && (job.kind === "invite" || job.kind === "reminder")) await textSigningLink(ports, job, config.siteUrl);
     } catch (error) {
       await result("queued", undefined, String((error as Error)?.message ?? error).slice(0, 200));
     }
   }
   return totals;
+}
+
+/** CONTACT-VERIFY: the text with the signer's own text link (never blocks the email; nothing is texted without a mobile or ClickSend). */
+// deno-lint-ignore no-explicit-any
+async function textSigningLink(ports: SigningPorts, job: Record<string, any>, siteUrl: string): Promise<void> {
+  const rpc = ports.serviceRpc;
+  if (!rpc) return;
+  try {
+    const target = await rpc("sign_sms_target", { p_email_hash: await sha256Text(String(job.token)) }) as { recipientId: string; name: string; title: string; mobile: string } | null;
+    if (!target?.mobile) return;
+    const service = { rpc: (name: string, args?: Record<string, unknown>) => rpc(name, args ?? {}).then((data) => ({ data, error: null }), (e) => ({ data: null, error: e as { message: string } })) };
+    const settings = await rpc("invite_sms_settings", {}).catch(() => null) as { username?: string } | null;
+    if (!settings?.username) return;
+    const token = newLinkToken();
+    if (await rpc("sign_sms_link_add", { p_recipient: target.recipientId, p_hash: await sha256Text(token), p_mobile: target.mobile }) !== true) return;
+    const first = String(target.name ?? "").trim().split(/\s+/)[0] || "there";
+    const title = String(target.title ?? "your document").replace(/[\u0000-\u001f]/g, " ").slice(0, 80); // eslint-disable-line no-control-regex
+    const sent = await sendText(service, { mobile: target.mobile, deliveryId: `sign-sms-${job.id}`,
+      body: `Hi ${first}, Skyline Institute of Technology sent you "${title}" to review and sign. We also emailed you; you will confirm your email with a code before signing.\n${siteUrl}/sign#t=${token}` });
+    if (sent.state !== "skipped") await rpc("sign_sms_record", { p_recipient: target.recipientId, p_outcome: sent.state, p_code: sent.code, p_last_digits: sent.to.slice(-3) }).catch(() => undefined);
+  } catch { /* a text never fails the email */ }
 }
 
 /** Bounded read of the request body, even when Content-Length is omitted. JSON, or multipart with "data" (JSON) and "file". */

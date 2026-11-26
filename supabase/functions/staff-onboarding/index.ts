@@ -19,6 +19,8 @@ import { DOCUMENT_SIZE_MESSAGE } from "../_shared/validation/person.ts";
 import { GEOSCAPE_URL, searchAddresses } from "../_shared/validation/address.ts";
 import { isLocalSupabaseUrl } from "../_shared/captcha.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
+import { readHrMailConfig, selectHrMailProvider } from "../_shared/hr-mail.ts";
+import { contactCodeEmail, newCode } from "../_shared/contact-links.ts";
 import { loadLetterhead } from "../_shared/letterhead.ts";
 // The PDF code (pdf-lib, the embedded fonts) is loaded only when an offer is signed, so the worker boots light.
 const offerPdfModule = () => import("../_shared/offer-pdf.ts");
@@ -140,6 +142,14 @@ Deno.serve(async (req) => {
     stampOffer: async (original, signature) => (await offerPdfModule()).stampSignedOffer(original, signature, await loadLetterhead(admin)),
     now: () => new Date(),
     searchAddress: (query) => searchAddresses(query, ADDRESS_KEY, addressFetch),
+    newCode,
+    sendCodeEmail: async (to, name, code) => {
+      const provider = selectHrMailProvider(mailEnv); const config = readHrMailConfig(mailEnv);
+      if (!provider || !config.from) return false;
+      const message = contactCodeEmail({ name, code, purpose: "continue" });
+      const outcome = await provider.send({ deliveryId: `staff-contact-${crypto.randomUUID()}`, from: config.from, to, subject: message.subject, textBody: message.text, htmlBody: message.html });
+      return outcome.kind === "accepted";
+    },
     setPassword: async (userId, password) => {
       const { error } = await admin.auth.admin.updateUserById(userId, { password, email_confirm: true });
       return { error: error ? error.message : null };

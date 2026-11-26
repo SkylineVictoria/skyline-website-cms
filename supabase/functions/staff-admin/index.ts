@@ -10,6 +10,7 @@ import { loadEmailBranding } from "../_shared/email-html.ts";
 import type { TemplatePerson, TemplateSource } from "../_shared/hr-template.ts";
 import { HR_MAIL_ENV, drainHrOutbox } from "../_shared/hr-mail-drain.ts";
 import { handleAdmin } from "./core.ts";
+import { newLinkToken, sendText, sha256Hex as sha256Text } from "../_shared/contact-links.ts";
 import { findAuthUserByEmail } from "../_shared/invite-delivery.ts";
 import { authorizeWorker } from "../_shared/notification/delivery.ts";
 import { MAX_OFFER_BYTES } from "../_shared/offer-rules.ts";
@@ -98,6 +99,18 @@ Deno.serve(async (req) => {
     },
     sendTemplate: (mail) => sendTemplateEmail(provider, config, mail),
     accountUrl: (token) => `${config.siteUrl}/staff/welcome#t=${encodeURIComponent(token)}`,
+    textLink: async ({ profileId, baseHash, url, expiresAt, what }) => {
+      const { data: person } = await service.rpc("link_person", { p_scope: "staff", p_subject: profileId });
+      if (!person?.mobile) return;
+      const { data: settings } = await service.rpc("invite_sms_settings");
+      if (!settings?.username) return;
+      const token = newLinkToken();
+      const { data: added } = await service.rpc("link_alias_add", { p_scope: "staff", p_subject: profileId, p_base_hash: baseHash, p_alias_hash: await sha256Text(token),
+        p_email: person.email, p_mobile: person.mobile, p_expires: expiresAt });
+      if (added !== true) return;
+      await sendText(service, { mobile: person.mobile, deliveryId: `hr-sms-${crypto.randomUUID()}`,
+        body: `Hi ${person.name || "there"}, Skyline Institute of Technology ${what}. We also emailed you; you will confirm your email with a code.\n${url(token)}` });
+    },
     // An unconfirmed login with no password given (Auth stores a random one nobody knows): it cannot sign in until the person
     // chooses a password through their one-time link, which also confirms the email.
     createLogin: async (email, name) => {

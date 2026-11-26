@@ -1,6 +1,7 @@
 # AGENTS.md
 
 All agent instructions live in `CLAUDE.md`. Read it first and follow it exactly.
+AVETMISS: every change touching reportable data follows CLAUDE.md "AVETMISS compliance" / "AVETMISS rules" and the register in `docs/compliance/AVETMISS.md`; the "AVETMISS compliance" workflow must pass.
 Task status: `docs/TASKS.md`. Supabase functions, migrations and env names: `docs/SUPABASE.md`.
 
 ## Permanent SLIT Business Rules policy

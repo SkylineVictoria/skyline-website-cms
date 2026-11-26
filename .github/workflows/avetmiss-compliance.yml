@@ -1,0 +1,51 @@
+name: AVETMISS compliance
+# Required check for main (owner, 2026-11-26). Job 1 needs no database; job 2 builds a fresh local Supabase stack from the
+# repo's migrations (never a hosted project) and runs every supabase/tests/avetmiss_*.sql suite.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gate:
+    name: AVETMISS guard gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: No AVETMISS guard removed, NAT changes come with tests
+        env:
+          GATE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="${GATE_BASE:-HEAD^}"
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then base=HEAD^; fi
+          node scripts/check-avetmiss.mjs "$base"
+  database:
+    name: AVETMISS database suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - run: npm ci --ignore-scripts
+      - name: Fresh lab stack from the repo's migrations
+        run: node scripts/lab/staff-lab.mjs up
+      - name: AVETMISS suites (no junk, NAT files, audit)
+        env:
+          LAB_SQL_ONLY: '^avetmiss_'
+        run: node scripts/lab/staff-lab.mjs sql

@@ -8,8 +8,8 @@ import SearchableSelect from "@/components/ui/SearchableSelect";
  * Setup for an app whose connector is not built yet (USI, VEVO, PRISMS, DataZoo): the administrator can store the access
  * details the provider issues, so they are ready the day the connector is added. Nothing is sent to the provider.
  */
-export default function PendingCredentialsForm({ connectionId, name, saved, busy, perform, onNotice, onDraftChange }: {
-  connectionId: string; name: string; saved: boolean; busy: boolean;
+export default function PendingCredentialsForm({ connectionId, ensureConnection, name, saved, busy, perform, onNotice, onDraftChange }: {
+  connectionId?: string; ensureConnection: () => Promise<string>; name: string; saved: boolean; busy: boolean;
   perform: (operation: () => Promise<void>) => Promise<void>; onNotice: (text: string) => void; onDraftChange: (dirty: boolean) => void;
 }) {
   const [apiKey, setApiKey] = useState('');
@@ -20,9 +20,9 @@ export default function PendingCredentialsForm({ connectionId, name, saved, busy
     <form className="space-y-4" onChangeCapture={() => onDraftChange(true)} onSubmit={event => {
       event.preventDefault();
       const fields = { apiKey, accountId, organisationCode, environment };
-      setApiKey('');
       void perform(async () => {
-        await pendingCredentialRequest('save', connectionId, fields);
+        await pendingCredentialRequest('save', await ensureConnection(), fields);
+        setApiKey('');
         setAccountId(''); setOrganisationCode('');
         onDraftChange(false);
         onNotice(`${name} details saved. They will be used once the ${name} connector is added to Skyline.`);
@@ -43,7 +43,7 @@ export default function PendingCredentialsForm({ connectionId, name, saved, busy
       </label>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" disabled={busy}>{saved ? 'Replace details' : 'Save details'}</Button>
-        {saved && <Button type="button" variant="outline" disabled={busy} onClick={() => void perform(async () => {
+        {saved && connectionId && <Button type="button" variant="outline" disabled={busy} onClick={() => void perform(async () => {
           await pendingCredentialRequest('clear', connectionId);
           onNotice(`${name} details removed.`);
         })}>Remove saved details</Button>}

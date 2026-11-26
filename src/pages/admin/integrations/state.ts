@@ -1,18 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import { integrationRequest, type Snapshot } from './api';
-const root = '/admin/integrations';
-export const sections = [
-  { id: 'overview', label: 'Overview', icon: 'ri-dashboard-line', to: root },
-  { id: 'applications', label: 'Connected Applications', icon: 'ri-apps-2-line', to: root + '/applications' },
-  { id: 'add', label: 'Add Connection', icon: 'ri-add-circle-line', to: root + '/add', admin: true },
-  { id: 'credentials', label: 'Credentials & Secrets', icon: 'ri-key-2-line', to: root + '/credentials' },
-  { id: 'webhooks', label: 'Webhooks & Events', icon: 'ri-webhook-line', to: root + '/webhooks' },
-  { id: 'sync-history', label: 'Sync History', icon: 'ri-history-line', to: root + '/sync-history' },
-  { id: 'logs', label: 'Integration Logs', icon: 'ri-file-list-3-line', to: root + '/logs' },
-  { id: 'settings', label: 'Settings', icon: 'ri-settings-3-line', to: root + '/settings', admin: true },
-] as const;
-export type Section = typeof sections[number]['id'];
-
 export const inputClass = 'rounded-md border border-background-300 bg-background-50 p-2 text-foreground-900 w-full';
 export const date = (value: string | null) => value ? new Date(value).toLocaleString() : 'Never';
 export function useIntegrations() {

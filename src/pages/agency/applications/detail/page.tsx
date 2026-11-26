@@ -203,11 +203,11 @@ export default function ApplicationDetailPage() {
 
   // STUDENT-FIRST-WIZARD (owner 2026-11-26): a student's FIRST application is finished in the document wizard; once the student has
   // an application past draft (submitted before), a new one opens as the one page where only course and intake need changing.
-  // FIRST-APPLICATION-WIZARD (owner 2026-11-26): this also holds when the agent prepared it and sent it to the student (the email /
-  // text link): a student's first application opens in the wizard, where they confirm each screen and sign (confirmMode); only a
-  // returning student gets the one page. While the agent has it back, or a guardian is signing, the wizard shows that notice.
+  // AGENT-FILLED-ONE-PAGE (owner 2026-11-26, replaces FIRST-APPLICATION-WIZARD): an application the agent filled and sent to the
+  // student (any handoff state) opens as the one page of cards, where the student checks, edits and signs; the wizard is only for
+  // an application the student started themselves.
   const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded
-    && (!handoff?.state || handoff.state === "with_student");
+    && !handoff?.state;
   const [studentReturning, setStudentReturning] = useState<boolean | null>(null);
   useEffect(() => {
     if (!studentBlank) return;

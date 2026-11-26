@@ -17,6 +17,8 @@ import {
   studentAgencyOptions,
   chooseStudentAgency,
   changeStudentAgent,
+  listInstitutionCourses,
+  type ApplicationCourseRow,
   type StudentAgencyOptions,
   type BusinessAgentOption,
   type StudentMatch,
@@ -29,6 +31,8 @@ import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/componen
 import { portalScopeCacheKey } from "@/lib/portalScope";
 import { isEmailTakenError } from "@/lib/identity/email";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import IntakeSelect from "@/pages/agency/components/IntakeSelect";
+import type { OpenIntake } from "@/pages/agency/lib/intakes";
 
 function newClientKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -105,6 +109,14 @@ export default function NewApplicationPage() {
   // STUDENT-NEW-APPLICATION-AGENT: who the student is with now (their agent preselected; same business only).
   const [studentOptions, setStudentOptions] = useState<StudentAgencyOptions | null>(null);
   const withBusiness = Boolean(studentOptions?.current && !studentOptions.current.direct);
+  // The course and start date are chosen on the same screen; the application then opens as the one page to check and sign.
+  const [courseRows, setCourseRows] = useState<ApplicationCourseRow[] | null>(null);
+  const [chosenCourseId, setChosenCourseId] = useState("");
+  const [chosenIntake, setChosenIntake] = useState<OpenIntake | null>(null);
+  useEffect(() => {
+    if (phase !== "agency" || courseRows) return;
+    listInstitutionCourses().then(setCourseRows, (e: unknown) => { setCourseRows([]); setError(e instanceof Error ? e.message : "The courses could not be loaded."); });
+  }, [phase, courseRows]);
 
   // Agency users work inside their own business; SLIT administrators choose one.
   const ownBusiness: Business | null = role !== "slit_admin" && agency ? { id: agency.id, name: agency.name, status: "Active" } : null;
@@ -310,12 +322,15 @@ export default function NewApplicationPage() {
       clientKeyRef.current = newClientKey();
       // A returning student's details are already on record: straight to Course and intake on the one-page form, then sign.
       // A first application goes through the document wizard (passport and documents are read there).
-      if (studentOptions?.current?.hasApplications) {
-        if (authUser?.id) clearSession(authUser.id);
-        navigate(`${paths.detail(id)}?edit=course`, { replace: true });
-        return;
+      const course = courseRows?.find((row) => row.courseId === chosenCourseId) ?? null;
+      if (course && chosenIntake) {
+        await saveWizardDraft(id, {
+          values: { courses_of_interest: [`${course.code} - ${course.title}`], preferred_intake: chosenIntake.display, intake_id: chosenIntake.id ?? "", intake_join_date: chosenIntake.joinDate ?? "" },
+          courses: [{ ...course, intakeId: chosenIntake.id ?? undefined }],
+        });
       }
-      openWizard(id);
+      if (authUser?.id) clearSession(authUser.id);
+      navigate(paths.detail(id), { replace: true });
     } catch (e) {
       if (isEmailTakenError(e)) { setEmailError(e); setPhase("student"); return; }
       setError(e instanceof Error ? e.message : "We could not start a new application.");
@@ -370,7 +385,7 @@ export default function NewApplicationPage() {
     // Yes: a student with a business picks among its agents; a direct student with no application picks a business and agent.
     const yesBlocked = withAgency === true && !withBusiness && !ask;
     const noBlocked = withAgency === false && withBusiness;
-    const canContinue = !creating && withAgency !== null && !yesBlocked && !noBlocked
+    const canContinue = !creating && withAgency !== null && !yesBlocked && !noBlocked && Boolean(chosenCourseId && chosenIntake)
       && (withAgency === false || Boolean((withBusiness || chosenBusinessId) && chosenAgentId));
     const go = () => void startAsStudent(withAgency ? { businessId: withBusiness ? current?.businessId ?? "" : chosenBusinessId, agentId: chosenAgentId } : null);
     return (
@@ -406,7 +421,8 @@ export default function NewApplicationPage() {
                   <option value="">{agentChoices.length ? "Select your agent" : "Your agency has no active agents"}</option>
                   {agentChoices.map((a) => <option key={a.id} value={a.id}>{a.name}{a.role === "agency_admin" ? " (business admin agent)" : ""}{a.id === current?.agentId ? " · your agent" : ""}</option>)}
                 </SearchableSelect>
-                <p className="mt-1 text-xs text-foreground-500">Your agent from before is chosen. You can pick another agent of {current?.businessName}. To change agency, ask SLIT Administration.</p>
+                <p className="mt-1 text-xs text-foreground-500">Your agent from before is chosen. You can pick any agent of {current?.businessName}.
+                  {" "}Not happy with any of them? <Link to="/agency/messages" className="font-semibold text-primary-700 underline-offset-2 hover:underline">Message SLIT</Link>.</p>
               </div>
             </div>
           ) : withAgency && ask ? (
@@ -432,9 +448,28 @@ export default function NewApplicationPage() {
             </div>
           ) : null}
 
-          {yesBlocked ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">You applied to SLIT directly before. To work with an agency now, ask SLIT Administration (Support tickets) to link you to it.</p> : null}
-          {noBlocked ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">You are recorded with {current?.businessName}{current?.agentName ? ` (${current.agentName})` : ""}. To apply without an agent, ask SLIT Administration (Support tickets), or choose Yes.</p> : null}
-          {withAgency === false && !withBusiness ? <p className="mt-4 text-sm text-foreground-600">Next you choose your course and start date{current?.hasApplications ? ", check your details and sign" : " and upload your documents"}.</p> : null}
+          {yesBlocked ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">You applied to SLIT directly before. To work with an agency now, <Link to="/agency/messages" className="font-semibold underline">message SLIT</Link> to link you to it.</p> : null}
+          {noBlocked ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">You are recorded with {current?.businessName}{current?.agentName ? ` (${current.agentName})` : ""}. To apply without an agent, <Link to="/agency/messages" className="font-semibold underline">message SLIT</Link>, or choose Yes.</p> : null}
+
+          {withAgency !== null && !yesBlocked && !noBlocked ? (
+            <div className="mt-6 space-y-4 border-t border-background-200 pt-5" data-testid="student-course-intake">
+              <h2 className="font-heading text-base font-semibold text-foreground-950">Course and start date</h2>
+              <div>
+                <label htmlFor="student-course" className="mb-1.5 block text-label font-medium text-foreground-800">Course <span className="text-primary-600">*</span></label>
+                <SearchableSelect id="student-course" className={selectClass} value={chosenCourseId} disabled={creating || !courseRows}
+                  onChange={(e) => { setChosenCourseId(e.target.value); setChosenIntake(null); }}>
+                  <option value="">{!courseRows ? "Loading courses…" : courseRows.length ? "Select a course" : "No course is open for applications"}</option>
+                  {(courseRows ?? []).map((row) => <option key={row.courseId} value={row.courseId}>{row.code} - {row.title}</option>)}
+                </SearchableSelect>
+              </div>
+              <div>
+                <label htmlFor="student-intake" className="mb-1.5 block text-label font-medium text-foreground-800">Start date <span className="text-primary-600">*</span></label>
+                <IntakeSelect id="student-intake" courseId={chosenCourseId || null} value={chosenIntake ? (chosenIntake.id ? (chosenIntake.joinDate ? `${chosenIntake.id}@${chosenIntake.joinDate}` : chosenIntake.id) : `month:${chosenIntake.display}`) : ""}
+                  onChange={setChosenIntake} disabled={creating || !chosenCourseId} className={selectClass} />
+              </div>
+              <p className="text-xs text-foreground-500">Continue opens your application with every detail on one page: check it, change what you need, then sign.</p>
+            </div>
+          ) : null}
 
           {error ? <div className="mt-4"><PortalError message={error} /></div> : null}
 

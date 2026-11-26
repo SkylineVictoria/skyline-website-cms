@@ -226,8 +226,8 @@ export default function ApplicationDetailPage() {
   // ONE-PAGE (owner 2026-11-26): once the agent has prepared the application and sent it to the student, it opens as one page with
   // every answer (the student checks, edits and signs there); the document wizard is only for a blank application.
   if (needsInitialWizard(application) && !handoffLoaded) return <PortalLoading label="Loading application…" />;
-  // A returning student (their details are on record) also gets the one page: course and intake first, then check and sign.
-  const returningStudent = role === "student" && Boolean(String((application.data?.values as Record<string, unknown> | undefined)?.first_name ?? "").trim());
+  // A student always gets the one page (course and intake were chosen when starting); the document wizard stays a button.
+  const returningStudent = role === "student";
   if (needsInitialWizard(application) && !handoff?.state && !returningStudent) {
     return (
       <div className="space-y-4">

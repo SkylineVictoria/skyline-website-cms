@@ -17,6 +17,29 @@ export interface ViewAsState { kind: ViewKind; adminEmail: string; testUserId: s
 /** Someone an admin can sign in as. */
 export interface ViewPerson { userId: string; name: string; email: string; detail: string }
 
+/** VIEW-AS-ALL-AGENTS: an agent in the grouped list (every agent of Master Data, with or without a login). */
+export interface ViewAgent { id: string; name: string; email: string; status: string; hasLogin: boolean }
+export interface ViewAgentGroup { business: { id: string | null; name: string }; agents: ViewAgent[] }
+
+async function failure(error: unknown, fallback: string): Promise<string> {
+  if (error && typeof error === "object" && "context" in error && error.context instanceof Response) {
+    try { return (await error.context.clone().json()).error || fallback; } catch { /* keep default */ }
+  }
+  return fallback;
+}
+
+/** Every agent, grouped by business (A-Z), matching a business name, agent name or email. */
+export async function listViewAgents(query: string): Promise<ViewAgentGroup[]> {
+  const { data, error } = await supabase.functions.invoke("admin-view-as", { body: { kind: "agent", action: "agents", query } });
+  if (error || !Array.isArray(data?.groups)) throw new Error(await failure(error, "The list could not be loaded."));
+  return data.groups as ViewAgentGroup[];
+}
+
+/** Closes the admin's open switch in the audit (Back to admin, or before the next switch). Best effort. */
+async function endSwitch(): Promise<void> {
+  await supabase.functions.invoke("admin-view-as", { body: { action: "end" } }).catch(() => undefined);
+}
+
 /** People of a workspace an admin can sign in as, matching a name or email (at most 25). */
 export async function listViewPeople(kind: ViewKind, query: string): Promise<ViewPerson[]> {
   const { data, error } = await supabase.functions.invoke("admin-view-as", { body: { kind, action: "people", query } });
@@ -43,17 +66,18 @@ export function clearViewAs(): void { try { localStorage.removeItem(KEY); } catc
 function save(v: ViewAsState): void { localStorage.setItem(KEY, JSON.stringify(v)); }
 
 /** Opens a workspace as its test account, or as the given person. Navigates on success; throws with a readable message otherwise. */
-export async function switchView(kind: ViewKind, person?: Pick<ViewPerson, "userId" | "name">): Promise<void> {
+export async function switchView(kind: ViewKind, person?: { userId?: string; agentId?: string; name: string }): Promise<void> {
   // Already looking at a test account: go back to the admin session first (only an admin may ask for a switch).
   const current = readViewAs();
   if (current) {
     const { error } = await supabase.auth.setSession({ access_token: current.access, refresh_token: current.refresh });
     if (error) { clearViewAs(); throw new Error("Your admin session has ended. Sign in again."); }
     clearViewAs();
+    await endSwitch();
   }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Sign in again to switch view.");
-  const { data, error } = await supabase.functions.invoke("admin-view-as", { body: person ? { kind, userId: person.userId } : { kind } });
+  const { data, error } = await supabase.functions.invoke("admin-view-as", { body: person?.agentId ? { kind, agentId: person.agentId } : person ? { kind, userId: person.userId } : { kind } });
   if (error || !data?.tokenHash) {
     let message = "Switch view is not available yet.";
     if (error && "context" in error && error.context instanceof Response) { try { message = (await error.context.clone().json()).error || message; } catch { /* keep default */ } }
@@ -79,5 +103,6 @@ export async function returnToAdmin(): Promise<void> {
   if (!v) { window.location.assign("/admin"); return; }
   const { error } = await supabase.auth.setSession({ access_token: v.access, refresh_token: v.refresh });
   if (error) { await supabase.auth.signOut().catch(() => undefined); window.location.assign("/login"); return; }
+  await endSwitch();
   window.location.assign("/admin");
 }

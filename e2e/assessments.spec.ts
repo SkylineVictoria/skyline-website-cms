@@ -1744,6 +1744,17 @@ test("PDF-WORKBOOK autosave: a failed save, offline / online and an expired sign
   expect(await page.evaluate((k) => window.localStorage.getItem(k) !== null, otherKey)).toBe(true);
   await page.evaluate((k) => window.localStorage.removeItem(k), otherKey);
 
+  // 4b. leftovers are kept 7 days at most: an 8-day-old copy is deleted when the app opens, a 6-day-old one stays
+  const day = 24 * 60 * 60 * 1000;
+  await page.evaluate(([oldK, newK, d]) => {
+    window.localStorage.setItem(oldK, JSON.stringify({ v: {}, at: Date.now() - 8 * Number(d) }));
+    window.localStorage.setItem(newK, JSON.stringify({ v: {}, at: Date.now() - 6 * Number(d) }));
+  }, [`asm-draft:00000000-0000-4000-8000-0000000000aa:${attemptId}`, `asm-draft:00000000-0000-4000-8000-0000000000bb:${attemptId}`, String(day)]);
+  await page.reload();
+  await expect(page.getByTestId("answer-text").first()).toBeVisible({ timeout: 30_000 });
+  expect(await page.evaluate(() => Object.keys(window.localStorage).filter((k) => k.startsWith("asm-draft:")).sort())).toEqual([`asm-draft:00000000-0000-4000-8000-0000000000bb:${attemptId}`]);
+  await page.evaluate(() => { for (const k of Object.keys(window.localStorage)) if (k.startsWith("asm-draft:")) window.localStorage.removeItem(k); });
+
   // 5. signing out with unsaved answers asks first: Cancel keeps them (saved once the server answers again, then deleted);
   //    "Discard them and sign out" deletes them; a saved draft never needs asking
   const signOut = async () => { await page.locator("button[aria-haspopup=menu]").first().click(); await page.getByRole("button", { name: "Sign out" }).click(); };

@@ -1525,6 +1525,17 @@ else {
   check("AUTOSAVE a change made while a save runs waits for it (saves in order)", order.join() === "1", order);
   release(); await wait(10);
   check("AUTOSAVE … then is saved", order.join() === "1,2" && q2.status.state === "saved", order);
+  // leftover drafts are kept 7 days at most from their last change (any person), then deleted when the app opens
+  const { expireDrafts, DRAFT_MAX_AGE_MS } = await import("../src/lib/assessment/autosave");
+  const now = Date.UTC(2026, 10, 26);
+  const mem = new Map<string, string>([
+    ["asm-draft:u1:a1", JSON.stringify({ v: {}, at: now - DRAFT_MAX_AGE_MS - 1 })],
+    ["asm-draft:u2:a2", JSON.stringify({ v: {}, at: now - DRAFT_MAX_AGE_MS + 60_000 })],
+    ["asm-draft:u3:a3", "not json"],
+    ["other-setting", JSON.stringify({ at: 0 })],
+  ]);
+  const removed = expireDrafts(now, { getItem: (k) => mem.get(k) ?? null, removeItem: (k) => { mem.delete(k); }, keys: () => [...mem.keys()] });
+  check("AUTOSAVE drafts older than 7 days (or unreadable) are deleted; younger ones and other settings stay", removed === 2 && [...mem.keys()].join() === "asm-draft:u2:a2,other-setting", [...mem.keys()]);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

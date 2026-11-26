@@ -54,6 +54,22 @@ export function discardDrafts(userId: string): void {
   for (const k of unsavedDraftKeys(userId)) { try { localStorage.removeItem(k); } catch { /* ignore */ } }
 }
 
+/** Leftover answers (a sign-in that expired, a closed tab) are kept at most 7 days from their last change, then deleted. */
+export const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** Deletes every kept copy (any person) older than 7 days, or unreadable; run when the app opens. Returns how many were deleted. */
+export function expireDrafts(now = Date.now(), store: Pick<Storage, "getItem" | "removeItem"> & { keys(): string[] } | null = null): number {
+  let removed = 0;
+  try {
+    const st = store ?? { getItem: (k: string) => localStorage.getItem(k), removeItem: (k: string) => localStorage.removeItem(k), keys: () => Object.keys(localStorage) };
+    for (const k of st.keys().filter((x) => x.startsWith(DRAFT_PREFIX))) {
+      let at = 0;
+      try { at = Number((JSON.parse(st.getItem(k) ?? "null") as { at?: number } | null)?.at ?? 0); } catch { at = 0; }
+      if (!at || now - at > DRAFT_MAX_AGE_MS) { st.removeItem(k); removed++; }
+    }
+  } catch { /* storage off */ }
+  return removed;
+}
+
 export class AutosaveQueue<T> {
   private latest: { v: T } | null = null;
   private chain: Promise<boolean> = Promise.resolve(true);

@@ -8,22 +8,23 @@ import SearchableSelect from "@/components/ui/SearchableSelect";
  * Setup for an app whose connector is not built yet (USI, VEVO, PRISMS, DataZoo): the administrator can store the access
  * details the provider issues, so they are ready the day the connector is added. Nothing is sent to the provider.
  */
-export default function PendingCredentialsForm({ connectionId, name, saved, busy, perform, onNotice }: {
+export default function PendingCredentialsForm({ connectionId, name, saved, busy, perform, onNotice, onDraftChange }: {
   connectionId: string; name: string; saved: boolean; busy: boolean;
-  perform: (operation: () => Promise<void>) => Promise<void>; onNotice: (text: string) => void;
+  perform: (operation: () => Promise<void>) => Promise<void>; onNotice: (text: string) => void; onDraftChange: (dirty: boolean) => void;
 }) {
   const [apiKey, setApiKey] = useState('');
   const [accountId, setAccountId] = useState('');
   const [organisationCode, setOrganisationCode] = useState('');
   const [environment, setEnvironment] = useState<'test' | 'production'>('test');
   return (
-    <form className="space-y-4" onSubmit={event => {
+    <form className="space-y-4" onChangeCapture={() => onDraftChange(true)} onSubmit={event => {
       event.preventDefault();
       const fields = { apiKey, accountId, organisationCode, environment };
       setApiKey('');
       void perform(async () => {
         await pendingCredentialRequest('save', connectionId, fields);
         setAccountId(''); setOrganisationCode('');
+        onDraftChange(false);
         onNotice(`${name} details saved. They will be used once the ${name} connector is added to Skyline.`);
       });
     }}>

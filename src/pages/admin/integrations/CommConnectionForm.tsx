@@ -27,8 +27,8 @@ async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
 }
 
 /** Save / replace / disconnect the details of a ClickSend, WhatsApp Business, Microsoft Teams channels or Google Maps connection. Values never come back. */
-export default function CommConnectionForm({ connectionId, connectorId, busy, perform, onNotice }: {
-  connectionId: string; connectorId: string; busy: boolean; perform: (operation: () => Promise<void>) => Promise<void>; onNotice: (text: string) => void;
+export default function CommConnectionForm({ connectionId, connectorId, busy, perform, onNotice, onDraftChange }: {
+  connectionId: string; connectorId: string; busy: boolean; perform: (operation: () => Promise<void>) => Promise<void>; onNotice: (text: string) => void; onDraftChange: (dirty: boolean) => void;
 }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [editing, setEditing] = useState(false);
@@ -38,7 +38,7 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
   const [channels, setChannels] = useState<Channel[]>([{ name: '', url: '' }]);
   const refresh = useCallback(async () => { try { setSummary(await rpc<Summary>('integration_comm_summary', { p_connection: connectionId })); } catch { setSummary(null); } }, [connectionId]);
   useEffect(() => { void refresh(); }, [refresh]);
-  const reset = () => { setA(''); setB(''); setC(''); setChannels([{ name: '', url: '' }]); setEditing(false); };
+  const reset = () => { setA(''); setB(''); setC(''); setChannels([{ name: '', url: '' }]); setEditing(false); onDraftChange(false); };
 
   const maps = connectorId === 'google_maps';
   const search = SEARCH_KEY[connectorId];
@@ -79,7 +79,8 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
           </div>
         </div>
       ) : (
-        <form className="space-y-3" onSubmit={e => { e.preventDefault(); void save(); }}>
+        // rule-policy: technical integration-credential-editor Track unsaved fields in the existing credential form.
+        <form className="space-y-3" onChangeCapture={() => onDraftChange(true)} onSubmit={e => { e.preventDefault(); void save(); }}>
           {connectorId === 'clicksend' ? <>
             <p className="text-sm">From the ClickSend dashboard: Developers › API Credentials.</p>
             <label className="block">API username<input className={inputClass} value={a} onChange={e => setA(e.target.value)} autoComplete="off" required maxLength={200} /></label>
@@ -110,10 +111,10 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
                   onChange={e => setChannels(list => list.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
                 <input className={inputClass} type="password" autoComplete="new-password" placeholder="Channel link (https://…)" value={ch.url} aria-label={`Channel ${i + 1} link`}
                   onChange={e => setChannels(list => list.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} />
-                <Button type="button" variant="ghost" disabled={channels.length === 1} onClick={() => setChannels(list => list.filter((_, j) => j !== i))}>Remove</Button>
+                <Button type="button" variant="ghost" disabled={channels.length === 1} onClick={() => { onDraftChange(true); setChannels(list => list.filter((_, j) => j !== i)); }}>Remove</Button>
               </div>
             ))}
-            {channels.length < 20 && <Button type="button" variant="outline" onClick={() => setChannels(list => [...list, { name: '', url: '' }])}>Add another channel</Button>}
+            {channels.length < 20 && <Button type="button" variant="outline" onClick={() => { onDraftChange(true); setChannels(list => [...list, { name: '', url: '' }]); }}>Add another channel</Button>}
           </>}
           <div className="flex flex-wrap gap-2">
             <Button type="submit" disabled={busy || !ready}>{saved ? 'Save new details' : 'Save & Connect'}</Button>

@@ -7,7 +7,7 @@ import { paymentsAction } from '@/lib/signingApi';
 import { currentTenantSite } from '@/lib/tenantSite';
 import { Empty, Frame } from './shared';
 import { ApplicationHeader, Applications, type Application } from './Applications';
-import OpenAIEnvironmentPanel from './OpenAIEnvironmentPanel';
+import ServerManagedPanel from './ServerManagedPanel';
 import LogsPage from './LogsPage';
 import SettingsPage from './SettingsPage';
 import SyncHistoryPage from './SyncHistoryPage';
@@ -515,7 +515,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
             </nav>}
             <div hidden={activeTab !== 'configuration'} className="space-y-4">
               {serverManaged ? (
-                <OpenAIEnvironmentPanel isAdmin={isAdmin} />
+                <ServerManagedPanel providerId={providerId} isAdmin={isAdmin} />
               ) : connection ? (
                 <>
                   <dl className="grid grid-cols-2 gap-2 rounded-md border border-background-200 bg-background-100 p-3 text-sm">

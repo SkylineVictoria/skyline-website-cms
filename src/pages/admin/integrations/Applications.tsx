@@ -19,6 +19,11 @@ export type Application = {
 
 const icons: Record<string, string> = {
   openai: 'ri-sparkling-2-line bg-emerald-100 text-emerald-800',
+  postmark: 'ri-mail-send-line bg-yellow-100 text-yellow-800',
+  geoscape: 'ri-map-pin-line bg-primary-100 text-primary-800',
+  training_gov_au: 'ri-government-line bg-secondary-100 text-secondary-800',
+  cloudflare_turnstile: 'ri-shield-check-line bg-orange-100 text-orange-800',
+  azure_document_intelligence: 'ri-file-search-line bg-blue-100 text-blue-800',
   microsoft365: 'ri-microsoft-fill bg-blue-100 text-blue-700',
   stripe: 'ri-bank-card-fill bg-indigo-100 text-indigo-700',
   google_maps: 'ri-map-pin-2-fill bg-primary-100 text-primary-800',

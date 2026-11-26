@@ -11,6 +11,7 @@ import { BreakDateField } from "@/pages/admin/components/rto/BreakDatePicker";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { shortDate, type StudyLoad } from "@/pages/admin/lib/rto";
 import MasterCyclesPanel, { FillSchoolBreaksButton } from "./MasterCyclesPanel";
+import CourseHolidaysPanel from "./CourseHolidaysPanel";
 import { COE_HOURS, CyclesUnavailable, courseStartFor, courseStartForEnd, cyclesCall, fixedWeeks, planTill, type CyclePlan } from "@/pages/admin/lib/masterCycles";
 
 interface Row { unitId: string; code: string; name: string; hours: number | null; weeks: number; startDate: string | null; endDate: string | null; prerequisites: string[] }
@@ -292,7 +293,8 @@ export default function StartDateBreaksEditor({ course, stepLabel, onClose, next
         </div>
         {editProblem && editing?.startDate && editing.endDate ? <p role="alert" className="mt-1 text-xs font-semibold text-red-700">{editProblem}</p>
           : draftProblem && draft.startDate && draft.endDate ? <p role="alert" className="mt-1 text-xs font-semibold text-red-700">{draftProblem}</p> : null}
-        <p className="mt-1 text-xs text-foreground-500">Days inside a term break are not counted: the unit dates move past them. Two breaks cannot share a day. A break marked (all courses) is changed for every course.</p>
+        <p className="mt-1 text-xs text-foreground-500">Days inside a term break are not counted: the unit dates move past them. Two breaks cannot share a day. Every break here is for {course.code} only.</p>
+        <div className="mt-3"><CourseHolidaysPanel courseId={course.id} courseCode={course.code} from={start} to={planTill(start, master.endDate, cycles, plan).till} canEdit={canEdit} /></div>
       </section>
 
       <section>

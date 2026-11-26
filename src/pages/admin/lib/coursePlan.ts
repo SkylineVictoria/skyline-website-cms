@@ -3,6 +3,7 @@
 // holiday), weekends included; hours of a class type the week has no slot for are taught in the first type it has
 // (theory, then practical, then assessment).
 import { listHolidays } from "@/lib/hrmsApi";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { addDays, listBreaks, loadUnitHours, rto, shownHours, type CourseDetail, type SessionType, type UnitHours } from "@/pages/admin/lib/rto";
 
 export type HoursByType = Record<SessionType, number>;
@@ -35,10 +36,19 @@ export async function loadCourseNeed(courseId: string): Promise<CourseNeed> {
   return need;
 }
 
+/** The public holidays this course teaches on (switched off for the course only). */
+async function courseHolidayTeaching(courseId: string): Promise<Set<string>> {
+  const { data, error } = await supabase.from("course_holiday_teaching").select("holiday_date").eq("course_id", courseId);
+  if (error) throw new Error(error.message);
+  return new Set(((data ?? []) as { holiday_date: string }[]).map((r) => r.holiday_date));
+}
+
 /** Days with no classes from `from` for three years: term breaks and confirmed, non-optional public holidays. */
 export async function loadClosedDays(from: string, courseId?: string | null): Promise<(day: string) => boolean> {
-  const [breaks, holidays] = await Promise.all([listBreaks(courseId).catch(() => []), listHolidays(from, addDays(from, 1095)).catch(() => [])]);
-  const off = new Set(holidays.filter((h) => h.status === "confirmed" && !h.isOptional).map((h) => h.date));
+  const [breaks, holidays, teaching] = await Promise.all([listBreaks(courseId).catch(() => []), listHolidays(from, addDays(from, 1095)).catch(() => []),
+    courseId ? courseHolidayTeaching(courseId).catch(() => new Set<string>()) : Promise.resolve(new Set<string>())]);
+  // A public holiday switched off for this course (course_holiday_teaching, migration 20261127040517) is a class day for it.
+  const off = new Set(holidays.filter((h) => h.status === "confirmed" && !h.isOptional && !teaching.has(h.date)).map((h) => h.date));
   return (day) => off.has(day) || breaks.some((b) => day >= b.startDate && day <= b.endDate);
 }
 

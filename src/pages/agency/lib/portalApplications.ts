@@ -580,6 +580,8 @@ export interface StudentAgencyOptions {
   ask: boolean;
   businesses: Array<{ id: string; name: string }>;
   agents: Array<{ id: string; name: string; role: string }>;
+  /** Who the student is recorded with now (STUDENT-NEW-APPLICATION-AGENT; null before migration 20261127030517). */
+  current: { businessId: string | null; businessName: string | null; direct: boolean; agentId: string | null; agentName: string | null; hasApplications: boolean } | null;
 }
 
 /** Active businesses a self-enrolled student may choose, and (for one business) its active agents. */
@@ -587,7 +589,14 @@ export async function studentAgencyOptions(businessId?: string): Promise<Student
   const { data, error } = await supabase.rpc("portal_student_agency_options", { p_business: businessId ?? null });
   if (error) throw new Error(error.message);
   const row = (data ?? {}) as Partial<StudentAgencyOptions>;
-  return { ask: row.ask === true, businesses: row.businesses ?? [], agents: row.agents ?? [] };
+  return { ask: row.ask === true, businesses: row.businesses ?? [], agents: row.agents ?? [], current: row.current ?? null };
+}
+
+/** The signed-in student picks another active agent of their own business (portal_student_change_agent). */
+export async function changeStudentAgent(agentId: string): Promise<{ agentName: string }> {
+  const { data, error } = await supabase.rpc("portal_student_change_agent", { p_agent: agentId });
+  if (error) throw new Error(error.message);
+  return { agentName: String((data as { agentName?: string } | null)?.agentName ?? "") };
 }
 
 /** Moves the signed-in student (record, sign-in and pending invitation) under the chosen business and agent. */

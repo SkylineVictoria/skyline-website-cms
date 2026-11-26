@@ -208,6 +208,8 @@ interface WorkspaceProps {
   onePage?: boolean;
   /** The student has it already: the agent / staff edit, but there is nothing to send (Resend is on the handoff panel). */
   sentToStudent?: boolean;
+  /** Opens the step holding this field once the form is ready (a returning student's new application starts on the course). */
+  initialEdit?: string;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -227,6 +229,7 @@ export default function ApplicationWorkspace({
   reviewBar,
   onePage = false,
   sentToStudent = false,
+  initialEdit,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
   // The same cards for staff, agents and students; read-only (submitted, or the other side has it) = the cards without Edit.
@@ -1258,6 +1261,9 @@ export default function ApplicationWorkspace({
     window.setTimeout(() => focusSection(index, field), 240);
   };
 
+  const openSectionRef = useRef(openSection);
+  openSectionRef.current = openSection;
+
   /** Scrolls to a step (or one of its fields), puts the cursor there and names the step in the URL (#address). */
   const focusSection = (index: number, field?: string) => {
     const card = formRef.current?.querySelector<HTMLElement>(`[data-section="${CSS.escape(keys[index])}"]`);
@@ -1294,6 +1300,13 @@ export default function ApplicationWorkspace({
   const stageOpenedRef = useRef(stageOpened);
   stageOpenedRef.current = stageOpened;
   const ready = hydrated && (attachmentsLoaded || Boolean(documentMessage));
+  const initialEditDone = useRef(false);
+  useEffect(() => {
+    if (!ready || !one || !initialEdit || initialEditDone.current || readOnly) return;
+    initialEditDone.current = true;
+    const index = sections.findIndex((section) => section.fields.some((field) => field.name === initialEdit));
+    if (index >= 0) openSectionRef.current(index, initialEdit);
+  }, [ready, one, initialEdit, readOnly, sections]);
   useEffect(() => { if (ready) stageOpenedRef.current(); }, [stage, ready]);
 
   // After a read or a pick: if its step is now complete, it closes, and the next incomplete step on the stage opens.

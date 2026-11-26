@@ -7,6 +7,7 @@ import {
 import { INVITE_SMS_LABEL, sendApplicationInvitation } from "@/pages/agency/lib/portalApplications";
 import { pendingContact, sendContactCode, signingPasswordNeeded, verifyContactCode } from "@/pages/agency/lib/handoff";
 import { passwordProblem } from "@/lib/passwords";
+import { portalSections } from "@/pages/agency/lib/portalSections";
 
 const when = (value: string | null | undefined) => (value ? new Date(value).toLocaleString() : "—");
 
@@ -94,24 +95,46 @@ function Timeline({ handoff }: { handoff: Handoff }) {
 
 const show = (value: unknown) => (value === null || value === undefined || value === "" ? "—" : Array.isArray(value) ? value.join(", ") : typeof value === "object" ? JSON.stringify(value) : String(value));
 
+/** The form's own label for a saved answer ("Date of Birth", not date_of_birth). */
+const FIELD_LABEL = new Map(portalSections.flatMap((section) => section.fields.map((field) => [field.name, field.label] as const)));
+const labelOf = (name: string) => FIELD_LABEL.get(name) || name.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+/** A long answer (the ticked declarations) as a short line, the whole text one click away. */
+function DiffValue({ value, strike = false }: { value: unknown; strike?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const text = Array.isArray(value) && value.length > 2 && !open ? `${value.length} items agreed` : show(value);
+  const long = text.length > 140 && !open;
+  return (
+    <span className={strike ? "text-foreground-600 line-through" : "font-medium text-foreground-900"}>
+      {long ? `${text.slice(0, 140)}…` : text}
+      {(long || (Array.isArray(value) && value.length > 2)) ? (
+        <button type="button" onClick={() => setOpen((v) => !v)} className="ml-1 cursor-pointer text-2xs font-semibold text-primary-700 no-underline hover:underline">{open ? "Show less" : "Show all"}</button>
+      ) : null}
+    </span>
+  );
+}
+
 /** What the student changed: the application sent vs submitted (or the current draft while it is still with them). */
-export function HandoffDiffView({ applicationId }: { applicationId: string }) {
+export function HandoffDiffView({ applicationId, viewer = "staff" }: { applicationId: string; viewer?: "staff" | "student" }) {
   const [diff, setDiff] = useState<HandoffDiff | null>(null);
   useEffect(() => { getHandoffDiff(applicationId).then(setDiff, () => setDiff(null)); }, [applicationId]);
   if (!diff?.source) return null;
   return (
     <div className="space-y-2" data-testid="handoff-diff">
       <p className="text-sm font-semibold text-foreground-900">
-        {diff.source === "submitted" ? "What the student changed before submitting" : "What the student has changed so far"} ({diff.changes.length})
+        {viewer === "student"
+          ? (diff.source === "submitted" ? "What you changed before submitting" : "What you have changed so far")
+          : (diff.source === "submitted" ? "What the student changed before submitting" : "What the student has changed so far")} ({diff.changes.length})
       </p>
       {diff.changes.length ? (
         <div className="overflow-x-auto rounded-lg border border-background-200">
           <table className="w-full text-left text-xs">
-            <thead className="bg-background-100 text-foreground-600"><tr><th className="px-3 py-2">Field</th><th className="px-3 py-2">You sent</th><th className="px-3 py-2">Student's answer</th><th className="px-3 py-2">Changed by</th></tr></thead>
+            <thead className="bg-background-100 text-foreground-600"><tr><th className="px-3 py-2">Question</th><th className="px-3 py-2">{viewer === "student" ? "Your agent entered" : "Sent to the student"}</th><th className="px-3 py-2">{viewer === "student" ? "Your answer" : "Student's answer"}</th></tr></thead>
             <tbody>{diff.changes.map((c) => (
-              <tr key={c.field} className="border-t border-background-200">
-                <td className="px-3 py-1.5 font-mono">{c.field}</td><td className="px-3 py-1.5 text-foreground-600 line-through">{show(c.before)}</td>
-                <td className="px-3 py-1.5 font-medium text-foreground-900">{show(c.after)}</td><td className="px-3 py-1.5">Student</td>
+              <tr key={c.field} className="border-t border-background-200 align-top">
+                <td className="px-3 py-2 font-medium text-foreground-800">{labelOf(c.field)}</td>
+                <td className="px-3 py-2"><DiffValue value={c.before} strike /></td>
+                <td className="px-3 py-2"><DiffValue value={c.after} /></td>
               </tr>))}</tbody>
           </table>
         </div>
@@ -124,7 +147,8 @@ export function HandoffDiffView({ applicationId }: { applicationId: string }) {
  * Agent / staff view of an application sent to the student: "With student", the timeline, Take back (before submit) and Resend.
  * Resend revokes the old link and sends a new one (the daily limit of the invitation rules applies).
  */
-export function AgentHandoffPanel({ applicationId, handoff, onChanged }: { applicationId: string; handoff: Handoff; onChanged: () => void }) {
+export function AgentHandoffPanel({ applicationId, handoff, onChanged, viewer = "staff" }: { applicationId: string; handoff: Handoff; onChanged: () => void; viewer?: "staff" | "student" }) {
+  const student = viewer === "student";
   const [busy, setBusy] = useState<"" | "take" | "resend">("");
   const [error, setError] = useState("");
   const [confirmTake, setConfirmTake] = useState(false);
@@ -148,15 +172,24 @@ export function AgentHandoffPanel({ applicationId, handoff, onChanged }: { appli
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${withStudent ? "bg-sky-100 text-sky-900" : handoff.state === "change_requested" ? "bg-amber-100 text-amber-900" : handoff.state === "submitted" ? "bg-emerald-100 text-emerald-900" : "bg-background-200 text-foreground-800"}`}
           data-testid="handoff-state">{HANDOFF_STATE_LABEL[handoff.state]}</span>
       </div>
-      {withStudent ? <p className="text-sm text-foreground-700">The student has the application. You can still edit the answers; only the student ticks the declarations and signs.
+      {student ? (
+        <p className="text-sm text-foreground-700">{handoff.state === "with_student" ? "Your agent sent you this application. Check it on the Application form tab, change what is wrong, then sign it there. Something your agent set is wrong? Request a change."
+          : handoff.state === "waiting_guardian" ? "You have signed. It is submitted once your parent or guardian signs."
+          : handoff.state === "submitted" ? "You signed and submitted this application. SLIT admissions will review it."
+          : handoff.state === "change_requested" ? `You asked your agent: “${handoff.changeNote}”. They will send it back to you.`
+          : "Your agent is making changes. You will get an email when it is ready for you again."}</p>
+      ) : null}
+      {!student && withStudent ? <p className="text-sm text-foreground-700">The student has the application. You can still edit the answers; only the student ticks the declarations and signs.
         {handoff.invite?.state === "expired" ? " Their link has expired: resend it." : ""}</p> : null}
-      {handoff.state === "waiting_guardian" ? <p className="text-sm text-foreground-700">The student is under 18 and has signed. It is submitted once {handoff.guardian ? `${handoff.guardian.name} (${handoff.guardian.relationship})` : "their parent or guardian"} signs.</p> : null}
-      {handoff.state === "change_requested" ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">The student asked for a change: “{handoff.changeNote}”. Make the change, then send it to the student again.</p> : null}
+      {!student && handoff.state === "waiting_guardian" ? <p className="text-sm text-foreground-700">The student is under 18 and has signed. It is submitted once {handoff.guardian ? `${handoff.guardian.name} (${handoff.guardian.relationship})` : "their parent or guardian"} signs.</p> : null}
+      {!student && handoff.state === "change_requested" ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">The student asked for a change: “{handoff.changeNote}”. Make the change, then send it to the student again.</p> : null}
       <Timeline handoff={handoff} />
-      {handoff.state === "submitted" || withStudent ? <HandoffDiffView applicationId={applicationId} /> : null}
+      {handoff.state === "submitted" || withStudent ? <HandoffDiffView applicationId={applicationId} viewer={viewer} /> : null}
       {error ? <p role="alert" className="text-sm text-red-800">{error}</p> : null}
       {note ? <p role="status" className="text-sm text-emerald-800">{note}</p> : null}
-      {withStudent ? (
+      {student && handoff.state === "with_student" ? <RequestChangeButton applicationId={applicationId} onDone={onChanged} /> : null}
+      {student && handoff.state === "waiting_guardian" ? <GuardianRequestForm applicationId={applicationId} handoff={handoff} onSent={onChanged} /> : null}
+      {!student && withStudent ? (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" disabled={Boolean(busy)} onClick={() => setConfirmTake(true)} data-testid="handoff-take-back">Take back</Button>
           {handoff.state === "with_student" ? <Button variant="ghost" disabled={Boolean(busy)} onClick={() => void run("resend")} data-testid="handoff-resend">{busy === "resend" ? "Sending…" : "Resend link"}</Button> : null}

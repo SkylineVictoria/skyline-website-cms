@@ -1,5 +1,6 @@
 import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
-import { AgentHandoffPanel, StudentHandoffNotice } from "@/pages/agency/components/ApplicationHandoff";
+import { AgentHandoffPanel } from "@/pages/agency/components/ApplicationHandoff";
+import { HANDOFF_STATE_LABEL } from "@/pages/agency/lib/handoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
@@ -50,7 +51,7 @@ function ReviewIssuesReporter({ count, onCount }: { count: number; onCount: (n: 
   return null;
 }
 
-type Tab = "form" | "documents" | "history" | "messages" | "notifications";
+type Tab = "form" | "signing" | "documents" | "history" | "messages" | "notifications";
 
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: "form", label: "Application form", icon: "ri-file-edit-line" },
@@ -225,7 +226,9 @@ export default function ApplicationDetailPage() {
   // ONE-PAGE (owner 2026-11-26): once the agent has prepared the application and sent it to the student, it opens as one page with
   // every answer (the student checks, edits and signs there); the document wizard is only for a blank application.
   if (needsInitialWizard(application) && !handoffLoaded) return <PortalLoading label="Loading application…" />;
-  if (needsInitialWizard(application) && !handoff?.state) {
+  // A returning student (their details are on record) also gets the one page: course and intake first, then check and sign.
+  const returningStudent = role === "student" && Boolean(String((application.data?.values as Record<string, unknown> | undefined)?.first_name ?? "").trim());
+  if (needsInitialWizard(application) && !handoff?.state && !returningStudent) {
     return (
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -326,15 +329,23 @@ export default function ApplicationDetailPage() {
         </p>
       </header>
 
-      {handoff?.state && role !== "student" ? <div className="mt-4"><AgentHandoffPanel applicationId={application.id} handoff={handoff}
-        onChanged={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1); }} /></div> : null}
-      {role === "student" ? <div className="mt-4"><StudentHandoffNotice applicationId={application.id} handoff={handoff} onChanged={() => void reloadHandoff()} /></div> : null}
+      {/* The student review and signature (timeline, what the student changed, Take back / Resend / Request a change) is its own tab. */}
+      {handoff?.state ? (
+        <button type="button" onClick={() => setTab("signing")} data-testid="handoff-strip"
+          className="mt-4 flex w-full cursor-pointer flex-wrap items-center gap-2 rounded-card border border-background-200 bg-background-50 px-4 py-2.5 text-left text-sm hover:border-primary-300">
+          <i className="ri-quill-pen-line text-base text-primary-600" aria-hidden="true" />
+          <span className="font-medium text-foreground-900">Student review and signature</span>
+          <span className="rounded-full bg-background-200 px-2 py-0.5 text-xs font-semibold text-foreground-800">{HANDOFF_STATE_LABEL[handoff.state]}</span>
+          <span className="ml-auto text-xs font-semibold text-primary-700">Open <i className="ri-arrow-right-line" aria-hidden="true" /></span>
+        </button>
+      ) : null}
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
       {/* OFFER-DEPOSIT: acceptance and deposit at a glance; staff and the agent remind, staff set the automatic reminders. */}
       <OfferDepositCard applicationId={application.id} canRemind={isSlit || role === "agent" || role === "agency_admin"} canConfigure={isSlit} refreshKey={application.status} />
 
       <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-background-200 pb-px">
-        {(paths.area === "cms" ? [...TABS, { id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : TABS).map((item) => (
+        {[...TABS.slice(0, 1), ...(handoff?.state ? [{ id: "signing" as Tab, label: "Review & signature", icon: "ri-quill-pen-line" }] : []), ...TABS.slice(1),
+          ...(paths.area === "cms" ? [{ id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : [])].map((item) => (
           <button
             key={item.id}
             type="button"
@@ -388,6 +399,7 @@ export default function ApplicationDetailPage() {
             agencyName={agencyName}
             readOnly={readOnly}
             onePage
+            initialEdit={searchParams.get("edit") === "course" ? "courses_of_interest" : undefined}
             sentToStudent={handoff?.state === "with_student"}
             auditAccess={isSlit}
             reviewBar={isSlit ? (issues: number) => <ReviewIssuesReporter count={issues} onCount={setReviewIssues} /> : undefined}
@@ -448,6 +460,11 @@ export default function ApplicationDetailPage() {
                 onDownload={() => { const d = preview.doc; setPreview(null); void handleDocumentAction(d, "download"); }} /> : null}
             </div>
           )
+        ) : null}
+
+        {tab === "signing" && handoff?.state ? (
+          <AgentHandoffPanel applicationId={application.id} handoff={handoff} viewer={role === "student" ? "student" : "staff"}
+            onChanged={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1); }} />
         ) : null}
 
         {tab === "history" ? (

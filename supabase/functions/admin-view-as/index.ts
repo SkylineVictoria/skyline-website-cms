@@ -35,6 +35,8 @@ Deno.serve(async (req: Request) => {
     let body: Record<string, unknown>;
     try { body = JSON.parse((await req.text()).slice(0, 2000)); } catch { return json({ error: 'Invalid JSON.' }, 400); }
     const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
+    // The browser checks this before signing in by agent (version 1 had no agent path and would open the test account).
+    if (body.action === 'version') return json({ version: 2 });
     if (body.action === 'end') {
       const ended = await admin.rpc('admin_view_as_end', { p_admin: who.user.id });
       return ended.error ? json({ error: 'The switch could not be closed.' }, ended.error.code === '42501' ? 403 : 500) : json({ ok: true, ended: ended.data ?? 0 });

@@ -24,7 +24,7 @@ export interface ConsentState {
 
 // Field types and answers that are not shown as values: notes, tables, terms, files, and answers the form keeps itself.
 const NOT_SHOWN_TYPES = new Set<AppField["type"]>(["static", "table", "terms", "file"]);
-const NOT_SHOWN_FIELDS = new Set(["checklist", "address_source", "via_agent", "agent_agency", "agent_contact_name", "agent_email", "agent_phone"]);
+const NOT_SHOWN_FIELDS = new Set(["checklist", "address_source", "via_agent", "agent_agency", "agent_contact_name", "agent_email", "agent_phone", "digital_signature"]);
 
 /**
  * Review & submit: every missing or invalid item first, each a link to its exact field; then one row per step (from the step

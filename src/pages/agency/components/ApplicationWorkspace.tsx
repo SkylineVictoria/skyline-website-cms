@@ -665,8 +665,17 @@ export default function ApplicationWorkspace({
 
   /* --------------------------------------------------------- events */
 
+  /** ONE-PAGE: the student signs once, by drawing; the typed "digital signature" is the declarant's name, kept in step out of sight. */
+  const syncTypedSignature = () => {
+    if (!one || !formRef.current) return;
+    const name = formRef.current.querySelector<HTMLInputElement>('[name="declaration_name"]');
+    const typed = formRef.current.querySelector<HTMLInputElement>('[name="digital_signature"]');
+    if (name && typed && typed.value !== name.value) typed.value = name.value;
+  };
+
   const handleChange = (event: FormEvent<HTMLFormElement>) => {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
+    syncTypedSignature();
     // Persisted portal attachments are managed by ApplicationAttachmentField;
     // never let the native file event create a second upload request.
     if (target?.type === "file") return;
@@ -1375,6 +1384,7 @@ export default function ApplicationWorkspace({
     const section = sections[index];
     if (!section?.fields.some((field) => field.name === "declaration_name") || !section.fields.some((field) => field.name === "digital_signature")) return [];
     const read = (name: string) => (formRef.current?.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+    syncTypedSignature();
     const name = read("declaration_name"), signature = read("digital_signature");
     return (name || signature) && name !== signature ? [{ field: "digital_signature", text: "The declarant name and digital signature do not match" }] : [];
   };
@@ -1404,6 +1414,7 @@ export default function ApplicationWorkspace({
   const handleSubmit = async () => {
     if (readOnly || submitting) return;
     setSubmitError("");
+    syncTypedSignature();
     const { missing, firstIndex } = collectMissing();
     setShowErrors(true);
     if (missing.length > 0) {
@@ -1575,6 +1586,9 @@ export default function ApplicationWorkspace({
       if (field.type === "static") return null;
       const saved = String(mergedInitial[field.name] ?? (field.name === "confirm_email" ? mergedInitial.email ?? "" : ""));
       return <input key={field.name} type="hidden" name={field.name} defaultValue={saved} />;
+    }
+    if (one && field.name === "digital_signature") {
+      return <input key={field.name} type="hidden" name={field.name} defaultValue={String(mergedInitial.declaration_name ?? mergedInitial.digital_signature ?? "")} />;
     }
     const fixedAustralia = field.name in fixedValues();
     const locked = readOnly || LOCKED_AGENT_FIELDS.has(field.name) || fixedAustralia;
@@ -1969,7 +1983,7 @@ export default function ApplicationWorkspace({
         onSelectSection={(index) => openSection(index)}
         hideNav={one}
         onPrevious={one ? (onePageView.kind === "grid" ? undefined : () => showOnePage("grid")) : () => showStage(stage - 1)}
-        previousDisabled={stage === 0}
+        previousDisabled={one ? false : stage === 0}
         onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
         message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={

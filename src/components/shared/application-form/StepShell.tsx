@@ -111,7 +111,7 @@ export default function StepShell({ stages, current, percent, status, notice, on
           {onPrevious ? (
             <button type="button" onClick={onPrevious} disabled={previousDisabled} className={`${SMALL_BUTTON} border border-background-300 bg-background-50 text-foreground-700 hover:bg-background-100`}>
               <i className="ri-arrow-left-line text-base leading-none" aria-hidden="true" />
-              Previous
+              {hideNav ? "Back to the application" : "Previous"}
             </button>
           ) : null}
           {message ? <div className="order-first min-w-0 basis-full sm:order-none sm:basis-auto sm:flex-1">{message}</div> : null}

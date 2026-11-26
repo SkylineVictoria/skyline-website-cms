@@ -5211,3 +5211,10 @@ test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Fo
   assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("await saveSignPassword(signPasswordRef.current);"));
   assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(67);"));
 });
+
+test("Student confirms every screen (2026-11-26): an application sent by the agent opens at the passport and moves one screen at a time to the signature", () => {
+  const wizard = read("src/pages/agency/components/ApplicationWizard.tsx");
+  assert.ok(wizard.includes('const confirmMode = signsHere && handoff?.state === "with_student";'));
+  assert.ok(wizard.includes("Math.min(index, LAST_STEP, confirmMode ? Math.max(confirmedUpTo.current, step + 1) : LAST_STEP)"), "no jump past the furthest confirmed screen");
+  assert.ok(!wizard.includes("setStep(LAST_STEP)"), "never opens on the signature screen");
+});

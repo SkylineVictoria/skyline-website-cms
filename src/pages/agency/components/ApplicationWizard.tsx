@@ -13,7 +13,6 @@ import {
   saveWizardDraft,
   submitApplication,
   sendApplicationInvitation,
-  getWizardSummary,
   uploadApplicationDocument,
   type ApplicationCourseRow,
   type DocumentRow,
@@ -271,14 +270,26 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     documentsRef.current = documents;
   }, [documents]);
 
-  // APPLICATION-STUDENT-SIGNS: a student opening what their agent filled starts on the review summary (the declaration screen,
-  // with Edit per section); otherwise the wizard resumes at the first incomplete step as before.
-  const reviewOpened = useRef(false);
+  // STUDENT-CONFIRMS-ALL (owner, 2026-11-26): a student opening what their agent filled starts at the passport and confirms every
+  // screen with Next, start to end, before signing; the stepper never jumps past the furthest screen they have confirmed. Their
+  // progress is kept on this device per sending (a new sending after a change request starts again from the passport).
+  const confirmMode = signsHere && handoff?.state === "with_student";
+  const confirmKey = `slit-portal-wizard-confirmed:${portalScopeCacheKey()}:${applicationId}:${handoff?.sentAt ?? ""}`;
+  const confirmedUpTo = useRef(0);
+  const confirmOpened = useRef(false);
   useEffect(() => {
-    if (reviewOpened.current || !signsHere || handoff?.state !== "with_student" || loading) return;
-    reviewOpened.current = true;
-    void getWizardSummary(applicationId).then((summary) => { if (summary?.status === "Ready for Submission") setStep(LAST_STEP); }, () => undefined);
-  }, [signsHere, handoff?.state, loading, applicationId]);
+    if (confirmOpened.current || !confirmMode || loading) return;
+    confirmOpened.current = true;
+    let saved = 0;
+    try { saved = Math.max(0, Math.min(LAST_STEP, Number(window.localStorage.getItem(confirmKey)) || 0)); } catch { /* storage unavailable */ }
+    confirmedUpTo.current = saved;
+    setStep(saved);
+  }, [confirmMode, loading, confirmKey]);
+  useEffect(() => {
+    if (!confirmMode || !confirmOpened.current || step <= confirmedUpTo.current) return;
+    confirmedUpTo.current = step;
+    try { window.localStorage.setItem(confirmKey, String(step)); } catch { /* storage unavailable */ }
+  }, [confirmMode, step, confirmKey]);
 
   useEffect(() => {
     if (!inputVersion) return;
@@ -697,7 +708,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // Forward navigation cannot bypass documents marked required by the published admissions rule.
   const goTo = async (index: number, completed = false) => {
     if (loading || loadError || finishing) return;
-    const bounded = Math.max(0, Math.min(index, LAST_STEP));
+    // A student confirming the agent's work moves forward one screen at a time (Next), never past what they have confirmed.
+    const bounded = Math.max(0, Math.min(index, LAST_STEP, confirmMode ? Math.max(confirmedUpTo.current, step + 1) : LAST_STEP));
     if (completed && ALL_STEPS[step]) completedSteps.current.add(ALL_STEPS[step].id);
     const missing = bounded > step ? firstMissingBefore(bounded) : -1;
     let next = missing >= 0 ? missing : bounded;
@@ -1316,7 +1328,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   return (
     <WizardShell
       title={"New application"}
-      subtitle={`Upload the documents, answer a few questions and submit. ${agencyName}`}
+      subtitle={confirmMode ? `Your agent has filled this in. Check every screen from the passport to the end and press Next to confirm it, then sign. ${agencyName}` : `Upload the documents, answer a few questions and submit. ${agencyName}`}
       onClose={() => void leaveDraft()}
       closeLabel="Save and close the wizard"
       stepper={

@@ -519,6 +519,17 @@ export async function saveStudent(input: StudentInput): Promise<{ id: string; na
   return { id: str(r.id), name: str(r.name), email: str(r.email), phone: str(r.phone), businessId: str(r.businessId), agentId: r.agentId ? str(r.agentId) : null, reused: Boolean(r.reused) };
 }
 
+/** A draft just created has no draft version yet: read it once (as getApplication does) so the first save can be checked
+ * against it (STUDENT-NEW-APPLICATION-SAVE). An error leaves it untracked; draftCommand then asks for a reload as before. */
+async function trackNewDraft(id: string): Promise<void> {
+  const { data, error } = await supabase.rpc("portal_wizard_application", { p_application: id });
+  if (error || !data) return;
+  const r = data as Record<string, unknown>;
+  const merged = (r.data as Record<string, unknown>) ?? {};
+  draftVersions.set(id, Number(r.draft_version ?? 0));
+  wizardSaveStamps.set(id, str(merged.savedAt) || null);
+}
+
 /** Creates the student and draft in one transaction. */
 export async function createStudentDraft(email: string, agentId: string, clientKey: string): Promise<string> {
   const { data, error } = await supabase.rpc("portal_start_student_draft", {
@@ -526,6 +537,7 @@ export async function createStudentDraft(email: string, agentId: string, clientK
   });
   if (error) throw new Error(error.message, { cause: error });
   if (typeof data !== "string") throw new Error("The draft could not be created.");
+  await trackNewDraft(data);
   return data;
 }
 
@@ -572,6 +584,7 @@ export async function createApplicationForStudent(clientKey: string, studentId: 
   if (error) throw new Error(error.message, { cause: error });
   const row = (Array.isArray(data) ? data[0] : data) as { application_id?: string; application_reference?: string } | null | undefined;
   if (!row?.application_id) throw new Error("The application could not be created.");
+  await trackNewDraft(String(row.application_id));
   return { id: String(row.application_id), reference: String(row.application_reference ?? "") };
 }
 

@@ -5273,3 +5273,14 @@ test("Contact verify everyone (2026-11-26, 20261126170517): employee links, sign
   const sql = read("supabase/migrations/20261126170517_contact_verify_everyone.sql");
   assert.ok(sql.includes("encode(sha256(convert_to(p_scope || ':' || p_subject::text || ':' || p_code, 'UTF8')), 'hex'), clock_timestamp() + interval '10 minutes'"), "codes stored hashed, 10 minutes");
 });
+
+test("new applications track their draft version on creation, so the first save needs no getApplication (STUDENT-NEW-APPLICATION-SAVE)", () => {
+  const lib = read("src/pages/agency/lib/portalApplications.ts");
+  const body = (name: string) => lib.slice(lib.indexOf(`export async function ${name}(`), lib.indexOf("\n}\n", lib.indexOf(`export async function ${name}(`)));
+  assert.match(lib, /async function trackNewDraft\(id: string\)[\s\S]*?rpc\("portal_wizard_application", \{ p_application: id \}\)[\s\S]*?if \(error \|\| !data\) return;[\s\S]*?draftVersions\.set\(id, Number\(r\.draft_version \?\? 0\)\);[\s\S]*?wizardSaveStamps\.set\(id, str\(merged\.savedAt\) \|\| null\);/);
+  assert.ok(body("createStudentDraft").includes("await trackNewDraft(data);"), "createStudentDraft tracks the new draft");
+  assert.ok(body("createApplicationForStudent").includes("await trackNewDraft(String(row.application_id));"), "createApplicationForStudent tracks the new draft");
+  // The two-session conflict check is unchanged: an untracked draft is still refused, and saves still send the expected version.
+  assert.ok(lib.includes('if (!draftVersions.has(id)) throw new Error("Reload the application before editing.");'));
+  assert.ok(lib.includes("p_expected_version: draftVersions.get(id)"));
+});

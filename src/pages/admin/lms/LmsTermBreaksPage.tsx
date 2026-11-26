@@ -3,7 +3,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { generateClassSessions, loadClassSessions, rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
-/** courseId null: the break applies to every course. */
+/** Every break belongs to one course (owner, 2026-11-26; migration 20261127040517). courseId null only on a database without course_id. */
 interface BreakRow { id: string; label: string; startDate: string; endDate: string; courseId: string | null }
 type Draft = { id: string | null; label: string; startDate: string; endDate: string; courseId: string | null };
 
@@ -68,7 +68,8 @@ export default function LmsTermBreaksPage() {
   };
   const replanNote = (n: number) => n ? ` Classes updated for ${n} intake${n === 1 ? "" : "s"}.` : "";
 
-  const draftProblem = !draft ? "" : !draft.label.trim() ? "Enter a name."
+  const draftProblem = !draft ? "" : perCourse && !draft.courseId ? "Choose the course."
+    : !draft.label.trim() ? "Enter a name."
     : draft.label.trim().length > 80 ? "The name can be at most 80 characters."
     : !draft.startDate || !draft.endDate ? "Enter the first and last day."
     : draft.endDate < draft.startDate ? "The last day must be on or after the first day." : "";
@@ -111,7 +112,7 @@ export default function LmsTermBreaksPage() {
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Learning Management</p>
         <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">Term breaks</h1>
-        <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. A break can apply to every course or to one course. When you add, change or delete a break, every running intake's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
+        <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. Each break is for one course only. When you add, change or delete a break, every running intake's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
       </div>
       {canEdit && !draft && <button type="button" onClick={() => { setDraft({ id: null, label: "", startDate: "", endDate: "", courseId: filter || null }); setNotice(""); }}
         className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add break</button>}
@@ -124,7 +125,7 @@ export default function LmsTermBreaksPage() {
       <h2 className="font-heading text-lg font-bold text-foreground-950">{draft.id ? "Edit break" : "Add break"}</h2>
       {perCourse && <label className="mt-3 block text-sm font-medium text-foreground-800">Applies to
         <SearchableSelect className={inputClass + " mt-1"} value={draft.courseId ?? ""} onChange={e => setDraft(d => d && { ...d, courseId: e.target.value || null })}>
-          <option value="">All courses</option>
+          <option value="">Choose a course</option>
           {courses.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}
         </SearchableSelect></label>}
       <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px_180px]">

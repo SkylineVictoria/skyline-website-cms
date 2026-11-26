@@ -59,10 +59,11 @@ insert into public.intake_trainers(intake_id, staff_id) values ('f5000000-0000-0
 -- placements are made by the system only (guard intake_enrolments_auto_only, 20261118180000): the fixture places its students as the
 -- system's planner does, for this insert only
 select set_config('rto.carry_over_planning', 'on', true);
--- AVETMISS (hosted 20261125025533) refuses an enrolment without the student's AVETMISS details: the fixture students have them.
+-- AVETMISS (hosted 20261125025533, 20261126124153) refuses an enrolment without the student's AVETMISS details: the fixture students have them.
 update public.enrollment_students set sex_code = 'M', birth_country_code = '1101', home_language_code = '1201', indigenous_status_code = '4',
-  school_level_code = '12', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N',
-  details = coalesce(details, '{}'::jsonb) || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb
+  school_level_code = '12', school_level_year = '2017', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N',
+  details = coalesce(details, '{}'::jsonb) || jsonb_build_object('first_name', split_part(full_name, ' ', 1), 'last_name', split_part(full_name, ' ', 2))
+    || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_street": "1 Test St", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb
  where id in ('e5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000012', 'e5000000-0000-0000-0000-000000000013');
 insert into public.intake_enrolments(intake_id, student_id, study_reason_code) values
  ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000011', '01'), ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000013', '01'),

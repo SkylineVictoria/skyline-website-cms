@@ -56,6 +56,7 @@ import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { GuardianRequestForm, RequestChangeButton, SignPasswordFields, StudentHandoffNotice, type SignPassword } from "@/pages/agency/components/ApplicationHandoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
 import { declarationConsent, saveSignPassword } from "@/pages/agency/lib/handoff";
+import DrawSignature from "@/pages/agency/components/DrawSignature";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
@@ -261,6 +262,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const declarationsRef = useRef<{ ticked: Record<string, string>; complete: boolean }>({ ticked: {}, complete: false });
   // A student who opened the application from the link alone creates the password at the signature (owner, 2026-11-26).
   const signPasswordRef = useRef<SignPassword>({ needed: false, password: "", valid: true });
+  // APPLICATION-DRAWN-SIGNATURE: the student draws their signature on the last screen.
+  const signatureRef = useRef<string | null>(null);
   const [sentToStudent, setSentToStudent] = useState(false);
   const [waitingGuardian, setWaitingGuardian] = useState(false);
   // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
@@ -611,7 +614,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         return;
       }
       await saveSignPassword(signPasswordRef.current);
-      const receipt = await submitApplication(applicationId, declarationConsent(declarationsRef.current.ticked));
+      const receipt = await submitApplication(applicationId, declarationConsent(declarationsRef.current.ticked, signatureRef.current));
       try { window.localStorage.removeItem(wizardStepKey(applicationId)); } catch { /* storage unavailable */ }
       if (receipt.waitingGuardian) { setWaitingGuardian(true); void reloadHandoff(); return; }
       setSubmittedRef(receipt.reference || application?.reference || "Submitted");
@@ -1029,6 +1032,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // One tick agrees and signs: the name is the student's own (from Personal details), never typed again.
       const signer = filled("declaration_name") || [filled("first_name"), filled("middle_name"), filled("last_name")].filter(Boolean).join(" ");
       if (signsHere && !declarationsRef.current.complete) errors.declaration_read = "Read and tick each declaration to sign.";
+      else if (signsHere && !signatureRef.current) errors.declaration_read = "Draw your signature in the box to sign.";
       else if (signsHere && !signPasswordRef.current.valid) errors.declaration_read = "Create your password (at least the length shown, both the same) to sign.";
       else if (!signer) errors.declaration_read = "Add the student's name on Personal details first.";
       // What the full form used to fill itself: the checklist, USI consent, the agent block and the visa answer.
@@ -1219,7 +1223,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <WizardFinishSteps question={question} answers={answers} errors={answerErrors} onChange={setAnswer} onAddress={pickAddress} summary={summary} version={hydrated} passportCountry={passportCountry}
                 studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }}
                 onDeclarations={(ticked, complete) => { declarationsRef.current = { ticked, complete }; if (complete) setAnswerErrors((prev) => ({ ...prev, declaration_read: "" })); }}
-                signExtras={signsHere ? <SignPasswordFields applicationId={applicationId} onChange={(value) => { signPasswordRef.current = value; }} /> : null}
+                signExtras={signsHere ? <>
+                  <DrawSignature onChange={(png) => { signatureRef.current = png; if (png) setAnswerErrors((prev) => ({ ...prev, declaration_read: "" })); }} />
+                  <SignPasswordFields applicationId={applicationId} onChange={(value) => { signPasswordRef.current = value; }} />
+                </> : null}
                 extraActions={studentLocked ? <RequestChangeButton applicationId={applicationId} onDone={() => void reloadHandoff()} label="Something your agent set is wrong? Request a change" /> : null} />
             ) : (
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}

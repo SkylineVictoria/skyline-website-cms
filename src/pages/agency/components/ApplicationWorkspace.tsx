@@ -1385,6 +1385,10 @@ export default function ApplicationWorkspace({
       setSubmitError("Read and tick each declaration to sign.");
       return;
     }
+    if (studentSigns && !consent.signature) {
+      setSubmitError("Draw your signature in the box to sign.");
+      return;
+    }
     if (studentSigns && !consent.password.valid) {
       setSubmitError("Create your password (both boxes the same) to sign.");
       return;
@@ -1406,7 +1410,7 @@ export default function ApplicationWorkspace({
       if (resubmitHere) {
         // Action required, corrected: the form is saved (above), the student signs again, then back to Submitted through the resubmit
         // command (history, audit, email).
-        await resubmitApplication(application.id, "Resubmitted after corrections", declarationConsent(consent.declarations));
+        await resubmitApplication(application.id, "Resubmitted after corrections", declarationConsent(consent.declarations, consent.signature));
         const snapshot = collectSnapshot();
         setSubmittedRef(application.reference);
         const done = () => onSubmitted?.(application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
@@ -1416,7 +1420,7 @@ export default function ApplicationWorkspace({
         return;
       }
       const snapshot = collectSnapshot();
-      const receipt = await submitApplication(application.id, declarationConsent(consent.declarations));
+      const receipt = await submitApplication(application.id, declarationConsent(consent.declarations, consent.signature));
       if (receipt.waitingGuardian) { onSaved?.(); onSentToStudent?.(); return; }
       const reference = receipt.reference;
       setSubmittedRef(reference || application.reference);
@@ -1936,7 +1940,7 @@ export default function ApplicationWorkspace({
                 icon: "ri-send-plane-line",
                 onClick: () => void handleSubmit(),
                 // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document; the same for a resubmission.
-                disabled: missingNow.length > 0 || (studentSigns && (!consent.complete || !consent.password.valid)) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
+                disabled: missingNow.length > 0 || (studentSigns && (!consent.complete || !consent.signature || !consent.password.valid)) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
                 busy: submitting,
                 busyLabel: !studentSigns ? "Sending…" : resubmitHere ? "Resubmitting…" : "Submitting…",
                 testId: "submit-application",

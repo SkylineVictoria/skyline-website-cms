@@ -747,7 +747,7 @@ export async function assignApplicationAgent(applicationId: string, agentProfile
  */
 export async function submitApplication(
   applicationId: string,
-  consent: { declarations: Record<string, string> },
+  consent: { declarations: Record<string, string>; signature?: string },
 ): Promise<{ reference: string; waitingGuardian: boolean }> {
   const key = "submission:" + applicationId + ":" + (draftVersions.get(applicationId) ?? "unknown");
   const { data, error } = await supabase.rpc("portal_submit_v2", {
@@ -866,7 +866,7 @@ export async function openOfferLetter(letterId: string): Promise<void> {
 /** Accept offer: the student or agent confirms (no signature); the application moves to Offer accepted. */
 export const acceptOffer = (applicationId: string) => rpcOrThrow<void>("portal_offer_accept", { p_application: applicationId });
 /** Resubmit (Action required → Submitted): the student signs the declarations again ({ declarations: { key: hash } }); only the student. */
-export const resubmitApplication = (applicationId: string, note = "", consent: { declarations: Record<string, string> } | null = null) =>
+export const resubmitApplication = (applicationId: string, note = "", consent: { declarations: Record<string, string>; signature?: string } | null = null) =>
   rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note, p_consent: consent });
 /** Send reminder: emails the student or agent what Action required still asks for. */
 export const sendActionReminder = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_reminder", { p_application: applicationId, p_note: note });

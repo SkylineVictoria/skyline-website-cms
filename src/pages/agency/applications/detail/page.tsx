@@ -4,6 +4,7 @@ import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
+import SignedApplicationCard from "@/pages/agency/components/SignedApplicationCard";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useState } from "react";
 
@@ -391,6 +392,7 @@ export default function ApplicationDetailPage() {
           />
         ) : null}
 
+        {tab === "documents" ? <SignedApplicationCard application={application} /> : null}
         {tab === "documents" ? <OfferLettersList applicationId={application.id} refreshKey={application.status} /> : null}
         {tab === "documents" ? (
           documents.length === 0 ? (

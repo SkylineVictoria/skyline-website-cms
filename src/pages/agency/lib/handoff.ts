@@ -42,7 +42,8 @@ export const requestApplicationChange = (applicationId: string, note: string) =>
   rpc<{ state: HandoffState }>("portal_application_request_change", { p_application: applicationId, p_note: note });
 
 /** The ticked declarations as the server records them: { key: hash of the exact text shown }. */
-export const declarationConsent = (ticked: Record<string, string>) => ({ declarations: ticked });
+export const declarationConsent = (ticked: Record<string, string>, signature?: string | null) =>
+  ({ declarations: ticked, ...(signature ? { signature } : {}) });
 
 async function invokeInvite<T>(body: Record<string, unknown>, fallback: string): Promise<T> {
   const { data, error } = await supabase.functions.invoke("student-application-invite", { body });

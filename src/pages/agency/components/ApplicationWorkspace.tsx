@@ -206,6 +206,8 @@ interface WorkspaceProps {
   /** ONE-PAGE (owner 2026-11-26): every step on one page (open where something is missing, else a one-line summary), the check and
    *  signature at the bottom; no stages to walk through. A read-only application keeps the one-page review. */
   onePage?: boolean;
+  /** The student has it already: the agent / staff edit, but there is nothing to send (Resend is on the handoff panel). */
+  sentToStudent?: boolean;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -224,6 +226,7 @@ export default function ApplicationWorkspace({
   onSentToStudent,
   reviewBar,
   onePage = false,
+  sentToStudent = false,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
   // The same cards for staff, agents and students; read-only (submitted, or the other side has it) = the cards without Edit.
@@ -1961,7 +1964,7 @@ export default function ApplicationWorkspace({
         message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
           one && onePageView.kind === "edit" ? { label: "Done", icon: "ri-check-line", testId: "section-done", onClick: () => showOnePage("grid") }
-          : one && onePageView.kind === "grid" ? (canSubmitHere && !readOnly ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
+          : one && onePageView.kind === "grid" ? (canSubmitHere && !readOnly && (studentSigns || !sentToStudent) ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
           : isReview
             ? !readOnly && canSubmitHere
               ? {

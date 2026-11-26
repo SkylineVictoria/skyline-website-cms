@@ -247,7 +247,7 @@ export default function ApplicationDetailPage() {
   // whether a record is editable; RLS separately determines who may edit it.
   const handoffBlocks = role === "student"
     ? ["with_agent", "change_requested", "waiting_guardian"].includes(handoff?.state ?? "")
-    : ["with_student", "waiting_guardian"].includes(handoff?.state ?? "");
+    : handoff?.state === "waiting_guardian"; // the agent and staff edit while the student has it too (migration 20261127020517)
   // ADMIN-EDIT-SUBMITTED (owner 2026-11-26): SLIT admins correct a submitted application on the same page, until an offer is issued.
   // The same two statuses portal_lock_draft lets SLIT admins save (migration 20261127010517).
   const adminEdits = isSlit && (application.status === "submitted" || application.status === "under_review");
@@ -388,6 +388,7 @@ export default function ApplicationDetailPage() {
             agencyName={agencyName}
             readOnly={readOnly}
             onePage
+            sentToStudent={handoff?.state === "with_student"}
             auditAccess={isSlit}
             reviewBar={isSlit ? (issues: number) => <ReviewIssuesReporter count={issues} onCount={setReviewIssues} /> : undefined}
             onSaved={refreshAfterSave}

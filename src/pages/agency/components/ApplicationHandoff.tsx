@@ -148,7 +148,7 @@ export function AgentHandoffPanel({ applicationId, handoff, onChanged }: { appli
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${withStudent ? "bg-sky-100 text-sky-900" : handoff.state === "change_requested" ? "bg-amber-100 text-amber-900" : handoff.state === "submitted" ? "bg-emerald-100 text-emerald-900" : "bg-background-200 text-foreground-800"}`}
           data-testid="handoff-state">{HANDOFF_STATE_LABEL[handoff.state]}</span>
       </div>
-      {withStudent ? <p className="text-sm text-foreground-700">The student has the application: it is view-only for you until they sign or you take it back.
+      {withStudent ? <p className="text-sm text-foreground-700">The student has the application. You can still edit the answers; only the student ticks the declarations and signs.
         {handoff.invite?.state === "expired" ? " Their link has expired: resend it." : ""}</p> : null}
       {handoff.state === "waiting_guardian" ? <p className="text-sm text-foreground-700">The student is under 18 and has signed. It is submitted once {handoff.guardian ? `${handoff.guardian.name} (${handoff.guardian.relationship})` : "their parent or guardian"} signs.</p> : null}
       {handoff.state === "change_requested" ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">The student asked for a change: “{handoff.changeNote}”. Make the change, then send it to the student again.</p> : null}

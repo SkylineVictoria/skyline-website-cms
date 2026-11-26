@@ -140,14 +140,16 @@ export default function ApplicationReview({
           {steps.map((step) => {
             const ok = step.issues.length === 0;
             return (
-              <section key={step.index} className={`flex min-w-0 flex-col rounded-xl border bg-background-50 p-4 ${ok ? "border-background-200" : "border-amber-300"}`} data-testid="application-card">
+              <section key={step.index} className={`flex min-w-0 flex-col rounded-xl border p-4 ${ok ? "border-background-200 bg-background-50" : "border-amber-300 bg-amber-50/50"}`} data-testid="application-card">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="flex min-w-0 items-center gap-1.5 font-heading text-sm font-semibold text-foreground-950">
                     {ok ? <i className="ri-checkbox-circle-fill text-base text-emerald-600" aria-label="complete" />
                       : <i className="ri-error-warning-fill text-base text-amber-500" aria-label="needs details" />}
                     <span className="truncate">{step.title}</span>
                   </h3>
-                  {readOnly ? null : (
+                  {readOnly ? null : !studentSigns && sections[step.index].fields.some((f) => f.type === "terms") ? (
+                    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-2xs font-semibold text-amber-900">Signed by the student</span>
+                  ) : (
                     <button type="button" onClick={() => onEditSection(step.index)} className="inline-flex min-h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-background-300 px-2.5 text-xs font-semibold text-foreground-700 hover:border-primary-300 hover:text-primary-700">
                       <i className="ri-pencil-line" aria-hidden="true" />Edit
                     </button>
@@ -214,7 +216,7 @@ export default function ApplicationReview({
       ) : canSubmit ? (
         <p className="mt-4 rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-sm text-sky-950" data-testid="review-student-signs">
           <i className="ri-quill-pen-line" aria-hidden="true" /> Only the student can sign{resubmit ? " and resubmit" : ""}: send it to them to review and sign
-          (with a parent or guardian if they are under 18). It is view-only for you while they have it.
+          (with a parent or guardian if they are under 18). You can still edit the answers while they have it; only they tick the declarations and sign.
         </p>
       ) : resubmit ? (
         <p className="mt-4 text-xs text-foreground-600" data-testid="resubmit-hint">

@@ -51,6 +51,29 @@ export function DeclarationTicks({ who, onChange, declarations: given }: {
   );
 }
 
+/** Why a text message did not go (the ClickSend outcome code recorded with the event), in plain words. */
+const SMS_REASON: Record<string, string> = {
+  invalid_recipient: "the mobile number is not valid for text messages",
+  insufficient_credit: "the ClickSend account has no credit left",
+  sender_rejected: "ClickSend refused the sender name (set an approved sender in Integrations › ClickSend)",
+  country_not_enabled: "ClickSend is not enabled for that country",
+  unauthorized: "ClickSend refused the username or API key (check Integrations › ClickSend)",
+  rejected: "ClickSend refused the message",
+  rate_limit: "ClickSend was busy (too many messages); send it again",
+  provider: "ClickSend had an error; send it again",
+  timeout: "ClickSend did not answer in time; send it again",
+  network: "ClickSend could not be reached; send it again",
+  schema: "ClickSend gave an answer we could not read",
+  empty_body: "the message was empty",
+  no_mobile: "the application has no mobile number",
+  not_connected: "ClickSend is not connected (Integrations › Connections)",
+};
+const smsReason = (detail: Record<string, unknown> | undefined) => {
+  const code = typeof detail?.code === "string" ? detail.code : "";
+  const to = typeof detail?.endsWith === "string" ? ` (to the number ending ${detail.endsWith})` : "";
+  return code ? `${SMS_REASON[code] ?? code}${to}` : to ? to.slice(2, -1) : "";
+};
+
 function Timeline({ handoff }: { handoff: Handoff }) {
   if (!handoff.events.length) return null;
   return (
@@ -60,6 +83,7 @@ function Timeline({ handoff }: { handoff: Handoff }) {
           <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-primary-500" aria-hidden="true" />
           <span className="font-medium text-foreground-900">{HANDOFF_EVENT_LABEL[e.event] ?? e.event}</span>
           <span className="text-foreground-500"> · {when(e.at)}{e.actorName ? ` · ${e.actorName}` : ""}</span>
+          {(e.event === "sms_failed" || e.event === "sms_skipped") && smsReason(e.detail) ? <p className="mt-0.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900" data-testid="handoff-sms-reason">Why: {smsReason(e.detail)}</p> : null}
           {e.event === "change_requested" && typeof e.detail?.note === "string" ? <p className="mt-0.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900">“{e.detail.note}”</p> : null}
         </li>
       ))}

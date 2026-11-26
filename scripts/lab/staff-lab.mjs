@@ -31,7 +31,6 @@
 //   node scripts/lab/staff-lab.mjs assistant P09-01 public assistant per tenant: two verified hosts with the same FAQ, the real public-assistant
 //                                           and public-assistant-index functions (mock embeddings), cache, spoofed / unverified / unknown hosts,
 //                                           a tenant document in another institution's storage refused, unpublish reflected (needs a fresh `up`)
-//   node scripts/lab/staff-lab.mjs asm-import  ASM-AI-IMPORT: the assessment import through the real asm-import function (stand-in model), cache, failure, access
 //   node scripts/lab/staff-lab.mjs sql      runs every supabase/tests/*.sql suite on the lab database
 //   node scripts/lab/staff-lab.mjs down     stops the lab stack (no backup)
 //
@@ -1142,96 +1141,6 @@ async function activate() {
 /* ------------------------------------------------------------------ retention (HR-02h) */
 
 /** Public holiday sync (20261113150000 + holiday-sync): the real function against the mock sources, refusals, re-runs, failure, the cron dispatcher. */
-/* ------------------------------------------------------------------ ASM-AI-IMPORT (2026-11-25) */
-// The assessment import end to end: the browser's steps (fingerprint, page text, upload, queue) with the lab admin's session, the
-// real pg_cron/pg_net dispatcher and the real asm-import function (EF_ASM_IMPORT_PROVIDER=mock: a stand-in model, never OpenAI),
-// the cache by file hash, a failure (the upload does not match its fingerprint) and who may read jobs and files.
-async function asmImport() {
-  const lab = readLab();
-  await ensureLabAdmin();
-  const jwt = await adminToken(lab);
-  psql("select vault.create_secret('http://kong:8000/functions/v1/staff-admin', 'hr_retention_function_url', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_function_url');");
-  psql("select vault.create_secret('" + lab.serviceKey + "', 'hr_retention_service_role_key', 'lab') where not exists (select 1 from vault.secrets where name = 'hr_retention_service_role_key');");
-  const workbook = [process.env.ASM_WORKBOOK, path.join(REPO, "DNT_RII50520_RIICWD525E_Select Pavement surfacing.pdf")].find((p) => p && fs.existsSync(p));
-  if (!workbook) { console.log("SKIP asm-import: the RIICWD525E workbook is not here (set ASM_WORKBOOK)"); return; }
-  const { createJiti } = await import("jiti");
-  const jiti = createJiti(import.meta.url);
-  const { pageTextsFromPdf } = await jiti.import(path.join(REPO, "src/lib/assessment/pageText.ts"));
-  const { imageRegionsFromPdf } = await jiti.import(path.join(REPO, "src/lib/assessment/workbookImport.ts"));
-  const { READER_VERSION } = await jiti.import(path.join(REPO, "supabase/functions/_shared/asm-import/pipeline.ts"));
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const bytes = new Uint8Array(fs.readFileSync(workbook));
-  const doc = await pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 }).promise;
-  // as the browser does: the pictures first, marked in the page text
-  const pages = await pageTextsFromPdf(doc, await imageRegionsFromPdf(doc, pdfjs.OPS));
-  const sha256 = nodeCrypto.createHash("sha256").update(bytes).digest("hex");
-  const rpc = async (fn, args, token = jwt) => {
-    const res = await fetch(`${lab.apiUrl}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(args) });
-    return { status: res.status, body: await res.json().catch(() => null) };
-  };
-  const upload = async (id, name, body, type, token = jwt) => (await fetch(`${lab.apiUrl}/storage/v1/object/asm-imports/${id}/${name}`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${token}`, "content-type": type }, body })).status;
-  const startArgs = (force, sha = sha256, size = bytes.byteLength, reader = READER_VERSION) => ({ p_kind: "workbook", p_sha256: sha, p_file_name: path.basename(workbook), p_bytes: size, p_pages: pages.length, p_scanned: [], p_force: force, p_reader: reader });
-  psql(`delete from public.asm_import_jobs where sha256 = '${sha256}';`);
-
-  // 1. start -> upload -> queue -> the dispatcher wakes asm-import, which reads it one step at a time
-  const t0 = Date.now();
-  const started = await rpc("asm_import_start", startArgs(false));
-  const id = started.body?.id;
-  check("asm-import: an admin starts an import (state uploading, not cached)", started.status === 200 && started.body?.state === "uploading" && started.body?.cached === false, JSON.stringify(started.body).slice(0, 200));
-  const early = await rpc("asm_import_queue", { p_id: id });
-  check("asm-import: queueing before the upload is refused", early.status >= 400 && /not complete/.test(JSON.stringify(early.body)), JSON.stringify(early.body));
-  const up1 = await upload(id, "source.pdf", bytes, "application/pdf");
-  const up2 = await upload(id, "pages.json", JSON.stringify(pages), "application/json");
-  const stray = await upload(id, "other.txt", "x", "application/json");
-  check("asm-import: the admin uploads the PDF and its page text into the job's folder; any other name is refused", up1 === 200 && up2 === 200 && stray >= 400, `${up1}/${up2}/${stray}`);
-  const queued = await rpc("asm_import_queue", { p_id: id });
-  check("asm-import: queued", queued.status === 200 && queued.body?.state === "queued", JSON.stringify(queued.body).slice(0, 200));
-  let st = queued.body; const seen = new Set();
-  for (let i = 0; i < 240 && !["done", "failed"].includes(st?.state); i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    st = (await rpc("asm_import_status", { p_id: id })).body;
-    if (st?.progress?.label) seen.add(`${st.progress.done}/${st.progress.total} ${st.progress.label}`);
-  }
-  const ms = Date.now() - t0;
-  console.log(`  progress seen: ${[...seen].join(" | ")}`);
-  console.log(`  summary: ${JSON.stringify(st?.summary)} in ${Math.round(ms / 1000)} s`);
-  check("asm-import: the worker finished the job step by step with live progress (outline, each task chunk, done)", st?.state === "done" && st?.progress?.total >= 4 && st?.progress?.done === st?.progress?.total && Number(st?.usage?.calls) === st?.progress?.total - 1, `${st?.state} ${st?.error ?? ""}`);
-  check("asm-import: the result names RIICWD525E version 1.0, provider mock, its questions checked verbatim", st?.result?.unit?.code === "RIICWD525E" && st?.result?.version === "1.0" && st?.provider === "mock"
-    && (st?.result?.tasks ?? []).flatMap((t) => t.sections.flatMap((s) => s.items)).every((it) => it.verbatim === "exact" || (it.kind === "drawing" && it.verbatim === "empty")), JSON.stringify(st?.result?.unit));
-  check("asm-import: usage is logged on the job (calls counted)", Number(st?.usage?.calls) >= 2, JSON.stringify(st?.usage));
-  const resultItems = (st?.result?.tasks ?? []).flatMap((t) => t.sections.flatMap((s) => s.items));
-  check("asm-import: both pictures (pages 44 and 75) are drawings in the result, marked in the uploaded page text", st?.summary?.drawings === 2 && resultItems.filter((i) => i.kind === "drawing").map((i) => i.pages[0]).join(",") === "44,75" && pages.reduce((n, p) => n + p.pictures, 0) === 2, JSON.stringify(st?.summary));
-  check("asm-import: every item comes back typed (question / section_heading / instruction), with how it was decided", resultItems.length > 0 && resultItems.every((i) => ["question", "section_heading", "instruction"].includes(i.itemType) && ["rules", "ai", "default"].includes(i.classification?.by)) && typeof st?.summary?.headings === "number", JSON.stringify(resultItems.find((i) => !i.itemType) ?? st?.summary).slice(0, 160));
-  check(`asm-import: the job records the reader version that read it (${READER_VERSION})`, st?.readerVersion === READER_VERSION && psql(`select reader_version from public.asm_import_jobs where id = '${id}';`) === String(READER_VERSION), String(st?.readerVersion));
-  // 2. the same file again: the finished job comes back, nothing new is made
-  const jobs = () => psql(`select count(*) from public.asm_import_jobs where sha256 = '${sha256}';`);
-  const before = jobs();
-  const again = await rpc("asm_import_start", startArgs(false));
-  check("asm-import: the same file again is answered from the cache (same job, done, no new job, no cost)", again.body?.cached === true && again.body?.id === id && again.body?.state === "done" && jobs() === before);
-  // a result read by an older reader is never answered from the cache: the file is read again with the current logic
-  psql(`update public.asm_import_jobs set reader_version = 1 where id = '${id}';`);
-  const stale = await rpc("asm_import_start", startArgs(false));
-  check("asm-import: a file read by an older reader version is read again (new job, not cached)", stale.body?.cached === false && stale.body?.id !== id && stale.body?.state === "uploading", JSON.stringify(stale.body).slice(0, 160));
-  const oldBrowser = await rpc("asm_import_start", { ...startArgs(false), p_reader: undefined });
-  check("asm-import: a browser that sends no reader version (before this release) gets the version-1 result, as before", oldBrowser.body?.cached === true && oldBrowser.body?.id === id, JSON.stringify(oldBrowser.body).slice(0, 160));
-  psql(`delete from public.asm_import_jobs where id = '${stale.body?.id}'; update public.asm_import_jobs set reader_version = ${READER_VERSION} where id = '${id}';`);
-  // 3. a failure: the uploaded bytes do not match the fingerprint -> failed with the reason (the browser then uses the standard reader)
-  const fake = "0".repeat(64);
-  psql(`delete from public.asm_import_jobs where sha256 = '${fake}';`);
-  const bad = await rpc("asm_import_start", startArgs(true, fake));
-  await upload(bad.body.id, "source.pdf", bytes, "application/pdf"); await upload(bad.body.id, "pages.json", JSON.stringify(pages), "application/json");
-  await rpc("asm_import_queue", { p_id: bad.body.id });
-  let bst = null;
-  for (let i = 0; i < 90 && !["done", "failed"].includes(bst?.state); i++) { await new Promise((r) => setTimeout(r, 1000)); bst = (await rpc("asm_import_status", { p_id: bad.body.id })).body; }
-  check("asm-import: an upload that does not match its fingerprint fails with a plain reason (fallback path)", bst?.state === "failed" && /fingerprint/.test(bst?.error ?? ""), `${bst?.state} ${bst?.error}`);
-  // 4. access: anon cannot start, read jobs or files; the worker refuses user tokens
-  const anonStart = await rpc("asm_import_start", startArgs(false), lab.anonKey);
-  const anonRead = await fetch(`${lab.apiUrl}/rest/v1/asm_import_jobs?select=id`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}` } }).then((r) => r.json()).catch(() => null);
-  const anonFile = (await fetch(`${lab.apiUrl}/storage/v1/object/asm-imports/${id}/pages.json`, { headers: { apikey: lab.anonKey, Authorization: `Bearer ${lab.anonKey}` } })).status;
-  check("asm-import: anon cannot start an import, list jobs or read the uploaded files", anonStart.status >= 400 && ((Array.isArray(anonRead) && anonRead.length === 0) || anonRead?.code === "42501") && anonFile >= 400, `${anonStart.status} ${JSON.stringify(anonRead).slice(0, 80)} ${anonFile}`);
-  const direct = await fetch(`${lab.apiUrl}/functions/v1/asm-import`, { method: "POST", headers: { apikey: lab.anonKey, Authorization: `Bearer ${jwt}`, "content-type": "application/json" }, body: "{}" });
-  check("asm-import: the worker refuses a signed-in admin's token (service callers only)", direct.status === 403, String(direct.status));
-}
 
 async function holidays() {
   const lab = readLab();
@@ -2612,7 +2521,6 @@ try {
   else if (command === "activate") await activate();
   else if (command === "retention") await retention();
   else if (command === "holidays") await holidays();
-  else if (command === "asm-import") await asmImport();
   else if (command === "flow") await flow();
   else if (command === "wizard") await wizard();
   else if (command === "signing") await signing();

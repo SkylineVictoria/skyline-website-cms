@@ -8,7 +8,8 @@ import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
 import SignedApplicationCard from "@/pages/agency/components/SignedApplicationCard";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { carryPreviousDocuments } from "@/lib/validatedDocumentUpload";
 
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
@@ -109,6 +110,9 @@ export default function ApplicationDetailPage() {
     setSearchParams(next, { replace: true });
   }, [id, searchParams, setSearchParams]);
   const [workspaceKey, setWorkspaceKey] = useState(0);
+  // DOCUMENT-CARRY: once per opened draft, copy the student's documents from their earlier application if any are still waiting.
+  const [carryKey, setCarryKey] = useState(0);
+  const carriedFor = useRef<string | null>(null);
   const [documentBusy, setDocumentBusy] = useState("");
 
   const isSlit = role === "slit_admin";
@@ -192,6 +196,17 @@ export default function ApplicationDetailPage() {
     }
   };
 
+  useEffect(() => {
+    if (!application || application.status !== "draft" || carriedFor.current === application.id) return;
+    carriedFor.current = application.id;
+    void carryPreviousDocuments(application.id).then((copied) => {
+      if (copied === 0) return;
+      setCarryKey((key) => key + 1);
+      setWorkspaceKey((key) => key + 1);
+      void load();
+    }, () => undefined);
+  }, [application, load]);
+
   const handleWizardFinish = async () => {
     closeWizard();
     // Once submitted, it goes to the review queue: staff and agents see it in the applications list, a student in theirs.
@@ -249,7 +264,7 @@ export default function ApplicationDetailPage() {
   if (studentBlank && studentReturning === null) return <PortalLoading label="Loading application…" />;
   if (studentBlank && studentReturning === false) {
     return (
-      <ApplicationWizard key={application.id} applicationId={application.id}
+      <ApplicationWizard key={`${application.id}:${carryKey}`} applicationId={application.id}
         agencyName={application.agencyName || agency?.name || ""}
         onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); navigate(paths.list, { replace: true }); }} />
     );
@@ -264,7 +279,7 @@ export default function ApplicationDetailPage() {
         </div>
         <FinishApplicationPanel key={application.id} id={application.id} email={application.studentEmail}
           canInvite={role === "slit_admin" || role === "agency_admin" || role === "agent"} onContinue={openWizard} />
-        {wizardOpen ? <ApplicationWizard key={application.id} applicationId={application.id}
+        {wizardOpen ? <ApplicationWizard key={`${application.id}:${carryKey}`} applicationId={application.id}
           agencyName={application.agencyName || agency?.name || ""}
           onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); void load(); }} /> : null}
         <Toast message={toast.message} onDismiss={toast.dismiss} />

@@ -151,6 +151,8 @@ export interface WizardDoc {
   extracted?: Record<string, string>;
   /** The reader classified the file as a different kind of document than this step asks for. */
   mismatch?: boolean;
+  /** DOCUMENT-CARRY: copied from the student's earlier application ("From your previous application"). */
+  carriedFrom?: string | null;
 }
 
 /** A file that has been picked but is not yet a stored document, or failed to upload. */

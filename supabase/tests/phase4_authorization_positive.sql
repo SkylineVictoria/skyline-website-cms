@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(1001);
+select plan(1018);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1903,5 +1903,57 @@ select is(public.sms_receipt_apply(repeat('0', 48), 'NO-SUCH-MESSAGE', 'Delivere
 select throws_ok($$select public.sms_receipt_key_rotate()$$, null, null, 'a non-admin caller cannot make a delivery report key');
 select ok(not has_function_privilege('anon', 'public.admin_student_login_plan(uuid)', 'execute'), 'anon cannot read a student login plan');
 select throws_ok($$select public.admin_student_login_plan(gen_random_uuid())$$, null, null, 'a non-admin caller is refused the login plan');
+-- DOCUMENT-CARRY (20261127130517): a student's new application gets copies of their own documents from the earlier one.
+reset role;
+insert into public.enrollment_students(id, agency_id, full_name, email, status) values
+ ('c7000000-0000-0000-0000-000000000001', '13000000-0000-0000-0000-000000000001', 'Carry Student', 'carry@example.test', 'Active');
+insert into public.enrollment_applications(id, agency_id, student_id, status, data) values
+ ('c7100000-0000-0000-0000-000000000001', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft', '{}');
+select pg_temp.checked_upload('c7100000-0000-0000-0000-000000000001/validated-pass.pdf', 'Passport');
+insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
+ ('c7200000-0000-0000-0000-000000000001', 'c7100000-0000-0000-0000-000000000001', 'Passport', 'c7100000-0000-0000-0000-000000000001/validated-pass.pdf', 'pass.pdf',
+  '{"extraction":{"extracted":{"passport_expiry":"2099-01-01"}}}');
+select pg_temp.checked_upload(p, c) from (values ('c7100000-0000-0000-0000-000000000001/validated-visa.pdf', 'Visa'),
+  ('c7100000-0000-0000-0000-000000000001/validated-eng.pdf', 'English Test'), ('c7100000-0000-0000-0000-000000000001/validated-acad1.pdf', 'Academic'),
+  ('c7100000-0000-0000-0000-000000000001/validated-acad2.pdf', 'Academic')) x(p, c);
+insert into storage.objects(bucket_id, name) values ('enrollment-documents', 'c7100000-0000-0000-0000-000000000001/offer.pdf');
+insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, review_state, metadata) values
+ ('c7200000-0000-0000-0000-000000000002', 'c7100000-0000-0000-0000-000000000001', 'Visa', 'c7100000-0000-0000-0000-000000000001/validated-visa.pdf', 'visa.pdf', 'Accepted',
+  '{"extraction":{"extracted":{"visa_expiry":"2001-01-01"}}}'),
+ ('c7200000-0000-0000-0000-000000000003', 'c7100000-0000-0000-0000-000000000001', 'English Test', 'c7100000-0000-0000-0000-000000000001/validated-eng.pdf', 'eng.pdf', 'Accepted', '{}'),
+ ('c7200000-0000-0000-0000-000000000004', 'c7100000-0000-0000-0000-000000000001', 'Academic', 'c7100000-0000-0000-0000-000000000001/validated-acad1.pdf', 'acad1.pdf', 'Accepted', '{}'),
+ ('c7200000-0000-0000-0000-000000000005', 'c7100000-0000-0000-0000-000000000001', 'Academic', 'c7100000-0000-0000-0000-000000000001/validated-acad2.pdf', 'acad2.pdf', 'Rejected', '{}'),
+ ('c7200000-0000-0000-0000-000000000006', 'c7100000-0000-0000-0000-000000000001', 'Offer Letter', 'c7100000-0000-0000-0000-000000000001/offer.pdf', 'offer.pdf', 'Accepted', '{}');
+insert into public.enrollment_applications(id, agency_id, student_id, status, data) values
+ ('c7100000-0000-0000-0000-000000000002', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft', '{}');
+select is((select string_agg(x->>'category', ',' order by ord) from jsonb_array_elements(public.application_document_carry_plan('c7100000-0000-0000-0000-000000000002')) with ordinality t(x, ord)),
+  'Passport,Academic,English Test', 'the plan copies the passport first, then the valid personal documents (no expired visa, no rejected file, no offer letter)');
+select is(public.application_document_carry_plan('c7100000-0000-0000-0000-000000000001') @> '[{"category":"Passport"}]'::jsonb, false, 'an application does not copy from itself');
+select throws_ok($$select public.application_document_carry_record('c7100000-0000-0000-0000-000000000002', 'c7200000-0000-0000-0000-000000000006', 'c7100000-0000-0000-0000-000000000002/validated-x.pdf')$$,
+  '42501', null, 'an application-specific document (offer letter) is never copied');
+select throws_ok($$select public.application_document_carry_record('c7100000-0000-0000-0000-000000000002', 'c7200000-0000-0000-0000-000000000001', 'c7100000-0000-0000-0000-000000000001/validated-pass.pdf')$$,
+  '22023', null, 'a copy must be a new file in the new application''s folder, never the old file');
+insert into storage.objects(bucket_id, name) values ('enrollment-documents', 'c7100000-0000-0000-0000-000000000002/validated-eng-copy.pdf'),
+ ('enrollment-documents', 'c7100000-0000-0000-0000-000000000002/validated-pass-copy.pdf');
+select is(public.application_document_carry_record('c7100000-0000-0000-0000-000000000002', 'c7200000-0000-0000-0000-000000000003', 'c7100000-0000-0000-0000-000000000002/validated-eng-copy.pdf'),
+  null, 'a checked document waits until the new application has its passport');
+select isnt(public.application_document_carry_record('c7100000-0000-0000-0000-000000000002', 'c7200000-0000-0000-0000-000000000001', 'c7100000-0000-0000-0000-000000000002/validated-pass-copy.pdf'),
+  null, 'the passport is copied as a new row');
+select isnt(public.application_document_carry_record('c7100000-0000-0000-0000-000000000002', 'c7200000-0000-0000-0000-000000000003', 'c7100000-0000-0000-0000-000000000002/validated-eng-copy.pdf'),
+  null, 'then the English evidence is copied against the new passport');
+select is(public.application_document_carry_record('c7100000-0000-0000-0000-000000000002', 'c7200000-0000-0000-0000-000000000001', 'c7100000-0000-0000-0000-000000000002/validated-pass-copy.pdf'),
+  null, 'a document is never copied twice');
+select is((select metadata #>> '{carriedFrom,documentId}' from public.enrollment_application_documents where application_id = 'c7100000-0000-0000-0000-000000000002' and category = 'Passport'),
+  'c7200000-0000-0000-0000-000000000001', 'the copy says where it came from');
+select is((select count(*)::int from public.enrollment_application_documents d join public.enrollment_application_documents o on o.storage_path = d.storage_path
+  where d.application_id = 'c7100000-0000-0000-0000-000000000002' and o.application_id = 'c7100000-0000-0000-0000-000000000001'), 0, 'the applications share no file');
+select is((select string_agg(x->>'category', ',') from jsonb_array_elements(public.application_document_carry_plan('c7100000-0000-0000-0000-000000000002')) x), 'Academic', 'only the qualification is still waiting');
+delete from public.enrollment_application_documents where application_id = 'c7100000-0000-0000-0000-000000000002';
+select is((select count(*)::int from public.enrollment_application_documents where application_id = 'c7100000-0000-0000-0000-000000000001'), 6, 'deleting the copies leaves the earlier application''s documents');
+select is(public.application_document_expiry('{"extraction":{"confirmed":{"passport_expiry":"2020-05-01"},"extracted":{"passport_expiry":"2030-05-01"}}}'), '2020-05-01'::date, 'the earliest stated expiry counts');
+select ok(not public.application_document_carry_category('Health Insurance') and not public.application_document_carry_category('Offer Letter') and public.application_document_carry_category('Driving Licence'), 'only the student''s own document types are copied');
+select ok(not has_function_privilege('authenticated', 'public.application_document_carry_record(uuid, uuid, text)', 'execute'), 'a signed-in user cannot record a copy');
+select ok(not has_function_privilege('authenticated', 'public.application_document_carry_plan(uuid)', 'execute'), 'a signed-in user cannot read another student''s copy plan');
+select ok(not has_function_privilege('anon', 'public.application_document_carry_pending(uuid)', 'execute'), 'anon cannot ask for a copy');
 select * from finish();
 rollback;

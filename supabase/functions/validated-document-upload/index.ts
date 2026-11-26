@@ -8,6 +8,8 @@ import { checkDocumentOwnership } from "../_shared/document-ownership.ts";
 import { recordDocumentCategory } from "../_shared/validated-document-storage.ts";
 import { DOCUMENT_MAX_BYTES, documentFileProblem, documentLimits } from "../_shared/validation/person.ts";
 import { loadRules, ruleList, ruleNumber } from "../_shared/business-rules.ts";
+import { isServiceCaller } from "../_shared/service-role.ts";
+import { carryPreviousDocuments } from "./carry.ts";
 
 const url = Deno.env.get("SUPABASE_URL") ?? "";
 const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -35,6 +37,23 @@ Deno.serve(async (request) => {
   if (backendConfiguration(url, serviceKey, anonKey)) return fail("Document checking is unavailable.", 503);
   const bearer = request.headers.get("Authorization");
   if (!bearer?.startsWith("Bearer ")) return fail("Sign in to upload a document.", 401);
+  // DOCUMENT-CARRY (owner 2026-11-26): { action: "carry", applicationId } copies the student's documents from their earlier
+  // application (database trigger with the service role, or the application page for a caller who may edit it).
+  if ((request.headers.get("content-type") ?? "").includes("application/json")) {
+    const body = await request.json().catch(() => null) as { action?: string; applicationId?: string } | null;
+    const applicationId = String(body?.applicationId ?? "").toLowerCase();
+    if (body?.action !== "carry" || !uuid.test(applicationId)) return fail("Choose an application.", 400);
+    if (!isServiceCaller(bearer, serviceKey, url)) {
+      const caller = createClient(url, anonKey, { auth: { persistSession: false }, global: { headers: { Authorization: bearer } } });
+      const { data: auth, error: authError } = await caller.auth.getUser(bearer.slice(7));
+      if (authError || !auth.user) return fail("Sign in to continue.", 401);
+      const { data, error } = await caller.rpc("portal_can_edit_application", { app_id: applicationId });
+      if (error || data !== true) return fail("You cannot change this application.", 403);
+    }
+    const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
+    const result = await carryPreviousDocuments(admin, applicationId);
+    return result.ok ? reply(result) : fail(result.error ?? "The documents could not be copied.", 503);
+  }
   const caller = createClient(url, anonKey, { auth: { persistSession: false }, global: { headers: { Authorization: bearer } } });
   const { data: auth, error: authError } = await caller.auth.getUser(bearer.slice(7));
   if (authError || !auth.user) return fail("Sign in to upload a document.", 401);

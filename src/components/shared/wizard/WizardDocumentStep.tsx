@@ -211,6 +211,7 @@ export default function WizardDocumentStep({ step, docs, pending, dismissed, onP
                   </>
                 }
               >
+                {doc.carriedFrom ? <p className="mt-1.5 flex items-center gap-1.5 text-xs text-foreground-600" data-testid="doc-carried-from"><i className="ri-history-line" aria-hidden="true" />{doc.carriedFrom}. Replace it if it has changed.</p> : null}
                 {expiry ? <p className={`mt-1.5 flex items-center gap-1.5 text-xs ${expiry.tone}`}><i className="ri-time-line" aria-hidden="true" />{expiry.text}</p> : null}
                 {failed ? <ReadFailure message={doc.error ?? "We couldn’t read this document."} onRetry={() => onRetryDoc(doc)} onManual={() => onDismissDoc(doc)} /> : null}
                 {doc.extraction === "empty" ? <p className="mt-1.5 text-xs text-foreground-600">Nothing readable on this one; add the details in the form.</p> : null}

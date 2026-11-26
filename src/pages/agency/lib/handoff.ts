@@ -75,6 +75,7 @@ export const HANDOFF_EVENT_LABEL: Record<string, string> = {
   taken_back: "Taken back by the agent", signed: "Signed by the student", guardian_sent: "Sent to the parent / guardian",
   guardian_verified: "Parent / guardian verified their email", guardian_signed: "Signed by the parent / guardian", submitted: "Submitted",
   sms_sent: "Text message sent", sms_failed: "Text message not sent", sms_skipped: "No text message",
+  sms_delivered: "Text message delivered", sms_undelivered: "Text message not delivered",
   email_confirmed: "Email confirmed", mobile_confirmed: "Mobile confirmed",
 };
 

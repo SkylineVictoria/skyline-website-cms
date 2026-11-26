@@ -76,6 +76,7 @@ export default function CommConnectionForm({ connectionId, ensureConnection, con
             : maps ? 'Add business fills the office address, website and phone from Google Maps with this key.'
             : search ? 'Add business finds the business\u2019s registered migration agents on the public OMARA register with this key (Business Rules › omara.search_provider chooses the service).'
             : 'The Communication Hub offers this channel when messaging people. Send a test to check it.'}</p>
+          {connectorId === 'clicksend' && <DeliveryReports busy={busy} />}
           {search ? <SearchCheckButton connector={connectorId as 'brave_search' | 'tavily'} busy={busy} /> : maps ? <GoogleMapsCheckButton busy={busy} /> : connectorId !== 'microsoft_teams' && <TestSend channel={connectorId === 'clicksend' ? 'sms' : 'whatsapp'} busy={busy} />}
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" disabled={busy} onClick={() => setEditing(true)}>Replace details</Button>
@@ -172,6 +173,47 @@ function SearchCheckButton({ connector, busy }: { connector: 'brave_search' | 't
 }
 
 /** Sends a test message through the saved account to a phone number and shows the provider's answer. */
+/**
+ * SMS-DELIVERY-REPORTS (2026-11-26): ClickSend tells us whether each text reached the phone. The link (with a key shown once) is pasted
+ * in ClickSend › Messaging Settings › SMS › Delivery Reports › Add rule › URL; the application timeline then shows Delivered / Not delivered.
+ */
+function DeliveryReports({ busy }: { busy: boolean }) {
+  type Status = { configured: boolean; createdAt: string | null; lastReportAt: string | null; counts: Record<string, number> };
+  const [status, setStatus] = useState<Status | null>(null);
+  const [link, setLink] = useState('');
+  const [error, setError] = useState('');
+  const load = useCallback(() => { rpc<Status>('sms_receipt_status', {}).then(setStatus, () => setStatus(null)); }, []);
+  useEffect(load, [load]);
+  const make = async () => {
+    if (status?.configured && !window.confirm('Make a new link? The link already in ClickSend stops working until you replace it there.')) return;
+    setError('');
+    try {
+      const r = await rpc<{ connectionId: string; key: string }>('sms_receipt_key_rotate', {});
+      const base = String(import.meta.env.VITE_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '');
+      setLink(`${base}/functions/v1/integrations-webhook?connection=${r.connectionId}&key=${r.key}`);
+      load();
+    } catch (e) { setError(e instanceof Error ? e.message : 'The link could not be made.'); }
+  };
+  const when = (t: string | null) => t ? new Date(t).toLocaleString('en-AU', { timeZone: 'Australia/Melbourne', dateStyle: 'medium', timeStyle: 'short' }) : '';
+  const c = status?.counts ?? {};
+  return (
+    <section className="space-y-2 rounded-md border border-background-200 bg-background-100 p-3" aria-label="Delivery reports" data-testid="sms-delivery-reports">
+      <h3 className="font-semibold">Delivery reports</h3>
+      <p className="text-foreground-700">{status === null ? 'Not available until the delivery reports update is installed.'
+        : status.configured ? `Set up ${when(status.createdAt)}. ${status.lastReportAt ? `Last report ${when(status.lastReportAt)}.` : 'No report received yet.'}`
+        : 'Not set up: texts show only as sent, not whether the phone received them.'}</p>
+      {status ? <p className="text-xs text-foreground-600">Texts: {c.delivered ?? 0} delivered · {c.undelivered ?? 0} not delivered · {c.accepted ?? 0} waiting for a report</p> : null}
+      {status ? <Button variant="outline" disabled={busy} onClick={() => void make()}>{status.configured ? 'Make a new link' : 'Set up delivery reports'}</Button> : null}
+      {error ? <p role="alert" className="text-xs text-red-700">{error}</p> : null}
+      {link ? <div className="space-y-1.5">
+        <p className="text-xs text-foreground-700">Copy this link now; it is not shown again. In ClickSend open <b>Messaging Settings › SMS › Delivery Reports</b>, add a rule with action <b>URL</b> and paste it (method POST).</p>
+        <input readOnly className={inputClass} value={link} onFocus={(e) => e.currentTarget.select()} aria-label="Delivery report link" />
+        <Button variant="outline" onClick={() => void navigator.clipboard?.writeText(link)}>Copy link</Button>
+      </div> : null}
+    </section>
+  );
+}
+
 function TestSend({ channel, busy }: { channel: 'sms' | 'whatsapp'; busy: boolean }) {
   const [to, setTo] = useState('');
   const [state, setState] = useState('');

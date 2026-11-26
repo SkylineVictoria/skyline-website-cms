@@ -43,6 +43,8 @@ export default function AssessmentDetailPage() {
   const [copying, setCopying] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [units, setUnits] = useState<{ id: string; code: string; name: string }[]>([]);
+  // every unit of the course (also one switched off), so the assessment's own unit is always found for the unit check
+  const [allUnits, setAllUnits] = useState<{ id: string; code: string; name: string }[]>([]);
   const [course, setCourse] = useState<{ code: string; name: string } | null>(null);
   const timer = useRef<number | null>(null);
 
@@ -52,7 +54,7 @@ export default function AssessmentDetailPage() {
       setDetail(d); setError(""); setMappings(d.editing?.mappings ?? []);
       const t = await loadTemplate(d.id).catch(() => null);
       setQuestions((t?.template?.questions ?? []).map((q) => ({ key: q.key, number: `Task ${q.task ?? ""} · ${questionName(q)}`.replace("Task  · ", ""), label: q.label ?? "" })));
-      rto<CourseDetail>("course_get", { courseId: d.courseId }).then((c) => { setUnits(c.units.filter((u) => u.isActive).map((u) => ({ id: u.id ?? "", code: u.code, name: u.name }))); setCourse(c.course ? { code: c.course.code, name: c.course.name } : null); }).catch(() => undefined);
+      rto<CourseDetail>("course_get", { courseId: d.courseId }).then((c) => { setAllUnits(c.units.map((u) => ({ id: u.id ?? "", code: u.code, name: u.name }))); setUnits(c.units.filter((u) => u.isActive).map((u) => ({ id: u.id ?? "", code: u.code, name: u.name }))); setCourse(c.course ? { code: c.course.code, name: c.course.name } : null); }).catch(() => undefined);
     } catch (e) { setError(e instanceof Error ? e.message : "The assessment did not load."); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
@@ -103,7 +105,7 @@ export default function AssessmentDetailPage() {
   if (!detail) return <SkeletonLines lines={8} />;
   const current = detail.versions.find((v) => v.id === detail.currentVersionId) ?? null;
   const canAssign = detail.versions.some((v) => v.status === "published") && !detail.archivedAt;
-  const unit = units.find((u) => u.id === detail.unitId) ?? null;
+  const unit = allUnits.find((u) => u.id === detail.unitId) ?? null;
   const editingDraft = detail.editing?.status === "draft";
   const ready = Boolean(detail.editing?.hasTemplate && detail.editing.questions > 0);
   const tab = params.get("tab") ?? "pdf";

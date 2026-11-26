@@ -24,8 +24,8 @@ let assessmentUrl = "";
 
 /** Places a student in an intake as the system's planner does (manual placements are refused by intake_enrolments_auto_only). */
 function enrol(intakeId: string, studentId: string): void {
-  // AVETMISS (hosted 20261125025533): an enrolment needs the student's AVETMISS details; the fixture student has them
-  sql(`update public.enrollment_students set sex_code = 'M', birth_country_code = '1101', home_language_code = '1201', indigenous_status_code = '4', school_level_code = '12', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N', details = coalesce(details, '{}'::jsonb) || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb where id = '${studentId}'`);
+  // AVETMISS (hosted 20261125025533, 20261126124153): an enrolment needs the student's AVETMISS details; the fixture student has them
+  sql(`update public.enrollment_students set sex_code = 'M', birth_country_code = '1101', home_language_code = '1201', indigenous_status_code = '4', school_level_code = '12', school_level_year = '2017', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N', details = coalesce(details, '{}'::jsonb) || jsonb_build_object('first_name', coalesce(nullif(split_part(full_name, ' ', 1), ''), 'Test'), 'last_name', coalesce(nullif(split_part(full_name, ' ', 2), ''), 'Student')) || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_street": "1 Test St", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb where id = '${studentId}'`);
   sql(`begin; select set_config('rto.carry_over_planning', 'on', true); insert into public.intake_enrolments(intake_id, student_id, study_reason_code) values ('${intakeId}', '${studentId}', '01'); commit;`);
 }
 
@@ -745,6 +745,10 @@ test.describe("ASM-WORKBOOK", () => {
     const list = page.getByRole("listbox");
 
     // Library course filter: search box (more than 7 courses), filtering, Enter picks, the optional filter clears
+    // a freshly built lab has only a few courses: add draft filler courses so the list is long enough for its search box
+    for (let n = Number(sql(`select count(*) from public.cms_courses`)); n < 9; n++) {
+      sql(`insert into public.cms_courses(id, slug, code, name, status) values ('course-e2e-fill-${RUN}-${n}', 'e2e-fill-${RUN}-${n}', 'ZZF${n}${RUN.slice(-4).toUpperCase()}', 'E2E filler course ${n}', 'Draft')`);
+    }
     await page.goto("/admin/assessments");
     const course = page.getByRole("combobox", { name: "Course" });
     await course.click();

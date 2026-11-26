@@ -68,6 +68,14 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
   // reason) before the template can be saved, and the decision is audited (asm_import_unit_check)
   const [unitCheck, setUnitCheck] = useState<UnitCheck | null>(null);
   const [keepReason, setKeepReason] = useState("");
+  // the unit the uploaded workbook names, waiting to be compared: the assessment's unit arrives with the course (course_get), which
+  // can still be loading when the PDF is uploaded; saving waits until the comparison is made
+  const [workbookUnit, setWorkbookUnit] = useState<{ code: string | null; name: string | null } | null>(null);
+  useEffect(() => {
+    if (!workbookUnit || !unit) return;
+    const check = checkUnit(workbookUnit, { code: unit.code, name: unit.name });
+    setUnitCheck(check.status === "mismatch" ? check : null); setKeepReason(""); setWorkbookUnit(null);
+  }, [workbookUnit, unit]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -94,8 +102,7 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
       // the unit the workbook names, read from its own copy before the page viewer takes the bytes
       const named = await unitInWorkbook(bytes.slice()).catch(() => ({ code: null, name: null }));
       setPdf(bytes); setTemplate(found); setFields(found.fields.map(toEditor)); setDirty(true);
-      const check = checkUnit(named, { code: unit?.code ?? null, name: unit?.name ?? null });
-      setUnitCheck(check.status === "mismatch" ? check : null); setKeepReason("");
+      setUnitCheck(null); setWorkbookUnit(named);
       toast.push(`${found.questions.length} questions and ${found.fields.length} fields found. Check them, then save.`, "success");
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
@@ -125,7 +132,7 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
     } catch (e) { setError((e as Error).message); }
   };
   const save = async () => {
-    if (!current || problems.length || unitCheck) return;
+    if (!current || problems.length || unitCheck || workbookUnit) return;
     setBusy("Saving…");
     try {
       const out = await saveTemplate(assessmentId, current, state?.status === "draft" ? state.updatedAt : null);
@@ -157,7 +164,7 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
       {editable ? <div className="flex flex-wrap gap-2">
         <Button variant={template ? "outline" : "primary"} size="sm" icon="ri-upload-2-line" disabled={!!busy} onClick={() => fileInput.current?.click()} data-testid="pdf-template-upload">{template ? "Replace PDF" : "Upload workbook PDF"}</Button>
         {template ? <Button variant="outline" size="sm" icon="ri-refresh-line" disabled={!!busy || !pdf} onClick={() => void detectAgain()}>Find fields again</Button> : null}
-        {template ? <Button size="sm" icon="ri-save-3-line" disabled={!!busy || !dirty || problems.length > 0 || !!unitCheck} onClick={() => void save()} data-testid="pdf-template-save">Save draft</Button> : null}
+        {template ? <Button size="sm" icon="ri-save-3-line" disabled={!!busy || !dirty || problems.length > 0 || !!unitCheck || !!workbookUnit} onClick={() => void save()} data-testid="pdf-template-save">Save draft</Button> : null}
       </div> : null}
     </div>
     {busy ? <p role="status" className="rounded-lg bg-background-100 px-3 py-2 text-sm text-foreground-700">{busy}</p> : null}

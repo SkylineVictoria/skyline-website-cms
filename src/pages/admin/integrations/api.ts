@@ -1,6 +1,7 @@
 import { supabase } from '@/pages/admin/lib/supabase';
 import { currentTenantSite } from '@/lib/tenantSite';
 export type Definition = { id: string; name: string; auth_type: string; availability: string; description: string };
+export const isEnvironmentManaged = (definition?: Definition) => definition?.availability === 'environment_managed';
 export type Connection = { id: string; connector_id: string; status: string; last_success_at: string | null; updated_at: string; credential_configured: boolean; webhook_configured: boolean; can_operate: boolean };
 export type Job = { id: string; connection_id: string; status: string; created_at: string; completed_at: string | null; success_count: number; failure_count: number; attempts: number; operation: string; correlation_id: string };
 export type Log = { id: string; connector_id: string; severity: string; code: string; created_at: string; correlation_id: string };

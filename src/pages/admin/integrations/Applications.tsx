@@ -1,8 +1,9 @@
 import { Button, TextInput } from '@/pages/admin/components/ui';
-import type { Connection, Definition } from './api';
+import { isEnvironmentManaged, type Connection, type Definition } from './api';
 import { ConnectionStatus } from './shared';
 
 function availabilityLabel(isAdmin: boolean, definition?: Definition) {
+  if (isEnvironmentManaged(definition)) return 'Server-managed';
   // rule-policy: security integration-snapshot-access Restricted accounts only see connection status for visible records.
   if (!isAdmin) return 'No accessible connection';
   return definition?.availability === 'requires_approval' ? 'Requires approval' : 'Not connected';
@@ -17,6 +18,7 @@ export type Application = {
 };
 
 const icons: Record<string, string> = {
+  openai: 'ri-sparkling-2-line bg-emerald-100 text-emerald-800',
   microsoft365: 'ri-microsoft-fill bg-blue-100 text-blue-700',
   stripe: 'ri-bank-card-fill bg-indigo-100 text-indigo-700',
   google_maps: 'ri-map-pin-2-fill bg-primary-100 text-primary-800',

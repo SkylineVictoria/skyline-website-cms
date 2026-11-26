@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
-import { integrationRequest, type Snapshot } from './api';
+import { integrationRequest, isEnvironmentManaged, type Snapshot } from './api';
 import { Button } from '@/pages/admin/components/ui';
 import { useToast } from '@/pages/admin/components/toastContext';
 import { paymentsAction } from '@/lib/signingApi';
 import { currentTenantSite } from '@/lib/tenantSite';
 import { Empty, Frame } from './shared';
 import { ApplicationHeader, Applications, type Application } from './Applications';
+import OpenAIEnvironmentPanel from './OpenAIEnvironmentPanel';
 import LogsPage from './LogsPage';
 import SettingsPage from './SettingsPage';
 import SyncHistoryPage from './SyncHistoryPage';
@@ -108,14 +109,14 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
   const state = useIntegrations();
   const { load } = state;
   const [params] = useSearchParams();
-  const [provider, setProvider] = useState('');
+  const [provider, setProvider] = useState(params.get('provider') ?? '');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<'All' | 'Connected' | 'Needs attention'>('All');
   const [tab, setTab] = useState(openCredentials ? 'credentials' : 'configuration');
   const [panel, setPanel] = useState<'provider' | 'activity' | 'settings'>(openSettings ? 'settings' : initialActivity ? 'activity' : 'provider');
   const [settingsOpened, setSettingsOpened] = useState(openSettings);
   const [activityView, setActivityView] = useState<ActivityView>(initialActivity ?? 'logs');
-  const [showDetails, setShowDetails] = useState(openSettings || !!initialActivity || params.has('connection'));
+  const [showDetails, setShowDetails] = useState(openSettings || !!initialActivity || params.has('connection') || params.has('provider'));
   const draft = useDraftRegistry();
   const dirty = useRef(false);
   function setDirty(value: boolean) {
@@ -147,6 +148,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
   const connectionId = connection?.id ?? selected;
   const providerId = connection?.connector_id ?? provider;
   const definition = state.data?.definitions.find(item => item.id === providerId);
+  const serverManaged = isEnvironmentManaged(definition);
   const app = definition && appSettings[definition.id];
   const isOAuth = definition?.auth_type === 'oauth2';
   const isAdmin = state.data?.isAdmin === true;
@@ -273,7 +275,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
   const commApp = isVaultFormConnector(definition?.id);
   const wrongDomain = setup && new URL(setup.callbackUrl).origin !== window.location.origin;
   // rule-policy: security integration-credential-access Reuses existing administrator and provider form availability.
-  const hasCredentials = isAdmin && !!connection && !disabled && !!definition && definition.id !== M365 &&
+  const hasCredentials = isAdmin && !serverManaged && !!connection && !disabled && !!definition && definition.id !== M365 &&
     (pendingApp || commApp || (isOAuth ? !!app : definition.availability !== 'requires_approval'));
   // rule-policy: security integration-stripe-webhook Reuses the existing administrator and connected-state checks.
   const paymentWebhook = isAdmin && definition?.id === 'stripe' && connection?.status === 'connected';
@@ -315,7 +317,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
 
   const education = definition && Object.hasOwn(australianEducationApps, definition.id) ? australianEducationApps[definition.id] : undefined;
   // rule-policy: security integration-add-access Reuses the existing administrator and provider availability checks.
-  const addable = isAdmin && definition && !selectedApp?.connections.length &&
+  const addable = isAdmin && !serverManaged && definition && !selectedApp?.connections.length &&
     (definition.availability !== 'requires_approval' || education);
   // rule-policy: security integration-direct-setup Shares existing provider availability and credential authorization.
   const inlineSetup = !!addable && definition.id !== M365 && (commApp || pendingApp || !isOAuth);
@@ -350,7 +352,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
     </>
   );
 
-  const credentialsPanel = (connection || inlineSetup) && isAdmin && !disabled && (definition?.id === M365 ? (
+  const credentialsPanel = !serverManaged && (connection || inlineSetup) && isAdmin && !disabled && (definition?.id === M365 ? (
     <Microsoft365Panel />
   ) : isOAuth && app ? (
     setup ? (wrongDomain ? (
@@ -512,7 +514,9 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
                 aria-pressed={activeTab === item.id} onClick={() => setTab(item.id)}>{item.label}</Button>)}
             </nav>}
             <div hidden={activeTab !== 'configuration'} className="space-y-4">
-              {connection ? (
+              {serverManaged ? (
+                <OpenAIEnvironmentPanel isAdmin={isAdmin} />
+              ) : connection ? (
                 <>
                   <dl className="grid grid-cols-2 gap-2 rounded-md border border-background-200 bg-background-100 p-3 text-sm">
                     <div><dt className="text-xs text-foreground-600">Last successful check</dt><dd>{date(connection.last_success_at)}</dd></div>

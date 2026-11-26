@@ -53,6 +53,7 @@ export default function ApplicationReview({
   resubmit = false,
   studentSigns = false,
   onePage = false,
+  tiles = false,
 }: {
   values: DraftValues;
   courses: string[];
@@ -83,6 +84,8 @@ export default function ApplicationReview({
   studentSigns?: boolean;
   /** ONE-PAGE: the answers are edited on the page above; only what is missing and the signature are shown. */
   onePage?: boolean;
+  /** ONE-PAGE cards: every step as a square card (two across) with its answers and Edit; the signature is on the next page. */
+  tiles?: boolean;
 }) {
   const flat: Record<string, string> = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")]));
   const val = (key: string): string => {
@@ -124,6 +127,59 @@ export default function ApplicationReview({
     return { key: `${step.index}-${n}`, step: step.title, text, onJump: () => onJumpToField(step.index, field?.name ?? documentField) };
   })));
 
+  if (tiles) {
+    const steps = groups.flatMap((group) => group.steps);
+    const done = steps.filter((step) => step.issues.length === 0).length;
+    return (
+      <div>
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-sm text-foreground-600">Check each part. Press Edit on a card to change it.</p>
+          <p className="text-sm text-foreground-600"><b className="font-semibold text-foreground-950">{done} of {steps.length}</b> complete</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2" data-testid="application-cards">
+          {steps.map((step) => {
+            const ok = step.issues.length === 0;
+            return (
+              <section key={step.index} className={`flex min-w-0 flex-col rounded-xl border bg-background-50 p-4 ${ok ? "border-background-200" : "border-amber-300"}`} data-testid="application-card">
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="flex min-w-0 items-center gap-1.5 font-heading text-sm font-semibold text-foreground-950">
+                    {ok ? <i className="ri-checkbox-circle-fill text-base text-emerald-600" aria-label="complete" />
+                      : <i className="ri-error-warning-fill text-base text-amber-500" aria-label="needs details" />}
+                    <span className="truncate">{step.title}</span>
+                  </h3>
+                  {readOnly ? null : (
+                    <button type="button" onClick={() => onEditSection(step.index)} className="inline-flex min-h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-background-300 px-2.5 text-xs font-semibold text-foreground-700 hover:border-primary-300 hover:text-primary-700">
+                      <i className="ri-pencil-line" aria-hidden="true" />Edit
+                    </button>
+                  )}
+                </div>
+                {step.rows.length ? (
+                  <dl className="mt-3 grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-1.5 text-xs">
+                    {step.rows.map((row) => (
+                      <div key={row.key} className="contents">
+                        <dt className="truncate text-foreground-500" title={row.label}>{row.label}</dt>
+                        <dd className="break-words font-medium text-foreground-900">{row.value}{row.note}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : <p className="mt-3 text-xs text-foreground-500">Nothing entered yet.</p>}
+                {step.issues.length ? (
+                  <ul className="mt-3 space-y-0.5 border-t border-amber-100 pt-2">
+                    {step.issues.map((text) => (
+                      <li key={text}>
+                        <button type="button" onClick={() => onJumpToField(step.index, sections[step.index].fields.find((f) => f.label === text)?.name)}
+                          className="cursor-pointer text-left text-xs text-amber-900 underline-offset-2 hover:underline">{text}</button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <ReviewSummary groups={groups} issues={issues} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}

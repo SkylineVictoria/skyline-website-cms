@@ -365,6 +365,15 @@ export default function ApplicationWorkspace({
   });
   const [showErrors, setShowErrors] = useState(false);
   const [reviewValues, setReviewValues] = useState<DraftValues | null>(null);
+  // ONE-PAGE: the cards of every step (grid), one step being edited, or the declarations and signature (sign).
+  const [onePageView, setOnePageView] = useState<{ kind: "grid" } | { kind: "edit"; index: number } | { kind: "sign" }>({ kind: "grid" });
+  /** Back to the cards (or on to the signature), with the answers as they are on the form now. */
+  const showOnePage = (kind: "grid" | "sign") => {
+    if (formRef.current) setReviewValues(collectFormValues(formRef.current));
+    void flushSave().catch(() => undefined);
+    setOnePageView({ kind });
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
   const [consent, setConsent] = useState<ConsentState>({ declarations: {}, complete: false, password: { needed: false, password: "", valid: true } });
   // APPLICATION-STUDENT-SIGNS: only the student signs; an agent or staff member sends it to the student instead.
   const studentSigns = usePortalAuth().role === "student";
@@ -1219,7 +1228,13 @@ export default function ApplicationWorkspace({
   /** Opens one step (and its stage) and puts the cursor in a field: the given one, else the step's first empty answer. */
   const openSection = (index: number, field?: string) => {
     const target = stageOf(index);
-    if (!one && target !== stage) { pendingFocusRef.current = { section: index, field }; showStage(target); return; }
+    if (one) {
+      setOnePageView({ kind: "edit", index });
+      setExpanded((prev) => new Set(prev).add(index));
+      window.setTimeout(() => focusSection(index, field), 120);
+      return;
+    }
+    if (target !== stage) { pendingFocusRef.current = { section: index, field }; showStage(target); return; }
     setExpanded((prev) => new Set(prev).add(index));
     window.setTimeout(() => focusSection(index, field), 240);
   };
@@ -1939,12 +1954,14 @@ export default function ApplicationWorkspace({
         onSelectStage={(index) => (index === reviewStage ? openReview() : showStage(index))}
         onSelectSection={(index) => openSection(index)}
         hideNav={one}
-        onPrevious={one ? undefined : () => showStage(stage - 1)}
+        onPrevious={one ? (onePageView.kind === "grid" ? undefined : () => showOnePage("grid")) : () => showStage(stage - 1)}
         previousDisabled={stage === 0}
         onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
         message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
-          isReview
+          one && onePageView.kind === "edit" ? { label: "Done", icon: "ri-check-line", testId: "section-done", onClick: () => showOnePage("grid") }
+          : one && onePageView.kind === "grid" ? (canSubmitHere ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
+          : isReview
             ? !readOnly && canSubmitHere
               ? {
                 label: !studentSigns ? "Send to student to review & sign" : resubmitHere ? "Sign and resubmit" : "Sign and submit",
@@ -2016,9 +2033,9 @@ export default function ApplicationWorkspace({
           {stages.flatMap((item) => item.sections).map((index) => {
             const section = sections[index];
             const { subtitle, tip } = stepHelp(section);
-            const shown = one ? sectionShown(index) : !isReview && stageOf(index) === stage && sectionShown(index);
+            const shown = one ? onePageView.kind === "edit" && onePageView.index === index && sectionShown(index) : !isReview && stageOf(index) === stage && sectionShown(index);
             const complete = issuesBySection[index].length === 0;
-            const open = expanded.has(index) || !ready;
+            const open = one || expanded.has(index) || !ready;
             return (
               <SectionCard
                 key={index}
@@ -2045,11 +2062,12 @@ export default function ApplicationWorkspace({
             );
           })}
         </div>
-        {one ? (
-          <div className="mt-4" data-testid="one-page-check">
+        {one && onePageView.kind !== "edit" ? (
+          <div data-testid={onePageView.kind === "grid" ? "one-page-cards" : "one-page-sign"}>
             <ApplicationReview
-              values={storedValues}
-              courses={((storedValues[COURSE_FIELD] as string[] | undefined) ?? [])}
+              tiles={onePageView.kind === "grid"}
+              values={reviewValues ?? storedValues}
+              courses={(((reviewValues ?? storedValues)[COURSE_FIELD] as string[] | undefined) ?? [])}
               sections={sections}
               application={application}
               qualifications={qualifications}

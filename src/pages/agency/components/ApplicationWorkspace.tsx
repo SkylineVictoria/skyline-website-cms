@@ -1233,6 +1233,12 @@ export default function ApplicationWorkspace({
   const openSection = (index: number, field?: string) => {
     const target = stageOf(index);
     if (one) {
+      // The student's declaration is filled on the sign page, open, with the ticks and the signature.
+      if (studentSigns && isDeclarationSection(index)) {
+        setOnePageView({ kind: "sign" });
+        window.setTimeout(() => focusSection(index, field), 120);
+        return;
+      }
       setOnePageView({ kind: "edit", index });
       setExpanded((prev) => new Set(prev).add(index));
       window.setTimeout(() => focusSection(index, field), 120);
@@ -1498,6 +1504,10 @@ export default function ApplicationWorkspace({
   }
 
   const isReview = one || stage === reviewStage;
+  /** The Student Declaration step (terms, declarant, typed signature): the student's, shown open on the sign page. */
+  function isDeclarationSection(index: number): boolean {
+    return Boolean(sections[index]?.fields.some((field) => field.type === "terms" || field.name === "digital_signature"));
+  }
   /** Missing answers on a step are marked once its stage was left with Next, or after a submit attempt. */
   const marksShown = (index: number) => showErrors || touchedStages.has(stageOf(index));
 
@@ -1623,7 +1633,7 @@ export default function ApplicationWorkspace({
     if (field.type === "terms") {
       return (
         <div key={field.name} className="md:col-span-2">
-          <TermsDeclaration heading={field.label} terms={field.options ?? []} plain />
+          <TermsDeclaration heading={field.label} terms={field.options ?? []} plain defaultOpen={one} />
         </div>
       );
     }
@@ -2037,7 +2047,7 @@ export default function ApplicationWorkspace({
           {stages.flatMap((item) => item.sections).map((index) => {
             const section = sections[index];
             const { subtitle, tip } = stepHelp(section);
-            const shown = one ? onePageView.kind === "edit" && onePageView.index === index && sectionShown(index) : !isReview && stageOf(index) === stage && sectionShown(index);
+            const shown = one ? sectionShown(index) && ((onePageView.kind === "edit" && onePageView.index === index) || (onePageView.kind === "sign" && studentSigns && isDeclarationSection(index))) : !isReview && stageOf(index) === stage && sectionShown(index);
             const complete = issuesBySection[index].length === 0;
             const open = one || expanded.has(index) || !ready;
             return (

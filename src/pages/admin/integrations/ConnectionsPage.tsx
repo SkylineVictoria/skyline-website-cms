@@ -6,13 +6,13 @@ import { useToast } from '@/pages/admin/components/toastContext';
 import { paymentsAction } from '@/lib/signingApi';
 import { currentTenantSite } from '@/lib/tenantSite';
 import { Empty, Frame } from './shared';
-import { ApplicationHeader, Applications, Overview, type Application } from './Applications';
+import { ApplicationHeader, Applications, type Application } from './Applications';
 import LogsPage from './LogsPage';
 import SettingsPage from './SettingsPage';
 import SyncHistoryPage from './SyncHistoryPage';
 import WebhooksPage from './WebhooksPage';
 import { useDraftRegistry } from '@/pages/admin/lib/draftContext';
-import { useIntegrations, date, inputClass, sections, type Section } from './state';
+import { useIntegrations, date, inputClass } from './state';
 import PendingCredentialsForm from './PendingCredentialsForm';
 import CommConnectionForm, { VAULT_FORM_CONNECTORS } from './CommConnectionForm';
 import Microsoft365Panel from '@/pages/admin/components/Microsoft365Panel';
@@ -86,28 +86,48 @@ function errorMessage(error: unknown) {
 
 const DRAFT = 'integration-form';
 
+const activityViews = [
+  { id: 'logs', label: 'Logs' },
+  { id: 'sync-history', label: 'Sync History' },
+  { id: 'webhooks', label: 'Webhooks' },
+] as const;
+type ActivityView = typeof activityViews[number]['id'];
+
 export default function ConnectionsPage() {
   const { pathname } = useLocation();
-  const section = sections.find(item => item.to === pathname)?.id ?? 'overview';
-  return <Workspace key={section} section={section} />;
+  const legacyActivity = activityViews.find(item => pathname.endsWith('/' + item.id))?.id;
+  return <Workspace key={pathname} initialActivity={legacyActivity} openSettings={pathname.endsWith('/settings')}
+    openCredentials={pathname.endsWith('/credentials')} />;
 }
 
-function Workspace({ section }: { section: Section }) {
+function Workspace({ initialActivity, openSettings, openCredentials }: {
+  initialActivity?: ActivityView;
+  openSettings: boolean;
+  openCredentials: boolean;
+}) {
   const state = useIntegrations();
   const { load } = state;
   const [params] = useSearchParams();
   const [provider, setProvider] = useState('');
   const [query, setQuery] = useState('');
-  const [auth, setAuth] = useState('');
-  const [tab, setTab] = useState('configuration');
+  const [filter, setFilter] = useState<'All' | 'Connected' | 'Needs attention'>('All');
+  const [tab, setTab] = useState(openCredentials ? 'credentials' : 'configuration');
+  const [panel, setPanel] = useState<'provider' | 'activity' | 'settings'>(openSettings ? 'settings' : initialActivity ? 'activity' : 'provider');
+  const [settingsOpened, setSettingsOpened] = useState(openSettings);
+  const [activityView, setActivityView] = useState<ActivityView>(initialActivity ?? 'logs');
+  const [showDetails, setShowDetails] = useState(openSettings || !!initialActivity || params.has('connection'));
   const draft = useDraftRegistry();
   const dirty = useRef(false);
   function setDirty(value: boolean) {
     dirty.current = value;
     draft?.setDirty(DRAFT, value, 'Unsaved integration changes will be discarded. Leave this page?');
   }
-  useEffect(() => () => draft?.clear(DRAFT), [draft]);
+  useEffect(() => () => {
+    draft?.clear(DRAFT);
+    draft?.clear('integration-settings');
+  }, [draft]);
   const [selected, setSelected] = useState(params.get('connection') ?? '');
+  const [formRevision, setFormRevision] = useState(0);
   const [secret, setSecret] = useState('');
   const [kind, setKind] = useState('api_key');
   const [clientId, setClientId] = useState('');
@@ -122,14 +142,15 @@ function Workspace({ section }: { section: Section }) {
   /** A success shows on the page and as a toast; the page's own snapshot is re-read by `perform` right after. */
   const announce = (text: string) => { setNotice(text); push(text); };
 
-  const connection = state.data?.connections.find(item => item.id === selected);
+  const connection = state.data?.connections.find(item => item.id === selected)
+    ?? state.data?.connections.find(item => item.connector_id === provider);
+  const connectionId = connection?.id ?? selected;
   const providerId = connection?.connector_id ?? provider;
   const definition = state.data?.definitions.find(item => item.id === providerId);
   const app = definition && appSettings[definition.id];
   const isOAuth = definition?.auth_type === 'oauth2';
   const isAdmin = state.data?.isAdmin === true;
-  const catalog = section === 'overview' || section === 'applications' || section === 'add' || section === 'credentials';
-  const m365 = useMicrosoft365(catalog && state.data?.connections.some(item => item.connector_id === M365) === true);
+  const m365 = useMicrosoft365(state.data?.connections.some(item => item.connector_id === M365) === true);
   const nameOf = (connectorId: string | undefined) => state.data?.definitions.find(provider => provider.id === connectorId)?.name ?? connectorId ?? 'The';
   /** The single status per entry: Microsoft 365 shows the same check as Email Management. */
   const statusOf = (item: { connector_id: string; status: string }) => item.connector_id === M365 && (m365.status || m365.loading) ? m365Label(m365.status, m365.loading) : item.status.replaceAll('_', ' ');
@@ -146,22 +167,22 @@ function Workspace({ section }: { section: Section }) {
   const listed = Array.from(applications.values()).sort((a, b) => Number(b.id === M365) - Number(a.id === M365));
 
   useEffect(() => {
-    if (!catalog || !selected || !isOAuth || !isAdmin || definition?.id === M365) return;
+    if (!connectionId || !isOAuth || !isAdmin || definition?.id === M365) return;
     let current = true;
-    void integrationRequest<OAuthSetup>('oauth_setup', { connectionId: selected }).then(result => {
+    void integrationRequest<OAuthSetup>('oauth_setup', { connectionId }).then(result => {
       if (!current) return;
       setSetup(result);
       setEditing(!result.configured);
       setEnvironment(result.configured ? result.environment : 'production');
     }).catch(problem => { if (current) setError(errorMessage(problem)); });
     return () => { current = false; };
-  }, [catalog, selected, isOAuth, isAdmin, definition?.id]);
+  }, [connectionId, isOAuth, isAdmin, definition?.id]);
 
   useEffect(() => {
     const code = params.get('code');
     const returnedState = params.get('state');
     const providerError = params.get('error');
-    if (!catalog || handled.current || (!code && !providerError)) return;
+    if (handled.current || (!code && !providerError)) return;
     handled.current = true;
     const saved = sessionStorage.getItem('integration_oauth');
     sessionStorage.removeItem('integration_oauth');
@@ -178,6 +199,7 @@ function Workspace({ section }: { section: Section }) {
     }
     const connectionId = pending.connectionId;
     setSelected(connectionId);
+    setShowDetails(true);
     setBusy(true);
     void (async () => {
       try {
@@ -194,11 +216,12 @@ function Workspace({ section }: { section: Section }) {
         setBusy(false);
       }
     })();
-  }, [catalog, params, load]);
+  }, [params, load]);
 
   function selectConnection(id: string) {
     setDirty(false);
     setSelected(id);
+    setFormRevision(revision => revision + 1);
     setSetup(undefined);
     setEditing(false);
     setClientId('');
@@ -209,8 +232,8 @@ function Workspace({ section }: { section: Section }) {
   }
 
   async function authorize() {
-    const result = await integrationRequest<{ url: string; state: string }>('oauth_start', { connectionId: selected });
-    sessionStorage.setItem('integration_oauth', JSON.stringify({ state: result.state, connectionId: selected }));
+    const result = await integrationRequest<{ url: string; state: string }>('oauth_start', { connectionId });
+    sessionStorage.setItem('integration_oauth', JSON.stringify({ state: result.state, connectionId }));
     window.location.assign(result.url);
   }
 
@@ -223,16 +246,24 @@ function Workspace({ section }: { section: Section }) {
     finally { await load(); setBusy(false); }
   }
 
+  async function createConnection(connectorId: string) {
+    await integrationRequest('add', { connectorId });
+    const latest = await integrationRequest<Snapshot>('snapshot');
+    const created = latest.connections.find(item => item.connector_id === connectorId);
+    if (!created) throw new Error('The connection could not be loaded. Try again.');
+    return created.id;
+  }
+
   async function addConnection(connectorId: string) {
     await perform(async () => {
-      let addError: unknown;
-      try { await integrationRequest('add', { connectorId }); } catch (problem) { addError = problem; }
-      const latest = await integrationRequest<Snapshot>('snapshot');
-      const created = latest.connections.find(item => item.connector_id === connectorId);
-      if (!created) throw addError ?? new Error('The connection could not be loaded. Try again.');
-      selectConnection(created.id);
+      const id = await createConnection(connectorId);
+      selectConnection(id);
       setTab('credentials');
     });
+  }
+
+  function ensureConnection() {
+    return connection ? Promise.resolve(connection.id) : createConnection(providerId);
   }
 
   const disabled = connection?.status === 'disabled';
@@ -247,24 +278,29 @@ function Workspace({ section }: { section: Section }) {
   // rule-policy: security integration-stripe-webhook Reuses the existing administrator and connected-state checks.
   const paymentWebhook = isAdmin && definition?.id === 'stripe' && connection?.status === 'connected';
   const data = state.data;
-  const globalView = section === 'webhooks' || section === 'sync-history' || section === 'logs' || section === 'settings';
 
   function confirmDiscard() {
     return !dirty.current || window.confirm('Discard unsaved integration changes?');
   }
-  function choose(application: Application) {
-    if (application.id === providerId || !confirmDiscard()) return;
-    setProvider(application.id);
-    const next = application.connections[0];
-    selectConnection(next?.id ?? '');
-    setTab(isAdmin ? 'credentials' : 'configuration');
+  function openPanel(next: typeof panel) {
+    if (next === 'settings') setSettingsOpened(true);
+    setPanel(next);
+    setShowDetails(true);
     requestAnimationFrame(() => {
-      const details = document.getElementById('integration-details');
-      const applicationList = details?.previousElementSibling;
-      if (details && applicationList && details.getBoundingClientRect().top > applicationList.getBoundingClientRect().top + 1) {
-        details.focus();
-      }
+      const back = document.getElementById('integration-mobile-back');
+      if (back?.getClientRects().length) back.focus();
     });
+  }
+
+  function choose(application: Application) {
+    if (busy || state.busy) return;
+    if (application.id !== providerId) {
+      if (!confirmDiscard()) return;
+      setProvider(application.id);
+      selectConnection(application.connections[0]?.id ?? '');
+      setTab(isAdmin ? 'credentials' : 'configuration');
+    }
+    openPanel('provider');
   }
 
   const tabs = [
@@ -281,22 +317,23 @@ function Workspace({ section }: { section: Section }) {
   // rule-policy: security integration-add-access Reuses the existing administrator and provider availability checks.
   const addable = isAdmin && definition && !selectedApp?.connections.length &&
     (definition.availability !== 'requires_approval' || education);
-  const visibleApps = section === 'add' ? listed.filter(item => !item.connections.length || item.id === providerId) : listed;
+  // rule-policy: security integration-direct-setup Shares existing provider availability and credential authorization.
+  const inlineSetup = !!addable && definition.id !== M365 && (commApp || pendingApp || !isOAuth);
 
   const configurationActions = isAdmin && connection && (
     <>
       {/* // rule-policy: security integration-test-access Reuses the existing restrictions on retrying a connection. */}
       {!pendingApp && !commApp && definition?.id !== M365 && connection.credential_configured && (!isOAuth || setup?.authorized) && !disabled && connection.status !== 'connected' && (
         <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
-          await integrationRequest('test', { connectionId: selected });
+          await integrationRequest('test', { connectionId });
           announce(`${nameOf(definition?.id)} connection verified.`);
         })}>Retry connection check</Button>
       )}
       {!pendingApp && !commApp && definition?.id !== M365 && (connection.credential_configured || connection.webhook_configured) && (
         <Button variant="outline" disabled={busy} onClick={() => void perform(async () => {
-          await integrationRequest('revoke', { connectionId: selected });
+          await integrationRequest('revoke', { connectionId });
           if (isOAuth) {
-            const updated = await integrationRequest<OAuthSetup>('oauth_setup', { connectionId: selected });
+            const updated = await integrationRequest<OAuthSetup>('oauth_setup', { connectionId });
             setSetup(updated);
             setEditing(!updated.configured);
           }
@@ -306,25 +343,25 @@ function Workspace({ section }: { section: Section }) {
       {!disabled && <details>
         <summary className="cursor-pointer text-sm">Connection controls</summary>
         <Button variant="outline" className="mt-2" disabled={busy} onClick={() => void perform(async () => {
-          await integrationRequest('disable', { connectionId: selected });
+          await integrationRequest('disable', { connectionId });
           announce('Connection disabled.');
         })}>Disable connection</Button>
       </details>}
     </>
   );
 
-  const credentialsPanel = connection && isAdmin && !disabled && (definition?.id === M365 ? (
+  const credentialsPanel = (connection || inlineSetup) && isAdmin && !disabled && (definition?.id === M365 ? (
     <Microsoft365Panel />
   ) : isOAuth && app ? (
     setup ? (wrongDomain ? (
-      <a className="underline" href={`${setup.callbackUrl}?connection=${encodeURIComponent(selected)}`}>Open CRM on the sign-in domain</a>
+      <a className="underline" href={`${setup.callbackUrl}?connection=${encodeURIComponent(connectionId)}`}>Open CRM on the sign-in domain</a>
     ) : editing ? (
       <form className="space-y-4" onChangeCapture={() => setDirty(true)} onSubmit={event => {
         event.preventDefault();
         const value = secret;
         setSecret('');
         void perform(async () => {
-          await integrationRequest('oauth_app_save', { connectionId: selected, clientId, clientSecret: value, environment });
+          await integrationRequest('oauth_app_save', { connectionId, clientId, clientSecret: value, environment });
           setSetup({ ...setup, configured: true, authorized: false, environment });
           setEditing(false);
           setClientId('');
@@ -360,7 +397,7 @@ function Workspace({ section }: { section: Section }) {
         <Button variant="outline" disabled={busy} onClick={() => setEditing(true)}>Update app credentials</Button>
       </div>
     )) : error ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void perform(async () => {
-      const result = await integrationRequest<OAuthSetup>('oauth_setup', { connectionId: selected });
+      const result = await integrationRequest<OAuthSetup>('oauth_setup', { connectionId });
       setSetup(result);
       setEditing(!result.configured);
       setEnvironment(result.configured ? result.environment : 'production');
@@ -369,9 +406,9 @@ function Workspace({ section }: { section: Section }) {
       <p role="status">Loading provider setup…</p>
     )
   ) : commApp && definition ? (
-    <CommConnectionForm key={connection.id} connectionId={connection.id} connectorId={definition.id} busy={busy} perform={perform} onNotice={announce} onDraftChange={setDirty} />
+    <CommConnectionForm connectionId={connection?.id} ensureConnection={ensureConnection} connectorId={definition.id} busy={busy} perform={perform} onNotice={announce} onDraftChange={setDirty} />
   ) : pendingApp && definition ? (
-    <PendingCredentialsForm key={connection.id} connectionId={connection.id} name={definition.name} saved={connection.credential_configured}
+    <PendingCredentialsForm connectionId={connection?.id} ensureConnection={ensureConnection} name={definition.name} saved={!!connection?.credential_configured}
       busy={busy} perform={perform} onNotice={setNotice} onDraftChange={setDirty} />
   // rule-policy: security integration-provider-availability Preserves the existing unsupported-provider handling.
   ) : definition?.availability === 'requires_approval' || isOAuth ? (
@@ -380,13 +417,14 @@ function Workspace({ section }: { section: Section }) {
     <form className="space-y-4" onChangeCapture={() => setDirty(true)} onSubmit={event => {
       event.preventDefault();
       const value = secret;
-      setSecret('');
       void perform(async () => {
-        await integrationRequest('credential', { connectionId: selected, kind, secret: value });
+        const id = await ensureConnection();
+        await integrationRequest('credential', { connectionId: id, kind, secret: value });
+        setSecret('');
         setDirty(false);
-        if (kind === 'api_key' || connection.credential_configured) {
+        if (kind === 'api_key' || connection?.credential_configured) {
           announce(`${definition.name} ${kind === 'api_key' ? 'API key' : 'webhook secret'} saved. Checking the connection…`);
-          await integrationRequest('test', { connectionId: selected });
+          await integrationRequest('test', { connectionId: id });
           await load();
           announce(`${definition.name} is connected.`);
         } else {
@@ -404,7 +442,7 @@ function Workspace({ section }: { section: Section }) {
       <label className="block">{kind === 'webhook_secret' ? 'Webhook signing secret' : definition.id === 'stripe' ? 'Stripe secret or restricted API key' : 'API key'}
         <input className={inputClass} type="password" autoComplete="new-password" value={secret} onChange={event => setSecret(event.target.value)} required maxLength={8000} />
       </label>
-      <Button type="submit" disabled={busy || !secret.trim()}>{kind === 'api_key' ? 'Save & Connect' : 'Save'}</Button>
+      <Button type="submit" disabled={busy || !secret.trim()}>{!connection ? 'Save connection' : kind === 'api_key' ? 'Save & Connect' : 'Save'}</Button>
     </form>
   ));
 
@@ -421,39 +459,49 @@ function Workspace({ section }: { section: Section }) {
   );
 
   return (
-    <Frame section={section} state={state} applications={
-      // rule-policy: technical integration-settings-list The application picker stays read-only in global Settings.
-      <Applications applications={visibleApps} selected={providerId} query={query} setQuery={setQuery}
-        auth={auth} setAuth={setAuth} choose={choose} statusOf={statusOf} isAdmin={isAdmin} busy={busy || state.busy || section === 'settings'} />
+    <Frame state={state} showDetails={showDetails} actions={
+      <>
+        <Button variant="outline" icon="ri-history-line" aria-pressed={panel === 'activity'}
+          onClick={() => openPanel(panel === 'activity' ? 'provider' : 'activity')}>Activity</Button>
+        {/* // rule-policy: security integration-settings-access Uses the existing administrator privilege. */}
+        {isAdmin && <Button variant="outline" icon="ri-settings-3-line" aria-pressed={panel === 'settings'}
+          onClick={() => openPanel(panel === 'settings' ? 'provider' : 'settings')}>Settings</Button>}
+      </>
+    } applications={
+      <Applications applications={listed} selected={providerId} query={query} setQuery={setQuery}
+        filter={filter} setFilter={setFilter} choose={choose} statusOf={statusOf} isAdmin={isAdmin} busy={busy || state.busy} />
     }>
+      <Button id="integration-mobile-back" className="integration-mobile-back mb-3" size="sm" variant="ghost" icon="ri-arrow-left-line"
+        onClick={() => {
+          setShowDetails(false);
+          requestAnimationFrame(() => document.querySelector<HTMLInputElement>('[aria-label="Search applications"]')?.focus());
+        }}>Back to applications</Button>
       <div className="space-y-4">
         {error && <p className="rounded-md border border-primary-200 p-3" role="alert">{error}</p>}
-        {/* // rule-policy: technical integration-action-feedback Announces the result of the existing action. */}
+        {/* // rule-policy: technical integration-action-feedback Announces the existing action result. */}
         {notice && <p className="rounded-md bg-primary-50 p-3 text-primary-800" role="status">{notice}</p>}
-        {globalView ? (
-          <>
-            <h2 className="font-heading text-xl font-bold text-foreground-950">{sections.find(item => item.id === section)?.label}</h2>
-            {selectedApp && section !== 'settings' && <div className="flex flex-wrap items-start justify-between gap-2">
+        {panel === 'activity' && <div className="space-y-3">
+          <h2 className="font-heading text-xl font-bold text-foreground-950">Integration activity</h2>
+          <nav aria-label="Activity views" className="flex flex-wrap gap-1 border-b border-background-200 pb-2">
+            {activityViews.map(item => <Button key={item.id} size="sm" variant={activityView === item.id ? 'secondary' : 'ghost'}
+              aria-pressed={activityView === item.id} onClick={() => setActivityView(item.id)}>{item.label}</Button>)}
+          </nav>
+          {activityView === 'webhooks' && <WebhooksPage state={state} />}
+          {activityView === 'sync-history' && <SyncHistoryPage state={state} />}
+          {activityView === 'logs' && <LogsPage state={state} />}
+        </div>}
+        {isAdmin && settingsOpened && <div hidden={panel !== 'settings'} className="space-y-3"
+          onChangeCapture={() => draft?.setDirty('integration-settings', true, 'Unsaved integration settings will be discarded. Leave this page?')}>
+          <h2 className="font-heading text-xl font-bold text-foreground-950">Integration settings</h2>
+          <SettingsPage state={state} />
+        </div>}
+        <div hidden={panel !== 'provider'} className="space-y-4">
+          {selectedApp ? <>
+            <div className="border-b border-background-200 pb-4">
               <ApplicationHeader application={selectedApp} connection={connection} statusOf={statusOf} isAdmin={isAdmin} />
-              <Button size="sm" variant="ghost" onClick={() => { setProvider(''); selectConnection(''); }}>Show all</Button>
-            </div>}
-            {section === 'webhooks' && (selectedApp && !connection ? <Empty>No webhooks for this application.</Empty> : <WebhooksPage state={state} connection={connection} />)}
-            {section === 'sync-history' && (selectedApp && !connection ? <Empty>No jobs for this application.</Empty> : <SyncHistoryPage state={state} connection={connection} />)}
-            {section === 'logs' && <LogsPage state={state} connectorId={selectedApp?.id} />}
-            {section === 'settings' && isAdmin && <div onChangeCapture={() => setDirty(true)}>
-              <SettingsPage state={state} />
-            </div>}
-          </>
-        ) : selectedApp ? (
-          <>
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <ApplicationHeader application={selectedApp} connection={connection} statusOf={statusOf} isAdmin={isAdmin} />
-              {section === 'overview' && <Button size="sm" variant="ghost" onClick={() => {
-                if (confirmDiscard()) { setProvider(''); selectConnection(''); }
-              }}>Back to overview</Button>}
             </div>
             {selectedApp.connections.length > 1 && <label className="block text-sm">Connection
-              <SearchableSelect className={inputClass} value={selected} disabled={busy} onChange={event => {
+              <SearchableSelect className={inputClass} value={connectionId} disabled={busy} onChange={event => {
                 if (confirmDiscard()) selectConnection(event.target.value);
               }}>
                 {selectedApp.connections.map(item => <option key={item.id} value={item.id}>{statusOf(item)} · {item.id}</option>)}
@@ -471,7 +519,7 @@ function Workspace({ section }: { section: Section }) {
                     <div><dt className="text-xs text-foreground-600">Credentials</dt><dd>{connection.credential_configured ? 'Configured' : 'Not configured'}</dd></div>
                   </dl>
                   {isAdmin && disabled && <Button disabled={busy} onClick={() => void perform(async () => {
-                    await integrationRequest('enable', { connectionId: selected });
+                    await integrationRequest('enable', { connectionId });
                     announce('Connection enabled.');
                   })}>Enable connection</Button>}
                   {!isAdmin && connection.can_operate && !isVaultFormConnector(connection.connector_id) && <Button variant="outline" disabled={busy || disabled}
@@ -482,7 +530,7 @@ function Workspace({ section }: { section: Section }) {
                     })}>Check connection</Button>}
                   {configurationActions}
                 </>
-              ) : (
+              ) : !inlineSetup && (
                 <div className="space-y-3">
                   {/* // rule-policy: technical integration-approval-copy Displays existing provider availability and guidance. */}
                   {education && definition?.availability === 'requires_approval' && <>
@@ -497,18 +545,15 @@ function Workspace({ section }: { section: Section }) {
                 </div>
               )}
             </div>
-            <div key={selected} hidden={activeTab !== (hasCredentials ? 'credentials' : 'configuration')} className="max-w-2xl space-y-3">
+            <div key={`${providerId}:${formRevision}`} hidden={activeTab !== (hasCredentials ? 'credentials' : 'configuration')} className="max-w-2xl space-y-3">
+              {inlineSetup && <h3 className="font-heading text-lg font-bold text-foreground-950">Connect {selectedApp.name}</h3>}
               {credentialsPanel}
             </div>
             {activeTab === 'webhooks' && <WebhooksPage state={state} connection={connection} paymentControls={stripeControls} />}
             {activeTab === 'sync-history' && <SyncHistoryPage state={state} connection={connection} />}
             {activeTab === 'logs' && <LogsPage state={state} connectorId={providerId} />}
-          </>
-        ) : section === 'overview' && data ? (
-          <Overview data={data} statusOf={statusOf} />
-        ) : (
-          <Empty>{section === 'add' ? 'Choose an application to add a connection.' : 'Select an application to view its connection details.'}</Empty>
-        )}
+          </> : <Empty>Select an application to view its details or add a connection.</Empty>}
+        </div>
       </div>
     </Frame>
   );

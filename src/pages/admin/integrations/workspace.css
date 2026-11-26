@@ -1,95 +1,36 @@
+.integration-shell {
+  container-type: inline-size;
+}
+
 .integration-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  --nav-text: var(--integration-foreground);
-  --nav-muted: var(--integration-muted);
-  --nav-surface: var(--integration-surface);
-  --nav-selected: var(--integration-selected);
-  --nav-accent: var(--integration-accent);
-}
-
-.integration-navigation {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: .125rem .25rem;
-}
-
-.integration-navigation .admin-nav-label {
-  overflow: visible;
-  white-space: normal;
-  text-overflow: clip;
-  line-height: 1.3;
-}
-
-.integration-navigation a:focus-visible {
-  outline: 2px solid var(--nav-accent);
-  outline-offset: -2px;
 }
 
 .integration-details {
   scroll-margin-top: 4.5rem;
 }
 
-.integration-applications,
-.integration-details {
-  border-top: 1px solid var(--integration-border);
+.integration-workspace[data-show-details="true"] .integration-applications,
+.integration-workspace[data-show-details="false"] .integration-details {
+  display: none;
 }
 
-.integration-list {
-  max-height: 18rem;
-  overflow-y: auto;
-}
-
-/* The available admin content width is smaller than the viewport with the CRM sidebar open. */
-.integration-shell {
-  container-type: inline-size;
-  --integration-foreground: theme('colors.foreground.800');
-  --integration-muted: theme('colors.foreground.500');
-  --integration-surface: theme('colors.background.200');
-  --integration-selected: theme('colors.primary.100');
-  --integration-accent: theme('colors.primary.600');
-  --integration-border: theme('colors.background.200');
-}
-
-@container (min-width: 40rem) {
+@container (min-width: 46rem) {
   .integration-workspace {
-    grid-template-columns: minmax(13rem, 30%) minmax(0, 1fr);
+    grid-template-columns: minmax(16rem, min(32%, 23rem)) minmax(0, 1fr);
+    min-height: 29rem;
   }
 
-  .integration-navigation {
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .integration-applications {
-    border-right: 1px solid var(--integration-border);
-  }
-
-  .integration-list {
-    max-height: 32rem;
-  }
-}
-
-@container (min-width: 56rem) {
-  .integration-workspace {
-    grid-template-columns: 11.5rem minmax(13.5rem, 24%) minmax(0, 1fr);
-  }
-
-  .integration-navigation {
-    grid-column: auto;
-    display: block;
-    border-right: 1px solid var(--integration-border);
-  }
-
-  .integration-applications,
-  .integration-details {
-    grid-row: auto;
-    border-top: 0;
-  }
-
-  .integration-applications {
+  .integration-workspace[data-show-details] .integration-applications {
     display: flex;
     flex-direction: column;
+    border-right: 1px solid theme('colors.background.200');
+  }
+
+  .integration-workspace[data-show-details] .integration-details {
+    display: block;
+    overflow-y: auto;
   }
 
   .integration-applications,
@@ -97,11 +38,11 @@
     max-height: max(30rem, calc(100dvh - 12rem));
   }
 
-  .integration-details {
+  .integration-list {
     overflow-y: auto;
   }
 
-  .integration-list {
-    max-height: none;
+  .integration-details .integration-mobile-back {
+    display: none;
   }
 }

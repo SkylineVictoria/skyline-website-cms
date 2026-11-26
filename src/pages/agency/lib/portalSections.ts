@@ -148,9 +148,11 @@ function reshapeLaterSections(list: AppSection[]): AppSection[] {
 /** Moves the education questions next to the academic documents they can be read from, and adds the language box. */
 function regroupStudentSections(list: AppSection[]): AppSection[] {
   const identifier = list.find((section) => section.fields.some((field) => field.name === "employment"));
-  // Year completed is asked once, with the qualification read from the documents, not again under the school level.
-  const education = (identifier?.fields.filter((field) => EDUCATION_FIELD_NAMES.has(field.name) && field.name !== "year_completed") ?? []).map((field) =>
-    field.name === "school_level" ? { ...field, label: "Highest completed education level", description: "Choose the highest level completed." } : field);
+  // AVETMISS-SUBMIT-FIX (owner 2026-11-26): the year the school level was completed is asked right under it (NCVER needs it; it was
+  // only taken from the academic document's details, so it could not be entered when those were not filled in).
+  const education = (identifier?.fields.filter((field) => EDUCATION_FIELD_NAMES.has(field.name)) ?? []).map((field) =>
+    field.name === "school_level" ? { ...field, label: "Highest completed education level", description: "Choose the highest level completed." }
+      : field.name === "year_completed" ? { ...field, label: "Year that school level was completed", placeholder: "e.g. 2015", description: "4 digits. Leave blank only if the student did not go to school." } : field);
   return list.map((section) => {
     if (section === identifier) {
       const fields = section.fields.filter((field) => !EDUCATION_FIELD_NAMES.has(field.name));

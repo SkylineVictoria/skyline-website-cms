@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(1018);
+select plan(1021);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1955,5 +1955,12 @@ select ok(not public.application_document_carry_category('Health Insurance') and
 select ok(not has_function_privilege('authenticated', 'public.application_document_carry_record(uuid, uuid, text)', 'execute'), 'a signed-in user cannot record a copy');
 select ok(not has_function_privilege('authenticated', 'public.application_document_carry_plan(uuid)', 'execute'), 'a signed-in user cannot read another student''s copy plan');
 select ok(not has_function_privilege('anon', 'public.application_document_carry_pending(uuid)', 'execute'), 'anon cannot ask for a copy');
+insert into public.student_prior_education(student_id, prior_education_code, recognition_code) values ('c7000000-0000-0000-0000-000000000001', '008', 'I');
+insert into public.enrollment_applications(id, agency_id, student_id, status, data) values
+ ('c7100000-0000-0000-0000-000000000003', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft', '{}'),
+ ('c7100000-0000-0000-0000-000000000004', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft', '{"values":{"prior_ed":"No"}}');
+select is((select (data #>> '{values,prior_education}')::jsonb -> 0 ->> 'code' from public.enrollment_applications where id = 'c7100000-0000-0000-0000-000000000003'), '008', 'a new application gets the student''s prior qualifications');
+select is((select data #>> '{values,prior_ed}' from public.enrollment_applications where id = 'c7100000-0000-0000-0000-000000000003'), 'Yes', 'and prior education is answered Yes');
+select is((select data #>> '{values,prior_education}' from public.enrollment_applications where id = 'c7100000-0000-0000-0000-000000000004'), null, 'an application answered No keeps No without rows');
 select * from finish();
 rollback;

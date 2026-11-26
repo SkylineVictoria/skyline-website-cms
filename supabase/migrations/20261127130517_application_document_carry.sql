@@ -16,7 +16,8 @@
 -- Checked categories other than the passport are recorded only once the new application has a current passport (copied first).
 -- Trigger application_document_carry_dispatch (after insert / update of student_id on enrollment_applications, drafts only) calls the
 -- function through pg_net when the plan is not empty; the application page also asks once when it opens (fallback).
--- Down: drop trigger application_document_carry_dispatch and the four functions.
+-- Prior qualifications: see application_prior_education_fill below.
+-- Down: drop triggers application_document_carry_dispatch, zzy_application_prior_education_fill and their functions.
 begin;
 
 -- Categories that are the student's own (not tied to a course, an intake or this application).
@@ -167,5 +168,48 @@ drop trigger if exists application_document_carry_dispatch on public.enrollment_
 create trigger application_document_carry_dispatch
   after insert or update of student_id on public.enrollment_applications
   for each row execute function public.application_document_carry_dispatch();
+
+-- Prior qualifications (owner 2026-11-26: "fill prior qualifications too"): an application of a student whose record holds prior
+-- qualifications (student_prior_education, copied there from an earlier application by avetmiss_answers_to_student) gets them in its
+-- answers when it has none: prior_education rows { code, recognition, name } and prior_ed Yes when unanswered. A student who answered
+-- No keeps No; rows already in the answers are never replaced.
+create or replace function public.application_prior_education_fill() returns trigger
+language plpgsql security definer set search_path = public as $fn$
+declare v jsonb := coalesce(new.data->'values', '{}'::jsonb); v_rows jsonb; v_have jsonb;
+begin
+  if new.student_id is null or new.status <> 'draft' then return new; end if;
+  if lower(btrim(coalesce(v->>'prior_ed', ''))) = 'no' then return new; end if;
+  begin
+    v_have := case jsonb_typeof(v->'prior_education') when 'array' then v->'prior_education'
+                   else nullif(btrim(coalesce(v->>'prior_education', '')), '')::jsonb end;
+  exception when others then v_have := null; end;
+  if jsonb_typeof(v_have) = 'array' and jsonb_array_length(v_have) > 0 then return new; end if;
+  select jsonb_agg(jsonb_build_object('code', p.prior_education_code, 'recognition', p.recognition_code, 'name', coalesce(p.qualification_name, ''))
+           order by p.prior_education_code, p.recognition_code)
+    into v_rows from student_prior_education p where p.student_id = new.student_id;
+  if v_rows is null then return new; end if;
+  v := v || jsonb_build_object('prior_education', v_rows::text, 'prior_ed', coalesce(nullif(btrim(v->>'prior_ed'), ''), 'Yes'));
+  new.data := jsonb_set(coalesce(new.data, '{}'::jsonb), '{values}', v);
+  return new;
+end $fn$;
+revoke all on function public.application_prior_education_fill() from public, anon, authenticated;
+
+drop trigger if exists zzy_application_prior_education_fill on public.enrollment_applications;
+create trigger zzy_application_prior_education_fill
+  before insert or update of data, student_id on public.enrollment_applications
+  for each row execute function public.application_prior_education_fill();
+
+-- Drafts that already exist get them now (same rule).
+do $fill$
+declare r record;
+begin
+  for r in select a.id from public.enrollment_applications a
+            where a.status = 'draft' and a.student_id is not null
+              and exists (select 1 from public.student_prior_education p where p.student_id = a.student_id) loop
+    perform set_config('portal.draft_command', r.id::text, true);
+    update public.enrollment_applications set data = data where id = r.id;
+  end loop;
+  perform set_config('portal.draft_command', '', true);
+end $fill$;
 
 commit;

@@ -1177,3 +1177,22 @@ final status writes one timeline entry `handoff_sms_delivered` / `handoff_sms_un
 set-up date, the last report and the counts. The ClickSend API key and connection status are not touched. Release: migration, then
 integrations-webhook and student-application-invite from clean main, then the frontend; then paste the link in ClickSend › Messaging
 Settings › SMS › Delivery Reports (rule with action URL, POST).
+
+## Documents carried to a student's next application (DOCUMENT-CARRY, 2026-11-26)
+Migration `20261127130517_application_document_carry` + `validated-document-upload` action `carry` (`carry.ts`).
+- A new draft of a student who has an earlier application gets NEW copies (new Storage object `<new application>/validated-<uuid>.<ext>`,
+  new `enrollment_application_documents` row of the new application only) of the student's own documents: Passport, Visa,
+  English / English Test / English Certificate / PTE, Academic, Driving Licence (`application_document_carry_category`);
+  `metadata.carriedFrom` = source document, application, reference, time; review state and extraction kept.
+- `application_document_carry_plan(app)` (service role): latest current version per category (Academic: every current file of the
+  latest application that has any, deduplicated by content hash); never Rejected, never expired (`application_document_expiry`: the
+  earliest expiry read from / confirmed on the document; passport also by the source application's `passport_expiry`); never a
+  category the new application already has, never a document already copied. Passport first.
+- `application_document_carry_record(app, source, path)` (service role): same student, a new file in the new application's folder,
+  receipt against the new application's own passport (a checked category waits until it has one), then the row. Idempotent.
+- Who asks: trigger `application_document_carry_dispatch` (after insert / update of `student_id`, drafts, plan not empty) posts
+  `{action:"carry", applicationId}` via `cron_http_post` with Vault `notification_service_role_key`; the application page asks once on
+  open (`application_document_carry_pending`, then the same action as the signed-in user, `portal_can_edit_application`).
+- Prior qualifications: trigger `zzy_application_prior_education_fill` (before insert / update of data, student_id; drafts) puts the
+  student's `student_prior_education` rows into an application's answers when it has none (`prior_ed` Yes when unanswered; No kept).
+- The wizard and the one-page form show "From your previous application (SLIT-…)" under a copied document; Replace / Delete as usual.

@@ -191,7 +191,7 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
       setRows((current) => current.filter((r) => r.id !== row.id));
       setTotal((n) => Math.max(0, n - 1));
       const files = result.filesFailed ? ` ${result.filesFailed} file${result.filesFailed === 1 ? "" : "s"} could not be removed yet.` : result.filesRemoved ? ` ${result.filesRemoved} file${result.filesRemoved === 1 ? "" : "s"} removed.` : "";
-      push(`${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"} and their documents.${files}`, result.filesFailed ? "error" : "success");
+      push(`${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"} and their documents${result.loginsDeleted ? " and portal login" : ""}.${files}`, result.filesFailed ? "error" : "success");
       setDeleteAsk(null);
       setReload((n) => n + 1);
     } catch (e) {
@@ -213,7 +213,8 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
       const items = [`Student: ${row.name || row.email || ""} · ${facts}`,
         `${n} application${n === 1 ? "" : "s"}${n ? ", with all their documents and files:" : ""}`,
         ...(preview?.applications ?? []).map((a) => `${a.reference ?? "Draft"} · ${statusInfo(workflow, a.status).label}${a.submittedAt ? "" : " (not submitted)"}${a.completion != null && !a.submittedAt ? ` · ${a.completion}%` : ""} · ${a.documents} document${a.documents === 1 ? "" : "s"}${a.offerLetters ? ` · ${a.offerLetters} offer letter${a.offerLetters === 1 ? "" : "s"}` : ""}`),
-        ...found.links.filter((l) => l.table !== "enrollment_applications" && l.table !== "enrollment_application_documents").map((l) => `${l.count} ${linkLabel(l.table)}`)];
+        ...(preview?.logins ?? []).map((l) => l.delete ? `Portal login ${l.email ?? ""} (the student's workspace) is deleted too` : `Portal login ${l.email ?? ""} is kept (${l.keepReason}); only unlinked`),
+        ...found.links.filter((l) => l.table !== "enrollment_applications" && l.table !== "enrollment_application_documents" && l.table !== "agency_memberships").map((l) => `${l.count} ${linkLabel(l.table)}`)];
       setDeleteError("");
       setConfirmDelete(row);
       setDeleteAsk({ row, items, applications: n });

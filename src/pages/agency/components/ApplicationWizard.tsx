@@ -1056,9 +1056,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         })(),
         ...(empty("holds_visa") ? { holds_visa: documentsRef.current.some((doc) => doc.category === "Visa") ? "Yes" : "No" } : {}),
       });
-    } else if (studentLocked) {
-      // Course and intake are the agent's (Request a change): nothing to check or save here.
     } else {
+      // STUDENT-CHANGES-COURSE (owner 2026-11-26): the student may change the course and intake the agent chose.
       if (!filled("course")) errors.course = "Choose the course.";
       const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
       if (filled("course") && intakeList?.length === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
@@ -1226,8 +1225,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
                 onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId}
                 defaultLoad={kind === "international" ? "coe" : undefined}
-                onlyLoad={kind === "international" ? "coe" : kind === "domestic" ? "voe" : undefined}
-                lockedNote={studentLocked ? <RequestChangeButton applicationId={applicationId} onDone={() => void reloadHandoff()} /> : undefined} />
+                onlyLoad={kind === "international" ? "coe" : kind === "domestic" ? "voe" : undefined} />
             )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>

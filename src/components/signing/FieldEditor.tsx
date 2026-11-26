@@ -3,11 +3,14 @@ import PdfPages from "./PdfPages";
 import { AUTO_FIELDS, type SignFieldType } from "@/lib/signingApi";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
-export interface EditorField { key: string; type: SignFieldType; owner: string; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value?: string }
+/** A placed field. `meta` travels with the field untouched (the assessment template keeps its question, group, option … there). */
+export interface EditorField<T extends string = SignFieldType> { key: string; type: T; owner: string; page: number; x: number; y: number; w: number; h: number; required: boolean; label: string; value?: string; meta?: Record<string, unknown> }
 /** Who a field belongs to: a signer (or a signer role on a template), or the sender for printed text. */
 export interface EditorOwner { id: string; label: string; textOnly?: boolean }
+/** A kind of field in the panel: its name, icon and the size a new one gets (fractions of the page). */
+export interface FieldKindSpec { label: string; icon: string; w: number; h: number }
 
-const FIELD_KINDS: Record<SignFieldType, { label: string; icon: string; w: number; h: number }> = {
+const FIELD_KINDS: Record<SignFieldType, FieldKindSpec> = {
   signature: { label: "Signature", icon: "ri-quill-pen-line", w: 0.28, h: 0.06 }, initials: { label: "Initials", icon: "ri-font-size", w: 0.1, h: 0.045 },
   date: { label: "Date signed", icon: "ri-calendar-line", w: 0.18, h: 0.03 }, name: { label: "Name", icon: "ri-user-line", w: 0.25, h: 0.03 },
   text: { label: "Text", icon: "ri-text", w: 0.3, h: 0.03 }, checkbox: { label: "Checkbox", icon: "ri-checkbox-line", w: 0.03, h: 0.022 },
@@ -31,7 +34,7 @@ interface Drag {
   /** The field being moved or resized. */
   key?: string;
   /** The field type being placed from the panel. */
-  type?: SignFieldType;
+  type?: string;
   /** The element that follows the pointer: the field itself, or the ghost of a new field. */
   el: HTMLElement;
   /** The element holding the pointer capture. */
@@ -59,13 +62,23 @@ interface Drag {
  * requestAnimationFrame loop (no React render per move), scrolls the pages area when the pointer is near its top or bottom edge, and
  * commits the position once, on drop, to the page under the field.
  */
-export default function FieldEditor({ source, owners, fields, onChange, panel }: {
-  source: string | Uint8Array; owners: EditorOwner[]; fields: EditorField[]; onChange: (fields: EditorField[]) => void;
+export default function FieldEditor<T extends string = SignFieldType>({ source, owners, fields, onChange, panel, kinds, presets = true, details, ownerLabel = "Fields for", lazy = false }: {
+  source: string | Uint8Array; owners: EditorOwner[]; fields: EditorField<T>[]; onChange: (fields: EditorField<T>[]) => void;
   /** Shown at the foot of the sidebar (the request's payment): not a field, so it changes neither the count nor the PDF. */
   panel?: ReactNode;
+  /** The field kinds offered (default: the signing kinds). */
+  kinds?: Record<T, FieldKindSpec>;
+  /** The signing presets (date signed, name …): off for other documents. */
+  presets?: boolean;
+  /** Replaces the selected field's settings (owner, label, required) with the caller's own; `update` patches the field. */
+  details?: (field: EditorField<T>, update: (patch: Partial<EditorField<T>>) => void) => ReactNode;
+  ownerLabel?: string;
+  /** Draw pages only when they come near the view (long documents). */
+  lazy?: boolean;
 }) {
+  const KINDS = (kinds ?? FIELD_KINDS) as Record<string, FieldKindSpec>;
   const [owner, setOwner] = useState(owners[0]?.id ?? "");
-  const [armed, setArmed] = useState<SignFieldType | null>(null);
+  const [armed, setArmed] = useState<T | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const latest = useRef(fields); latest.current = fields;
   const scroller = useRef<HTMLDivElement>(null);
@@ -82,19 +95,19 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
     settle.current = [];
   }, [fields]);
 
-  const place = (type: SignFieldType, page: number, fx: number, fy: number) => {
+  const place = (type: T, page: number, fx: number, fy: number) => {
     if (!current) return;
-    const kind = FIELD_KINDS[current.textOnly ? "text" : type];
-    const field: EditorField = { key: newKey(), type: current.textOnly ? "text" : type, owner: current.id, page, w: kind.w, h: kind.h, x: clamp(fx - kind.w / 2, 0, 1 - kind.w), y: clamp(fy - kind.h / 2, 0, 1 - kind.h),
+    const kind = KINDS[current.textOnly ? "text" : type];
+    const field: EditorField<T> = { key: newKey(), type: (current.textOnly ? "text" : type) as T, owner: current.id, page, w: kind.w, h: kind.h, x: clamp(fx - kind.w / 2, 0, 1 - kind.w), y: clamp(fy - kind.h / 2, 0, 1 - kind.h),
       required: true, label: "", ...(current.textOnly ? { value: "" } : {}) };
     onChange([...latest.current, field]); setSelected(field.key); setArmed(null);
   };
   /** An automatic field (filled by the server at signing) for the selected signer: placed in a stack near the foot of the current page, ready to drag. */
-  const placePreset = (type: SignFieldType, label: string, slot: number) => {
+  const placePreset = (type: T, label: string, slot: number) => {
     if (!current || current.textOnly) return;
-    const kind = FIELD_KINDS[type];
+    const kind = KINDS[type];
     const page = chosen?.page ?? latest.current[latest.current.length - 1]?.page ?? 1;
-    const field: EditorField = { key: newKey(), type, owner: current.id, page, w: kind.w, h: kind.h, x: 0.08, y: clamp(0.68 + slot * (kind.h + 0.012), 0, 1 - kind.h), required: false, label };
+    const field: EditorField<T> = { key: newKey(), type, owner: current.id, page, w: kind.w, h: kind.h, x: 0.08, y: clamp(0.68 + slot * (kind.h + 0.012), 0, 1 - kind.h), required: false, label };
     onChange([...latest.current, field]); setSelected(field.key); setArmed(null);
   };
   const click = (event: ReactMouseEvent<HTMLDivElement>, page: number) => {
@@ -213,7 +226,7 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
       const page = commit ? pageNear(d.last.x, d.last.y, false) : null;
       if (!page || !d.type) return;
       const pr = page.getBoundingClientRect();
-      place(d.type, Number(page.dataset.pdfPage), (d.last.x - pr.left) / pr.width, (d.last.y - pr.top) / pr.height);
+      place(d.type as T, Number(page.dataset.pdfPage), (d.last.x - pr.left) / pr.width, (d.last.y - pr.top) / pr.height);
       return;
     }
     const field = latest.current.find((f) => f.key === d.key);
@@ -241,18 +254,18 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
   };
   useEffect(() => () => finish(false), []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startMove = (event: ReactPointerEvent<HTMLElement>, field: EditorField) => {
+  const startMove = (event: ReactPointerEvent<HTMLElement>, field: EditorField<T>) => {
     event.preventDefault(); event.stopPropagation(); setSelected(field.key);
     begin(event, { mode: "move", el: event.currentTarget, key: field.key });
   };
-  const startResize = (event: ReactPointerEvent<HTMLElement>, field: EditorField) => {
+  const startResize = (event: ReactPointerEvent<HTMLElement>, field: EditorField<T>) => {
     event.preventDefault(); event.stopPropagation(); setSelected(field.key);
     const el = event.currentTarget.parentElement; if (el) begin(event, { mode: "resize", el, key: field.key });
   };
   // A new field from the panel: a ghost the size the field will have on the first page follows the pointer.
-  const startNew = (event: ReactPointerEvent<HTMLElement>, type: SignFieldType) => {
+  const startNew = (event: ReactPointerEvent<HTMLElement>, type: T) => {
     if (!current) return;
-    const kind = FIELD_KINDS[current.textOnly ? "text" : type];
+    const kind = KINDS[current.textOnly ? "text" : type];
     const page = pageElements()[0]?.getBoundingClientRect();
     const colour = colourOf(current.id);
     const ghost = document.createElement("div");
@@ -284,56 +297,56 @@ export default function FieldEditor({ source, owners, fields, onChange, panel }:
     return () => window.removeEventListener("keydown", onKey);
   }, [selected, onChange]);
 
-  const update = (patch: Partial<EditorField>) => { if (chosen) onChange(fields.map((f) => f.key === chosen.key ? { ...f, ...patch } : f)); };
+  const update = (patch: Partial<EditorField<T>>) => { if (chosen) onChange(fields.map((f) => f.key === chosen.key ? { ...f, ...patch } : f)); };
 
   // The pages area is the only scrolling element; the panel scrolls on its own; the modal header and footer stay put.
   return <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row" data-testid="field-editor">
     <aside className="max-h-[38%] shrink-0 space-y-4 overflow-y-auto pr-1 lg:max-h-none lg:w-[260px]" data-testid="field-panel">
-      <label className="block text-label font-medium text-foreground-800">Fields for
+      <label className="block text-label font-medium text-foreground-800">{ownerLabel}
         <SearchableSelect value={current?.id ?? ""} onChange={(e) => { setOwner(e.target.value); setArmed(null); }} className="mt-1 w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm" data-testid="field-owner">
           {owners.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
         </SearchableSelect>
       </label>
       <div className="flex items-center gap-2 text-xs text-foreground-600"><span className="inline-block h-3 w-3 rounded-sm" style={{ background: colourOf(current?.id ?? "") }} /> Fields of this person are shown in this colour.</div>
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-        {(Object.keys(FIELD_KINDS) as SignFieldType[]).filter((type) => !current?.textOnly || type === "text").map((type) => <button key={type} type="button" data-testid={`field-kind-${type}`}
+        {(Object.keys(KINDS) as T[]).filter((type) => !current?.textOnly || type === "text").map((type) => <button key={type} type="button" data-testid={`field-kind-${type}`}
           onPointerDown={(e) => startNew(e, type)}
           onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } setArmed(armed === type ? null : type); }}
           className={`flex cursor-grab touch-none select-none items-center gap-2 rounded-md border px-3 py-2 text-left text-sm ${armed === type ? "border-primary-500 bg-primary-50" : "border-background-300 bg-background-50 hover:bg-background-100"}`}>
-          <i className={`${FIELD_KINDS[type].icon} text-base`} aria-hidden="true" />{current?.textOnly ? "Printed text" : FIELD_KINDS[type].label}</button>)}
+          <i className={`${KINDS[type].icon} text-base`} aria-hidden="true" />{current?.textOnly ? "Printed text" : KINDS[type].label}</button>)}
       </div>
-      {!current?.textOnly && <div className="space-y-1" data-testid="auto-field-presets">
+      {presets && !current?.textOnly && <div className="space-y-1" data-testid="auto-field-presets">
         <p className="text-xs font-semibold text-foreground-700">Automatic</p>
         <p className="text-2xs text-foreground-500">Filled by the server when {current?.label ?? "the signer"} signs; the signer sees them greyed. Click one to place it, then drag it where it goes.</p>
         <div className="grid grid-cols-2 gap-1 lg:grid-cols-1">
-          {AUTO_FIELDS.map((preset, i) => <button key={preset.label} type="button" data-testid={`auto-field-${preset.label.replace(/\s+/g, "-").toLowerCase()}`} onClick={() => placePreset(preset.type, preset.label, i)}
+          {AUTO_FIELDS.map((preset, i) => <button key={preset.label} type="button" data-testid={`auto-field-${preset.label.replace(/\s+/g, "-").toLowerCase()}`} onClick={() => placePreset(preset.type as unknown as T, preset.label, i)}
             className="flex items-center gap-2 rounded-md border border-dashed border-background-300 bg-background-50 px-3 py-1.5 text-left text-sm hover:bg-background-100">
-            <i className={`${FIELD_KINDS[preset.type].icon} text-base text-foreground-500`} aria-hidden="true" />{preset.label}</button>)}
+            <i className={`${KINDS[preset.type].icon} text-base text-foreground-500`} aria-hidden="true" />{preset.label}</button>)}
         </div>
       </div>}
       <p className="text-xs text-foreground-600">{armed ? "Now click the place on the page where it goes." : "Drag a field onto a page, or choose one and then click the page. Drag a placed field to move it (also to another page) and its corner to resize it. Arrow keys nudge the selected field; Delete removes it."}</p>
       {chosen && <div className="space-y-3 rounded-md border border-background-300 p-3 text-sm" data-testid="field-details">
-        <p className="font-semibold">{FIELD_KINDS[chosen.type].label} · page {chosen.page}</p>
-        <label className="block text-xs">Belongs to
+        <p className="font-semibold">{KINDS[chosen.type]?.label ?? chosen.type} · page {chosen.page}</p>
+        {details ? details(chosen, update) : <><label className="block text-xs">Belongs to
           <SearchableSelect value={chosen.owner} onChange={(e) => update({ owner: e.target.value })} className="mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm">
             {owners.filter((o) => !o.textOnly || chosen.type === "text").map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</SearchableSelect></label>
         {owners.find((o) => o.id === chosen.owner)?.textOnly
           ? <label className="block text-xs">Text to print (variables allowed)<input value={chosen.value ?? ""} maxLength={500} onChange={(e) => update({ value: e.target.value })} placeholder="{{student.full_name}}" className="mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm" /></label>
           : <>{(chosen.type === "text" || chosen.type === "checkbox") && <label className="block text-xs">Label shown to the signer<input value={chosen.label} maxLength={120} onChange={(e) => update({ label: e.target.value })} className="mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm" /></label>}
-            {(chosen.type === "text" || chosen.type === "checkbox") && <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={chosen.required} onChange={(e) => update({ required: e.target.checked })} /> Required</label>}</>}
+            {(chosen.type === "text" || chosen.type === "checkbox") && <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={chosen.required} onChange={(e) => update({ required: e.target.checked })} /> Required</label>}</>}</>}
         <button type="button" onClick={() => { onChange(fields.filter((f) => f.key !== chosen.key)); setSelected(null); }} className="text-xs font-medium text-red-700 underline">Remove this field</button>
       </div>}
       <p className="text-xs text-foreground-500">{fields.length} field{fields.length === 1 ? "" : "s"} placed.</p>
       {panel}
     </aside>
     <div ref={scroller} data-testid="field-pages" className={`min-h-[240px] flex-1 overflow-y-auto overscroll-contain rounded-md bg-background-200 p-3 ${armed ? "cursor-crosshair" : ""}`}>
-      <PdfPages source={source} maxWidth={820} overlay={(page) => <div className="absolute inset-0" data-testid={`field-page-${page}`} onClick={(e) => click(e, page)}>
+      <PdfPages source={source} maxWidth={820} lazy={lazy} overlay={(page) => <div className="absolute inset-0" data-testid={`field-page-${page}`} onClick={(e) => click(e, page)}>
         {fields.filter((f) => f.page === page).map((f) => {
           const colour = colourOf(f.owner), active = f.key === selected;
           return <div key={f.key} data-testid="placed-field" data-field-type={f.type} data-field-key={f.key} onPointerDown={(e) => startMove(e, f)}
             className="absolute flex cursor-move touch-none select-none items-center overflow-hidden rounded-sm text-2xs font-medium leading-none"
             style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, border: `${active ? 2 : 1}px ${active ? "solid" : "dashed"} ${colour}`, background: `${colour}22`, color: colour }}>
-            <span className="truncate px-1">{f.type === "checkbox" ? "☐" : f.value || f.label || FIELD_KINDS[f.type].label}</span>
+            <span className="truncate px-1">{f.type === "checkbox" ? "☐" : f.value || f.label || (KINDS[f.type]?.label ?? f.type)}</span>
             <span onPointerDown={(e) => startResize(e, f)} aria-hidden="true" data-testid="field-resize" className="absolute bottom-0 right-0 h-2.5 w-2.5 cursor-nwse-resize touch-none" style={{ background: colour }} />
           </div>;
         })}

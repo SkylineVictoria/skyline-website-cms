@@ -11,13 +11,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Select, TextInput } from "@/pages/admin/components/ui";
 import { Empty } from "@/pages/admin/components/rto/overlay";
-import { BTN_PRIMARY, BTN_SECONDARY } from "@/components/assessment/CheckList";
-import { numberOf } from "@/lib/assessment/checkList";
-import { flattenQuestions } from "@/lib/assessment/definition";
-import { isAnswerable } from "@/lib/assessment/registry";
 import { MAPPABLE_KINDS, suggestionsByElement, tgaMerge, type MappingSuggestionRow, type TgaElement, type UnitElementRow } from "@/lib/assessment/unitElements";
-import { workbookNumbering } from "@/lib/assessment/workbookLayout";
-import type { Definition, UnitMapping } from "@/lib/assessment/types";
+import type { UnitMapping } from "@/lib/assessment/types";
+
+const BTN_PRIMARY = "inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50";
+const BTN_SECONDARY = "inline-flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-background-300 bg-white px-3 py-2 text-sm font-semibold text-foreground-800 transition-colors hover:border-primary-300 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-50";
+/** A question of the workbook PDF template, keyed by its printed number (task.number): the mapping's key. */
+export interface MapQuestion { key: string; number: string; label: string }
 import { asmAdmin, ELEMENT_KINDS, kindShort, type UnitElement } from "@/pages/admin/lib/assessments";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { invokeTga } from "@/pages/admin/lib/tga";
@@ -36,8 +36,8 @@ async function functionError(error: unknown, fallback: string): Promise<string> 
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-export default function MappingPanel({ assessmentId, definition, unitId, unitCode, elements, mappings, onChange, onElementsChanged, readOnly }: {
-  assessmentId: string; definition: Definition; unitId: string | null; unitCode: string | null; elements: UnitElement[]; mappings: UnitMapping[];
+export default function MappingPanel({ assessmentId, questions, unitId, unitCode, elements, mappings, onChange, onElementsChanged, readOnly }: {
+  assessmentId: string; questions: MapQuestion[]; unitId: string | null; unitCode: string | null; elements: UnitElement[]; mappings: UnitMapping[];
   onChange: (m: UnitMapping[]) => void; onElementsChanged: () => void; readOnly?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
@@ -47,9 +47,7 @@ export default function MappingPanel({ assessmentId, definition, unitId, unitCod
   const [matrix, setMatrix] = useState(false);
   const active = useMemo(() => elements.filter((e) => e.isActive !== false), [elements]);
   const requirements = useMemo(() => active.filter((e) => MAPPABLE_KINDS.includes(e.kind)), [active]);
-  const numbers = useMemo(() => workbookNumbering(definition), [definition]);
-  const questions = useMemo(() => flattenQuestions(definition).filter((f) => !f.parent && isAnswerable(f.question) && (f.question.markingMode ?? "criteria") !== "none"), [definition]);
-  const qBy = useMemo(() => new Map(questions.map((f) => [f.question.id, f])), [questions]);
+  const qBy = useMemo(() => new Map(questions.map((q) => [q.key, q])), [questions]);
 
 
   const loadSuggestions = useCallback(async () => {
@@ -116,12 +114,12 @@ export default function MappingPanel({ assessmentId, definition, unitId, unitCod
   // coverage from the mappings on screen (saved a moment later), so a confirmed tick counts at once
   const mapped = new Set(mappings.map((m) => m.elementId));
   const gaps = requirements.filter((e) => !mapped.has(e.id));
-  const unmappedQuestions = questions.filter((f) => !mappings.some((m) => m.questionId === f.question.id)).length;
+  const unmappedQuestions = questions.filter((q) => !mappings.some((m) => m.questionId === q.key)).length;
   const covered = requirements.length - gaps.length;
   const grouped = suggestionsByElement(suggestions, requirements);
   const openCount = suggestions.filter((s) => s.state === "suggested").length;
-  const qText = (id: string) => { const f = qBy.get(id); return f ? { number: numberOf(f, numbers), text: f.question.label } : { number: "", text: "A question no longer in this version" }; };
-  const rows = questions.flatMap((f) => [{ key: f.question.id, questionId: f.question.id, criterionId: null as string | null, label: `${numberOf(f, numbers)} ${f.question.label || f.question.type}` }, ...(f.question.criteria ?? []).map((c) => ({ key: `${f.question.id}|${c.id}`, questionId: f.question.id, criterionId: c.id as string | null, label: `    ↳ ${c.text}` }))]);
+  const qText = (id: string) => { const q = qBy.get(id); return q ? { number: q.number, text: q.label } : { number: "", text: "A question no longer in this version" }; };
+  const rows = questions.map((q) => ({ key: q.key, questionId: q.key, criterionId: null as string | null, label: `${q.number} ${q.label}`.trim() }));
   const toggle = (qid: string, cid: string | null, eid: string) => onChange(has(qid, cid, eid) ? mappings.filter((m) => !(m.questionId === qid && (m.criterionId ?? null) === cid && m.elementId === eid)) : [...mappings, { questionId: qid, criterionId: cid, elementId: eid }]);
 
   return (

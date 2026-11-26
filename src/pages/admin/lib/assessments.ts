@@ -1,6 +1,6 @@
 /** Assessment Management in the CMS: shapes the `asm_admin` RPC returns (camelCase) and small helpers. */
 import { asmAdmin } from "@/lib/assessment/api";
-import type { Definition, QuestionKey, UnitMapping } from "@/lib/assessment/types";
+import type { UnitMapping } from "@/lib/assessment/types";
 import { ruleObject } from "@/lib/businessRules";
 
 export { asmAdmin };
@@ -21,7 +21,8 @@ export interface AssignmentRow {
 export interface AssessmentDetail {
   id: string; courseId: string; unitId: string | null; code: string | null; title: string; description: string; isTemplate: boolean; settingsOverride: Record<string, unknown>; archivedAt: string | null;
   currentVersionId: string | null; updatedAt: string; effectiveSettings: Record<string, unknown>;
-  editing: { versionId: string; versionNo: number; status: string; definition: Definition; updatedAt: string; keys: QuestionKey[]; mappings: UnitMapping[] } | null;
+  /** The draft (else the published version): whether its workbook PDF template is saved and how many questions it has, and its unit mapping. */
+  editing: { versionId: string; versionNo: number; status: string; updatedAt: string; hasTemplate: boolean; questions: number; mappings: UnitMapping[] } | null;
   versions: VersionSummary[]; elements: UnitElement[]; assignments: AssignmentRow[];
 }
 export interface AttemptChip { id: string; attemptNo: number; state: string; outcome: string | null; submittedAt: string | null; dueAt: string | null; receiptNo?: string | null }

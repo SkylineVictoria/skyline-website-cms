@@ -42,3 +42,7 @@ Status: DONE = enforced in the database and tested; PARTIAL = enforced but not a
 4. Release 8.1 changes for activity from 1 Jan 2027; VET Information Standard before 1 Jan 2029.
 5. Register each government rule in Business Rules & Policies as protected (cannot be switched off); Health Check screen under
    Government Compliance (avetmiss_full_audit).
+
+- 2026-11-26 AVETMISS-SUBMIT-FIX (20261127100517): English proficiency, year highest school level completed, prior education and
+  disability types answered in the application are copied to the student record by the database (trigger avetmiss_answers_to_student),
+  so the submit check (avetmiss_student_missing) sees them for every writer; the wizard asks the year completed. Status: DONE locally.

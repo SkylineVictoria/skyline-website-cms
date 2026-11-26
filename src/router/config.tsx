@@ -84,6 +84,7 @@ import AdminSigningPage from "@/pages/admin/SigningPage";
 import FinancePaymentsPage from "@/pages/admin/finance/PaymentsPage";
 import SigningPage from "@/pages/SigningPage";
 import GuardianSignPage from "@/pages/guardian-sign/page";
+import TextInvitePage from "@/pages/TextInvitePage";
 import { LegacyCandidateRedirect, LegacyEmployeeRedirect, LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
@@ -164,6 +165,8 @@ const routes: RouteObject[] = [
   { path: "/sign", element: <SigningPage /> },
   // APPLICATION-STUDENT-SIGNS: a parent / guardian signs a minor's application from the emailed link (no account; one-time code).
   { path: "/guardian-sign", element: <GuardianSignPage /> },
+  // CONTACT-VERIFY: a CMS invitation opened from the text message (email confirmed with a code, then the password).
+  { path: "/admin/text-invite", element: <TextInvitePage /> },
   // BOOK-01: the booking module. /book/... and /booking work signed out (the emailed token is in the URL fragment).
   { path: "/bookings", element: <BookingsPage /> },
   { path: "/book/:handle", element: <PublicBookingPage /> },

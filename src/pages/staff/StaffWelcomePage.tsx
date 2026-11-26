@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { MIN_PASSWORD_LENGTH, passwordProblem } from "@/lib/passwords";
 import { claimStaffAccount } from "@/lib/staffApi";
+import EmailCodeGate from "./components/EmailCodeGate";
 import { LinkInvalidError, PASSWORD_MIN, accountLink, newPasswordProblem, takeLinkToken, type AccountView } from "@/lib/staffOnboardingApi";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 
@@ -91,6 +92,7 @@ function SetPasswordByLink({ token }: { token: string }) {
           <>
             <h1 className="font-heading text-2xl font-bold text-foreground-950">Welcome{account?.firstName ? `, ${account.firstName}` : ""}</h1>
             <p className="mt-2 text-sm text-foreground-600">Choose a password for your staff account{account ? <> (<strong className="break-all">{account.email}</strong>)</> : null}. Use at least {PASSWORD_MIN} characters, with a letter and a number. Next you will read and sign your offer letter.</p>
+            <div className="mt-4"><EmailCodeGate token={token} /></div>
             <form className="mt-6 space-y-4" onSubmit={(e) => void save(e)}>
               <Field label="Password" required><TextInput type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" data-testid="set-password-new" /></Field>
               <Field label="Confirm password" required><TextInput type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="new-password" data-testid="set-password-confirm" /></Field>

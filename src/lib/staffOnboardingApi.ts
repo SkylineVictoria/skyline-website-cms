@@ -51,8 +51,29 @@ export function takeLinkToken(kind: "onboard" | "offer" | "account"): string | n
   } catch { return fromHash; }
 }
 
+/**
+ * CONTACT-VERIFY (2026-11-26): a link opened from the text message proves the mobile; the email is confirmed with a 6-digit code
+ * before the password, the documents or the signature. The function says so on every view (`contact`) and refuses those steps with
+ * code email_unconfirmed; EmailCodeGate shows the code box from this store.
+ */
+export interface ContactState { emailPending: boolean; emailTo: string | null }
+let contactState: ContactState | null = null;
+const contactListeners = new Set<(state: ContactState | null) => void>();
+function setContact(state: ContactState | null) { contactState = state; contactListeners.forEach((l) => l(state)); }
+export function onContact(listener: (state: ContactState | null) => void): () => void { contactListeners.add(listener); listener(contactState); return () => { contactListeners.delete(listener); }; }
+export const contactCode = {
+  send: async (t: string) => { await invoke({ action: "contact_code_send", t }); },
+  verify: async (t: string, code: string) => {
+    const r = await invoke({ action: "contact_code_verify", t, code }) as { ok?: boolean; reason?: string; remaining?: number; error?: string };
+    if (r.ok) setContact({ emailPending: false, emailTo: null });
+    return r;
+  },
+};
+
 async function invoke(body: Record<string, unknown> | FormData): Promise<Record<string, unknown>> {
   const { data, error } = await supabase.functions.invoke("staff-onboarding", { body });
+  const contact = (data as { contact?: ContactState } | null)?.contact;
+  if (!error && contact && typeof contact.emailPending === "boolean") setContact(contact);
   if (error) {
     let message = error.message;
     let code: string | undefined;
@@ -60,7 +81,8 @@ async function invoke(body: Record<string, unknown> | FormData): Promise<Record<
     const context = (error as { context?: unknown }).context;
     if (context instanceof Response) {
       try {
-        const parsed = (await context.clone().json()) as { error?: string; code?: string; field?: string };
+        const parsed = (await context.clone().json()) as { error?: string; code?: string; field?: string; emailTo?: string | null };
+        if (parsed?.code === "email_unconfirmed") setContact({ emailPending: true, emailTo: parsed.emailTo ?? null });
         if (parsed?.error) message = parsed.error;
         code = parsed?.code;
         field = parsed?.field;

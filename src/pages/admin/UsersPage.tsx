@@ -1,5 +1,6 @@
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import { useState } from "react";
+import { TEXT_INVITE_LABEL } from "@/lib/textInvite";
 import { useAuth, passwordResetUrl } from "@/pages/admin/lib/authContext";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { useAdminData } from "@/pages/admin/lib/storeContext";
@@ -79,6 +80,8 @@ export default function UsersPage() {
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [busy, setBusy] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
+  // CONTACT-VERIFY: an optional mobile on a new invitation; the invitation then also goes by text with its own link.
+  const [inviteMobile, setInviteMobile] = useState("");
   // One email per CMS user: the live check and the server's answer both show under the email field.
   const [emailError, setEmailError] = useState<unknown>(null);
   const [emailBlocking, setEmailBlocking] = useState(false);
@@ -135,6 +138,7 @@ export default function UsersPage() {
       name: draft.name.trim(),
       role: draft.role,
       redirectTo: passwordResetUrl(),
+      ...(inviteMobile.trim() ? { mobile: inviteMobile.trim() } : {}),
     });
     setBusy(false);
     if (!res.ok) {
@@ -146,6 +150,9 @@ export default function UsersPage() {
     reload();
     logActivity("Invited", draft.name, "Users");
     const link = typeof res.data?.inviteLink === "string" ? (res.data?.inviteLink as string) : null;
+    const text = typeof res.data?.text === "string" ? (res.data.text as string) : null;
+    if (text) push(TEXT_INVITE_LABEL[text] ?? "The text message was not sent", text === "sent" ? "success" : "error");
+    setInviteMobile("");
     if (res.data?.emailSent) push("Invitation email sent");
     else if (link) setInviteLink(link);
     else push("Invitation created");
@@ -359,6 +366,11 @@ export default function UsersPage() {
                 onStatusChange={(_status, blocking) => setEmailBlocking(blocking)}
               />
             </Field>
+            {!editing && (
+              <Field label="Mobile (optional)" hint="The invitation also goes by text. Opened from the text, they confirm their email with a code.">
+                <TextInput value={inviteMobile} onChange={(e) => setInviteMobile(e.target.value)} inputMode="tel" autoComplete="tel" placeholder="04xx xxx xxx" data-testid="invite-mobile" />
+              </Field>
+            )}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field label="Role">
                 <Select value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value as Role })}>

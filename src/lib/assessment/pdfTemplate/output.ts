@@ -21,8 +21,11 @@ export interface BundleAttempt {
   id: string; attemptNo: number; state: string; submittedAt?: string | null; returnedAt?: string | null; finalisedAt?: string | null;
   outcome?: "S" | "NYS" | null; overallFeedback?: string; rowVersion?: number;
   results: BundleResult[]; taskResults: BundleTask[]; assessorResponses?: { pdf?: Record<string, string>; pdfChoice?: Record<string, string>; [k: string]: unknown };
-  snapshot: Snapshot | null; signoff: PdfSig | null; acknowledgement: PdfSig | null; output: { path: string; pdfSha256: string; snapshotHash: string; createdAt: string } | null;
+  snapshot: Snapshot | null; signoff: PdfSig | null; acknowledgement: PdfSig | null;
+  /** The official stored PDF (the acknowledged copy when there is one, else the sign-off copy); outputs = every stored copy. */
+  output: StoredPdf | null; outputs?: StoredPdf[];
 }
+export interface StoredPdf { kind?: "final" | "acknowledged"; path: string; pdfSha256: string; snapshotHash: string; markingHash?: string; acknowledgementHash?: string; createdAt: string }
 export interface PdfBundle { attemptId: string; attemptNo: number; role: "trainer" | "student"; canAssess: boolean; template: PdfTemplate; attempts: BundleAttempt[] }
 
 export type StampValue = { kind: "text"; text: string; by: "student" | "trainer" | "record" } | { kind: "tick"; by: "student" | "trainer" | "record" } | { kind: "png"; png: string; name: string; by: "student" | "trainer" };

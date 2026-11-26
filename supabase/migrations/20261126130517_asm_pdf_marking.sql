@@ -105,7 +105,9 @@ on conflict (id) do nothing;
 
 create table if not exists public.asm_attempt_outputs (
  attempt_id uuid not null references public.asm_attempts(id) on delete cascade,
- kind text not null check (kind in ('final')),
+ -- final = stored at the trainer's final sign-off; acknowledged = stored again once the student has acknowledged the result
+ -- (the official record when it exists); both kept, each with the hashes it was drawn from
+ kind text not null check (kind in ('final', 'acknowledged')),
  tenant_id uuid references public.tenants(id) on delete restrict,
  path text not null,
  pdf_sha256 text not null check (pdf_sha256 ~ '^[a-f0-9]{64}$'),
@@ -117,6 +119,11 @@ create table if not exists public.asm_attempt_outputs (
 -- what was marked when the PDF was stored: the marks, task results, outcome, feedback, the trainer's fields and the sign-off, and its hash
 alter table public.asm_attempt_outputs add column if not exists marking jsonb not null default '{}'::jsonb;
 alter table public.asm_attempt_outputs add column if not exists marking_hash text not null default '' check (marking_hash = '' or marking_hash ~ '^[a-f0-9]{64}$');
+alter table public.asm_attempt_outputs drop constraint if exists asm_attempt_outputs_kind_check;
+alter table public.asm_attempt_outputs add constraint asm_attempt_outputs_kind_check check (kind in ('final', 'acknowledged'));
+-- the acknowledged copy also records the acknowledgement it printed, and its hash
+alter table public.asm_attempt_outputs add column if not exists acknowledgement jsonb not null default '{}'::jsonb;
+alter table public.asm_attempt_outputs add column if not exists acknowledgement_hash text not null default '' check (acknowledgement_hash = '' or acknowledgement_hash ~ '^[a-f0-9]{64}$');
 alter table public.asm_attempt_outputs enable row level security;
 revoke all on public.asm_attempt_outputs from anon, authenticated;
 create or replace function public.asm_attempt_outputs_frozen() returns trigger
@@ -131,10 +138,14 @@ revoke all on function public.asm_attempt_outputs_frozen() from public, anon, au
 
 create or replace function public.asm_output_storage_allowed(p_name text, p_write boolean) returns boolean
 language sql stable security definer set search_path = '' as $$
- select p_name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/final-[a-f0-9]{64}\.pdf$' and exists (
+ select p_name ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/(final|acknowledged)-[a-f0-9]{64}\.pdf$' and exists (
   select 1 from public.asm_attempts t where t.id::text = split_part(p_name, '/', 1) and public.tenant_scope(t.tenant_id)
-   and case when p_write then t.state = 'final' and (public.asm_is_admin() or public.asm_can_assess_attempt(t.id))
-            else public.asm_is_admin() or public.asm_trainer_on_attempt(t.id) or t.student_id = public.asm_student_id() end);
+   and case when not p_write then public.asm_is_admin() or public.asm_trainer_on_attempt(t.id) or t.student_id = public.asm_student_id()
+            when split_part(p_name, '/', 2) like 'final-%' then t.state = 'final' and (public.asm_is_admin() or public.asm_can_assess_attempt(t.id))
+            -- the acknowledged copy: once the sign-off copy is stored and the student has acknowledged; drawn by the student's browser
+            else t.state = 'final' and (public.asm_is_admin() or public.asm_can_assess_attempt(t.id) or t.student_id = public.asm_student_id())
+             and exists (select 1 from public.asm_attempt_outputs o where o.attempt_id = t.id and o.kind = 'final')
+             and exists (select 1 from public.asm_attempt_signatures x where x.attempt_id = t.id and x.kind = 'student_acknowledgement') end);
 $$;
 revoke all on function public.asm_output_storage_allowed(text, boolean) from public, anon;
 grant execute on function public.asm_output_storage_allowed(text, boolean) to authenticated;
@@ -176,30 +187,54 @@ language sql stable security definer set search_path = '' as $$
 $$;
 revoke all on function public.asm_attempt_marking(uuid) from public, anon, authenticated;
 
-/** Records the final PDF of a final attempt (drawn from its snapshot, uploaded first); the first one stands. */
-create or replace function public.asm_pdf_output_record(p_attempt uuid, p_path text, p_sha256 text) returns jsonb
+/** The student's acknowledgement as printed: who, when, the statement, and the SHA-256 of the signature picture. */
+create or replace function public.asm_attempt_acknowledgement(p_attempt uuid) returns jsonb
+language sql stable security definer set search_path = '' as $$
+ select coalesce((select jsonb_build_object('signerName', x.signer_name, 'signedAt', x.signed_at, 'statement', x.statement,
+   'png', encode(sha256(convert_to(coalesce(x.signature_png, ''), 'UTF8')), 'hex'))
+  from public.asm_attempt_signatures x where x.attempt_id = p_attempt and x.kind = 'student_acknowledgement'), '{}'::jsonb);
+$$;
+revoke all on function public.asm_attempt_acknowledgement(uuid) from public, anon, authenticated;
+
+/**
+ * Records a stored PDF of a final attempt (drawn from its snapshot, uploaded first under its SHA-256); the first of each kind stands.
+ *  final         at the trainer's final sign-off (an assessor of the attempt or an admin);
+ *  acknowledged  once the student has acknowledged the result, after the sign-off copy (the student, an assessor or an admin):
+ *                the official record from then on. Each copy keeps the snapshot, marking and acknowledgement hashes it was drawn from.
+ */
+drop function if exists public.asm_pdf_output_record(uuid, text, text);
+create or replace function public.asm_pdf_output_record(p_attempt uuid, p_path text, p_sha256 text, p_kind text default 'final') returns jsonb
 language plpgsql security definer set search_path = '' as $$
-declare t public.asm_attempts; s public.asm_attempt_snapshots; o public.asm_attempt_outputs; v_marking jsonb;
+declare t public.asm_attempts; s public.asm_attempt_snapshots; o public.asm_attempt_outputs; v_marking jsonb; v_ack jsonb := '{}'::jsonb; v_actor text;
 begin
+ if p_kind is null or p_kind not in ('final', 'acknowledged') then raise exception 'Unknown PDF kind' using errcode = '22023'; end if;
  select * into t from public.asm_attempts where id = p_attempt and public.tenant_scope(tenant_id);
  if t.id is null then raise exception 'Attempt not found' using errcode = 'P0002'; end if;
- if not (public.asm_is_admin() or public.asm_can_assess_attempt(p_attempt)) then raise exception 'Only an assessor of this attempt stores its PDF' using errcode = '42501'; end if;
+ v_actor := case when public.asm_is_admin() then 'admin' when public.asm_can_assess_attempt(p_attempt) then 'trainer'
+                 when p_kind = 'acknowledged' and t.student_id = public.asm_student_id() then 'student' end;
+ if v_actor is null then raise exception 'Only an assessor of this attempt stores its PDF' using errcode = '42501'; end if;
  if t.state <> 'final' then raise exception 'The PDF is stored when the result is final' using errcode = '22023'; end if;
- select * into o from public.asm_attempt_outputs where attempt_id = p_attempt and kind = 'final';
+ select * into o from public.asm_attempt_outputs where attempt_id = p_attempt and kind = p_kind;
  if o.attempt_id is not null then return to_jsonb(o); end if;
+ if p_kind = 'acknowledged' then
+  if not exists (select 1 from public.asm_attempt_outputs x where x.attempt_id = p_attempt and x.kind = 'final') then raise exception 'The sign-off copy is stored first' using errcode = '22023'; end if;
+  v_ack := public.asm_attempt_acknowledgement(p_attempt);
+  if v_ack = '{}'::jsonb then raise exception 'The student has not acknowledged the result yet' using errcode = '22023'; end if;
+ end if;
  select * into s from public.asm_attempt_snapshots where attempt_id = p_attempt;
  if s.attempt_id is null then raise exception 'The attempt has no submitted snapshot' using errcode = 'P0002'; end if;
- if coalesce(p_sha256, '') !~ '^[a-f0-9]{64}$' or p_path <> p_attempt::text || '/final-' || p_sha256 || '.pdf' then raise exception 'The file name must be its SHA-256' using errcode = '22023'; end if;
+ if coalesce(p_sha256, '') !~ '^[a-f0-9]{64}$' or p_path <> p_attempt::text || '/' || p_kind || '-' || p_sha256 || '.pdf' then raise exception 'The file name must be its SHA-256' using errcode = '22023'; end if;
  if not exists (select 1 from storage.objects x where x.bucket_id = 'assessment-output' and x.name = p_path) then raise exception 'Upload the PDF first' using errcode = 'P0002'; end if;
  v_marking := public.asm_attempt_marking(p_attempt);
- insert into public.asm_attempt_outputs(attempt_id, kind, tenant_id, path, pdf_sha256, snapshot_hash, created_by, marking, marking_hash)
- values (p_attempt, 'final', t.tenant_id, p_path, p_sha256, s.hash, auth.uid(), v_marking, encode(sha256(convert_to(v_marking::text, 'UTF8')), 'hex')) returning * into o;
- perform public.asm_log(case when public.asm_is_admin() then 'admin' else 'trainer' end, 'final_pdf_store', 'attempt', p_attempt::text,
-  jsonb_build_object('path', p_path, 'pdfSha256', p_sha256, 'snapshotHash', s.hash, 'markingHash', o.marking_hash), t.tenant_id);
+ insert into public.asm_attempt_outputs(attempt_id, kind, tenant_id, path, pdf_sha256, snapshot_hash, created_by, marking, marking_hash, acknowledgement, acknowledgement_hash)
+ values (p_attempt, p_kind, t.tenant_id, p_path, p_sha256, s.hash, auth.uid(), v_marking, encode(sha256(convert_to(v_marking::text, 'UTF8')), 'hex'),
+  v_ack, case when v_ack = '{}'::jsonb then '' else encode(sha256(convert_to(v_ack::text, 'UTF8')), 'hex') end) returning * into o;
+ perform public.asm_log(v_actor, case when p_kind = 'final' then 'final_pdf_store' else 'acknowledged_pdf_store' end, 'attempt', p_attempt::text,
+  jsonb_build_object('path', p_path, 'pdfSha256', p_sha256, 'snapshotHash', s.hash, 'markingHash', o.marking_hash, 'acknowledgementHash', o.acknowledgement_hash), t.tenant_id);
  return to_jsonb(o);
 end $$;
-revoke all on function public.asm_pdf_output_record(uuid, text, text) from public, anon;
-grant execute on function public.asm_pdf_output_record(uuid, text, text) to authenticated;
+revoke all on function public.asm_pdf_output_record(uuid, text, text, text) from public, anon;
+grant execute on function public.asm_pdf_output_record(uuid, text, text, text) to authenticated;
 
 -- ------------------------------------------------------------------ everything that draws an attempt's PDF
 create or replace function public.asm_pdf_attempt(p_attempt uuid) returns jsonb
@@ -222,7 +257,11 @@ begin
      'snapshot', (select jsonb_build_object('answers', s.answers, 'signatures', s.signatures, 'record', s.record, 'hash', s.hash, 'createdAt', s.created_at) from public.asm_attempt_snapshots s where s.attempt_id = a.id),
      'signoff', (select public.asm_signature_json(x) from public.asm_attempt_signatures x where x.attempt_id = a.id and x.kind = 'assessor_signoff'),
      'acknowledgement', (select public.asm_signature_json(x) from public.asm_attempt_signatures x where x.attempt_id = a.id and x.kind = 'student_acknowledgement'),
-     'output', (select jsonb_build_object('path', o.path, 'pdfSha256', o.pdf_sha256, 'snapshotHash', o.snapshot_hash, 'createdAt', o.created_at) from public.asm_attempt_outputs o where o.attempt_id = a.id and o.kind = 'final'))
+     -- output = the official record: the acknowledged copy when there is one, else the sign-off copy; outputs = both
+     'output', (select jsonb_build_object('kind', o.kind, 'path', o.path, 'pdfSha256', o.pdf_sha256, 'snapshotHash', o.snapshot_hash, 'markingHash', o.marking_hash, 'acknowledgementHash', o.acknowledgement_hash, 'createdAt', o.created_at)
+       from public.asm_attempt_outputs o where o.attempt_id = a.id order by (o.kind = 'acknowledged') desc limit 1),
+     'outputs', coalesce((select jsonb_agg(jsonb_build_object('kind', o.kind, 'path', o.path, 'pdfSha256', o.pdf_sha256, 'snapshotHash', o.snapshot_hash, 'markingHash', o.marking_hash, 'acknowledgementHash', o.acknowledgement_hash, 'createdAt', o.created_at) order by o.created_at)
+       from public.asm_attempt_outputs o where o.attempt_id = a.id), '[]'::jsonb))
     order by a.attempt_no)
    from public.asm_attempts a where a.assignment_id = t.assignment_id and a.student_id = t.student_id and a.state <> 'void' and a.attempt_no <= t.attempt_no), '[]'::jsonb));
 end $$;

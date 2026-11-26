@@ -11,7 +11,11 @@
  * The workbook layout appears only in "Export as workbook PDF".
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
+import { loginUrl } from "@/lib/loginRouting";
+import { supabase } from "@/pages/admin/lib/supabase";
+import UnsavedGuard from "@/components/assessment/UnsavedGuard";
+import { draftKey, localDraftStore, saveLabel as saveLabelOf, saveTone, useAutosave, type DraftStore } from "@/lib/assessment/autosave";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { AssessmentInfo } from "@/components/assessment/AssessmentRenderer";
 import { sanitize } from "@/components/assessment/registry";
@@ -73,8 +77,6 @@ export default function StudentAssessmentPage() {
   const rowVersionRef = useRef(1);
   const submitRequestId = useRef<string | null>(null);
   const [error, setError] = useState("");
-  const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [view, setView] = useState<View>({ kind: "start" });
   const [signatures, setSignatures] = useState<AttemptSignature[]>([]);
@@ -93,15 +95,41 @@ export default function StudentAssessmentPage() {
   const [pdfSigs, setPdfSigs] = useState<PdfSignature[]>([]);
   const [pdfChecked, setPdfChecked] = useState(false);
   const [prevPdf, setPrevPdf] = useState<PdfBundle | null>(null);
-  const timer = useRef<number | null>(null);
   const [, tick] = useState(0);
+  const location = useLocation();
+  // autosave (owner 2026-11-26): retried until it goes through, kept in this browser until the server has it, offline / signed-out
+  // states shown, saved again when back online or signed in again
+  const attemptIdRef = useRef("");
+  const userIdRef = useRef("");
+  const draftStore = useMemo<DraftStore<Responses>>(() => ({
+    save: (v) => { if (attemptIdRef.current && userIdRef.current) localDraftStore<Responses>(draftKey(userIdRef.current, attemptIdRef.current)).save(v); },
+    clear: () => { if (attemptIdRef.current && userIdRef.current) localDraftStore<Responses>(draftKey(userIdRef.current, attemptIdRef.current)).clear(); },
+  }), []);
+  const autosave = useAutosave<Responses>(async (r) => {
+    const out = await asmStudent<{ ok: boolean; rowVersion: number; savedAt: string }>("draft_save", { attemptId: attemptIdRef.current, responses: r, rowVersion: rowVersionRef.current });
+    rowVersionRef.current = out.rowVersion;
+  }, { store: draftStore, resumeOn: (resume) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => { if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") resume(); });
+    return () => sub.subscription.unsubscribe();
+  } });
+  const queueSave = autosave.queue;
+  const [leaving, setLeaving] = useState(false);
+  // Sign in again: the answers are in this browser; the login page brings the student back here, where they are saved
+  useEffect(() => { if (leaving) window.location.assign(loginUrl(location.pathname + location.search, true)); }, [leaving, location.pathname, location.search]);
   useEffect(() => { const t = window.setInterval(() => tick((n) => n + 1), 20_000); return () => window.clearInterval(t); }, []);
 
   const loadSignatures = useCallback(async (attemptId: string) => setSignatures(await asmSignatures(attemptId)), []);
   const load = useCallback(async () => {
     try {
       const d = await asmStudent<Opened>("assessment_open", { assignmentId: id });
-      setData(d); setResponses(d.attempt.responses ?? {}); rowVersionRef.current = d.attempt.rowVersion; setError("");
+      setData(d); rowVersionRef.current = d.attempt.rowVersion; attemptIdRef.current = d.attempt.id; setError("");
+      // answers this student typed here and not yet on the server (offline, signed out, closed before the save) come back and are
+      // saved; the key carries the signed-in person, so another student on this browser never sees them
+      userIdRef.current = (await supabase.auth.getSession()).data.session?.user.id ?? "";
+      const local = localDraftStore<Responses>(draftKey(userIdRef.current, d.attempt.id));
+      const kept = userIdRef.current && d.attempt.state === "draft" && d.assignment.status === "open" ? local.read() : null;
+      if (kept && JSON.stringify(kept.v) !== JSON.stringify(d.attempt.responses ?? {})) { setResponses(kept.v); queueSave(kept.v); }
+      else { if (kept) local.clear(); setResponses(d.attempt.responses ?? {}); } // a kept copy equal to the server's is saved: deleted
       void loadSignatures(d.attempt.id);
       const tpl = await loadStudentTemplate(d.attempt.id);
       if (tpl) {
@@ -111,7 +139,7 @@ export default function StudentAssessmentPage() {
       } else setPdfTpl(null);
       setPdfChecked(true);
     } catch (e) { setError(e instanceof Error ? e.message : "The assessment did not load."); }
-  }, [id, loadSignatures]);
+  }, [id, loadSignatures, queueSave]);
   useEffect(() => { void load(); }, [load]);
 
   const attempt = data?.attempt; const definition = data?.version.definition;
@@ -138,13 +166,14 @@ export default function StudentAssessmentPage() {
   // the student's name for the declaration (editable, filled in from their record)
   useEffect(() => { if (!declName && history?.student?.name) setDeclName(history.student.name); }, [history?.student?.name, declName]);
 
-  const save = useCallback(async (r: Responses) => {
-    if (!attempt) return; setSaving(true);
-    try { const out = await asmStudent<{ ok: boolean; rowVersion: number; savedAt: string }>("draft_save", { attemptId: attempt.id, responses: r, rowVersion: rowVersionRef.current }); rowVersionRef.current = out.rowVersion; setSavedAt(Date.now()); setError(""); }
-    catch (e) { setError(e instanceof Error ? e.message : "Not saved."); } finally { setSaving(false); }
-  }, [attempt]);
-  const change = (r: Responses) => { setResponses(r); if (timer.current) window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void save(r), 900); };
-  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
+  const change = (r: Responses) => { setResponses(r); queueSave(r); };
+  /** Submit waits for the save; when it does not go through, the student is told why and nothing is submitted. */
+  const unsavedReason = (): string => {
+    const st = autosave.current().state;
+    if (st === "offline") return "You are offline. Your latest answers are kept on this device and will save when you reconnect; submit after that.";
+    if (st === "expired") return "Your sign-in has expired. Sign in again to save your latest answers, then submit.";
+    return "Your latest answers are not saved yet (retrying). Submit once they show as saved.";
+  };
 
   const onUpload = async (q: Question, files: FileList) => {
     if (!attempt || !data) return;
@@ -161,10 +190,9 @@ export default function StudentAssessmentPage() {
 
   const submit = async () => {
     if (!attempt || !definition || !agreed || declName.trim().length < 2) return;
-    if (timer.current) window.clearTimeout(timer.current);
+    if (!(await autosave.flush())) { setError(unsavedReason()); return; }
     setBusy(true);
     try {
-      await save(responses);
       const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersionRef.current, declaration: { signature: declName.trim(), agreed: true }, requestId: (submitRequestId.current ??= crypto.randomUUID()) });
       if (!out.ok) { setErrors(out.errors ?? []); return; }
       submitRequestId.current = null; setReceipt(out.receiptNo ?? ""); await load();
@@ -190,13 +218,18 @@ export default function StudentAssessmentPage() {
   const unitCode = data.assignment.unitCode ?? definition.source?.unit?.code ?? "";
   const unitName = data.assignment.unitName ?? definition.source?.unit?.name ?? data.assignment.title;
   const due = attempt.dueAt ?? data.assignment.dueAt;
-  const savedLabel = saving ? "Saving…" : savedAt ? (Date.now() - savedAt < 60_000 ? "✓ Saved just now" : `✓ Saved ${new Date(savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`) : "Your work saves as you go";
+  const savedLabel = saveLabelOf(autosave.status, "Your work saves as you go");
+  const signInAgain = autosave.status.state === "expired"
+    ? <button type="button" className="min-h-[36px] rounded-lg bg-primary-600 px-3 text-xs font-semibold text-white" onClick={() => setLeaving(true)} data-testid="sign-in-again">Sign in again</button> : null;
+  const guard = <UnsavedGuard when={Boolean(editable) && autosave.pending && !leaving}
+    message="They are kept on this device and will be saved when you come back to this assessment. Stay to let them save now." />;
   const go = (v: View) => { setView(v); window.scrollTo({ top: 0 }); };
 
   const topBar = (
     <div className="sticky top-0 z-30 -mx-4 mb-5 flex items-center justify-between gap-3 border-b border-background-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
       <p className="min-w-0 truncate text-sm text-foreground-600"><span className="font-semibold text-foreground-900">{unitCode}</span>{unitCode ? " · " : ""}{unitName}</p>
-      {editable && view.kind !== "start" ? <p className={`shrink-0 text-sm font-semibold ${saving ? "text-foreground-500" : "text-green-700"}`} role="status" data-testid="autosave">{savedLabel}</p>
+      {guard}
+      {editable && view.kind !== "start" ? <div className="flex shrink-0 items-center gap-2"><p className={`text-sm font-semibold ${saveTone(autosave.status)}`} role="status" data-testid="autosave">{savedLabel}</p>{signInAgain}</div>
         : <p className="shrink-0 text-sm text-foreground-600">Due {fmtDate(due)}</p>}
     </div>
   );
@@ -294,10 +327,10 @@ export default function StudentAssessmentPage() {
   if (pdfTpl) {
     const studentName = history?.student?.name ?? declName;
     const submitPdf = async () => {
-      if (timer.current) window.clearTimeout(timer.current);
-      setBusy(true); setPdfErrors([]);
+      setPdfErrors([]);
+      if (!(await autosave.flush())) { setPdfErrors([unsavedReason()]); return; }
+      setBusy(true);
       try {
-        await save(responses);
         const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersionRef.current,
           declaration: { signature: (studentName || "Student").trim(), agreed: true }, requestId: (submitRequestId.current ??= crypto.randomUUID()) });
         if (!out.ok) { setPdfErrors((out.errors ?? []).map((e) => e.message)); return; }
@@ -306,8 +339,10 @@ export default function StudentAssessmentPage() {
       finally { setBusy(false); }
     };
     return <div className="px-0 sm:px-2">
+      {guard}
       {error ? <div className="mb-3"><PortalError message={error} /></div> : null}
-      <PdfWizard previous={prevPdf ? previousOf(prevPdf) : null} template={pdfTpl.template} pdfBytes={pdfTpl.bytes} responses={responses} onChange={change} saving={saving} savedLabel={savedAt || saving ? savedLabel : ""}
+      <PdfWizard previous={prevPdf ? previousOf(prevPdf) : null} template={pdfTpl.template} pdfBytes={pdfTpl.bytes} responses={responses} onChange={change}
+        saveClass={saveTone(autosave.status)} saveAction={signInAgain} savedLabel={autosave.status.state === "idle" ? "" : savedLabel}
         dueLabel={`Due ${fmtDate(due)}`} signatures={pdfSigs} busy={busy} serverErrors={pdfErrors} onSubmit={submitPdf}
         onSign={async (slot, v, statement) => { await pdfSign(attempt.id, slot, v ? (v.method === "saved" ? "saved" : v.method) : "saved", v?.png ?? null, statement); if (v) await keepSignature({ ...v, keep: true }); setPdfSigs(await pdfSignatures(attempt.id)); }}
         record={{ studentName: studentName ?? "", studentRef: history?.student?.ref ?? "", studentEmail: history?.student?.email ?? "", trainer: (history?.trainers ?? []).join(", "),

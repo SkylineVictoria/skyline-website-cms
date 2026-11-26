@@ -1,5 +1,7 @@
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useState } from "react";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
+import { discardDrafts, unsavedDraftKeys } from "@/lib/assessment/autosave";
 import { ROLE_LABELS } from "@/pages/agency/lib/portalData";
 import WorkspaceShell, { type NavEntry } from "@/pages/agency/components/WorkspaceShell";
 
@@ -81,7 +83,12 @@ export default function PortalLayout() {
   const crumbs = buildCrumbs(location.pathname).map((crumb, index) => (index === 0 && isStudent ? { ...crumb, label: "Student Portal" } : crumb));
   const workspaceName = isSlit ? selectedScope?.tenantId ? selectedScope.name : "SLIT Administration" : isStudent ? "My applications" : agency?.name || "Agency";
 
-  const handleSignOut = async () => {
+  // assessment answers still waiting to be saved (kept in this browser): the student is asked before signing out (owner 2026-11-26)
+  const [unsavedAsk, setUnsavedAsk] = useState(false);
+  const handleSignOut = async (discard = false) => {
+    if (!discard && authUser?.id && unsavedDraftKeys(authUser.id).length) { setUnsavedAsk(true); return; }
+    if (discard && authUser?.id) discardDrafts(authUser.id);
+    setUnsavedAsk(false);
     try { await signOut(); navigate("/login"); }
     catch { /* The active editor displays its save error and retains values. */ }
   };
@@ -113,6 +120,16 @@ export default function PortalLayout() {
       onSignOut={() => void handleSignOut()}
     >
       <Outlet key={scopeEpoch} />
+      {unsavedAsk ? <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="signout-unsaved-title" data-testid="signout-unsaved">
+        <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+          <h2 id="signout-unsaved-title" className="text-base font-semibold text-foreground-900">You have unsaved answers</h2>
+          <p className="mt-2 text-sm text-foreground-700">You have unsaved answers. Reconnect to save them, or they'll be lost when you sign out.</p>
+          <div className="mt-4 flex flex-wrap justify-end gap-2">
+            <button type="button" className="min-h-[44px] rounded-lg border border-red-300 px-4 text-sm font-semibold text-red-700" onClick={() => void handleSignOut(true)} data-testid="signout-discard">Discard them and sign out</button>
+            <button type="button" className="min-h-[44px] rounded-lg bg-primary-600 px-4 text-sm font-semibold text-white" onClick={() => setUnsavedAsk(false)} data-testid="signout-cancel" autoFocus>Cancel</button>
+          </div>
+        </div>
+      </div> : null}
     </WorkspaceShell>
   );
 }

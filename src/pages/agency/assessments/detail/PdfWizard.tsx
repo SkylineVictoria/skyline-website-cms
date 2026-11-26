@@ -25,8 +25,10 @@ const SECONDARY = "inline-flex cursor-pointer items-center justify-center gap-1.
 const INPUT = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm text-foreground-900 focus:border-primary-400 focus:bg-white focus:outline-none";
 const RATINGS = ["Strongly disagree", "Disagree", "Neutral", "Agree", "Strongly agree"];
 
-export default function PdfWizard({ template, pdfBytes, responses, onChange, savedLabel, saving, record, signatures, onSign, onSubmit, busy, serverErrors, dueLabel, previous = null }: {
-  template: PdfTemplate; pdfBytes: Uint8Array | null; responses: Responses; onChange: (r: Responses) => void; savedLabel: string; saving: boolean;
+export default function PdfWizard({ template, pdfBytes, responses, onChange, savedLabel, saveClass, saveAction = null, record, signatures, onSign, onSubmit, busy, serverErrors, dueLabel, previous = null }: {
+  template: PdfTemplate; pdfBytes: Uint8Array | null; responses: Responses; onChange: (r: Responses) => void; savedLabel: string;
+  /** The save indicator's colour (green saved, amber offline, red not saved) and, when signed out, its Sign in again button. */
+  saveClass: string; saveAction?: ReactNode;
   record: PdfRecord; signatures: PdfSignature[];
   /** Signs one declaration: v null = with the saved signature (one tap). */
   onSign: (slot: string, v: SignatureValue | null, statement: string) => Promise<void>;
@@ -67,7 +69,7 @@ export default function PdfWizard({ template, pdfBytes, responses, onChange, sav
     <div className="sticky top-0 z-30 -mx-4 mb-4 border-b border-background-200 bg-white/95 px-4 pb-2 pt-3 backdrop-blur sm:-mx-6 sm:px-6">
       <div className="flex items-center justify-between gap-3">
         <p className="min-w-0 truncate text-sm text-foreground-600"><span className="font-semibold text-foreground-900">{record.unitCode}</span>{record.unitCode ? " · " : ""}{record.unitName}</p>
-        <p className={`shrink-0 text-sm font-semibold ${saving ? "text-foreground-500" : "text-green-700"}`} role="status" data-testid="autosave">{savedLabel || dueLabel}</p>
+        <div className="flex shrink-0 items-center gap-2"><p className={`text-sm font-semibold ${saveClass}`} role="status" data-testid="autosave">{savedLabel || dueLabel}</p>{saveAction}</div>
       </div>
       <div className="mt-2 flex items-center gap-3">
         <div className="h-2 flex-1 overflow-hidden rounded-full bg-background-200" role="progressbar" aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={index + 1} aria-label="Progress" data-testid="wizard-progress">

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import UnsavedGuard from "@/components/assessment/UnsavedGuard";
+import { saveLabel, saveTone, useAutosave } from "@/lib/assessment/autosave";
+import { supabase } from "@/pages/admin/lib/supabase";
 import PdfPages from "@/components/signing/PdfPages";
 import SignatureField, { SignatureImage, type SignatureValue } from "@/components/assessment/SignatureField";
 import { asmSign, asmTrainer, keepSignature, mySignature } from "@/lib/assessment/api";
-import { buildStampedPdf, loadPdfAttempt, storeFinalPdf } from "@/lib/assessment/pdfTemplate/api";
+import { buildStampedPdf, ensureAcknowledgedCopy, loadPdfAttempt, storeFinalPdf } from "@/lib/assessment/pdfTemplate/api";
 import { questionName, type TemplateField } from "@/lib/assessment/pdfTemplate/model";
 import { answered, markingMissing, stampValues, type BundleAttempt, type PdfBundle, type StampValue } from "@/lib/assessment/pdfTemplate/output";
 import { reviewName } from "@/lib/assessment/pdfTemplate/student";
@@ -33,12 +36,10 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
   const [overall, setOverall] = useState<"S" | "NYS" | null>(cur.outcome ?? null);
   const [overallFeedback, setOverallFeedback] = useState(cur.overallFeedback ?? "");
   const [base, setBase] = useState<Uint8Array | null>(null);
-  const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
   const rowVersion = useRef(cur.rowVersion ?? 1);
-  const timer = useRef<number | null>(null);
   const open = cur.state === "submitted" || cur.state === "marking";
   const editable = open && bundle.canAssess;
 
@@ -60,24 +61,29 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
     return qs.some((q) => marks[q.key]?.outcome === "NYS") ? "NYS" : "S";
   }
 
-  const save = useCallback(async (m: Record<string, Mark>, tf: Record<string, string>, as: typeof assessor, of: string) => {
-    setSaved("Saving…");
-    try {
-      const out = await asmTrainer<{ rowVersion: number }>("mark_save", { id: attemptId, rowVersion: rowVersion.current,
-        results: Object.entries(m).filter(([, x]) => x.outcome).map(([questionId, x]) => ({ questionId, outcome: x.outcome, feedback: x.feedback })),
-        taskResults: t.tasks.map((tk) => ({ taskId: tk.number, feedback: tf[tk.number] ?? "" })), assessorResponses: as, overallFeedback: of });
-      rowVersion.current = out.rowVersion; setSaved("✓ Saved"); setError("");
-    } catch (e) { setSaved(""); setError(e instanceof Error ? e.message : "Not saved."); }
+  // the marks save as the trainer goes (owner 2026-11-26): a failed save says so and is retried, offline / signed out shown, saved
+  // again when back online or signed in again; leaving the page with marks not saved asks first
+  const send = useCallback(async ({ m, tf, as, of }: { m: Record<string, Mark>; tf: Record<string, string>; as: typeof assessor; of: string }) => {
+    const out = await asmTrainer<{ rowVersion: number }>("mark_save", { id: attemptId, rowVersion: rowVersion.current,
+      results: Object.entries(m).filter(([, x]) => x.outcome).map(([questionId, x]) => ({ questionId, outcome: x.outcome, feedback: x.feedback })),
+      taskResults: t.tasks.map((tk) => ({ taskId: tk.number, feedback: tf[tk.number] ?? "" })), assessorResponses: as, overallFeedback: of });
+    rowVersion.current = out.rowVersion;
   }, [attemptId, t.tasks]);
-  const queue = (m = marks, tf = taskFeedback, as = assessor, of = overallFeedback) => {
-    if (!editable) return;
-    if (timer.current) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => void save(m, tf, as, of), 700);
-  };
-  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
+  const autosave = useAutosave(send, { debounceMs: 700, resumeOn: (resume) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => { if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") resume(); });
+    return () => sub.subscription.unsubscribe();
+  } });
+  const queue = (m = marks, tf = taskFeedback, as = assessor, of = overallFeedback) => { if (editable) autosave.queue({ m, tf, as, of }); };
   const mark = (key: string, patch: Partial<Mark>) => { const next = { ...marks, [key]: { outcome: null, feedback: "", ...marks[key], ...patch } }; setMarks(next); queue(next); };
 
   const reload = async () => { const b = await loadPdfAttempt(attemptId); if (b) setBundle(b); };
+  // the student acknowledged but their browser did not store the acknowledged copy: the assessor's opening finishes it
+  useEffect(() => {
+    if (!bundle.canAssess) return;
+    let off = false;
+    void ensureAcknowledgedCopy(bundle).then((stored) => { if (stored && !off) void reload(); }).catch(() => undefined);
+    return () => { off = true; };
+  }, [bundle]); // eslint-disable-line react-hooks/exhaustive-deps
   const goPage = (page: number) => document.querySelector(`[data-pdf-page="${page}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   // what the release needs (the same rules as the database's asm_template_marking_missing): every question marked, every checklist row the trainer ticks
   const missing = useMemo(() => markingMissing(t, Object.entries(marks).map(([questionId, m]) => ({ questionId, outcome: m.outcome })), assessor.pdfChoice), [t, marks, assessor.pdfChoice]);
@@ -86,10 +92,11 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
 
   const decide = async () => {
     if (!overall) return;
-    setBusy("Saving the decision…"); setError("");
+    setError("");
+    autosave.queue({ m: marks, tf: taskFeedback, as: assessor, of: overallFeedback });
+    if (!(await autosave.flush())) { setError("The marks are not saved yet (" + saveLabel(autosave.current(), "").replace("…", "") + "). Release once they are saved."); return; }
+    setBusy("Saving the decision…");
     try {
-      if (timer.current) window.clearTimeout(timer.current);
-      await save(marks, taskFeedback, assessor, overallFeedback);
       const out = await asmTrainer<{ ok: boolean; errors?: { message: string }[]; nextAttemptId?: string | null }>("mark_return", { id: attemptId, rowVersion: rowVersion.current, outcome: overall, overallFeedback });
       if (!out.ok) { setError((out.errors ?? []).map((e) => e.message).join(" ") || "Not saved."); return; }
       const b = await loadPdfAttempt(attemptId);
@@ -117,7 +124,8 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
         <p className="truncate font-heading text-lg font-bold text-foreground-950">{cur.snapshot?.record.studentName ?? "Student"} · attempt {cur.attemptNo}</p>
         <p className="truncate text-xs text-foreground-500">{cur.snapshot?.record.unitCode} {cur.snapshot?.record.unitName} · snapshot {cur.snapshot?.hash.slice(0, 12)}…</p>
         {earlier.length ? <p className="text-xs text-foreground-600" data-testid="earlier-attempts">Earlier attempts (their own answers, marks and checklists): {earlier.map((a) => <Link key={a.id} to={`/staff/assessments/attempts/${a.id}`} className="mr-2 font-semibold text-primary-700 underline">Attempt {a.attemptNo}</Link>)}</p> : null}</div>
-      <div className="flex items-center gap-3"><span className="text-sm font-semibold text-green-700" role="status" data-testid="marking-saved">{saved}</span>
+      <UnsavedGuard when={editable && autosave.pending} message="Your latest marks are not saved yet. Stay to let them save." />
+      <div className="flex items-center gap-3"><span className={`text-sm font-semibold ${saveTone(autosave.status)}`} role="status" data-testid="marking-saved">{autosave.status.state === "idle" ? "" : saveLabel(autosave.status, "")}</span>
         <button type="button" className={SECONDARY} onClick={() => void openStamped()} data-testid="open-stamped">Open stamped PDF</button></div>
     </header>
     {error ? <p role="alert" className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
@@ -167,7 +175,7 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
             <button type="button" className={`${PRIMARY} w-full`} disabled={!editable || !overall || missing.length > 0 || !signoff || !!busy} onClick={() => void decide()} data-testid="decide">
               {busy || (overall === "NYS" ? "Return for resubmission" : "Release result")}</button>
             <p className="text-2xs text-foreground-500">{overall === "NYS" ? "The student gets the next attempt with their answers filled in; the next column of the results and summary sheets is used." : "The result is released to the student, who signs to acknowledge it on the summary sheet."}</p>
-          </> : <p className="rounded-lg bg-background-100 px-3 py-2 text-sm text-foreground-700" data-testid="decided">{cur.state === "returned" ? "Returned for resubmission." : "Result released."}{cur.output ? <> Final PDF stored · SHA-256 <span className="font-mono text-2xs">{cur.output.pdfSha256.slice(0, 16)}…</span> · snapshot <span className="font-mono text-2xs">{cur.output.snapshotHash.slice(0, 16)}…</span></> : null}</p>}
+          </> : <p className="rounded-lg bg-background-100 px-3 py-2 text-sm text-foreground-700" data-testid="decided">{cur.state === "returned" ? "Returned for resubmission." : "Result released."}{(cur.outputs ?? []).map((o) => <span key={o.kind} className="block" data-testid={`stored-${o.kind}`}>{o.kind === "acknowledged" ? "Acknowledged copy (official record)" : "Sign-off copy"} · SHA-256 <span className="font-mono text-2xs">{o.pdfSha256.slice(0, 16)}…</span> · snapshot <span className="font-mono text-2xs">{o.snapshotHash.slice(0, 16)}…</span></span>)}</p>}
         </section>
       </aside>
     </div>

@@ -1445,6 +1445,16 @@ async function answerStep(page: Page, text: string): Promise<void> {
 }
 const CPC_KEYS = ["1.1", "1.2", "1.3", "2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11"];
 let cpcAssignment = "";
+let riiAssignment = "";
+const STUDENT_RPC = "**/rest/v1/rpc/asm_student";
+/** Makes the student's draft_save answer as the server would when it fails (every other student call goes through). */
+async function failDraftSave(page: Page, status: number, body: { code: string; message: string }): Promise<void> {
+  await page.route(STUDENT_RPC, async (route) => {
+    const data = route.request().postDataJSON() as { p_action?: string } | null;
+    if (data?.p_action === "draft_save") await route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ ...body, details: null, hint: null }) });
+    else await route.continue();
+  });
+}
 
 /** Ticks every Evidence Outcome row of the marking checklists (Yes or No) on the page. */
 async function tickEvidence(page: Page, option: "yes" | "no"): Promise<void> {
@@ -1568,6 +1578,17 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await page.goto(`${base}?step=review`);
   await page.getByTestId("pack-declaration").getByTestId("sign-button").click();
   await expect(page.getByTestId("review-ready")).toBeVisible({ timeout: 10_000 });
+  // AUTOSAVE: submit waits for the save; while it fails nothing is submitted and the student is told why
+  await failDraftSave(page, 500, { code: "57014", message: "canceling statement due to statement timeout" });
+  await page.getByTestId("wizard-back").click();
+  await page.getByTestId("rating-row").first().locator("label").first().click();
+  await expect(page.getByTestId("autosave")).toHaveText("Not saved, retrying…", { timeout: 10_000 });
+  await page.getByTestId("wizard-next").click();
+  await page.getByTestId("submit").click();
+  await expect(page.getByRole("alert").filter({ hasText: "Your latest answers are not saved yet (retrying). Submit once they show as saved." })).toBeVisible({ timeout: 10_000 });
+  expect(sql(`select state from public.asm_attempts where assignment_id = '${cpcAssignment}' and attempt_no = 2`)).toBe("draft");
+  await page.unroute(STUDENT_RPC);
+  await expect(page.getByTestId("autosave")).toContainText("Saved", { timeout: 40_000 });
   await page.getByTestId("submit").click();
   await expect(page.getByTestId("pdf-results")).toContainText(/receipt/i, { timeout: 20_000 });
 
@@ -1584,18 +1605,18 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await page.getByTestId("signoff-sign").click();
   await expect(page.getByTestId("signoff-done")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("decide").click();
-  await expect(page.getByTestId("decided")).toContainText("Final PDF stored", { timeout: 60_000 });
+  await expect(page.getByTestId("stored-final")).toContainText("Sign-off copy", { timeout: 60_000 });
   // attempt 1 keeps its own answers, marks and checklists: opened from attempt 2's history, read-only
   await page.getByTestId("earlier-attempts").getByRole("link", { name: "Attempt 1" }).click();
   await expect(page.getByTestId("decided")).toContainText("Returned for resubmission", { timeout: 30_000 });
   await expect(page.locator("[data-testid=marking-question][data-key='2.3']").getByTestId("mark-NYS")).toHaveAttribute("aria-pressed", "true");
   expect(sql(`select (select count(*) from jsonb_object_keys(assessor_responses->'pdfChoice')) from public.asm_attempts where id = '${attempt1}'`)).toBe("13");
-  expect(sql(`select (o.snapshot_hash = s.hash)::text || ':' || (o.path = a.id || '/final-' || o.pdf_sha256 || '.pdf')::text from public.asm_attempt_outputs o join public.asm_attempt_snapshots s on s.attempt_id = o.attempt_id join public.asm_attempts a on a.id = o.attempt_id where o.attempt_id = '${attempt2}'`)).toBe("true:true");
-  const outPath = sql(`select path from public.asm_attempt_outputs where attempt_id = '${attempt2}'`);
+  expect(sql(`select (o.snapshot_hash = s.hash)::text || ':' || (o.path = a.id || '/final-' || o.pdf_sha256 || '.pdf')::text from public.asm_attempt_outputs o join public.asm_attempt_snapshots s on s.attempt_id = o.attempt_id join public.asm_attempts a on a.id = o.attempt_id where o.attempt_id = '${attempt2}' and o.kind = 'final'`)).toBe("true:true");
+  const outPath = sql(`select path from public.asm_attempt_outputs where attempt_id = '${attempt2}' and kind = 'final'`);
   const { data } = await serviceClient().storage.from("assessment-output").download(outPath);
   const bytes = Buffer.from(await data!.arrayBuffer());
   const { createHash } = await import("node:crypto");
-  expect(createHash("sha256").update(bytes).digest("hex")).toBe(sql(`select pdf_sha256 from public.asm_attempt_outputs where attempt_id = '${attempt2}'`));
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe(sql(`select pdf_sha256 from public.asm_attempt_outputs where attempt_id = '${attempt2}' and kind = 'final'`));
   if (process.env.E2E_SHOTS_DIR) writeFileSync(`${process.env.E2E_SHOTS_DIR}/cpc-final.pdf`, bytes);
 
   // the student reads the result and signs the acknowledgement (the summary sheet's wording)
@@ -1604,6 +1625,19 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await page.getByTestId("acknowledge-sign").click();
   await expect(page.getByTestId("acknowledged")).toBeVisible({ timeout: 10_000 });
   expect(sql(`select statement from public.asm_attempt_signatures where attempt_id = '${attempt2}' and kind = 'student_acknowledgement'`)).toBe("I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.");
+  // the acknowledged copy is stored beside the sign-off copy and becomes the official record; each keeps the hashes it was drawn from
+  await expect(page.getByTestId("official-pdf")).toContainText("the copy stored after your acknowledgement", { timeout: 60_000 });
+  expect(sql(`select string_agg(o.kind || ':' || (o.snapshot_hash = s.hash)::text || ':' || (o.marking_hash ~ '^[a-f0-9]{64}$')::text || ':' || (o.acknowledgement_hash <> '')::text
+    || ':' || (o.path = o.attempt_id || '/' || o.kind || '-' || o.pdf_sha256 || '.pdf')::text, ',' order by o.kind) from public.asm_attempt_outputs o join public.asm_attempt_snapshots s on s.attempt_id = o.attempt_id where o.attempt_id = '${attempt2}'`))
+    .toBe("acknowledged:true:true:true:true,final:true:true:false:true");
+  expect(sql(`select (a.pdf_sha256 <> f.pdf_sha256 and a.acknowledgement->>'statement' like 'I declare that I have been assessed%')::text from public.asm_attempt_outputs a join public.asm_attempt_outputs f on f.attempt_id = a.attempt_id and f.kind = 'final' where a.attempt_id = '${attempt2}' and a.kind = 'acknowledged'`)).toBe("true");
+  {
+    const ackPath = sql(`select path from public.asm_attempt_outputs where attempt_id = '${attempt2}' and kind = 'acknowledged'`);
+    const { data: ack } = await serviceClient().storage.from("assessment-output").download(ackPath);
+    const ackBytes = Buffer.from(await ack!.arrayBuffer());
+    expect(createHash("sha256").update(ackBytes).digest("hex")).toBe(sql(`select pdf_sha256 from public.asm_attempt_outputs where attempt_id = '${attempt2}' and kind = 'acknowledged'`));
+    if (process.env.E2E_SHOTS_DIR) writeFileSync(`${process.env.E2E_SHOTS_DIR}/cpc-final-acknowledged.pdf`, ackBytes);
+  }
   await page.getByTestId("show-workbook").click();
   await expect(page.getByTestId("stamped-workbook").locator("[data-pdf-page='48']")).toBeAttached({ timeout: 60_000 });
   await shot(page, "pdf-results");
@@ -1618,6 +1652,7 @@ test("PDF-WORKBOOK RIICWD525E on its workbook: 36 steps, 1.2 asks for its parts 
   test.skip(!RII_PDF, "the RIICWD525E workbook is not on this machine (set ASM_WORKBOOK)");
   test.setTimeout(300_000);
   const assignment = await publishWorkbook(page, RII_PDF!, 28);
+  riiAssignment = assignment;
   const base = `/agency/assessments/${assignment}`;
   await signInStaff(page, student.email, base);
   await expect(page.getByTestId("wizard-step-count")).toHaveText("Step 1 of 36", { timeout: 30_000 });
@@ -1635,4 +1670,103 @@ test("PDF-WORKBOOK RIICWD525E on its workbook: 36 steps, 1.2 asks for its parts 
   await expect(page.getByTestId("review-missing")).toContainText("Q1.2:");
   await expect(page.getByTestId("review-missing")).toContainText("Sign the student declaration (page 7).");
   await expect(page.getByTestId("review-missing")).not.toContainText("valuation");
+});
+
+test("PDF-WORKBOOK autosave: a failed save, offline / online and an expired sign-in never show Saved, keep the answers and save them; leaving and signing out ask first; drafts belong to their student", async ({ page }) => {
+  test.skip(!riiAssignment, "needs the RIICWD525E draft above");
+  test.setTimeout(300_000);
+  const base = `/agency/assessments/${riiAssignment}`;
+  const attemptId = sql(`select id from public.asm_attempts where assignment_id = '${riiAssignment}' and attempt_no = 1`);
+  const onServer = (text: string) => sql(`select (position('${text}' in responses::text) > 0)::text from public.asm_attempts where id = '${attemptId}'`);
+  // unsaved answers are kept under asm-draft:<signed-in user>:<attempt>
+  const userId = sql(`select id from auth.users where email = '${student.email}'`);
+  const myKey = `asm-draft:${userId}:${attemptId}`;
+  const inBrowser = () => page.evaluate((k) => window.localStorage.getItem(k), myKey);
+  await signInStaff(page, student.email, `${base}?step=q-1.2`);
+  const box = page.getByTestId("answer-text").first();
+  const status = page.getByTestId("autosave");
+  await expect(box).toBeVisible({ timeout: 30_000 });
+
+  // 1. the server refuses the save: "Not saved, retrying…", never "Saved"; leaving asks first; retried until it goes through
+  await failDraftSave(page, 500, { code: "57014", message: "canceling statement due to statement timeout" });
+  await box.fill("FAILED-SAVE-ONE");
+  await expect(status).toHaveText("Not saved, retrying…", { timeout: 10_000 });
+  expect(await inBrowser()).toContain("FAILED-SAVE-ONE");
+  await page.getByRole("link", { name: "My learning" }).first().click();
+  await expect(page.getByTestId("unsaved-dialog")).toBeVisible();
+  await page.getByTestId("unsaved-stay").click();
+  await expect(page).toHaveURL(new RegExp(riiAssignment));
+  await expect(status).not.toContainText("Saved");
+  expect(onServer("FAILED-SAVE-ONE")).toBe("false");
+  await page.unroute(STUDENT_RPC);
+  await expect(status).toContainText("Saved", { timeout: 40_000 });
+  expect(onServer("FAILED-SAVE-ONE")).toBe("true");
+  expect(await inBrowser()).toBeNull();
+
+  // 2. offline: "Offline, will save when reconnected", the answers kept in the browser, saved by themselves when back online
+  await page.context().setOffline(true);
+  await box.fill("OFFLINE-TWO");
+  await expect(status).toHaveText("Offline, will save when reconnected", { timeout: 10_000 });
+  expect(await inBrowser()).toContain("OFFLINE-TWO");
+  expect(onServer("OFFLINE-TWO")).toBe("false");
+  await page.context().setOffline(false);
+  await expect(status).toContainText("Saved", { timeout: 40_000 });
+  expect(onServer("OFFLINE-TWO")).toBe("true");
+  expect(await inBrowser()).toBeNull();
+
+  // 3. the sign-in expired: "Session expired, sign in again", nothing typed is lost, saved after signing in again
+  await failDraftSave(page, 401, { code: "PGRST301", message: "JWT expired" });
+  await box.fill("EXPIRED-THREE");
+  await expect(status).toHaveText("Session expired, sign in again", { timeout: 10_000 });
+  expect(await inBrowser()).toContain("EXPIRED-THREE");
+  await page.unroute(STUDENT_RPC);
+  // the sign-in is really gone now (the stored session removed), as when it expires
+  await page.evaluate(() => { for (const k of Object.keys(window.localStorage)) if (/^sb-.*-auth-token$/.test(k)) window.localStorage.removeItem(k); });
+  await page.getByTestId("sign-in-again").click();
+  await page.waitForURL(/\/login/, { timeout: 20_000 });
+  await page.getByRole("tab", { name: "Sign in" }).click();
+  await page.locator('input[name="email"]').fill(student.email);
+  await page.locator('input[name="password"]').fill(PASSWORD);
+  await page.getByRole("button", { name: /^sign in$/i }).last().click();
+  await page.waitForURL(new RegExp(`/agency/assessments/${riiAssignment}`), { timeout: 30_000 });
+  await expect(page.getByTestId("answer-text").first()).toHaveValue("EXPIRED-THREE", { timeout: 30_000 });
+  await expect(page.getByTestId("autosave")).toContainText("Saved", { timeout: 40_000 });
+  expect(onServer("EXPIRED-THREE")).toBe("true");
+  expect(await inBrowser()).toBeNull();
+
+  // 4. answers kept for another person on this browser are never shown to this student (and are not theirs to delete)
+  const otherKey = `asm-draft:00000000-0000-4000-8000-0000000000ff:${attemptId}`;
+  const otherCopy = sql(`select responses::text from public.asm_attempts where id = '${attemptId}'`).replace("EXPIRED-THREE", "OTHER-STUDENT");
+  await page.evaluate(([k, v]) => window.localStorage.setItem(k, JSON.stringify({ v: JSON.parse(v), at: Date.now() })), [otherKey, otherCopy]);
+  await page.reload();
+  await expect(page.getByTestId("answer-text").first()).toHaveValue("EXPIRED-THREE", { timeout: 30_000 });
+  expect(onServer("OTHER-STUDENT")).toBe("false");
+  expect(await page.evaluate((k) => window.localStorage.getItem(k) !== null, otherKey)).toBe(true);
+  await page.evaluate((k) => window.localStorage.removeItem(k), otherKey);
+
+  // 5. signing out with unsaved answers asks first: Cancel keeps them (saved once the server answers again, then deleted);
+  //    "Discard them and sign out" deletes them; a saved draft never needs asking
+  const signOut = async () => { await page.locator("button[aria-haspopup=menu]").first().click(); await page.getByRole("button", { name: "Sign out" }).click(); };
+  await failDraftSave(page, 500, { code: "57014", message: "canceling statement due to statement timeout" });
+  await box.fill("UNSAVED-FOUR");
+  await expect(status).toHaveText("Not saved, retrying…", { timeout: 10_000 });
+  await signOut();
+  await expect(page.getByTestId("signout-unsaved")).toContainText("You have unsaved answers. Reconnect to save them, or they'll be lost when you sign out.");
+  await page.getByTestId("signout-cancel").click();
+  await expect(page.getByTestId("signout-unsaved")).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(riiAssignment));
+  expect(await inBrowser()).toContain("UNSAVED-FOUR");
+  await page.unroute(STUDENT_RPC);
+  await expect(status).toContainText("Saved", { timeout: 40_000 });
+  expect(onServer("UNSAVED-FOUR")).toBe("true");
+  expect(await inBrowser()).toBeNull();
+  await failDraftSave(page, 500, { code: "57014", message: "canceling statement due to statement timeout" });
+  await box.fill("DISCARDED-FIVE");
+  await expect(status).toHaveText("Not saved, retrying…", { timeout: 10_000 });
+  await signOut();
+  await page.getByTestId("signout-discard").click();
+  await page.waitForURL(/\/login/, { timeout: 20_000 });
+  expect(await page.evaluate((id) => Object.keys(window.localStorage).filter((k) => k.startsWith(`asm-draft:${id}:`)).length, userId)).toBe(0);
+  await page.unroute(STUDENT_RPC);
+  expect(onServer("DISCARDED-FIVE")).toBe("false");
 });

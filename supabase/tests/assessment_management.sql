@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(543);
+select plan(556);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -1119,5 +1119,26 @@ select is((select (o.marking->>'outcome') || ':' || jsonb_array_length(o.marking
 select throws_ok(format($$update public.asm_attempts set overall_feedback = 'changed' where id = '%s'$$, pg_temp.v('r2')), '42501', null, 'LOCK a final result cannot change');
 select throws_ok(format($$update public.asm_results set feedback = 'changed' where attempt_id = '%s'$$, pg_temp.v('r2')), '42501', null, 'LOCK a final question comment cannot change');
 select throws_ok(format($$update public.asm_attempt_outputs set marking = '{}' where attempt_id = '%s'$$, pg_temp.v('r2')), '42501', null, 'LOCK the stored final PDF record cannot change');
+-- the acknowledged copy (owner 2026-11-26): stored once the student has acknowledged, beside the sign-off copy, the official record from then on
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/acknowledged-%s.pdf')$$, pg_temp.v('r2'), repeat('a', 64)), '42501', null, 'ACK the student cannot store the acknowledged copy before acknowledging');
+select throws_ok(format($$select public.asm_pdf_output_record('%s', '%s/acknowledged-%s.pdf', '%s', 'acknowledged')$$, pg_temp.v('r2'), pg_temp.v('r2'), repeat('a', 64), repeat('a', 64)), '22023', 'The student has not acknowledged the result yet', 'ACK no acknowledged copy before the acknowledgement');
+select is((public.asm_sign(pg_temp.v('r2')::uuid, 'student_acknowledgement', 'typed', null, 'I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.'))->>'kind', 'student_acknowledgement', 'ACK the student acknowledges the result');
+select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/final-%s.pdf')$$, pg_temp.v('r2'), repeat('b', 64)), '42501', null, 'ACK the student still cannot store a sign-off copy');
+select throws_ok(format($$select public.asm_pdf_output_record('%s', '%s/final-%s.pdf', '%s', 'final')$$, pg_temp.v('r2'), pg_temp.v('r2'), repeat('b', 64), repeat('b', 64)), '42501', null, 'ACK the student cannot record a sign-off copy');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/acknowledged-%s.pdf')$$, pg_temp.v('r2'), repeat('a', 64)), 'ACK the student''s browser uploads the acknowledged copy');
+select is((public.asm_pdf_output_record(pg_temp.v('r2')::uuid, pg_temp.s('r2') || '/acknowledged-' || repeat('a', 64) || '.pdf', repeat('a', 64), 'acknowledged'))->>'kind', 'acknowledged', 'ACK the acknowledged copy is recorded');
+select is((public.asm_pdf_output_record(pg_temp.v('r2')::uuid, pg_temp.s('r2') || '/acknowledged-' || repeat('a', 64) || '.pdf', repeat('a', 64), 'acknowledged'))->>'pdf_sha256', repeat('a', 64), 'ACK recording it again returns the first copy (it stands)');
+select is((public.asm_pdf_attempt(pg_temp.v('r2')::uuid))->'attempts'->1->'output'->>'kind', 'acknowledged', 'ACK the official record is the acknowledged copy');
+select is((select string_agg(o->>'kind', ',' order by o->>'kind') from jsonb_array_elements((public.asm_pdf_attempt(pg_temp.v('r2')::uuid))->'attempts'->1->'outputs') o), 'acknowledged,final', 'ACK both copies are kept and listed');
+select pg_temp.as_postgres();
+select is((select string_agg(o.kind || ':' || (o.snapshot_hash = s.hash)::text || ':' || (o.marking_hash = encode(sha256(convert_to(o.marking::text, 'UTF8')), 'hex'))::text
+  || ':' || (o.acknowledgement_hash <> '')::text || ':' || (o.acknowledgement_hash = '' or o.acknowledgement_hash = encode(sha256(convert_to(o.acknowledgement::text, 'UTF8')), 'hex'))::text, ',' order by o.kind)
+  from public.asm_attempt_outputs o join public.asm_attempt_snapshots s on s.attempt_id = o.attempt_id where o.attempt_id = pg_temp.v('r2')::uuid),
+  'acknowledged:true:true:true:true,final:true:true:false:true', 'ACK each copy keeps the snapshot, marking and acknowledgement hashes it was drawn from');
+select is((select (a.marking_hash = f.marking_hash)::text || ':' || (a.acknowledgement->>'signerName' is not null)::text || ':' || (a.acknowledgement->>'statement')
+  from public.asm_attempt_outputs a join public.asm_attempt_outputs f on f.attempt_id = a.attempt_id and f.kind = 'final' where a.attempt_id = pg_temp.v('r2')::uuid and a.kind = 'acknowledged'),
+  'true:true:I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.', 'ACK the marking is the same in both copies; the acknowledged copy names who acknowledged and the statement');
+select throws_ok(format($$delete from public.asm_attempt_outputs where attempt_id = '%s' and kind = 'acknowledged'$$, pg_temp.v('r2')), '42501', null, 'ACK the acknowledged copy is never removed');
 select * from finish();
 rollback;

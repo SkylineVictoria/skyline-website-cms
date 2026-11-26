@@ -65,15 +65,31 @@ export async function loadPdfAttempt(attemptId: string): Promise<PdfBundle | nul
 
 export const OUTPUT_BUCKET = "assessment-output";
 
-/** Stores the final PDF of a final attempt (named by its SHA-256) and records it with the snapshot hash it was drawn from. */
-export async function storeFinalPdf(attemptId: string, bytes: Uint8Array): Promise<{ path: string; pdf_sha256: string; snapshot_hash: string }> {
+/**
+ * Stores a PDF of a final attempt (named by its SHA-256) and records it with the snapshot, marking (and acknowledgement) hashes it
+ * was drawn from: "final" at the trainer's sign-off, "acknowledged" once the student has acknowledged (the official record).
+ */
+export async function storeFinalPdf(attemptId: string, bytes: Uint8Array, kind: "final" | "acknowledged" = "final"): Promise<{ path: string; pdf_sha256: string; snapshot_hash: string }> {
   const sha = await sha256Hex(bytes);
-  const path = `${attemptId}/final-${sha}.pdf`;
+  const path = `${attemptId}/${kind}-${sha}.pdf`;
   const { error } = await supabase.storage.from(OUTPUT_BUCKET).upload(path, new Blob([bytes.slice()], { type: "application/pdf" }), { contentType: "application/pdf", upsert: false });
   if (error && !/exist|duplicate/i.test(error.message)) throw new Error(`The final PDF could not be stored: ${error.message}`);
-  const { data, error: e2 } = await supabase.rpc("asm_pdf_output_record", { p_attempt: attemptId, p_path: path, p_sha256: sha });
+  const { data, error: e2 } = await supabase.rpc("asm_pdf_output_record", { p_attempt: attemptId, p_path: path, p_sha256: sha, p_kind: kind });
   if (e2) throw new Error(e2.message);
   return data as { path: string; pdf_sha256: string; snapshot_hash: string };
+}
+
+/**
+ * A final attempt the student has acknowledged gets its acknowledged copy (sign-off copy kept): drawn from the snapshot, the marks and
+ * the acknowledgement and stored once. Run by the student's results view right after signing, and by any later opening (student or
+ * trainer) if that did not finish. True when a copy was stored now.
+ */
+export async function ensureAcknowledgedCopy(bundle: PdfBundle): Promise<boolean> {
+  const a = bundle.attempts.find((x) => x.attemptNo === bundle.attemptNo);
+  const kinds = new Set((a?.outputs ?? []).map((o) => o.kind));
+  if (!a || a.state !== "final" || !a.acknowledgement || !kinds.has("final") || kinds.has("acknowledged")) return false;
+  await storeFinalPdf(a.id, await buildStampedPdf(bundle, { trainer: true }), "acknowledged");
+  return true;
 }
 
 export async function downloadOutput(path: string): Promise<Uint8Array> {

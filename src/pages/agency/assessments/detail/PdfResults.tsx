@@ -4,7 +4,7 @@ import PdfPages from "@/components/signing/PdfPages";
 import SignatureField, { SignatureImage, type SignatureValue } from "@/components/assessment/SignatureField";
 import { asmSign, keepSignature, mySignature } from "@/lib/assessment/api";
 import { ACKNOWLEDGEMENT_TEXT } from "@/lib/assessment/studentFlow";
-import { buildStampedPdf, downloadOutput, loadPdfAttempt } from "@/lib/assessment/pdfTemplate/api";
+import { buildStampedPdf, downloadOutput, ensureAcknowledgedCopy, loadPdfAttempt } from "@/lib/assessment/pdfTemplate/api";
 import { reviewName } from "@/lib/assessment/pdfTemplate/student";
 import type { PdfBundle } from "@/lib/assessment/pdfTemplate/output";
 
@@ -26,6 +26,13 @@ export default function PdfResults({ attemptId, unit, receipt, otherAttempts, ne
   const [drawing, setDrawing] = useState(false);
   const load = async () => { try { setBundle(await loadPdfAttempt(attemptId)); } catch (e) { setError(e instanceof Error ? e.message : "The result did not load."); } };
   useEffect(() => { setBundle(null); setPdf(null); void load(); }, [attemptId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // acknowledged a final result: its acknowledged copy is stored (the sign-off copy stays), then shown as the official record
+  useEffect(() => {
+    if (!bundle) return;
+    let off = false;
+    void ensureAcknowledgedCopy(bundle).then((stored) => { if (stored && !off) void load(); }).catch((e) => { if (!off) setError(e instanceof Error ? e.message : "The acknowledged PDF was not stored."); });
+    return () => { off = true; };
+  }, [bundle]); // eslint-disable-line react-hooks/exhaustive-deps
   if (error) return <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>;
   if (!bundle) return <p role="status" className="p-6 text-sm text-foreground-600">Loading your result…</p>;
   const a = bundle.attempts.find((x) => x.attemptNo === bundle.attemptNo)!;
@@ -74,10 +81,12 @@ export default function PdfResults({ attemptId, unit, receipt, otherAttempts, ne
     <div className={`${CARD} space-y-3`}>
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-heading text-base font-semibold text-foreground-950">Your workbook</h2>
         <div className="flex gap-2">
-          {a.output ? <button type="button" className={SECONDARY} onClick={() => void download()} data-testid="download-final">Download the final PDF</button> : null}
+          {a.output ? <button type="button" className={SECONDARY} onClick={() => void download()} data-testid="download-final">Download the official PDF</button> : null}
           {!pdf ? <button type="button" className={SECONDARY} disabled={drawing} onClick={() => void show()} data-testid="show-workbook">{drawing ? "Drawing…" : "Show my workbook"}</button> : null}
         </div></div>
-      <p className="text-xs text-foreground-500">{released ? "Your answers, your trainer's marks and the signatures, printed on the workbook." : "Your answers as you submitted them, printed on the workbook."}{a.output ? ` The final PDF was stored at sign-off (SHA-256 ${a.output.pdfSha256.slice(0, 16)}…).` : ""}</p>
+      <p className="text-xs text-foreground-500">{released ? "Your answers, your trainer's marks and the signatures, printed on the workbook." : "Your answers as you submitted them, printed on the workbook."}{a.output ? <span data-testid="official-pdf">{a.output.kind === "acknowledged"
+        ? ` Official record: the copy stored after your acknowledgement (SHA-256 ${a.output.pdfSha256.slice(0, 16)}…); the copy stored at sign-off is kept too.`
+        : ` Official record: the copy stored at sign-off (SHA-256 ${a.output.pdfSha256.slice(0, 16)}…).`}</span> : null}</p>
       {pdf ? <div className="rounded-xl bg-background-200 p-2" data-testid="stamped-workbook"><PdfPages source={pdf} maxWidth={820} lazy /></div> : null}
     </div>
     {otherAttempts.length ? <p className="text-sm text-foreground-600">Other attempts: {otherAttempts.map((x) => <Link key={x.id} to={`?results=${x.id}`} className="mr-2 underline">Attempt {x.attemptNo}</Link>)}</p> : null}

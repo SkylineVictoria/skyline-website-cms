@@ -1483,23 +1483,47 @@ else {
 
 // autosave with retry: a failed save never shows "Saved", is retried with the newest value, and submit knows it is not saved
 {
-  const { AutosaveQueue, saveLabel, retryDelay } = await import("../src/lib/assessment/autosave");
+  const { AutosaveQueue, saveLabel, retryDelay, classifySaveError } = await import("../src/lib/assessment/autosave");
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const sent: string[] = []; const states: string[] = []; let fail = 2;
-  const q = new AutosaveQueue<string>(async (v) => { sent.push(v); if (fail > 0) { fail--; throw new TypeError("Failed to fetch"); } }, (st) => states.push(st.state), { debounceMs: 1, retryMs: () => 15 });
+  const kept: (string | null)[] = []; const store = { save: (v: string) => kept.push(v), clear: () => kept.push(null) };
+  const q = new AutosaveQueue<string>(async (v) => { sent.push(v); if (fail > 0) { fail--; throw new Error("canceling statement due to statement timeout"); } }, (st) => states.push(st.state), { debounceMs: 1, retryMs: () => 15, store });
   q.queue("a");
-  await new Promise((r) => setTimeout(r, 5));
-  check("AUTOSAVE a failed save shows Not saved, retrying (never Saved) with the reason", q.status.state === "retrying" && saveLabel(q.status, "") === "Not saved, retrying…" && q.status.reason === "Failed to fetch", q.status);
+  await wait(5);
+  check("AUTOSAVE a failed save shows Not saved, retrying (never Saved) with the reason", q.status.state === "retrying" && saveLabel(q.status, "") === "Not saved, retrying…" && /statement timeout/.test(q.status.reason), q.status);
   check("AUTOSAVE submit waits: flush says not saved while the save fails", (await q.flush()) === false && q.pending);
-  q.queue("b"); // typed on while offline: the newest value is what gets saved
-  await new Promise((r) => setTimeout(r, 60));
+  q.queue("b"); // typed on while it fails: the newest value is what gets saved
+  await wait(60);
   check("AUTOSAVE retried until it went through, with the newest value, then Saved", sent.join() === "a,a,b" && q.status.state === "saved" && !q.pending && saveLabel(q.status, "") === "✓ Saved just now", [sent, states]);
+  check("AUTOSAVE every unsaved value is kept in the browser and dropped once the server has it", kept.join("|") === "a|b|" && kept[kept.length - 1] === null, kept);
   check("AUTOSAVE flush with nothing waiting = saved", (await q.flush()) === true);
   check("AUTOSAVE retry waits 2 s, 4 s, 8 s … at most 30 s", [1, 2, 3, 5, 9].map(retryDelay).join() === "2000,4000,8000,30000,30000");
+  check("AUTOSAVE failures told apart: no network / expired sign-in / other",
+    classifySaveError(new TypeError("Failed to fetch"), true) === "offline" && classifySaveError(new Error("anything"), false) === "offline"
+    && classifySaveError(Object.assign(new Error("JWT expired"), { status: 401, code: "PGRST301" }), true) === "auth"
+    && classifySaveError(Object.assign(new Error("permission denied for function asm_student"), { status: 401, code: "42501" }), true) === "auth"
+    && classifySaveError(Object.assign(new Error("This attempt was changed elsewhere"), { status: 400 }), true) === "error");
+  // offline: shown as such, kept, saved at once when the connection comes back
+  let online = false; const off: string[] = [];
+  const qo = new AutosaveQueue<string>(async (v) => { if (!online) throw new TypeError("Failed to fetch"); off.push(v); }, () => undefined, { debounceMs: 1, retryMs: () => 60_000 });
+  qo.queue("x"); await wait(5); qo.queue("y"); await wait(5);
+  check("AUTOSAVE offline: Offline, will save when reconnected; typing on waits (no save attempt per keystroke)", qo.status.state === "offline" && saveLabel(qo.status, "") === "Offline, will save when reconnected" && qo.pending);
+  online = true; qo.resume(); await wait(5);
+  check("AUTOSAVE back online: the newest answers are saved at once", off.join() === "y" && qo.status.state === "saved", off);
+  qo.stop();
+  // expired sign-in: shown, never retried on a timer, saved again after signing in
+  let signedIn = false; const exp: string[] = [];
+  const qe = new AutosaveQueue<string>(async (v) => { if (!signedIn) throw Object.assign(new Error("JWT expired"), { status: 401, code: "PGRST301" }); exp.push(v); }, () => undefined, { debounceMs: 1, retryMs: () => 1 });
+  qe.queue("m"); await wait(20);
+  check("AUTOSAVE expired sign-in: Session expired, sign in again; the answers wait (no retry loop)", qe.status.state === "expired" && saveLabel(qe.status, "") === "Session expired, sign in again" && qe.status.failures === 1 && qe.pending);
+  signedIn = true; qe.resume(); await wait(5);
+  check("AUTOSAVE signed in again: saved", exp.join() === "m" && qe.status.state === "saved");
+  qe.stop();
   const order: string[] = []; let release!: () => void;
   const q2 = new AutosaveQueue<string>((v) => { order.push(v); return v === "1" ? new Promise<void>((r) => { release = r; }) : Promise.resolve(); }, () => undefined, { debounceMs: 1 });
-  q2.queue("1"); await new Promise((r) => setTimeout(r, 5)); q2.queue("2"); await new Promise((r) => setTimeout(r, 5));
+  q2.queue("1"); await wait(5); q2.queue("2"); await wait(5);
   check("AUTOSAVE a change made while a save runs waits for it (saves in order)", order.join() === "1", order);
-  release(); await new Promise((r) => setTimeout(r, 10));
+  release(); await wait(10);
   check("AUTOSAVE … then is saved", order.join() === "1,2" && q2.status.state === "saved", order);
 }
 

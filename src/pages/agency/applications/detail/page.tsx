@@ -3,6 +3,7 @@ import { AgentHandoffPanel } from "@/pages/agency/components/ApplicationHandoff"
 import { HANDOFF_STATE_LABEL } from "@/pages/agency/lib/handoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
+import StudentWithdraw from "@/pages/agency/components/StudentWithdraw";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
 import SignedApplicationCard from "@/pages/agency/components/SignedApplicationCard";
@@ -282,6 +283,7 @@ export default function ApplicationDetailPage() {
             <span className="rounded-full bg-accent-100 px-2.5 py-1 text-2xs font-semibold uppercase text-accent-900">Test data</span>
           ) : null}
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            {role === "student" ? <StudentWithdraw applicationId={application.id} status={application.status} onDone={(m) => { toast.show(m); void load(); }} /> : null}
             {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Student" size="sm" variant="ghost" /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Agent" size="sm" variant="ghost" /> : null}

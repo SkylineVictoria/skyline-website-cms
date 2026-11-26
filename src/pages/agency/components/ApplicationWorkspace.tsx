@@ -215,6 +215,11 @@ interface WorkspaceProps {
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 
+/** The applicant's full name from the form (first, middle, last), the declarant of a one-page application. */
+function applicantName(value: (field: string) => string): string {
+  return [value("first_name"), value("middle_name"), value("last_name")].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
 export default function ApplicationWorkspace({
   application,
   agentName,
@@ -669,10 +674,18 @@ export default function ApplicationWorkspace({
   /* --------------------------------------------------------- events */
 
   /** ONE-PAGE: the student signs once, by drawing; the typed "digital signature" is the declarant's name, kept in step out of sight. */
+  // STUDENT-SIGN-ONLY (owner, 2026-11-26): the student is not asked to type their name either: the declarant is the applicant's
+  // own name from the form and the date is today, both kept in step out of sight; the drawn signature is the only thing to do.
   const syncTypedSignature = () => {
     if (!one || !formRef.current) return;
-    const name = formRef.current.querySelector<HTMLInputElement>('[name="declaration_name"]');
-    const typed = formRef.current.querySelector<HTMLInputElement>('[name="digital_signature"]');
+    const form = formRef.current;
+    const value = (field: string) => (form.querySelector<HTMLInputElement>(`[name="${field}"]`)?.value ?? "").trim();
+    const name = form.querySelector<HTMLInputElement>('[name="declaration_name"]');
+    const typed = form.querySelector<HTMLInputElement>('[name="digital_signature"]');
+    const date = form.querySelector<HTMLInputElement>('[name="declaration_date"]');
+    const applicant = applicantName(value);
+    if (name && name.type === "hidden" && applicant && name.value !== applicant) name.value = applicant;
+    if (date && date.type === "hidden" && !date.value) date.value = new Date().toISOString().slice(0, 10);
     if (name && typed && typed.value !== name.value) typed.value = name.value;
   };
 
@@ -1602,6 +1615,18 @@ export default function ApplicationWorkspace({
     }
     if (one && field.name === "digital_signature") {
       return <input key={field.name} type="hidden" name={field.name} defaultValue={String(mergedInitial.declaration_name ?? mergedInitial.digital_signature ?? "")} />;
+    }
+    if (one && field.name === "declaration_name") {
+      const signer = applicantName((key) => String(mergedInitial[key] ?? "").trim()) || String(mergedInitial.declaration_name ?? "");
+      return (
+        <div key={field.name} className="sm:col-span-2" data-testid="one-page-signer">
+          <input type="hidden" name={field.name} defaultValue={signer} />
+          <p className="text-sm text-foreground-700">Signing as <strong className="font-medium text-foreground-950">{signer || "the applicant"}</strong> on {new Date().toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}. Draw your signature below.</p>
+        </div>
+      );
+    }
+    if (one && field.name === "declaration_date") {
+      return <input key={field.name} type="hidden" name={field.name} defaultValue={String(mergedInitial.declaration_date || new Date().toISOString().slice(0, 10))} />;
     }
     const fixedAustralia = field.name in fixedValues();
     const locked = readOnly || LOCKED_AGENT_FIELDS.has(field.name) || fixedAustralia;

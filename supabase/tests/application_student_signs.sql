@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(91);
+select plan(96);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -296,6 +296,20 @@ select ok(not public.link_email_pending('staff', 'f5100000-0000-0000-0000-000000
 select public.link_alias_add('cms', 'f5100000-0000-0000-0000-000000000002', null, pg_temp.hash(pg_temp.tok(23)), 'cms.person@example.test', '+61412345679', now() + interval '7 days');
 select public.link_opened(pg_temp.hash(pg_temp.tok(23)));
 select ok(public.link_alias_use(pg_temp.hash(pg_temp.tok(23))) and public.link_alias_use(pg_temp.hash(pg_temp.tok(23))) is null, 'a CMS text link is used once');
+
+-- 14. STUDENT-WITHDRAW: the student withdraws their own submitted application (with a reason); nobody else does it this way.
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'Changed my mind')$$, '42501',
+  'Only the student can withdraw their own application', 'the agent cannot withdraw as the student');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select throws_ok($$select public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'no')$$, '22023',
+  'Tell us briefly why you are withdrawing (at least 5 characters)', 'a reason is needed');
+select is(public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'Studying elsewhere')->>'status', 'withdrawn', 'the student withdraws');
+reset role;
+select is((select status from public.enrollment_applications where id = 'e5100000-0000-0000-0000-000000000007'), 'withdrawn', 'the application is withdrawn');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select throws_ok($$select public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'Studying elsewhere')$$, '22023', null, 'not twice');
+reset role;
 
 select * from finish();
 rollback;

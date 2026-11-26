@@ -5196,7 +5196,7 @@ test("Agent fills, student signs (2026-11-25, 20261125190517): only the student 
   assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked, signatureRef.current)"));
   assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
   // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(91);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(96);"));
 });
 
 test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Forgot password); a first-time email starts as a guest and creates the password at the signature", () => {
@@ -5209,7 +5209,7 @@ test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Fo
   const page = read("src/pages/agency/application-invite/page.tsx");
   assert.ok(page.includes('check.account === "login"') && page.includes("Forgot password?") && page.includes("Start my application"));
   assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("await saveSignPassword(signPasswordRef.current);"));
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(91);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(96);"));
 });
 
 test("Student confirms every screen (2026-11-26): an application sent by the agent opens at the passport and moves one screen at a time to the signature", () => {

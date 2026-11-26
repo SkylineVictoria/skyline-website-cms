@@ -30,12 +30,14 @@ export const isCheckViolation = (e: unknown): e is Error => e instanceof Error &
 /** AVETMISS-CHECK: answers checked against the AVETMISS code lists (public.avetmiss_check_answers). fieldErrors only flags values that
  * are filled in and invalid (blank passes); missingForSubmit lists what the student's record still lacks to submit. Null when the
  * database has no such check (the save itself still refuses a bad value). */
-export interface AvetmissCheck { fieldErrors: Record<string, string>; missingForSubmit: string[] }
+/** missingInAnswers (AVETMISS-PAGE-CHECK, 20261127110517): the same required answers as missingForSubmit, read from the answers sent. */
+export interface AvetmissCheck { fieldErrors: Record<string, string>; missingForSubmit: string[]; missingInAnswers: string[] }
 export async function avetmissCheckAnswers(values: Record<string, unknown>, studentId: string | null): Promise<AvetmissCheck | null> {
   const { data, error } = await supabase.rpc("avetmiss_check_answers", { p_values: values, p_student: studentId });
   if (error) { if (error.code === "PGRST202") return null; throw new Error(error.message); }
-  const row = (data ?? {}) as { fieldErrors?: Record<string, string>; missingForSubmit?: string[] };
-  return { fieldErrors: row.fieldErrors ?? {}, missingForSubmit: Array.isArray(row.missingForSubmit) ? row.missingForSubmit.map(String) : [] };
+  const row = (data ?? {}) as { fieldErrors?: Record<string, string>; missingForSubmit?: string[]; missingInAnswers?: string[] };
+  return { fieldErrors: row.fieldErrors ?? {}, missingForSubmit: Array.isArray(row.missingForSubmit) ? row.missingForSubmit.map(String) : [],
+    missingInAnswers: Array.isArray(row.missingInAnswers) ? row.missingInAnswers.map(String) : [] };
 }
 
 async function draftCommand(id: string, fn: string, args: Record<string, unknown>): Promise<unknown> {

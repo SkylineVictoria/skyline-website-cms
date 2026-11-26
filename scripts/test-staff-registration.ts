@@ -2613,7 +2613,7 @@ test("onboarding: a file is checked by content, the database approves the type B
   let run = linkDeps();
   const r = await onboard.handleOnboarding(linkRequest("upload", { category: "Passport", expiryDate: "2031-01-01", replaces: "" }, new File([PDF_BYTES], "C:\\docs\\passport.pdf", { type: "application/pdf" })), run.deps);
   assert.equal(r.status, 200);
-  assert.deepEqual(run.names().filter((n) => n !== "limit"), ["hr_svc_upload_target", "upload", "hr_svc_document_add", "remove"]);
+  assert.deepEqual(run.names().filter((n) => n !== "limit" && n !== "link_opened"), ["hr_svc_upload_target", "upload", "hr_svc_document_add", "remove"]);
   assert.deepEqual(run.calls.find(([n]) => n === "upload")![1], { p: "p-1/passport/validated-rnd.pdf", type: "application/pdf", size: PDF_BYTES.length });
   const added = run.calls.find(([n]) => n === "hr_svc_document_add")![1] as Record<string, unknown>;
   assert.deepEqual([added.p_path, added.p_filename, added.p_mime, added.p_expiry], ["p-1/passport/validated-rnd.pdf", "passport.pdf", "application/pdf", "2031-01-01"]);
@@ -2652,7 +2652,7 @@ test("onboarding: a rejected category leaves the current file and checklist unto
     ...run.deps, checkOwnership: async () => ({ ok: false, status: 422, error: "Upload an academic record." }),
   });
   assert.deepEqual(result, { status: 422, body: { error: "Upload an academic record.", field: "file" } });
-  assert.deepEqual(run.names().filter((name) => name !== "limit"), ["hr_svc_upload_target"]);
+  assert.deepEqual(run.names().filter((name) => name !== "limit" && name !== "link_opened"), ["hr_svc_upload_target"]);
   assert.deepEqual(run.scheduled, []);
 });
 
@@ -3390,7 +3390,7 @@ test("onboarding offer sign: link-checked, the stored offer must match its uploa
   const req = { action: "offer_sign", token: LINK, ip: "203.0.113.5", userAgent: "UA-1", fields: { name: "  Ann   Applicant ", consent: true } };
   let r = await onboard.handleOnboarding(req, run.deps);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.deepEqual(run.names().filter((n) => n !== "limit"), ["hr_svc_offer_file", "download", "stamp", "upload", "hr_svc_offer_sign"]);
+  assert.deepEqual(run.names().filter((n) => n !== "limit" && n !== "link_opened"), ["hr_svc_offer_file", "download", "stamp", "upload", "hr_svc_offer_sign"]);
   const stamp = run.calls.find(([n]) => n === "stamp")![1] as Record<string, unknown>;
   assert.deepEqual([stamp.signerName, stamp.ip, stamp.userAgent, stamp.consent, stamp.offerSha256, stamp.signedAt], ["Ann Applicant", "203.0.113.5", "UA-1", offerPdf.OFFER_CONSENT, "sha(3)", "2026-11-09T10:00:00.000Z"]);
   assert.deepEqual(run.calls.find(([n]) => n === "hr_svc_offer_sign")![1], { p_token_hash: `h(${LINK})`, p_offer: "o-1", p_signer_name: "Ann Applicant", p_consent_text: offerPdf.OFFER_CONSENT,
@@ -4995,8 +4995,9 @@ test("Students (2026-11-24): the finish-application link asks for a password; ag
   assert.ok(sql.includes("case when coalesce(v_pw, false) then 'active' else 'no_password' end"));
   const fn = read("supabase/functions/portal-admin-users/index.ts");
   assert.ok(fn.includes('ctx?.role === "agent" && ((action === "invite" && parsed.role === "student") || action === "resend")'));
-  const page = read("src/pages/agency/application-invite/page.tsx");
-  assert.ok(page.includes('supabase.rpc("portal_my_password_set")') && page.includes("supabase.auth.updateUser({ password })") && page.includes("passwordProblem(password, confirm)"));
+  // Since 2026-11-26 the password is created at the signature (SignPasswordFields, portal_my_password_set via hasPortalLogin).
+  const signPw = read("src/pages/agency/components/ApplicationHandoff.tsx") + read("src/pages/agency/lib/handoff.ts");
+  assert.ok(signPw.includes('supabase.rpc("portal_my_password_created")') && signPw.includes("supabase.auth.updateUser({ password: value.password })") && signPw.includes("passwordProblem(pw, again)"));
   const detail = read("src/pages/agency/applications/detail/page.tsx");
   assert.equal((detail.match(/<StudentPortalInvite /g) ?? []).length, 2, "both the incomplete and the full application views");
   const ui = read("src/pages/agency/components/StudentPortalInvite.tsx");
@@ -5192,8 +5193,94 @@ test("Agent fills, student signs (2026-11-25, 20261125190517): only the student 
   const workspace = read("src/pages/agency/components/ApplicationWorkspace.tsx");
   assert.ok(!workspace.includes("uploadConsentDocument(") && workspace.includes("await sendApplicationInvitation(application.id);"));
   const wizard = read("src/pages/agency/components/ApplicationWizard.tsx");
-  assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked)"));
+  assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked, signatureRef.current)"));
   assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
   // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(58);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(96);"));
+});
+
+test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Forgot password); a first-time email starts as a guest and creates the password at the signature", () => {
+  const sql = read("supabase/migrations/20261126090517_application_invite_guest_start.sql");
+  assert.ok(read("supabase/migrations/20261126110517_invite_returning_student.sql").includes("'account', case when u.id is not null and skyline_private.student_account_established(u.id, s.id) then 'login' else 'new' end"), "sign-in only for a student who made their own password or submitted before");
+  assert.ok(!sql.includes("raise exception 'Create your password (or sign in with Google) before opening the application'"), "accept no longer needs a password");
+  assert.ok(sql.includes("raise exception 'Create your password before signing, so you can sign in to your SLIT account later'"));
+  const fn = read("supabase/functions/student-application-invite/index.ts");
+  assert.ok(fn.includes('if (found.account !== "new") return json({ error: "This email already has a SLIT account. Sign in to continue." }, 409);'), "never a link-only sign-in to an existing account");
+  const page = read("src/pages/agency/application-invite/page.tsx");
+  assert.ok(page.includes('check.account === "login"') && page.includes("Forgot password?") && page.includes("Start my application"));
+  assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("await saveSignPassword(signPasswordRef.current);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(96);"));
+});
+
+test("Student confirms every screen (2026-11-26): an application sent by the agent opens at the passport and moves one screen at a time to the signature", () => {
+  const wizard = read("src/pages/agency/components/ApplicationWizard.tsx");
+  assert.ok(wizard.includes('const confirmMode = signsHere && handoff?.state === "with_student";'));
+  assert.ok(wizard.includes("Math.min(index, LAST_STEP, confirmMode ? Math.max(confirmedUpTo.current, step + 1) : LAST_STEP)"), "no jump past the furthest confirmed screen");
+  assert.ok(!wizard.includes("setStep(LAST_STEP)"), "never opens on the signature screen");
+});
+
+test("Invite by text (2026-11-26, 20261126130517): the application and guardian links also go by ClickSend text; email never blocked; only the last 3 digits recorded", () => {
+  const fn = read("supabase/functions/student-application-invite/index.ts");
+  assert.ok(fn.includes('admin.rpc("invite_sms_settings")') && fn.includes('createClickSendProvider({ username: settings.username, apiKey: settings.apiKey'));
+  assert.ok(fn.includes('const wantsText = !Array.isArray(body?.channels) || body.channels.includes("sms");'), "text by default, email-only on request");
+  assert.ok(fn.includes('await textLink(admin, "guardian", req.id, guardianLink'), "guardian link texted too");
+  const sql = read("supabase/migrations/20261126130517_invite_sms.sql");
+  assert.ok(sql.includes("'endsWith', nullif(right(regexp_replace(coalesce(p_last_digits, ''), '[^0-9]', '', 'g'), 3), '')"));
+  assert.ok(sql.includes("grant execute on function public.invite_sms_settings() to service_role;") && sql.includes("revoke all on function public.invite_sms_settings() from public, anon, authenticated;"));
+  assert.ok(read("src/pages/agency/components/FinishApplicationPanel.tsx").includes("Also send the link by text message to the student's mobile"));
+});
+
+test("Contact verify (2026-11-26, 20261126150517): the email and the text carry different links; the other channel is confirmed with a code before signing", () => {
+  const sql = read("supabase/migrations/20261126150517_contact_verify_students.sql");
+  assert.ok(sql.includes("where fingerprint in (token_hash, sms_token_hash) for update;") && sql.includes("raise exception 'Confirm your email with the code we send you before signing'"));
+  assert.ok(sql.includes("encode(sha256(convert_to(p_user::text || ':' || p_code, 'UTF8')), 'hex'), clock_timestamp() + interval '10 minutes'"), "codes stored hashed, 10 minutes");
+  const fn = read("supabase/functions/student-application-invite/index.ts");
+  assert.ok(fn.includes('await admin.rpc("invite_set_sms_token"') && fn.includes('body?.action === "contact_code_send"'));
+  assert.ok(read("src/pages/agency/components/ApplicationHandoff.tsx").includes('data-testid="sign-contact-code"'));
+});
+
+test("Contact verify everyone (2026-11-26, 20261126170517): employee links, signing links and CMS invitations: separate text link, the email confirmed with a code first", async () => {
+  // Employee link opened from the text: the emailed link's record is used, and the password / documents / signature wait for the email code.
+  const pending = { data: { scope: "staff", subject: "p-1", base: "h(emailed)", via: "sms", emailPending: true, emailTo: "a•••@x.test" } };
+  let run = linkDeps({ db: { link_opened: pending, link_code_issue: { data: { to: "a@x.test" } }, link_person: { data: { name: "Ana" } }, link_code_verify: { data: { ok: true } } } });
+  const mails: string[] = [];
+  const deps = { ...run.deps, newCode: () => "123456", sendCodeEmail: async (to: string, _name: string, code: string) => { mails.push(`${to}:${code}`); return true; } };
+  const opened = await onboard.handleOnboarding(linkRequest("open"), deps);
+  assert.equal(opened.status, 200);
+  assert.deepEqual((opened.body as { contact?: unknown }).contact, { emailPending: true, emailTo: "a•••@x.test" }, "the page is told to ask for the code");
+  assert.ok(run.calls.some(([n, a]) => n === "hr_svc_onboarding_open" && (a as { p_token_hash: string }).p_token_hash === "h(emailed)"), "the text link opens the emailed link's record");
+  for (const action of ["submit", "account_setup", "offer_sign"]) {
+    const refused = await onboard.handleOnboarding(linkRequest(action, { password: "Password123456" }), deps);
+    assert.equal(refused.status, 403, action); assert.equal((refused.body as { code?: string }).code, "email_unconfirmed");
+  }
+  const sent = await onboard.handleOnboarding(linkRequest("contact_code_send"), deps);
+  assert.equal(sent.status, 200); assert.deepEqual(mails, ["a@x.test:123456"], "the code goes to the email");
+  const checked = await onboard.handleOnboarding(linkRequest("contact_code_verify", { code: "123456" }), deps);
+  assert.deepEqual(checked.body, { ok: true });
+  // Opened from the email: nothing to confirm.
+  run = linkDeps();
+  const plain = await onboard.handleOnboarding(linkRequest("open"), run.deps);
+  assert.equal((plain.body as { contact?: unknown }).contact, undefined);
+  // Signing links (business, offer letters, employee documents): text link, the email code before signing, the code step shown.
+  const signing = read("supabase/functions/document-signing/core.ts");
+  assert.ok(signing.includes('ports.serviceRpc("sign_link_opened", { p_hash: hash })') && signing.includes('if (emailPending) throw new SigningError("Confirm your email with the code we send you before signing.", 403);'));
+  assert.ok(signing.includes("requireCode: record.require_code === true || emailPending") && signing.includes("await textSigningLink(ports, job, config.siteUrl)"));
+  // Employee emails also go by text; CMS invitations take an optional mobile and have their own text page.
+  const admin = read("supabase/functions/staff-admin/core.ts");
+  assert.equal((admin.match(/await textToo\(/g) ?? []).length, 4, "document / offer / sign-in links all go by text too");
+  const cms = read("supabase/functions/cms-admin-users/index.ts");
+  assert.ok(cms.includes('"text_open", "text_code_send", "text_code_verify"') && cms.includes('admin.rpc("link_alias_use"'));
+  const sql = read("supabase/migrations/20261126170517_contact_verify_everyone.sql");
+  assert.ok(sql.includes("encode(sha256(convert_to(p_scope || ':' || p_subject::text || ':' || p_code, 'UTF8')), 'hex'), clock_timestamp() + interval '10 minutes'"), "codes stored hashed, 10 minutes");
+});
+
+test("new applications track their draft version on creation, so the first save needs no getApplication (STUDENT-NEW-APPLICATION-SAVE)", () => {
+  const lib = read("src/pages/agency/lib/portalApplications.ts");
+  const body = (name: string) => lib.slice(lib.indexOf(`export async function ${name}(`), lib.indexOf("\n}\n", lib.indexOf(`export async function ${name}(`)));
+  assert.match(lib, /async function trackNewDraft\(id: string\)[\s\S]*?rpc\("portal_wizard_application", \{ p_application: id \}\)[\s\S]*?if \(error \|\| !data\) return;[\s\S]*?draftVersions\.set\(id, Number\(r\.draft_version \?\? 0\)\);[\s\S]*?wizardSaveStamps\.set\(id, str\(merged\.savedAt\) \|\| null\);/);
+  assert.ok(body("createStudentDraft").includes("await trackNewDraft(data);"), "createStudentDraft tracks the new draft");
+  assert.ok(body("createApplicationForStudent").includes("await trackNewDraft(String(row.application_id));"), "createApplicationForStudent tracks the new draft");
+  // The two-session conflict check is unchanged: an untracked draft is still refused, and saves still send the expected version.
+  assert.ok(lib.includes('if (!draftVersions.has(id)) throw new Error("Reload the application before editing.");'));
+  assert.ok(lib.includes("p_expected_version: draftVersions.get(id)"));
 });

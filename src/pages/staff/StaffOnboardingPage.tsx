@@ -12,6 +12,7 @@ import WizardStepper from "@/components/shared/wizard/WizardStepper";
 import { STAFF_WIZARD_STEPS, type WizardExtractionState } from "@/pages/agency/lib/wizardConfig";
 import type { StaffDocument } from "@/lib/staffApi";
 import SignaturePad from "@/components/signing/SignaturePad";
+import EmailCodeGate from "./components/EmailCodeGate";
 import { FieldError as SaveError, LinkInvalidError, myOfferApi, onboarding, takeLinkToken, type OnboardingView } from "@/lib/staffOnboardingApi";
 import { STAFF_WIZARD, detailsOf, isBeingRead, licenceGaveAddress, prefillNote, stepComplete, stepFields, taxSuperRows, wizardProblems, type PrefillField, type StaffWizardStepId } from "@/lib/staffOnboardingWizard";
 import { STAFF_DOC_LABEL, staffDocKinds, todayIso, type StaffDocCategory } from "@/lib/staffStatus";
@@ -106,6 +107,7 @@ export default function StaffOnboardingPage() {
     return (
       <Shell>
         {error ? <p role="alert" className={`mb-3 ${ALERT}`}>{error}</p> : null}
+        <EmailCodeGate token={token} />
         <Wizard view={view} token={token!} onChange={setView} onError={handle} />
       </Shell>
     );
@@ -116,6 +118,7 @@ export default function StaffOnboardingPage() {
       <h1 className="font-heading text-2xl font-bold text-foreground-950">{name ? `Welcome, ${view.profile.first_name}` : "Your staff application"}</h1>
       <p className="mt-1 text-sm text-foreground-600">{view.readOnly ? "Thank you. This is what you sent us." : `This private link works until ${new Date(view.expiresAt).toLocaleDateString()}.`}</p>
       {error ? <p role="alert" className={`mt-3 ${ALERT}`}>{error}</p> : null}
+      <div className="mt-4"><EmailCodeGate token={token} /></div>
       <div className="mt-6">
         {view.readOnly ? <Submitted view={view} token={token!} onChange={setView} onError={handle} /> : <Reupload view={view} token={token!} onChange={setView} onError={handle} />}
       </div>

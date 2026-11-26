@@ -99,12 +99,14 @@ const LOAD_LABEL = { coe: "CoE", voe: "VoE" } as const;
  * chosen entry (or null); `onLoaded` the list, so the parent can block the step when it is empty. An RTO Manager (`canAdd`) also gets
  * "+ Add new intake…" at the foot of the list and in the no-intakes message (`onAdd`); `reloadToken` re-reads the list after one is added.
  */
-export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, error, disabled, className, canAdd = false, onAdd, reloadToken = 0, defaultLoad }: {
+export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, error, disabled, className, canAdd = false, onAdd, reloadToken = 0, defaultLoad, onlyLoad }: {
   id: string; courseId: string | null; value: string; onChange: (intake: OpenIntake | null) => void;
   onLoaded?: (intakes: OpenIntake[]) => void; error?: string; disabled?: boolean; className: string;
   canAdd?: boolean; onAdd?: () => void; reloadToken?: number;
   /** CoE or VoE chosen to start with (an international student: CoE, owner 2026-11-25); still changeable. */
   defaultLoad?: "coe" | "voe";
+  /** The only kind this student can take (owner, 2026-11-26): international = CoE, domestic = VoE; the other is greyed out. */
+  onlyLoad?: "coe" | "voe";
 }) {
   const [pickedLoad, setPickedLoad] = useState<"coe" | "voe" | null>(null);
   const [state, setState] = useState<{ course: string; intakes: OpenIntake[] | null; failed: string }>({ course: "", intakes: null, failed: "" });
@@ -127,7 +129,13 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   const loadsOffered = (["coe", "voe"] as const).filter((l) => intakes.some((i) => !i.fallback && i.studyLoad === l));
   const selected = intakes.find((i) => keyOf(i) === value);
   // CoE or VoE is asked (chosen to start with only for an international student: CoE); a kind with no intake is shown but cannot be picked.
-  const load = pickedLoad ?? selected?.studyLoad ?? (defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null);
+  const load = onlyLoad ? (loadsOffered.includes(onlyLoad) ? onlyLoad : null)
+    : pickedLoad ?? selected?.studyLoad ?? (defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null);
+  // A start of the other kind saved earlier (before the residency answer) is cleared.
+  useEffect(() => {
+    if (onlyLoad && selected?.studyLoad && selected.studyLoad !== onlyLoad) onChange(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the kind or the chosen start changes
+  }, [onlyLoad, selected?.studyLoad]);
   const needsLoad = loadsOffered.length > 0 && !load;
   const shown = (() => {
     if (fallbackOnly(intakes) || loadsOffered.length === 0) return intakes;
@@ -141,7 +149,8 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
   // With CoE or VoE chosen the start date is picked on the calendar (month by month, with the weekly timetable) instead of a dropdown.
   const calendarMode = loadsOffered.length > 0 && !fallbackOnly(intakes);
   const addable = canAdd && Boolean(courseId) && !loading && !state.failed && Boolean(onAdd);
-  const help = state.failed || (none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : calendarMode ? (needsLoad ? "Choose CoE or VoE to see the start dates." : "Pick the date you want to start. Check the weekly timetable under each month to make sure the times suit you.") : courseId ? "The next three start dates of each intake are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
+  const onlyMissing = Boolean(onlyLoad && loadsOffered.length > 0 && !loadsOffered.includes(onlyLoad!));
+  const help = state.failed || (onlyMissing ? `No ${LOAD_LABEL[onlyLoad!]} intake is open for this course for ${onlyLoad === "coe" ? "international" : "domestic"} students. Contact admissions.` : none ? NO_INTAKES_MESSAGE : fallback ? FALLBACK_MESSAGE : calendarMode ? (needsLoad ? "Choose CoE or VoE to see the start dates." : "Pick the date you want to start. Check the weekly timetable under each month to make sure the times suit you.") : courseId ? "The next three start dates of each intake are shown; each is when the student can start: the next units of the class running now, or day one of the next intake. Any prerequisite units missed are done first." : "The start dates of the course you choose are listed here.");
   return (
     <div>
       {loadsOffered.length > 0 && !fallbackOnly(intakes) ? (
@@ -149,10 +158,11 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
           <p className="mb-1 text-xs font-medium text-foreground-700">How will the student study?</p>
           <div className="grid grid-cols-2 gap-2">
             {(["coe", "voe"] as const).map((l) => (
-              <button key={l} type="button" role="radio" aria-checked={load === l} disabled={disabled || !loadsOffered.includes(l)} title={loadsOffered.includes(l) ? undefined : `No ${LOAD_LABEL[l]} intake is open for this course`}
+              <button key={l} type="button" role="radio" aria-checked={load === l} disabled={disabled || !loadsOffered.includes(l) || (onlyLoad !== undefined && l !== onlyLoad)}
+                title={onlyLoad && l !== onlyLoad ? (onlyLoad === "coe" ? "International students study on a CoE" : "Australian / NZ citizens and permanent residents study on a VoE") : loadsOffered.includes(l) ? undefined : `No ${LOAD_LABEL[l]} intake is open for this course`}
                 onClick={() => { setPickedLoad(l); if (selected && selected.studyLoad !== l) onChange(null); }}
                 className={`rounded-lg border-2 px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${load === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
-                {LOAD_LABEL[l]}{loadsOffered.includes(l) ? "" : " · no intake open"}
+                {LOAD_LABEL[l]}{onlyLoad && l !== onlyLoad ? (onlyLoad === "coe" ? " · domestic only" : " · student visa holders only") : loadsOffered.includes(l) ? "" : " · no intake open"}
               </button>
             ))}
           </div>

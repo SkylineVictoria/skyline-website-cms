@@ -4,6 +4,7 @@ import { loadRules } from "../_shared/business-rules.ts";
 import { tokenRoles } from "../_shared/microsoft365.ts";
 import { isServiceCaller } from "../_shared/service-role.ts";
 import { simpleEmailHtml } from "../_shared/email-html.ts";
+import { createClickSendProvider, normalizePhoneNumber } from "../_shared/notification/sms.ts";
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -140,12 +141,14 @@ async function guardian(action: string, body: any, request: Request, admin: any,
     });
     if (error || !req) return dbError(error, "The request could not be prepared.");
     let accepted = false;
+    let guardianLink = "";
     let message = "The email to your parent or guardian could not be sent. Try again.";
     try {
       const brand = brandOf(req.template);
       const site = httpsUrl(brand.field("siteUrl"));
       const link = new URL("/guardian-sign", site);
       link.hash = new URLSearchParams({ t: token }).toString();
+      guardianLink = link.href;
       const subject = `Please sign ${req.studentName}'s application to ${brand.brand}`;
       const paragraphs = [`Hello ${req.guardianName},`,
         `${req.studentName} is under 18 and has applied to study with ${brand.brand}. As their parent or guardian, please read the declarations and sign the application too. It is submitted only once you have signed.`,
@@ -160,7 +163,10 @@ async function guardian(action: string, body: any, request: Request, admin: any,
     } catch { /* recorded below */ }
     const { data: recorded, error: trackError } = await admin.rpc("portal_guardian_request_delivered", { p_request: req.id, p_accepted: accepted });
     if (trackError || recorded !== true) return json({ error: "The email status could not be confirmed. Check before sending again." }, 503);
-    return accepted ? json({ ok: true }) : json({ error: message }, 502);
+    if (!accepted) return json({ error: message }, 502);
+    const sms = guardianLink ? await textLink(admin, "guardian", req.id, guardianLink,
+      (name, studentName) => `SLIT: ${name ? `Hi ${name}, ` : ""}please sign ${studentName}'s application (they are under 18). Open it here:`) : "not_requested";
+    return json({ ok: true, sms });
   }
   if (typeof body.token !== "string" || !tokenShape.test(body.token)) return json({ error: "This link is invalid, expired, or no longer available." }, 403);
   const hash = await sha256Hex(body.token);
@@ -198,6 +204,30 @@ async function guardian(action: string, body: any, request: Request, admin: any,
   return json({ error: "Unknown action." }, 400);
 }
 
+/**
+ * INVITE-SMS (owner, 2026-11-26): the same link by text message through the ClickSend connection (Integrations › Connections).
+ * Never blocks the email: no connection or no mobile is recorded as skipped; the outcome goes on the application's timeline.
+ */
+// deno-lint-ignore no-explicit-any
+async function textLink(admin: any, kind: "student" | "guardian", id: string, link: string, wording: (name: string, studentName: string) => string): Promise<string> {
+  try {
+    const [{ data: settings }, { data: target }] = await Promise.all([admin.rpc("invite_sms_settings"), admin.rpc("invite_sms_target", { p_kind: kind, p_id: id })]);
+    if (!target?.applicationId) return "skipped";
+    const record = (outcome: string, code: string, to = "") => admin.rpc("invite_sms_record", { p_application: target.applicationId, p_who: kind,
+      p_outcome: outcome, p_code: code, p_last_digits: to.slice(-3) }).then(() => undefined, () => undefined);
+    if (!settings?.username || !settings?.apiKey) { await record("skipped", "not_connected"); return "not_connected"; }
+    const to = normalizePhoneNumber(String(target.mobile ?? ""));
+    if (!to) { await record("skipped", "no_mobile"); return "no_mobile"; }
+    const provider = createClickSendProvider({ username: settings.username, apiKey: settings.apiKey, senderId: settings.from ?? undefined });
+    const outcome = await provider.send({ deliveryId: id, to, body: `${wording(String(target.name ?? "").trim(), String(target.studentName ?? ""))}\n${link}` });
+    if (outcome.kind === "accepted") { await record("sent", "", to); return "sent"; }
+    await record("failed", outcome.code, to);
+    return "failed";
+  } catch {
+    return "failed";
+  }
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { headers });
   if (request.method !== "POST") return json({ error: "Method not allowed." }, 405);
@@ -227,6 +257,57 @@ Deno.serve(async (request) => {
         mailboxFound: Boolean(mailbox.id), lookup: mailbox.lookup, aliasLookup: mailbox.aliasLookup, matched: mailbox.matched });
     } catch {
       return json({ error: "Office 365 mailbox lookup failed." }, 502);
+    }
+  }
+  // APPLICATION-INVITE-GUEST-START: the student's link page. invite_check says whether the invited email already has an account
+  // (then: sign in) or not (then: invite_session opens the application from the link alone; the password is made when signing).
+  if (body?.action === "invite_check" || body?.action === "invite_session") {
+    if (typeof body.token !== "string" || !tokenShape.test(body.token)) return json({ valid: false });
+    const { data: found, error: lookupError } = await admin.rpc("portal_wizard_invite_lookup", { p_hash: await sha256Hex(body.token) });
+    if (lookupError) return json({ error: "The invitation could not be checked. Try again." }, 503);
+    if (!found?.valid) return json({ valid: false });
+    if (body.action === "invite_check") return json(found);
+    // Never a link-only sign-in to an account that has a password or Google: that person signs in.
+    if (found.account !== "new") return json({ error: "This email already has a SLIT account. Sign in to continue." }, 409);
+    const created = await admin.auth.admin.createUser({ email: found.email, email_confirm: true });
+    if (created.error && !/already|registered|exists/i.test(created.error.message)) {
+      return json({ error: "Your application could not be opened. Try again." }, 502);
+    }
+    const link = await admin.auth.admin.generateLink({ type: "magiclink", email: found.email });
+    const tokenHash = link.data?.properties?.hashed_token;
+    if (link.error || !tokenHash) return json({ error: "Your application could not be opened. Try again." }, 502);
+    return json({ tokenHash, email: found.email });
+  }
+  // CONTACT-VERIFY: a 6-digit code to the signed-in person's channel still to confirm (email by Graph, mobile by ClickSend).
+  if (body?.action === "contact_code_send") {
+    const userClient = createClient(url, anon, { ...config, global: { headers: { Authorization: authorization } } });
+    const { data: who } = await userClient.auth.getUser(authorization.slice(7));
+    if (!who?.user) return json({ error: "Sign in first." }, 401);
+    const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, "0");
+    const { data: target, error: issueError } = await admin.rpc("contact_code_issue", { p_user: who.user.id, p_code: code });
+    if (issueError || !target?.to) {
+      const known = issueError && ["22023", "42501"].includes(issueError.code ?? "");
+      return json({ error: known ? issueError!.message : "A code could not be sent." }, 400);
+    }
+    try {
+      if (target.kind === "phone") {
+        const { data: settings } = await admin.rpc("invite_sms_settings");
+        const to = normalizePhoneNumber(String(target.to));
+        if (!settings?.username || !to) return json({ error: "A text cannot be sent at the moment. Ask SLIT to check the text message connection." }, 502);
+        const sent = await createClickSendProvider({ username: settings.username, apiKey: settings.apiKey, senderId: settings.from ?? undefined })
+          .send({ deliveryId: who.user.id, to, body: `SLIT: your code is ${code}. It works for 10 minutes.` });
+        return sent.kind === "accepted" ? json({ ok: true, kind: "phone" }) : json({ error: "The text could not be sent. Try again in a minute." }, 502);
+      }
+      const rules = await loadRules(admin, ["admissions.application_invite_sender", "admissions.application_invite_template"]);
+      const sender = String(rules["admissions.application_invite_sender"] ?? "");
+      const brand = brandOf((rules["admissions.application_invite_template"] ?? {}) as Record<string, unknown>);
+      const paragraphs = ["Hello,", `Your code to confirm this email address for your SLIT application is ${code}. It works for 10 minutes.`];
+      const html = simpleEmailHtml({ brand: brand.brand || "SLIT", heading: "Your one-time code", paragraphs, code, note: "If you did not ask for this code, you can ignore this email.",
+        footer: brand.contact, primary: brand.primaryOk ? brand.field("primary") : "#ea6619" });
+      const sent = await sendMail(ports, sender, String(target.to), `Your ${brand.brand || "SLIT"} code: ${code}`, paragraphs.join("\r\n\r\n"), html);
+      return sent.accepted ? json({ ok: true, kind: "email" }) : json({ error: sent.message }, 502);
+    } catch {
+      return json({ error: "The code could not be sent. Try again in a minute." }, 502);
     }
   }
   if (typeof body?.action === "string" && body.action.startsWith("guardian_")) {
@@ -263,7 +344,12 @@ Deno.serve(async (request) => {
     return json({ error: known ? beginError.message : "The invitation could not be prepared." }, beginError?.code === "42501" ? 403 : 400);
   }
 
+  // CONTACT-VERIFY: the text carries its own link (the database knows which one was opened).
+  const wantsText = !Array.isArray(body?.channels) || body.channels.includes("sms");
+  const smsToken = wantsText && !retry ? newToken() : "";
+  if (smsToken) await admin.rpc("invite_set_sms_token", { p_invitation: invitation.id, p_hash: await sha256Hex(smsToken) });
   let accepted = false;
+  let sentLink = "";
   let message = "Office 365 could not accept the invitation. Try sending it again.";
   try {
     const template = invitation.template as Record<string, unknown>;
@@ -282,6 +368,7 @@ Deno.serve(async (request) => {
       throw new Error("Invalid invitation template");
     }
     link.hash = new URLSearchParams({ t: token }).toString();
+    sentLink = link.href;
     const text = [field("greeting"), field("body"), `${button}: ${link}`, field("note"), field("signature"), brand.contact].join("\r\n\r\n");
     const html = simpleEmailHtml({
       brand: brand.brand, heading: subject, paragraphs: [field("greeting"), field("body")],
@@ -298,5 +385,9 @@ Deno.serve(async (request) => {
   });
   if (trackingError || recorded !== true) return json({ error: "The invitation status could not be confirmed. Check its status before resending." }, 503);
   if (!accepted) return json({ error: message }, 502);
-  return json({ ok: true });
+  // Also by text (its own link), unless the sender asked for email only (channels: ["email"]).
+  const smsLink = smsToken && sentLink ? (() => { const u = new URL(sentLink); u.hash = new URLSearchParams({ t: smsToken }).toString(); return u.href; })() : "";
+  const sms = smsLink ? await textLink(admin, "student", invitation.id, smsLink,
+    (name) => `SLIT: ${name ? `Hi ${name}, y` : "Y"}our application is ready to check and sign. Open it here:`) : "not_requested";
+  return json({ ok: true, sms });
 });

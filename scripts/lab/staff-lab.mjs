@@ -2494,7 +2494,9 @@ insert into public.cms_documents(id,name,url,status,assistant_publication_approv
 function sqlSuites() {
   const dir = path.join(REPO, "supabase", "tests");
   psql("create extension if not exists pgtap with schema extensions;");
-  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+  // LAB_SQL_ONLY (a regular expression) runs only the matching suites, e.g. ^avetmiss_ in the AVETMISS compliance workflow.
+  const only = process.env.LAB_SQL_ONLY ? new RegExp(process.env.LAB_SQL_ONLY) : null;
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".sql") && (!only || only.test(f))).sort()) {
     const res = spawnSync("docker", ["exec", "-i", DB_CONTAINER, "psql", "-U", "postgres", "-q", "-At"], { input: fs.readFileSync(path.join(dir, file), "utf8"), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     const out = `${res.stdout}${res.stderr}`;
     const plan = out.match(/^1\.\.(\d+)/m)?.[1] ?? "?";

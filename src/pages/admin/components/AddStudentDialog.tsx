@@ -7,7 +7,7 @@ import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import AddStudentRecordDialog, { type AddStudentRecordValue } from "@/pages/admin/components/AddStudentRecordDialog";
 import StudentDetailsStep, { type StudentDraft } from "@/pages/agency/components/StudentDetailsStep";
 import { activateAgent, listBusinesses, setBusinessStatus, type BusinessStatus } from "@/pages/admin/lib/businessData";
-import { createApplicationForStudent, createStudentDraft, agentPickable, listActiveAgentsElsewhere, listAgentsOfBusiness, sendApplicationInvitation, type BusinessAgentOption, type StudentMatch } from "@/pages/agency/lib/portalApplications";
+import { createApplicationForStudent, createStudentDraft, agentPickable, listActiveAgentsElsewhere, listAgentsOfBusiness, sendApplicationInvitation, saveWizardDraft, INVITE_SMS_LABEL, type BusinessAgentOption, type StudentMatch } from "@/pages/agency/lib/portalApplications";
 import { isEmailTakenError } from "@/lib/identity/email";
 
 function newClientKey(): string {
@@ -97,10 +97,12 @@ export default function AddStudentDialog({ open, onClose, onAdded, presetBusines
       const applicationId = existing
         ? (await createApplicationForStudent(key, existing.id)).id
         : await createStudentDraft(draft.email, agent.id, key);
+      // CONTACT-LINKS: the mobile from the first screen goes on the application (the invitation texts it from there).
+      if (draft.mobile) await saveWizardDraft(applicationId, { values: { mobile: draft.mobile } }).catch(() => notes.push("The mobile could not be saved; add it in the application."));
       if (draft.invite) {
         try {
-          await sendApplicationInvitation(applicationId);
-          notes.push("Application invitation sent.");
+          const sms = await sendApplicationInvitation(applicationId, undefined, Boolean(draft.sendText));
+          notes.push(["Application invitation sent by email.", INVITE_SMS_LABEL[sms]].filter(Boolean).join(" "));
         } catch (e) {
           notes.push(e instanceof Error ? e.message : "Invitation failed. Try again from Finish Application.");
         }

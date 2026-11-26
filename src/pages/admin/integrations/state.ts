@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { integrationRequest, type Snapshot } from './api';
-export const inputClass = 'rounded-md border border-background-300 bg-white p-2 text-foreground-900 w-full';
+export const inputClass = 'rounded-md border border-background-300 bg-background-50 p-2 text-foreground-900 w-full';
 export const date = (value: string | null) => value ? new Date(value).toLocaleString() : 'Never';
 export function useIntegrations() {
   const [data, setData] = useState<Snapshot | null>(null);

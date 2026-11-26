@@ -1,3 +1,4 @@
+import { textInviteNote } from "@/lib/textInvite";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { ruleNumber } from "@/lib/businessRules";
 import { invokePortalUsers } from "@/pages/agency/lib/portalData";
@@ -13,7 +14,7 @@ export async function sendStudentInvitation(student: { id: string; email: string
   const data = student.login?.invitationId
     ? await invokePortalUsers({ action: "resend", invitationId: student.login.invitationId, redirectTo: portalPasswordResetUrl() })
     : await invokePortalUsers({ action: "invite", role: "student", studentId: student.id, email: student.email, name: student.name || student.email, agencyId: student.agencyId, redirectTo: portalPasswordResetUrl() });
-  return data.warning ? String(data.warning) : `Sign-in invitation sent to ${student.email}.`;
+  return data.warning ? String(data.warning) : `Sign-in invitation sent to ${student.email}.${textInviteNote(data.text)}`;
 }
 
 /**
@@ -25,7 +26,7 @@ export async function resendInvitation(agent: { invitationId: string | null; ema
   const data = agent.invitationId
     ? await invokePortalUsers({ action: "resend", invitationId: agent.invitationId, redirectTo: portalPasswordResetUrl() })
     : await invokePortalUsers({ action: "invite", email: agent.email, name: agent.name, role: agent.role, agencyId: agent.businessId, redirectTo: portalPasswordResetUrl() });
-  return data.warning ? String(data.warning) : `Invitation sent to ${agent.email}.`;
+  return data.warning ? String(data.warning) : `Invitation sent to ${agent.email}.${textInviteNote(data.text)}`;
 }
 
 /**

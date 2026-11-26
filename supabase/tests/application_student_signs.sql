@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(58);
+select plan(96);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -108,12 +108,19 @@ select lives_ok($$select public.portal_wizard_invite_begin('e5100000-0000-0000-0
 reset role;
 select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-0000-000000000005'), true);
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000005');
-select throws_ok($$select public.portal_wizard_invite_accept(pg_temp.tok(5))$$, '42501', 'Create your password (or sign in with Google) before opening the application', 'accept needs a password or Google');
+reset role;
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(5)))->>'account', 'new', 'lookup: first-time email opens as a guest');
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(1)))->>'account', 'new', 'lookup: a password the student never created does not mean sign-in');
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(98)))->>'valid', 'false', 'lookup: unknown link invalid');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000005');
+select is(public.portal_wizard_invite_accept(pg_temp.tok(5)), 'e5100000-0000-0000-0000-000000000005'::uuid, 'first-time student opens the application without a password');
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000005', pg_temp.dv('e5100000-0000-0000-0000-000000000005'), 'k-nopass', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  '42501', 'Create your password before signing, so you can sign in to your SLIT account later', 'signing needs the password first');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select is(public.portal_wizard_invite_accept(pg_temp.tok(1)), 'e5100000-0000-0000-0000-000000000002'::uuid, 'student accepts with a password');
 select throws_ok($$select public.portal_wizard_invite_accept(pg_temp.tok(99))$$, '42501', null, 'unknown link refused');
 reset role;
-select ok(pg_temp.events('e5100000-0000-0000-0000-000000000002') = 'sent,accepted', 'timeline: sent, accepted');
+select ok(pg_temp.events('e5100000-0000-0000-0000-000000000002') = 'sent,email_confirmed,accepted', 'timeline: sent, email confirmed by the link, accepted');
 select ok(pg_temp.mails('e5100000-0000-0000-0000-000000000002') like '%handoff_accepted%', 'agent told the student accepted');
 
 -- 5. Student edits allowed fields; view-only fields refused.
@@ -165,6 +172,11 @@ reset role;
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select public.portal_wizard_invite_accept(pg_temp.tok(3));
 select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0455555555"}}');
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult0', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  '42501', 'Create your password before signing, so you can sign in to your SLIT account later', 'a hidden password does not count: create it at signing');
+select ok(public.portal_my_signing_password_needed('e5100000-0000-0000-0000-000000000002'), 'sign step asks for the password');
+select ok(public.portal_my_password_created(), 'password created at the sign step is recorded');
+select ok(not public.portal_my_signing_password_needed('e5100000-0000-0000-0000-000000000002'), 'then no longer asked');
 select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('declarations', pg_temp.decl() - 'usi_permission'))$$,
   '22023', null, 'every declaration must be ticked');
 select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('declarations', pg_temp.decl() || '{"esos_written_agreement":"00"}'))$$,
@@ -173,6 +185,7 @@ select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000
   'student signs and submits');
 reset role;
 select is(pg_temp.status('e5100000-0000-0000-0000-000000000002'), 'submitted', 'adult: submitted at once');
+select ok(skyline_private.student_account_established('b5100000-0000-0000-0000-000000000002', 'd5100000-0000-0000-0000-000000000002'), 'after a submission the next link asks to sign in');
 select is((select count(*)::int from public.enrollment_application_consents where application_id = 'e5100000-0000-0000-0000-000000000002'
   and signer_role = 'student' and signer_user_id = 'b5100000-0000-0000-0000-000000000002' and text_hash ~ '^[a-f0-9]{64}$'), 3, 'three consent rows with signer and text hash');
 select ok(pg_temp.mails('e5100000-0000-0000-0000-000000000002') like '%handoff_signed%handoff_submitted%', 'agent told signed and submitted');
@@ -189,6 +202,7 @@ reset role;
 select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-0000-000000000003'), true);
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000003');
 select public.portal_wizard_invite_accept(pg_temp.tok(6));
+select public.portal_my_password_created();
 select is(public.portal_submit_v2('e5100000-0000-0000-0000-000000000003', pg_temp.dv('e5100000-0000-0000-0000-000000000003'), 'k-minor', jsonb_build_object('declarations', pg_temp.decl()))->>'state',
   'waiting_guardian', 'under 18: waits for the guardian');
 select throws_ok($$select public.portal_guardian_request_begin('e5100000-0000-0000-0000-000000000003', 'Pat Parent', 'Mother', 'minor.signs@example.test', '+61400000000', pg_temp.hash(pg_temp.tok(7)))$$,
@@ -225,6 +239,76 @@ update public.enrollment_applications set status = 'action_required' where id = 
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
 select throws_ok($$select public.portal_application_resubmit('e5100000-0000-0000-0000-000000000002', 'fixed', jsonb_build_object('declarations', pg_temp.decl()))$$,
   '42501', null, 'agent resubmit refused');
+reset role;
+
+-- 11. Invite by text (20261126130517): settings only when ClickSend is connected, the student's mobile, outcome on the timeline.
+reset role;
+select is(public.invite_sms_settings(), null, 'no ClickSend connection: no text settings');
+select ok((public.invite_sms_target('student', pg_temp.inv('e5100000-0000-0000-0000-000000000002'))->>'mobile') <> '', 'the student mobile is found');
+select lives_ok($$select public.invite_sms_record('e5100000-0000-0000-0000-000000000002', 'student', 'sent', '', '+61400000555')$$, 'text outcome recorded');
+select ok((select detail->>'endsWith' = '555' and detail::text not like '%61400%' from skyline_private.application_handoff_events where application_id = 'e5100000-0000-0000-0000-000000000002' and event = 'sms_sent' limit 1), 'only the last three digits are kept');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.invite_sms_settings()$$, '42501', null, 'agents cannot read the ClickSend account');
+reset role;
+
+-- 12. Two links (20261126150517): the text link proves the mobile; the email is confirmed with a code before signing.
+reset role;
+insert into auth.users(id, email, email_confirmed_at, encrypted_password) values ('b5100000-0000-0000-0000-000000000007', 'textlink.signs@example.test', now(), 'x');
+insert into public.enrollment_students(id, agency_id, full_name, email, status) values
+ ('d5100000-0000-0000-0000-000000000007', 'a5100000-0000-0000-0000-000000000001', 'Text Link', 'textlink.signs@example.test', 'Active');
+insert into public.enrollment_applications(id, agency_id, assigned_agent_id, created_by, student_id, status, student_email, data) values
+ ('e5100000-0000-0000-0000-000000000007', 'a5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001',
+  'd5100000-0000-0000-0000-000000000007', 'draft', 'textlink.signs@example.test', '{"values":{"dob":"1995-01-01","mobile":"0412345678"}}');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select public.portal_wizard_invite_begin('e5100000-0000-0000-0000-000000000007', pg_temp.hash(pg_temp.tok(11)));
+reset role;
+select ok(public.invite_set_sms_token(pg_temp.inv('e5100000-0000-0000-0000-000000000007'), pg_temp.hash(pg_temp.tok(12))), 'the text gets its own link');
+select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-0000-000000000007'), true);
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(12)))->>'via', 'sms', 'lookup knows the text link');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select is(public.portal_wizard_invite_accept(pg_temp.tok(12)), 'e5100000-0000-0000-0000-000000000007'::uuid, 'opened from the text link');
+select is(public.contact_pending_mine()->>'kind', 'email', 'the email still has to be confirmed');
+select public.portal_my_password_created();
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  '42501', 'Confirm your email with the code we send you before signing', 'no signature before the email code');
+reset role;
+select public.contact_code_issue('b5100000-0000-0000-0000-000000000007', '654321');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select is(public.contact_code_verify('111111', 'e5100000-0000-0000-0000-000000000007')->>'ok', 'false', 'wrong email code refused');
+select is(public.contact_code_verify('654321', 'e5100000-0000-0000-0000-000000000007')->>'ok', 'true', 'email confirmed with the code');
+select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  'then the student signs and submits');
+reset role;
+select ok(pg_temp.events('e5100000-0000-0000-0000-000000000007') like '%mobile_confirmed%email_confirmed%', 'both confirmations on the timeline');
+
+-- 13. CONTACT-VERIFY everyone: employee / CMS / signing links use the same method (generic link aliases, proofs and codes).
+select ok(public.link_alias_add('staff', 'f5100000-0000-0000-0000-000000000001', pg_temp.hash(pg_temp.tok(21)), pg_temp.hash(pg_temp.tok(22)),
+  'Staff.Person@example.test', '+61412345678', now() + interval '7 days'), 'an employee link gets a text alias');
+select is(public.link_opened(pg_temp.hash(pg_temp.tok(22)))->>'via', 'sms', 'the text alias is recognised');
+select is(public.link_opened(pg_temp.hash(pg_temp.tok(22)))->>'base', pg_temp.hash(pg_temp.tok(21)), 'the text alias opens the emailed link''s record');
+select ok(public.link_email_pending('staff', 'f5100000-0000-0000-0000-000000000001'), 'opened from the text: the email waits for a code');
+select is(public.link_code_issue('staff', 'f5100000-0000-0000-0000-000000000001', '246810')->>'to', 'staff.person@example.test', 'the code goes to the email');
+select throws_ok($$select public.link_code_issue('staff', 'f5100000-0000-0000-0000-000000000001', '135791')$$, '22023',
+  'A code was just sent. Wait a minute before asking for another', 'one code a minute');
+select is(public.link_code_verify('staff', 'f5100000-0000-0000-0000-000000000001', '000000')->>'ok', 'false', 'a wrong code is refused');
+select is(public.link_code_verify('staff', 'f5100000-0000-0000-0000-000000000001', '246810')->>'ok', 'true', 'the right code confirms the email');
+select ok(not public.link_email_pending('staff', 'f5100000-0000-0000-0000-000000000001'), 'nothing left to confirm');
+select public.link_alias_add('cms', 'f5100000-0000-0000-0000-000000000002', null, pg_temp.hash(pg_temp.tok(23)), 'cms.person@example.test', '+61412345679', now() + interval '7 days');
+select public.link_opened(pg_temp.hash(pg_temp.tok(23)));
+select ok(public.link_alias_use(pg_temp.hash(pg_temp.tok(23))) and public.link_alias_use(pg_temp.hash(pg_temp.tok(23))) is null, 'a CMS text link is used once');
+
+-- 14. STUDENT-WITHDRAW: the student withdraws their own submitted application (with a reason); nobody else does it this way.
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'Changed my mind')$$, '42501',
+  'Only the student can withdraw their own application', 'the agent cannot withdraw as the student');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select throws_ok($$select public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'no')$$, '22023',
+  'Tell us briefly why you are withdrawing (at least 5 characters)', 'a reason is needed');
+select is(public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'Studying elsewhere')->>'status', 'withdrawn', 'the student withdraws');
+reset role;
+select is((select status from public.enrollment_applications where id = 'e5100000-0000-0000-0000-000000000007'), 'withdrawn', 'the application is withdrawn');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select throws_ok($$select public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'Studying elsewhere')$$, '22023', null, 'not twice');
 reset role;
 
 select * from finish();

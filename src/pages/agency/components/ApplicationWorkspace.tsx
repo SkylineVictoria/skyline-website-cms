@@ -37,7 +37,7 @@ import {
   type DocumentRow,
 } from "@/pages/agency/lib/portalApplications";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import { declarationConsent } from "@/pages/agency/lib/handoff";
+import { declarationConsent, saveSignPassword } from "@/pages/agency/lib/handoff";
 import { documentCategoryForField, extractionStatus } from "@/pages/agency/lib/documentAttachments";
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
@@ -203,10 +203,22 @@ interface WorkspaceProps {
   onSentToStudent?: () => void;
   /** Staff: the status, what is needed next and Take action, at the bottom of Review. */
   reviewBar?: ReactNode | ((reviewIssues: number) => ReactNode);
+  /** ONE-PAGE (owner 2026-11-26): every step on one page (open where something is missing, else a one-line summary), the check and
+   *  signature at the bottom; no stages to walk through. A read-only application keeps the one-page review. */
+  onePage?: boolean;
+  /** The student has it already: the agent / staff edit, but there is nothing to send (Resend is on the handoff panel). */
+  sentToStudent?: boolean;
+  /** Opens the step holding this field once the form is ready (a returning student's new application starts on the course). */
+  initialEdit?: string;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
+
+/** The applicant's full name from the form (first, middle, last), the declarant of a one-page application. */
+function applicantName(value: (field: string) => string): string {
+  return [value("first_name"), value("middle_name"), value("last_name")].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
 
 export default function ApplicationWorkspace({
   application,
@@ -220,8 +232,13 @@ export default function ApplicationWorkspace({
   onSubmitted,
   onSentToStudent,
   reviewBar,
+  onePage = false,
+  sentToStudent = false,
+  initialEdit,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
+  // The same cards for staff, agents and students; read-only (submitted, or the other side has it) = the cards without Edit.
+  const one = onePage;
   // The courses on offer, by their CMS id: rto_admin course_list for staff (every status), portal_course_options for agents and students
   // (Published, or with an open intake). null while loading. No static catalogue.
   const [courseChoices, setCourseChoices] = useState<{ label: string; row: ApplicationCourseRow }[] | null>(null);
@@ -360,7 +377,16 @@ export default function ApplicationWorkspace({
   });
   const [showErrors, setShowErrors] = useState(false);
   const [reviewValues, setReviewValues] = useState<DraftValues | null>(null);
-  const [consent, setConsent] = useState<ConsentState>({ declarations: {}, complete: false });
+  // ONE-PAGE: the cards of every step (grid), one step being edited, or the declarations and signature (sign).
+  const [onePageView, setOnePageView] = useState<{ kind: "grid" } | { kind: "edit"; index: number } | { kind: "sign" }>({ kind: "grid" });
+  /** Back to the cards (or on to the signature), with the answers as they are on the form now. */
+  const showOnePage = (kind: "grid" | "sign") => {
+    if (formRef.current) setReviewValues(collectFormValues(formRef.current));
+    void flushSave().catch(() => undefined);
+    setOnePageView({ kind });
+    window.requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+  const [consent, setConsent] = useState<ConsentState>({ declarations: {}, complete: false, password: { needed: false, password: "", valid: true } });
   // APPLICATION-STUDENT-SIGNS: only the student signs; an agent or staff member sends it to the student instead.
   const studentSigns = usePortalAuth().role === "student";
   const [submitting, setSubmitting] = useState(false);
@@ -647,8 +673,25 @@ export default function ApplicationWorkspace({
 
   /* --------------------------------------------------------- events */
 
+  /** ONE-PAGE: the student signs once, by drawing; the typed "digital signature" is the declarant's name, kept in step out of sight. */
+  // STUDENT-SIGN-ONLY (owner, 2026-11-26): the student is not asked to type their name either: the declarant is the applicant's
+  // own name from the form and the date is today, both kept in step out of sight; the drawn signature is the only thing to do.
+  const syncTypedSignature = () => {
+    if (!one || !formRef.current) return;
+    const form = formRef.current;
+    const value = (field: string) => (form.querySelector<HTMLInputElement>(`[name="${field}"]`)?.value ?? "").trim();
+    const name = form.querySelector<HTMLInputElement>('[name="declaration_name"]');
+    const typed = form.querySelector<HTMLInputElement>('[name="digital_signature"]');
+    const date = form.querySelector<HTMLInputElement>('[name="declaration_date"]');
+    const applicant = applicantName(value);
+    if (name && name.type === "hidden" && applicant && name.value !== applicant) name.value = applicant;
+    if (date && date.type === "hidden" && !date.value) date.value = new Date().toISOString().slice(0, 10);
+    if (name && typed && typed.value !== name.value) typed.value = name.value;
+  };
+
   const handleChange = (event: FormEvent<HTMLFormElement>) => {
     const target = event.target as HTMLInputElement | HTMLSelectElement;
+    syncTypedSignature();
     // Persisted portal attachments are managed by ApplicationAttachmentField;
     // never let the native file event create a second upload request.
     if (target?.type === "file") return;
@@ -1214,10 +1257,25 @@ export default function ApplicationWorkspace({
   /** Opens one step (and its stage) and puts the cursor in a field: the given one, else the step's first empty answer. */
   const openSection = (index: number, field?: string) => {
     const target = stageOf(index);
+    if (one) {
+      // The student's declaration is filled on the sign page, open, with the ticks and the signature.
+      if (studentSigns && isDeclarationSection(index)) {
+        setOnePageView({ kind: "sign" });
+        window.setTimeout(() => focusSection(index, field), 120);
+        return;
+      }
+      setOnePageView({ kind: "edit", index });
+      setExpanded((prev) => new Set(prev).add(index));
+      window.setTimeout(() => focusSection(index, field), 120);
+      return;
+    }
     if (target !== stage) { pendingFocusRef.current = { section: index, field }; showStage(target); return; }
     setExpanded((prev) => new Set(prev).add(index));
     window.setTimeout(() => focusSection(index, field), 240);
   };
+
+  const openSectionRef = useRef(openSection);
+  openSectionRef.current = openSection;
 
   /** Scrolls to a step (or one of its fields), puts the cursor there and names the step in the URL (#address). */
   const focusSection = (index: number, field?: string) => {
@@ -1235,6 +1293,11 @@ export default function ApplicationWorkspace({
   // A stage has opened (or the page is ready): the first incomplete step opens, the rest are one line, and the cursor goes to the first
   // incomplete step (or the step asked for). Through a ref, so only the stage change runs it.
   const stageOpened = () => {
+    if (one) {
+      // One page: the steps that still need something are open, the rest are one line (opened on click); nothing scrolls.
+      setExpanded(new Set(sections.map((_, index) => index).filter((index) => sectionShown(index) && sectionIssues(index).length > 0)));
+      return;
+    }
     if (stage >= reviewStage) return;
     const pending = pendingFocusRef.current;
     pendingFocusRef.current = null;
@@ -1250,6 +1313,13 @@ export default function ApplicationWorkspace({
   const stageOpenedRef = useRef(stageOpened);
   stageOpenedRef.current = stageOpened;
   const ready = hydrated && (attachmentsLoaded || Boolean(documentMessage));
+  const initialEditDone = useRef(false);
+  useEffect(() => {
+    if (!ready || !one || !initialEdit || initialEditDone.current || readOnly) return;
+    initialEditDone.current = true;
+    const index = sections.findIndex((section) => section.fields.some((field) => field.name === initialEdit));
+    if (index >= 0) openSectionRef.current(index, initialEdit);
+  }, [ready, one, initialEdit, readOnly, sections]);
   useEffect(() => { if (ready) stageOpenedRef.current(); }, [stage, ready]);
 
   // After a read or a pick: if its step is now complete, it closes, and the next incomplete step on the stage opens.
@@ -1340,6 +1410,7 @@ export default function ApplicationWorkspace({
     const section = sections[index];
     if (!section?.fields.some((field) => field.name === "declaration_name") || !section.fields.some((field) => field.name === "digital_signature")) return [];
     const read = (name: string) => (formRef.current?.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+    syncTypedSignature();
     const name = read("declaration_name"), signature = read("digital_signature");
     return (name || signature) && name !== signature ? [{ field: "digital_signature", text: "The declarant name and digital signature do not match" }] : [];
   };
@@ -1369,6 +1440,7 @@ export default function ApplicationWorkspace({
   const handleSubmit = async () => {
     if (readOnly || submitting) return;
     setSubmitError("");
+    syncTypedSignature();
     const { missing, firstIndex } = collectMissing();
     setShowErrors(true);
     if (missing.length > 0) {
@@ -1385,6 +1457,14 @@ export default function ApplicationWorkspace({
       setSubmitError("Read and tick each declaration to sign.");
       return;
     }
+    if (studentSigns && !consent.signature) {
+      setSubmitError("Draw your signature in the box to sign.");
+      return;
+    }
+    if (studentSigns && !consent.password.valid) {
+      setSubmitError("Create your password (both boxes the same) to sign.");
+      return;
+    }
     setSubmitting(true);
     try {
       // Always save once more: the server checks the saved draft, which must carry the derived answers (e.g. ec_in_au).
@@ -1398,10 +1478,11 @@ export default function ApplicationWorkspace({
         onSentToStudent?.();
         return;
       }
+      await saveSignPassword(consent.password);
       if (resubmitHere) {
         // Action required, corrected: the form is saved (above), the student signs again, then back to Submitted through the resubmit
         // command (history, audit, email).
-        await resubmitApplication(application.id, "Resubmitted after corrections", declarationConsent(consent.declarations));
+        await resubmitApplication(application.id, "Resubmitted after corrections", declarationConsent(consent.declarations, consent.signature));
         const snapshot = collectSnapshot();
         setSubmittedRef(application.reference);
         const done = () => onSubmitted?.(application.reference, `${String(snapshot?.values.first_name ?? "")} ${String(snapshot?.values.last_name ?? "")}`.trim());
@@ -1411,7 +1492,7 @@ export default function ApplicationWorkspace({
         return;
       }
       const snapshot = collectSnapshot();
-      const receipt = await submitApplication(application.id, declarationConsent(consent.declarations));
+      const receipt = await submitApplication(application.id, declarationConsent(consent.declarations, consent.signature));
       if (receipt.waitingGuardian) { onSaved?.(); onSentToStudent?.(); return; }
       const reference = receipt.reference;
       setSubmittedRef(reference || application.reference);
@@ -1459,7 +1540,11 @@ export default function ApplicationWorkspace({
     );
   }
 
-  const isReview = stage === reviewStage;
+  const isReview = one || stage === reviewStage;
+  /** The Student Declaration step (terms, declarant, typed signature): the student's, shown open on the sign page. */
+  function isDeclarationSection(index: number): boolean {
+    return Boolean(sections[index]?.fields.some((field) => field.type === "terms" || field.name === "digital_signature"));
+  }
   /** Missing answers on a step are marked once its stage was left with Next, or after a submit attempt. */
   const marksShown = (index: number) => showErrors || touchedStages.has(stageOf(index));
 
@@ -1528,6 +1613,21 @@ export default function ApplicationWorkspace({
       const saved = String(mergedInitial[field.name] ?? (field.name === "confirm_email" ? mergedInitial.email ?? "" : ""));
       return <input key={field.name} type="hidden" name={field.name} defaultValue={saved} />;
     }
+    if (one && field.name === "digital_signature") {
+      return <input key={field.name} type="hidden" name={field.name} defaultValue={String(mergedInitial.declaration_name ?? mergedInitial.digital_signature ?? "")} />;
+    }
+    if (one && field.name === "declaration_name") {
+      const signer = applicantName((key) => String(mergedInitial[key] ?? "").trim()) || String(mergedInitial.declaration_name ?? "");
+      return (
+        <div key={field.name} className="sm:col-span-2" data-testid="one-page-signer">
+          <input type="hidden" name={field.name} defaultValue={signer} />
+          <p className="text-sm text-foreground-700">Signing as <strong className="font-medium text-foreground-950">{signer || "the applicant"}</strong> on {new Date().toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}. Draw your signature below.</p>
+        </div>
+      );
+    }
+    if (one && field.name === "declaration_date") {
+      return <input key={field.name} type="hidden" name={field.name} defaultValue={String(mergedInitial.declaration_date || new Date().toISOString().slice(0, 10))} />;
+    }
     const fixedAustralia = field.name in fixedValues();
     const locked = readOnly || LOCKED_AGENT_FIELDS.has(field.name) || fixedAustralia;
     // Always "Australian Address": the ways to fill it (search, licence, by hand) are offered above the fields instead.
@@ -1585,7 +1685,7 @@ export default function ApplicationWorkspace({
     if (field.type === "terms") {
       return (
         <div key={field.name} className="md:col-span-2">
-          <TermsDeclaration heading={field.label} terms={field.options ?? []} plain />
+          <TermsDeclaration heading={field.label} terms={field.options ?? []} plain defaultOpen={one} />
         </div>
       );
     }
@@ -1902,7 +2002,7 @@ export default function ApplicationWorkspace({
       noValidate
       onChange={handleChange}
       onKeyDown={onFormKeyDown}
-      className="form-compact mx-auto w-full max-w-[960px] scroll-mt-20"
+      className={`form-compact w-full scroll-mt-20 ${one ? "" : "mx-auto max-w-[960px]"}`}
     >
       <StepShell
         stages={navStages}
@@ -1919,19 +2019,22 @@ export default function ApplicationWorkspace({
         ) : null}
         onSelectStage={(index) => (index === reviewStage ? openReview() : showStage(index))}
         onSelectSection={(index) => openSection(index)}
-        onPrevious={() => showStage(stage - 1)}
-        previousDisabled={stage === 0}
+        hideNav={one}
+        onPrevious={one ? (onePageView.kind === "grid" ? undefined : () => showOnePage("grid")) : () => showStage(stage - 1)}
+        previousDisabled={one ? false : stage === 0}
         onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
         message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
-          isReview
+          one && onePageView.kind === "edit" ? { label: "Done", icon: "ri-check-line", testId: "section-done", onClick: () => showOnePage("grid") }
+          : one && onePageView.kind === "grid" ? (canSubmitHere && !readOnly && (studentSigns || !sentToStudent) ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
+          : isReview
             ? !readOnly && canSubmitHere
               ? {
                 label: !studentSigns ? "Send to student to review & sign" : resubmitHere ? "Sign and resubmit" : "Sign and submit",
                 icon: "ri-send-plane-line",
                 onClick: () => void handleSubmit(),
                 // The rule the submit always had (nothing missing, both confirmations), plus no wrong or unread document; the same for a resubmission.
-                disabled: missingNow.length > 0 || (studentSigns && !consent.complete) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
+                disabled: missingNow.length > 0 || (studentSigns && (!consent.complete || !consent.signature || !consent.password.valid)) || documentProblems.some(Boolean) || crossFieldProblems.some((list) => list.length > 0),
                 busy: submitting,
                 busyLabel: !studentSigns ? "Sending…" : resubmitHere ? "Resubmitting…" : "Submitting…",
                 testId: "submit-application",
@@ -1960,7 +2063,7 @@ export default function ApplicationWorkspace({
           </div>
         ) : null}
 
-        {isReview ? (
+        {isReview && !one ? (
           <div className={direction === "back" ? "step-in-back" : "step-in-forward"}>
             <ApplicationReview
               values={reviewValues ?? storedValues}
@@ -1996,9 +2099,9 @@ export default function ApplicationWorkspace({
           {stages.flatMap((item) => item.sections).map((index) => {
             const section = sections[index];
             const { subtitle, tip } = stepHelp(section);
-            const shown = !isReview && stageOf(index) === stage && sectionShown(index);
+            const shown = one ? sectionShown(index) && ((onePageView.kind === "edit" && onePageView.index === index) || (onePageView.kind === "sign" && studentSigns && isDeclarationSection(index))) : !isReview && stageOf(index) === stage && sectionShown(index);
             const complete = issuesBySection[index].length === 0;
-            const open = expanded.has(index) || !ready;
+            const open = one || expanded.has(index) || !ready;
             return (
               <SectionCard
                 key={index}
@@ -2025,6 +2128,34 @@ export default function ApplicationWorkspace({
             );
           })}
         </div>
+        {one && onePageView.kind !== "edit" ? (
+          <div data-testid={onePageView.kind === "grid" ? "one-page-cards" : "one-page-sign"}>
+            <ApplicationReview
+              tiles={onePageView.kind === "grid"}
+              values={reviewValues ?? storedValues}
+              courses={(((reviewValues ?? storedValues)[COURSE_FIELD] as string[] | undefined) ?? [])}
+              sections={sections}
+              application={application}
+              qualifications={qualifications}
+              agentName={agentName}
+              agencyName={agencyName}
+              consent={consent}
+              onConsentChange={(patch) => setConsent((prev) => ({ ...prev, ...patch }))}
+              onEditSection={(index) => openSection(index)}
+              onJumpToField={(index, field) => openSection(index, field)}
+              stages={stages}
+              missing={missingNow}
+              documentProblems={documentProblems}
+              fieldProblems={crossFieldProblems}
+              submitError={submitError}
+              readOnly={readOnly}
+              canSubmit={canSubmitHere}
+              resubmit={resubmitHere}
+              studentSigns={studentSigns}
+              onePage
+            />
+          </div>
+        ) : null}
       </StepShell>
 
       <Toast message={toast.message} onDismiss={toast.dismiss} />

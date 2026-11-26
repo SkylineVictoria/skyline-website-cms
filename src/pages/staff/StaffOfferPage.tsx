@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { offerApiForLink, takeLinkToken } from "@/lib/staffOnboardingApi";
 import OfferPanel from "./components/OfferPanel";
+import EmailCodeGate from "./components/EmailCodeGate";
 
 /**
  * /staff/offer#t=<token>: an offer letter opened by a private link (HR-02e). The link is the credential and is re-checked by the
@@ -43,5 +44,5 @@ export default function StaffOfferPage() {
       </Shell>
     );
   }
-  return <Shell><OfferPanel api={api} onInvalid={onInvalid} /></Shell>;
+  return <Shell><EmailCodeGate token={token} /><OfferPanel api={api} onInvalid={onInvalid} /></Shell>;
 }

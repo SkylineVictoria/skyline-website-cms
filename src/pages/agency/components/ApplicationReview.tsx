@@ -8,18 +8,23 @@ import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
 import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
 import { EXPIRY_FIELDS, expiryLabel, expiryTone, expiryTooltip, getDocumentExpiryStatus, type ExpiryDocument } from "@/pages/agency/lib/documentExpiry";
 import "@/pages/agency/lib/admissionsRules"; // Business Rules: expiry warning months, English result validity
-import { DeclarationTicks } from "@/pages/agency/components/ApplicationHandoff";
+import { DeclarationTicks, SignPasswordFields, type SignPassword } from "@/pages/agency/components/ApplicationHandoff";
+import DrawSignature from "@/pages/agency/components/DrawSignature";
 import { qualificationDetail, qualificationTitle, submittedQualifications, type Qualification } from "@/pages/agency/lib/qualifications";
 
 /** APPLICATION-STUDENT-SIGNS: the student's ticked declarations ({ key: hash of the exact text shown }); complete when all ticked. */
 export interface ConsentState {
   declarations: Record<string, string>;
   complete: boolean;
+  /** A guest student's new password, created at the signature (needed false when the account already has one). */
+  password: SignPassword;
+  /** The drawn signature (PNG data URL), required to sign (APPLICATION-DRAWN-SIGNATURE). */
+  signature?: string | null;
 }
 
 // Field types and answers that are not shown as values: notes, tables, terms, files, and answers the form keeps itself.
 const NOT_SHOWN_TYPES = new Set<AppField["type"]>(["static", "table", "terms", "file"]);
-const NOT_SHOWN_FIELDS = new Set(["checklist", "address_source", "via_agent", "agent_agency", "agent_contact_name", "agent_email", "agent_phone"]);
+const NOT_SHOWN_FIELDS = new Set(["checklist", "address_source", "via_agent", "agent_agency", "agent_contact_name", "agent_email", "agent_phone", "digital_signature"]);
 
 /**
  * Review & submit: every missing or invalid item first, each a link to its exact field; then one row per step (from the step
@@ -47,6 +52,8 @@ export default function ApplicationReview({
   canSubmit = true,
   resubmit = false,
   studentSigns = false,
+  onePage = false,
+  tiles = false,
 }: {
   values: DraftValues;
   courses: string[];
@@ -75,6 +82,10 @@ export default function ApplicationReview({
   resubmit?: boolean;
   /** APPLICATION-STUDENT-SIGNS: the signed-in person is the student (only they sign; agents send it to them). */
   studentSigns?: boolean;
+  /** ONE-PAGE: the answers are edited on the page above; only what is missing and the signature are shown. */
+  onePage?: boolean;
+  /** ONE-PAGE cards: every step as a square card (two across) with its answers and Edit; the signature is on the next page. */
+  tiles?: boolean;
 }) {
   const flat: Record<string, string> = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")]));
   const val = (key: string): string => {
@@ -110,15 +121,76 @@ export default function ApplicationReview({
     .map((stage) => ({ key: stage.id, title: stage.title, steps: stage.sections.filter((index) => isConditionMet(sections[index]?.showIf, flat)).map(stepOf) }))
     .filter((group) => group.steps.length > 0);
   // Every missing or invalid item in form order of the stages, each pointing at its field (found by its label on that step).
-  const issues: ReviewIssue[] = groups.flatMap((group) => group.steps.flatMap((step) => step.issues.map((text, n) => {
+  const studentOnly = (index: number) => !studentSigns && sections[index].fields.some((f) => f.type === "terms" || f.name === "digital_signature");
+  const issues: ReviewIssue[] = groups.flatMap((group) => group.steps.filter((step) => !studentOnly(step.index)).flatMap((step) => step.issues.map((text, n) => {
     const field = sections[step.index].fields.find((candidate) => candidate.label === text) ?? (fieldProblems[step.index] ?? []).filter((problem) => problem.text === text).map((problem) => ({ name: problem.field }))[0];
     const documentField = sections[step.index].fields.find((candidate) => candidate.type === "file")?.name;
     return { key: `${step.index}-${n}`, step: step.title, text, onJump: () => onJumpToField(step.index, field?.name ?? documentField) };
   })));
 
+  if (tiles) {
+    const steps = groups.flatMap((group) => group.steps);
+    const done = steps.filter((step) => step.issues.length === 0).length;
+    return (
+      <div>
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-sm text-foreground-600">{readOnly ? "Every part of the application." : "Check each part. Press Edit on a card to change it."}</p>
+          <p className="text-sm text-foreground-600"><b className="font-semibold text-foreground-950">{done} of {steps.length}</b> complete</p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3" data-testid="application-cards">
+          {steps.map((step) => {
+            // The declaration is the student's: staff and agents never fill or sign it, so its gaps are not links for them.
+            const studentPart = !studentSigns && sections[step.index].fields.some((f) => f.type === "terms" || f.name === "digital_signature");
+            const ok = step.issues.length === 0;
+            return (
+              <section key={step.index} className={`flex min-w-0 flex-col rounded-xl border p-4 ${ok ? "border-background-200 bg-background-50" : "border-amber-300 bg-amber-50/50"}`} data-testid="application-card">
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="flex min-w-0 items-center gap-1.5 font-heading text-sm font-semibold text-foreground-950">
+                    {ok ? <i className="ri-checkbox-circle-fill text-base text-emerald-600" aria-label="complete" />
+                      : <i className="ri-error-warning-fill text-base text-amber-500" aria-label="needs details" />}
+                    <span className="truncate">{step.title}</span>
+                  </h3>
+                  {studentPart ? (
+                    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-2xs font-semibold text-amber-900">Signed by the student</span>
+                  ) : (
+                    <button type="button" onClick={() => onEditSection(step.index)} className="inline-flex min-h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-background-300 px-2.5 text-xs font-semibold text-foreground-700 hover:border-primary-300 hover:text-primary-700">
+                      <i className="ri-pencil-line" aria-hidden="true" />Edit
+                    </button>
+                  )}
+                </div>
+                {step.rows.length ? (
+                  <dl className="mt-3 grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-1.5 text-xs">
+                    {step.rows.map((row) => (
+                      <div key={row.key} className="contents">
+                        <dt className="truncate text-foreground-500" title={row.label}>{row.label}</dt>
+                        <dd className="break-words font-medium text-foreground-900">{row.value}{row.note}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : <p className="mt-3 text-xs text-foreground-500">Nothing entered yet.</p>}
+                {studentPart && !ok ? (
+                  <p className="mt-3 border-t border-amber-100 pt-2 text-xs text-amber-900">Only the student ticks the declarations and signs, on their sign page.</p>
+                ) : step.issues.length ? (
+                  <ul className="mt-3 space-y-0.5 border-t border-amber-100 pt-2">
+                    {step.issues.map((text) => (
+                      <li key={text}>
+                        <button type="button" onClick={() => onJumpToField(step.index, sections[step.index].fields.find((f) => f.label === text)?.name)}
+                          className="cursor-pointer text-left text-xs text-amber-900 underline-offset-2 hover:underline">{text}</button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <ReviewSummary groups={groups} issues={issues} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}>
+    <ReviewSummary groups={groups} issues={issues} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}
+      hideSteps={onePage} title={onePage ? (canSubmit ? (studentSigns ? "Check, sign and submit" : "Check and send to the student") : "Your changes save by themselves") : undefined}>
 
       {readOnly ? (
         <div className="mt-4 text-xs text-foreground-600">
@@ -142,12 +214,14 @@ export default function ApplicationReview({
         <fieldset className="mt-4 space-y-2">
           <legend className="text-sm font-semibold text-foreground-900">Read and sign</legend>
           <DeclarationTicks who="student" onChange={(declarations, complete) => onConsentChange({ declarations, complete })} />
+          <DrawSignature onChange={(signature) => onConsentChange({ signature })} />
+          <SignPasswordFields applicationId={application.id} onChange={(password) => onConsentChange({ password })} />
           <p className="text-xs text-foreground-500">Your signature is recorded with the exact text above, the date and time, and this device. If you are under 18, a parent or guardian signs next.</p>
         </fieldset>
       ) : canSubmit ? (
         <p className="mt-4 rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-sm text-sky-950" data-testid="review-student-signs">
           <i className="ri-quill-pen-line" aria-hidden="true" /> Only the student can sign{resubmit ? " and resubmit" : ""}: send it to them to review and sign
-          (with a parent or guardian if they are under 18). It is view-only for you while they have it.
+          (with a parent or guardian if they are under 18). You can still edit the answers while they have it; only they tick the declarations and sign.
         </p>
       ) : resubmit ? (
         <p className="mt-4 text-xs text-foreground-600" data-testid="resubmit-hint">
@@ -155,7 +229,8 @@ export default function ApplicationReview({
         </p>
       ) : (
         <p className="mt-4 text-xs text-foreground-600">
-          Your corrections are saved on this application. SLIT administration reviews them and moves the application on.
+          {onePage ? "Your changes are saved on this application as you type; each change after submission is recorded with your name."
+            : "Your corrections are saved on this application. SLIT administration reviews them and moves the application on."}
         </p>
       )}
 

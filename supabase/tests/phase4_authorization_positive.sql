@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(967);
+select plan(990);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1238,6 +1238,44 @@ select throws_ok($$select public.admin_view_as_people('agent','','33000000-0000-
 select is(public.admin_view_as_person('agent','33000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002')->>'email','positive@example.test','an admin can sign in as the agent');
 select is((select count(*)::int from public.admin_view_events where target_auth_user = '33000000-0000-0000-0000-000000000001'),1,'the switch is recorded with the person');
 select throws_ok($$select public.admin_view_as_person('staff','33000000-0000-0000-0000-000000000002','33000000-0000-0000-0000-000000000002')$$,'42501',null,'an admin can never sign in as a CMS user');
+-- Sign in as any agent (migration 20261126210517): every agent grouped by business, with or without a login; admins only; audited.
+set local session_replication_role = replica;
+insert into public.agencies(id,name,code,status) values ('13000000-0000-0000-0000-0000000000b7','Zeta Viewas Co','P2-VIEWAS','Active');
+insert into auth.users(id,email,encrypted_password) values ('33000000-0000-0000-0000-0000000000b7','viewas.haslogin@example.test','x');
+insert into public.portal_profiles(id,auth_user_id,full_name,email) values ('23000000-0000-0000-0000-0000000000b7','33000000-0000-0000-0000-0000000000b7','Viewas Haslogin','viewas.haslogin@example.test');
+insert into public.agency_memberships(user_id,agency_id,role) values ('23000000-0000-0000-0000-0000000000b7','13000000-0000-0000-0000-0000000000b7','agent');
+insert into public.agents(id,business_id,profile_id,full_name,email,role,status) values
+ ('53000000-0000-0000-0000-0000000000b7','13000000-0000-0000-0000-0000000000b7','23000000-0000-0000-0000-0000000000b7','Viewas Haslogin','viewas.haslogin@example.test','agent','Active'),
+ ('53000000-0000-0000-0000-0000000000b8','13000000-0000-0000-0000-0000000000b7',null,'Viewas Nologin','viewas.nologin@example.test','agent','Active');
+set local session_replication_role = origin;
+select is((select jsonb_array_length(g->'agents') from jsonb_array_elements(public.admin_view_as_agents('','33000000-0000-0000-0000-000000000002')) g where g->'business'->>'name' = 'Zeta Viewas Co'),2,'view-as agents: every agent of the business is listed, also one without a login');
+select is((select a->>'hasLogin' from jsonb_array_elements(public.admin_view_as_agents('zeta viewas','33000000-0000-0000-0000-000000000002')) g, jsonb_array_elements(g->'agents') a where a->>'name'='Viewas Nologin'),'false','view-as agents: an agent without a login is listed as No login yet');
+select is((select a->>'hasLogin' from jsonb_array_elements(public.admin_view_as_agents('zeta viewas','33000000-0000-0000-0000-000000000002')) g, jsonb_array_elements(g->'agents') a where a->>'name'='Viewas Haslogin'),'true','view-as agents: an agent with a password is listed as Has login');
+select is((select string_agg(a->>'name', ',') from jsonb_array_elements(public.admin_view_as_agents('ZETA VIEWAS','33000000-0000-0000-0000-000000000002')) g, jsonb_array_elements(g->'agents') a),'Viewas Haslogin,Viewas Nologin','view-as agents: search by business name (any case), agents A-Z');
+select is((select string_agg(a->>'name', ',') from jsonb_array_elements(public.admin_view_as_agents('viewas nolog','33000000-0000-0000-0000-000000000002')) g, jsonb_array_elements(g->'agents') a),'Viewas Nologin','view-as agents: search by agent name');
+select is((select string_agg(a->>'name', ',') from jsonb_array_elements(public.admin_view_as_agents('VIEWAS.HASLOGIN@','33000000-0000-0000-0000-000000000002')) g, jsonb_array_elements(g->'agents') a),'Viewas Haslogin','view-as agents: search by agent email');
+select is((select count(*)::int from jsonb_array_elements(public.admin_view_as_agents('zeta viewas','33000000-0000-0000-0000-000000000002')) g, jsonb_array_elements(g->'agents') a, jsonb_object_keys(a) k where k not in ('id','name','email','status','hasLogin')),0,'view-as agents: only id, name, email, status and hasLogin are returned');
+select throws_ok($$select public.admin_view_as_agents('','33000000-0000-0000-0000-000000000001')$$,'42501',null,'view-as agents: a non-admin cannot list agents');
+select throws_ok($$select public.admin_view_as_agent_start('53000000-0000-0000-0000-0000000000b7','33000000-0000-0000-0000-000000000001')$$,'42501',null,'view-as agents: a non-admin cannot sign in as an agent');
+set local role authenticated;
+set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000002"}';
+select throws_ok($$select public.admin_view_as_agents('','33000000-0000-0000-0000-000000000002')$$,'42501',null,'view-as agents: the list is service role only (admin-view-as), never called from a browser');
+reset role;
+select is(public.admin_view_as_agent_target('53000000-0000-0000-0000-0000000000b8','33000000-0000-0000-0000-000000000002')->>'authUserId',null,'view-as agents: an agent without a login needs one made');
+-- admin-view-as makes the Auth account (no password, nothing emailed); a plain row stands for it here.
+insert into auth.users(id,email) values ('33000000-0000-0000-0000-0000000000b8','viewas.nologin@example.test');
+select lives_ok($$select public.admin_view_as_agent_link('53000000-0000-0000-0000-0000000000b8','33000000-0000-0000-0000-0000000000b8','33000000-0000-0000-0000-000000000002')$$,'view-as agents: the password-less login is linked to the agent');
+select is(public.admin_view_as_agent_start('53000000-0000-0000-0000-0000000000b8','33000000-0000-0000-0000-000000000002')->>'email','viewas.nologin@example.test','view-as agents: an admin can sign in as an agent without a login');
+select is((select m.status from public.agency_memberships m join public.agents a on a.profile_id = m.user_id where a.id = '53000000-0000-0000-0000-0000000000b8'),'Active','view-as agents: the agent''s workspace opens while the admin is signed in as them');
+select is((select count(*)::int from public.admin_view_events where agent_id = '53000000-0000-0000-0000-0000000000b8' and business_id = '13000000-0000-0000-0000-0000000000b7' and target_type = 'agent' and ended_at is null),1,'view-as agents: the start is recorded with admin, agent and business');
+select is((select a->>'hasLogin' from jsonb_array_elements(public.admin_view_as_agents('viewas nolog','33000000-0000-0000-0000-000000000002')) g, jsonb_array_elements(g->'agents') a),'false','view-as agents: the made login is still No login yet (no password)');
+select throws_ok($$select public.admin_view_as_agent_start('53000000-0000-0000-0000-0000000000b7','33000000-0000-0000-0000-0000000000b8')$$,'42501',null,'view-as agents: a signed-in-as session cannot start another switch (nested refused)');
+select is(public.admin_view_as_end('33000000-0000-0000-0000-000000000002') >= 1,true,'view-as agents: Back to admin ends the switch');
+select is((select count(*)::int from public.admin_view_events where agent_id = '53000000-0000-0000-0000-0000000000b8' and ended_at is not null),1,'view-as agents: the end is recorded');
+select is((select m.status from public.agency_memberships m join public.agents a on a.profile_id = m.user_id where a.id = '53000000-0000-0000-0000-0000000000b8'),'Inactive','view-as agents: the password-less login opens nothing after the admin goes back');
+select ok(pg_get_functiondef('public.portal_invitation_create(uuid,uuid,text,text,text,uuid)'::regprocedure) like '%admin_view_agent_logins%','view-as agents: the normal invitation is not refused for an agent signed in as before being invited');
+select is(public.admin_view_as_agent_start('53000000-0000-0000-0000-0000000000b8','33000000-0000-0000-0000-000000000002')->>'name','Viewas Nologin','view-as agents: signing in again switches the made login on again');
+select is((select count(*)::int from public.admin_view_events where admin_auth_user = '33000000-0000-0000-0000-000000000002' and ended_at is null),1,'view-as agents: one open switch per admin');
 -- Messages popup (migration 20261117024731): finding a contact and sharing into a team are admin only.
 set local role authenticated;
 set local request.jwt.claims='{"sub":"33000000-0000-0000-0000-000000000001"}';

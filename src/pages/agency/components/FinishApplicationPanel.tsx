@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/pages/admin/components/ui";
-import { getWizardSummary, sendApplicationInvitation, type WizardSummary } from "@/pages/agency/lib/portalApplications";
+import { getWizardSummary, INVITE_SMS_LABEL, sendApplicationInvitation, type WizardSummary } from "@/pages/agency/lib/portalApplications";
 import { WIZARD_STEPS, WIZARD_QUESTIONS } from "@/pages/agency/lib/wizardConfig";
 import { validateEmail } from "@/pages/agency/lib/userValidation";
 import { AgentHandoffPanel, StudentHandoffNotice } from "@/pages/agency/components/ApplicationHandoff";
@@ -18,6 +18,9 @@ export default function FinishApplicationPanel({ id, email, onContinue, canInvit
   const [error, setError] = useState("");
   const [correcting, setCorrecting] = useState(false);
   const [recipient, setRecipient] = useState(email);
+  // INVITE-SMS: the link also goes by text message to the student's mobile (ClickSend), unless unticked.
+  const [alsoText, setAlsoText] = useState(true);
+  const [sentNote, setSentNote] = useState("");
   // APPLICATION-STUDENT-SIGNS: the agent fills, then sends it to the student to review and sign (only the student signs).
   const { handoff, reload: reloadHandoff } = useHandoff(id);
   const refresh = useCallback(async () => { setSummary(await getWizardSummary(id)); await reloadHandoff(); }, [id, reloadHandoff]);
@@ -38,7 +41,8 @@ export default function FinishApplicationPanel({ id, email, onContinue, canInvit
     setSending(true);
     setError("");
     try {
-      await sendApplicationInvitation(id, recipient.trim().toLowerCase() === email.trim().toLowerCase() ? undefined : recipient);
+      const sms = await sendApplicationInvitation(id, recipient.trim().toLowerCase() === email.trim().toLowerCase() ? undefined : recipient, alsoText);
+      setSentNote(["Sent by email.", INVITE_SMS_LABEL[sms]].filter(Boolean).join(" "));
       setCorrecting(false);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "The invitation could not be sent.");
@@ -75,6 +79,7 @@ export default function FinishApplicationPanel({ id, email, onContinue, canInvit
         </dl>
       ) : null}
       {error ? <p role="alert" className="text-sm text-red-800">{error}</p> : null}
+      {sentNote ? <p role="status" className="text-sm text-emerald-800" data-testid="invite-sent-note">{sentNote}</p> : null}
       {canInvite && handoff?.state === "change_requested" ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="handoff-change-note">
         The student asked for a change: “{handoff.changeNote}”. Make the change, then send it to the student again.</p> : null}
       {!open ? (
@@ -86,6 +91,10 @@ export default function FinishApplicationPanel({ id, email, onContinue, canInvit
             <input value={recipient} onChange={(event) => setRecipient(event.target.value)} type="email" maxLength={254}
               className="block w-full max-w-sm rounded-md border border-background-300 px-3 py-2" />
           </label> : null}
+          <label className="flex items-center gap-2 text-sm text-foreground-700">
+            <input type="checkbox" checked={alsoText} onChange={(event) => setAlsoText(event.target.checked)} className="h-4 w-4" data-testid="invite-also-text" />
+            Also send the link by text message to the student's mobile
+          </label>
           <div className="flex flex-wrap gap-2">
             <Button onClick={onContinue}>Continue filling in</Button>
             {!correcting && !validateEmail(recipient) ? <Button variant="ghost" disabled={sending} onClick={() => setCorrecting(true)}>Correct student email</Button> : null}

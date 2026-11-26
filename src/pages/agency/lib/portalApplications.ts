@@ -21,13 +21,30 @@ if (typeof window !== "undefined") window.addEventListener("portal-scope-changed
   draftVersions.clear(); wizardSaveStamps.clear(); draftQueues.clear();
 });
 export async function flushApplicationEdits(id: string): Promise<void> { await draftQueues.get(id); }
+/** An Error carrying the Postgres code (23514 = check_violation: its message is meant for the user). */
+export function dbError(error: { message: string; code?: string }): Error & { code?: string } {
+  return Object.assign(new Error(error.message), { code: error.code });
+}
+export const isCheckViolation = (e: unknown): e is Error => e instanceof Error && (e as { code?: string }).code === "23514";
+
+/** AVETMISS-CHECK: answers checked against the AVETMISS code lists (public.avetmiss_check_answers). fieldErrors only flags values that
+ * are filled in and invalid (blank passes); missingForSubmit lists what the student's record still lacks to submit. Null when the
+ * database has no such check (the save itself still refuses a bad value). */
+export interface AvetmissCheck { fieldErrors: Record<string, string>; missingForSubmit: string[] }
+export async function avetmissCheckAnswers(values: Record<string, unknown>, studentId: string | null): Promise<AvetmissCheck | null> {
+  const { data, error } = await supabase.rpc("avetmiss_check_answers", { p_values: values, p_student: studentId });
+  if (error) { if (error.code === "PGRST202") return null; throw new Error(error.message); }
+  const row = (data ?? {}) as { fieldErrors?: Record<string, string>; missingForSubmit?: string[] };
+  return { fieldErrors: row.fieldErrors ?? {}, missingForSubmit: Array.isArray(row.missingForSubmit) ? row.missingForSubmit.map(String) : [] };
+}
+
 async function draftCommand(id: string, fn: string, args: Record<string, unknown>): Promise<unknown> {
   const prior = draftQueues.get(id) ?? Promise.resolve();
   const task = prior.catch(() => undefined).then(async () => {
     if (!draftVersions.has(id)) throw new Error("Reload the application before editing.");
     const stamp = fn === "portal_wizard_save" ? { p_saved_at: wizardSaveStamps.get(id) ?? null } : {};
     const { data, error } = await supabase.rpc(fn, { p_application_id: id, p_expected_version: draftVersions.get(id), ...stamp, ...args });
-    if (error) throw new Error(error.message);
+    if (error) throw dbError(error);
     draftVersions.set(id, Number(typeof data === "number" ? data : data.draft_version));
     if (fn === "portal_wizard_save") wizardSaveStamps.set(id, data.saved_at ?? null);
     return data;
@@ -519,6 +536,17 @@ export async function saveStudent(input: StudentInput): Promise<{ id: string; na
   return { id: str(r.id), name: str(r.name), email: str(r.email), phone: str(r.phone), businessId: str(r.businessId), agentId: r.agentId ? str(r.agentId) : null, reused: Boolean(r.reused) };
 }
 
+/** A draft just created has no draft version yet: read it once (as getApplication does) so the first save can be checked
+ * against it (STUDENT-NEW-APPLICATION-SAVE). An error leaves it untracked; draftCommand then asks for a reload as before. */
+async function trackNewDraft(id: string): Promise<void> {
+  const { data, error } = await supabase.rpc("portal_wizard_application", { p_application: id });
+  if (error || !data) return;
+  const r = data as Record<string, unknown>;
+  const merged = (r.data as Record<string, unknown>) ?? {};
+  draftVersions.set(id, Number(r.draft_version ?? 0));
+  wizardSaveStamps.set(id, str(merged.savedAt) || null);
+}
+
 /** Creates the student and draft in one transaction. */
 export async function createStudentDraft(email: string, agentId: string, clientKey: string): Promise<string> {
   const { data, error } = await supabase.rpc("portal_start_student_draft", {
@@ -526,17 +554,27 @@ export async function createStudentDraft(email: string, agentId: string, clientK
   });
   if (error) throw new Error(error.message, { cause: error });
   if (typeof data !== "string") throw new Error("The draft could not be created.");
+  await trackNewDraft(data);
   return data;
 }
 
-export async function sendApplicationInvitation(applicationId: string, correctedEmail?: string): Promise<void> {
-  const { error } = await supabase.functions.invoke("student-application-invite", {
-    body: { applicationId, correctedEmail },
+/** INVITE-SMS: what happened to the text message sent with the invitation email. */
+export type InviteSmsResult = "sent" | "failed" | "no_mobile" | "not_connected" | "not_requested" | "skipped";
+export const INVITE_SMS_LABEL: Record<InviteSmsResult, string> = {
+  sent: "Also sent by text message.", failed: "The text message could not be sent (the email went).",
+  no_mobile: "No text sent: the application has no mobile number.", not_connected: "No text sent: ClickSend is not connected (Integrations › Connections).",
+  not_requested: "", skipped: "",
+};
+
+export async function sendApplicationInvitation(applicationId: string, correctedEmail?: string, text = true): Promise<InviteSmsResult> {
+  const { data, error } = await supabase.functions.invoke("student-application-invite", {
+    body: { applicationId, correctedEmail, channels: text ? ["email", "sms"] : ["email"] },
   });
   if (error) {
     const detail = error.context instanceof Response ? await error.context.json().catch(() => null) : null;
     throw new Error(detail?.error ?? "The invitation could not be sent. Try again from Finish Application.");
   }
+  return (data?.sms as InviteSmsResult) ?? "not_requested";
 }
 
 export interface WizardSummary {
@@ -563,6 +601,7 @@ export async function createApplicationForStudent(clientKey: string, studentId: 
   if (error) throw new Error(error.message, { cause: error });
   const row = (Array.isArray(data) ? data[0] : data) as { application_id?: string; application_reference?: string } | null | undefined;
   if (!row?.application_id) throw new Error("The application could not be created.");
+  await trackNewDraft(String(row.application_id));
   return { id: String(row.application_id), reference: String(row.application_reference ?? "") };
 }
 
@@ -571,6 +610,8 @@ export interface StudentAgencyOptions {
   ask: boolean;
   businesses: Array<{ id: string; name: string }>;
   agents: Array<{ id: string; name: string; role: string }>;
+  /** Who the student is recorded with now (STUDENT-NEW-APPLICATION-AGENT; null before migration 20261127030517). */
+  current: { businessId: string | null; businessName: string | null; direct: boolean; agentId: string | null; agentName: string | null; hasApplications: boolean } | null;
 }
 
 /** Active businesses a self-enrolled student may choose, and (for one business) its active agents. */
@@ -578,7 +619,14 @@ export async function studentAgencyOptions(businessId?: string): Promise<Student
   const { data, error } = await supabase.rpc("portal_student_agency_options", { p_business: businessId ?? null });
   if (error) throw new Error(error.message);
   const row = (data ?? {}) as Partial<StudentAgencyOptions>;
-  return { ask: row.ask === true, businesses: row.businesses ?? [], agents: row.agents ?? [] };
+  return { ask: row.ask === true, businesses: row.businesses ?? [], agents: row.agents ?? [], current: row.current ?? null };
+}
+
+/** The signed-in student picks another active agent of their own business (portal_student_change_agent). */
+export async function changeStudentAgent(agentId: string): Promise<{ agentName: string }> {
+  const { data, error } = await supabase.rpc("portal_student_change_agent", { p_agent: agentId });
+  if (error) throw new Error(error.message);
+  return { agentName: String((data as { agentName?: string } | null)?.agentName ?? "") };
 }
 
 /** Moves the signed-in student (record, sign-in and pending invitation) under the chosen business and agent. */
@@ -738,14 +786,14 @@ export async function assignApplicationAgent(applicationId: string, agentProfile
  */
 export async function submitApplication(
   applicationId: string,
-  consent: { declarations: Record<string, string> },
+  consent: { declarations: Record<string, string>; signature?: string },
 ): Promise<{ reference: string; waitingGuardian: boolean }> {
   const key = "submission:" + applicationId + ":" + (draftVersions.get(applicationId) ?? "unknown");
   const { data, error } = await supabase.rpc("portal_submit_v2", {
     p_application_id: applicationId, p_expected_version: draftVersions.get(applicationId),
     p_request_key: key, p_consent: consent,
   });
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return { reference: String(data?.reference ?? ""), waitingGuardian: data?.state === "waiting_guardian" };
 }
 
@@ -857,7 +905,7 @@ export async function openOfferLetter(letterId: string): Promise<void> {
 /** Accept offer: the student or agent confirms (no signature); the application moves to Offer accepted. */
 export const acceptOffer = (applicationId: string) => rpcOrThrow<void>("portal_offer_accept", { p_application: applicationId });
 /** Resubmit (Action required → Submitted): the student signs the declarations again ({ declarations: { key: hash } }); only the student. */
-export const resubmitApplication = (applicationId: string, note = "", consent: { declarations: Record<string, string> } | null = null) =>
+export const resubmitApplication = (applicationId: string, note = "", consent: { declarations: Record<string, string>; signature?: string } | null = null) =>
   rpcOrThrow<void>("portal_application_resubmit", { p_application: applicationId, p_note: note, p_consent: consent });
 /** Send reminder: emails the student or agent what Action required still asks for. */
 export const sendActionReminder = (applicationId: string, note = "") => rpcOrThrow<void>("portal_application_reminder", { p_application: applicationId, p_note: note });

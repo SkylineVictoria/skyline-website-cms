@@ -2,10 +2,6 @@ import LmsPage, { OldBatchRedirect } from "@/pages/admin/lms/LmsPage";
 import CommunicationHubPage from "@/pages/admin/CommunicationHubPage";
 import EmailManagementPage from "@/pages/admin/EmailManagementPage";
 import IntegrationConnectionsPage from "@/pages/admin/integrations/ConnectionsPage";
-import IntegrationWebhooksPage from "@/pages/admin/integrations/WebhooksPage";
-import IntegrationSyncHistoryPage from "@/pages/admin/integrations/SyncHistoryPage";
-import IntegrationLogsPage from "@/pages/admin/integrations/LogsPage";
-import IntegrationSettingsPage from "@/pages/admin/integrations/SettingsPage";
 import ApplicationStatusesPage from "@/pages/admin/ApplicationStatusesPage";
 import { Navigate } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
@@ -88,6 +84,7 @@ import AdminSigningPage from "@/pages/admin/SigningPage";
 import FinancePaymentsPage from "@/pages/admin/finance/PaymentsPage";
 import SigningPage from "@/pages/SigningPage";
 import GuardianSignPage from "@/pages/guardian-sign/page";
+import TextInvitePage from "@/pages/TextInvitePage";
 import { LegacyCandidateRedirect, LegacyEmployeeRedirect, LegacyStaffDetailRedirect } from "@/pages/admin/staffRoutes";
 import CandidatesPage, { CandidateDetailPage } from "@/pages/admin/CandidatesPage";
 import StaffHomePage from "@/pages/staff/StaffHomePage";
@@ -168,6 +165,9 @@ const routes: RouteObject[] = [
   { path: "/sign", element: <SigningPage /> },
   // APPLICATION-STUDENT-SIGNS: a parent / guardian signs a minor's application from the emailed link (no account; one-time code).
   { path: "/guardian-sign", element: <GuardianSignPage /> },
+  // CONTACT-VERIFY: a CMS invitation opened from the text message (email confirmed with a code, then the password).
+  { path: "/admin/text-invite", element: <TextInvitePage /> },
+  { path: "/agency/text-invite", element: <TextInvitePage fn="portal-admin-users" /> },
   // BOOK-01: the booking module. /book/... and /booking work signed out (the emailed token is in the URL fragment).
   { path: "/bookings", element: <BookingsPage /> },
   { path: "/book/:handle", element: <PublicBookingPage /> },
@@ -331,10 +331,10 @@ const routes: RouteObject[] = [
           { path: "integrations/applications", element: <IntegrationConnectionsPage /> },
           { path: "integrations/add", element: <IntegrationConnectionsPage /> },
           { path: "integrations/credentials", element: <IntegrationConnectionsPage /> },
-          { path: "integrations/webhooks", element: <IntegrationWebhooksPage /> },
-          { path: "integrations/sync-history", element: <IntegrationSyncHistoryPage /> },
-          { path: "integrations/logs", element: <IntegrationLogsPage /> },
-          { path: "integrations/settings", element: <RequireAdmin><IntegrationSettingsPage /></RequireAdmin> },
+          { path: "integrations/webhooks", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/sync-history", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/logs", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/settings", element: <RequireAdmin><IntegrationConnectionsPage /></RequireAdmin> },
           { path: "knowledge", element: <RequireAdmin><KnowledgePage /></RequireAdmin> },
           { path: "settings/application-statuses", element: <RequireAdmin><ApplicationStatusesPage /></RequireAdmin> },
           // The Document Extraction page was removed; old links land on the dashboard.

@@ -27,8 +27,8 @@ async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
 }
 
 /** Save / replace / disconnect the details of a ClickSend, WhatsApp Business, Microsoft Teams channels or Google Maps connection. Values never come back. */
-export default function CommConnectionForm({ connectionId, connectorId, busy, perform, onNotice }: {
-  connectionId: string; connectorId: string; busy: boolean; perform: (operation: () => Promise<void>) => Promise<void>; onNotice: (text: string) => void;
+export default function CommConnectionForm({ connectionId, ensureConnection, connectorId, busy, perform, onNotice, onDraftChange }: {
+  connectionId?: string; ensureConnection: () => Promise<string>; connectorId: string; busy: boolean; perform: (operation: () => Promise<void>) => Promise<void>; onNotice: (text: string) => void; onDraftChange: (dirty: boolean) => void;
 }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [editing, setEditing] = useState(false);
@@ -36,9 +36,11 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
   const [b, setB] = useState('');
   const [c, setC] = useState('');
   const [channels, setChannels] = useState<Channel[]>([{ name: '', url: '' }]);
-  const refresh = useCallback(async () => { try { setSummary(await rpc<Summary>('integration_comm_summary', { p_connection: connectionId })); } catch { setSummary(null); } }, [connectionId]);
-  useEffect(() => { void refresh(); }, [refresh]);
-  const reset = () => { setA(''); setB(''); setC(''); setChannels([{ name: '', url: '' }]); setEditing(false); };
+  const refresh = useCallback(async (id: string) => {
+    try { setSummary(await rpc<Summary>('integration_comm_summary', { p_connection: id })); } catch { setSummary(null); }
+  }, []);
+  useEffect(() => { if (connectionId) void refresh(connectionId); }, [connectionId, refresh]);
+  const reset = () => { setA(''); setB(''); setC(''); setChannels([{ name: '', url: '' }]); setEditing(false); onDraftChange(false); };
 
   const maps = connectorId === 'google_maps';
   const search = SEARCH_KEY[connectorId];
@@ -49,13 +51,15 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
   const ready = connectorId === 'microsoft_teams' ? channels.some(x => x.name.trim() && x.url.trim()) : maps ? GOOGLE_KEY.test(b.trim()) : search ? search.re.test(b.trim()) : !!a.trim() && !!b.trim();
 
   const save = () => perform(async () => {
-    await rpc('integration_comm_credentials_save', { p_connection: connectionId, p_fields: fields });
-    reset(); await refresh();
+    const id = await ensureConnection();
+    await rpc('integration_comm_credentials_save', { p_connection: id, p_fields: fields });
+    reset(); await refresh(id);
     onNotice(maps ? 'Google Maps key saved. Use Check connection to test it.' : search ? `${search.label} key saved. Use Check connection to test it.` : 'Details saved. The Communication Hub can use this connection now.');
   });
   const clear = () => perform(async () => {
+    if (!connectionId) return;
     await rpc('integration_comm_credentials_clear', { p_connection: connectionId });
-    reset(); await refresh();
+    reset(); await refresh(connectionId);
     onNotice(search ? `${search.label} disconnected. Add business offers only pasted OMARA links unless the other search service is set up.` : maps ? 'Google Maps disconnected. Add business no longer fills the office from Google Maps (unless the server fallback key is set).' : 'Connection disconnected. The Communication Hub no longer offers it.');
   });
 
@@ -79,7 +83,8 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
           </div>
         </div>
       ) : (
-        <form className="space-y-3" onSubmit={e => { e.preventDefault(); void save(); }}>
+        // rule-policy: technical integration-credential-editor Track unsaved fields in the existing credential form.
+        <form className="space-y-3" onChangeCapture={() => onDraftChange(true)} onSubmit={e => { e.preventDefault(); void save(); }}>
           {connectorId === 'clicksend' ? <>
             <p className="text-sm">From the ClickSend dashboard: Developers › API Credentials.</p>
             <label className="block">API username<input className={inputClass} value={a} onChange={e => setA(e.target.value)} autoComplete="off" required maxLength={200} /></label>
@@ -110,13 +115,13 @@ export default function CommConnectionForm({ connectionId, connectorId, busy, pe
                   onChange={e => setChannels(list => list.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} />
                 <input className={inputClass} type="password" autoComplete="new-password" placeholder="Channel link (https://…)" value={ch.url} aria-label={`Channel ${i + 1} link`}
                   onChange={e => setChannels(list => list.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} />
-                <Button type="button" variant="ghost" disabled={channels.length === 1} onClick={() => setChannels(list => list.filter((_, j) => j !== i))}>Remove</Button>
+                <Button type="button" variant="ghost" disabled={channels.length === 1} onClick={() => { onDraftChange(true); setChannels(list => list.filter((_, j) => j !== i)); }}>Remove</Button>
               </div>
             ))}
-            {channels.length < 20 && <Button type="button" variant="outline" onClick={() => setChannels(list => [...list, { name: '', url: '' }])}>Add another channel</Button>}
+            {channels.length < 20 && <Button type="button" variant="outline" onClick={() => { onDraftChange(true); setChannels(list => [...list, { name: '', url: '' }]); }}>Add another channel</Button>}
           </>}
           <div className="flex flex-wrap gap-2">
-            <Button type="submit" disabled={busy || !ready}>{saved ? 'Save new details' : 'Save & Connect'}</Button>
+            <Button type="submit" disabled={busy || !ready}>{saved ? 'Save new details' : 'Save connection'}</Button>
             {editing && <Button type="button" variant="outline" onClick={reset}>Cancel</Button>}
           </div>
         </form>

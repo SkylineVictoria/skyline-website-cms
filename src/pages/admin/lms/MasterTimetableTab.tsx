@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { LOAD_HOURS, shortDate } from "@/pages/admin/lib/rto";
 import MasterCyclesPanel, { FillSchoolBreaksButton } from "./MasterCyclesPanel";
+import CourseHolidaysPanel from "./CourseHolidaysPanel";
 import { COE_HOURS, CyclesUnavailable, cyclesCall, fixedWeeks, planTill, type CyclePlan } from "@/pages/admin/lib/masterCycles";
 
 interface Row {
@@ -228,6 +229,8 @@ export default function MasterTimetableTab({ courseId, courseCode, onSaved }: { 
       <button type="button" disabled={busy} onClick={() => setBreakDraft(null)} className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Cancel</button>
       {breakProblem && (breakDraft.startDate || breakDraft.endDate) ? <span className="text-xs text-red-700">{breakProblem}</span> : null}
     </div> : null}
+
+    <CourseHolidaysPanel courseId={courseId} courseCode={courseCode} from={start} to={planTill(start, master.endDate, cycles, plan).till} canEdit={canEdit} />
 
     {!order.length ? <p className="py-10 text-center text-sm text-foreground-500">This course has no active units. Add units first.</p> : <div className="overflow-x-auto rounded-lg border border-background-200">
       <table className="w-full min-w-[700px] text-sm">

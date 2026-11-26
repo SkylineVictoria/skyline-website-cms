@@ -57,6 +57,8 @@ export interface AdminDeps {
   sendTemplate?(mail: { to: string; message: { subject: string; text: string; html?: string }; deliveryId: string }): Promise<{ state: "sent" | "failed" | "skipped"; messageId?: string; error?: string }>;
   /** The one-time set-password page for a token. */
   accountUrl?(token: string): string;
+  /** CONTACT-VERIFY: the same link by text, as its own alias of the emailed link (never fails the email; no mobile or ClickSend = no text). */
+  textLink?(input: { profileId: string; baseHash: string; url: (token: string) => string; expiresAt: string | null; what: string }): Promise<void>;
   /** Auth (service role): a new, unconfirmed login for this email with no password anyone knows (it cannot sign in until the person sets one). */
   createLogin?(email: string, name: string): Promise<{ userId: string | null; error: string | null }>;
   /** Auth (service role): removes a login this request created. */
@@ -123,6 +125,10 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
   // Makes a link (only its hash reaches the database through `rpc`), emails it inline, logs the outcome without the token, and
   // cancels that link at once when the email failed. Shared by document, re-upload, offer and hire links. The person is `pid`, or,
   // when the caller does not know them yet (hire: a candidate application id), the profileId the database answers with.
+  const textToo = async (pid: string | null, baseHash: string | null | undefined, url: (token: string) => string, expiresAt: string | null | undefined, what: string) => {
+    if (!pid || !baseHash || !deps.textLink) return;
+    await deps.textLink({ profileId: pid, baseHash, url, expiresAt: expiresAt ?? null, what }).catch(() => undefined);
+  };
   const sendLinkFlow = async (purpose: LinkPurpose, rpc: string, args: Record<string, unknown>, pid: string | null = profileId): Promise<AdminResult> => {
     if (!deps.config.siteUrl) return { status: 503, body: { error: "Links cannot be sent: EF_HR_PUBLIC_SITE_URL is not set.", code: "configuration_unavailable" } };
     const link = await deps.newLink();
@@ -159,6 +165,8 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       // Sending is off: hand the link to the admin ONCE to pass on themselves. It is not stored anywhere.
       return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again.", profileId: owner } };
     }
+    await textToo(owner, link.hash, (t) => deps.linkUrl(purpose, t), invite.invite.expiresAt,
+      purpose === "offer" ? "sent you your offer" : purpose === "reupload" ? "asked you to upload a document again" : "asked you to add your documents");
     return { status: 200, body: { emailSent: true, expiresAt: invite.invite.expiresAt, profileId: owner } };
   };
 
@@ -309,6 +317,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
         return { status: 502, body: { emailSent: false, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; the login stays linked. Use Send sign-in link again.` } };
       }
       if (sent.state === "skipped") return { status: 200, body: { emailSent: false, link: url, expiresAt: made.expiresAt, needsPassword, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+      if (link) await textToo(profileId, link.hash, (t) => deps.accountUrl!(t), made.expiresAt, "sent you a link to create your password");
       return { status: 200, body: { emailSent: true, needsPassword, expiresAt: made.expiresAt } };
     }
     case "send_documents":
@@ -391,6 +400,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
       if (sent.state === "skipped") {
         return { status: 200, body: { emailSent: false, link: signingLink, expiresAt: made.expiresAt, needsPassword, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
       }
+      if (link) await textToo(profileId, link.hash, (t) => deps.accountUrl!(t), made.expiresAt, "sent you your offer");
       return { status: 200, body: { emailSent: true, needsPassword, expiresAt: made.expiresAt, firstSend: made.firstSend } };
     }
     case "resend_login": {
@@ -411,6 +421,7 @@ export async function handleAdmin(body: Record<string, unknown>, deps: AdminDeps
         return { status: 502, body: { emailSent: false, error: `The email could not be sent (${sent.error ?? "error"}). The link was cancelled; use Resend login again.` } };
       }
       if (sent.state === "skipped") return { status: 200, body: { emailSent: false, link: url, expiresAt: invite.expiresAt, note: "Email sending is switched off. Copy this link now; it is not shown again." } };
+      await textToo(profileId, link.hash, (t) => deps.accountUrl!(t), invite.expiresAt, "sent you a link to create your password");
       return { status: 200, body: { emailSent: true, expiresAt: invite.expiresAt } };
     }
     case "send_invite": {

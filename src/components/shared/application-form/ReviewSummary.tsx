@@ -21,8 +21,11 @@ export interface ReviewIssue { key: string; step: string; text: string; onJump: 
  * Review & submit: "13 of 14 complete", every missing or invalid item first (each a link to its field), then the steps grouped by
  * stage, one row each (✓ / ⚠, Edit), opening to a tight label / value grid. What follows (declaration, Submit) is the caller's.
  */
-export default function ReviewSummary({ groups, issues = [], meta, readOnly, onEdit, children }: {
+export default function ReviewSummary({ groups, issues = [], meta, readOnly, onEdit, children, hideSteps = false, title = "Review & submit" }: {
   groups: readonly ReviewGroup[];
+  /** One-page form: the steps are on the page above, so only what is missing and the signature are shown here. */
+  hideSteps?: boolean;
+  title?: string;
   issues?: readonly ReviewIssue[];
   meta?: string;
   readOnly?: boolean;
@@ -37,7 +40,7 @@ export default function ReviewSummary({ groups, issues = [], meta, readOnly, onE
   return (
     <div className="rounded-xl border border-background-200 bg-background-50 p-4 sm:p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h3 className="font-heading text-lg font-semibold text-foreground-950">Review &amp; submit</h3>
+        <h3 className="font-heading text-lg font-semibold text-foreground-950">{title}</h3>
         <p className="text-sm text-foreground-600" data-testid="review-complete">
           <span className="font-semibold text-foreground-950">{complete} of {steps.length}</span> complete
         </p>
@@ -63,7 +66,7 @@ export default function ReviewSummary({ groups, issues = [], meta, readOnly, onE
         </div>
       ) : null}
 
-      {groups.map((group) => (
+      {(hideSteps ? [] : groups).map((group) => (
         <section key={group.key} className="mt-4" aria-label={group.title}>
           <p className="mb-1 text-xs font-medium uppercase tracking-wide text-foreground-500">{group.title}</p>
           <ul className="divide-y divide-background-200 border-y border-background-200" aria-label="Steps">

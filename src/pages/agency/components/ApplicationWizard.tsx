@@ -13,7 +13,8 @@ import {
   saveWizardDraft,
   submitApplication,
   sendApplicationInvitation,
-  getWizardSummary,
+  avetmissCheckAnswers,
+  isCheckViolation,
   uploadApplicationDocument,
   type ApplicationCourseRow,
   type DocumentRow,
@@ -24,7 +25,7 @@ import { BORN_IN_PASSPORT_COUNTRY, PASSPORT_COUNTRY_LABEL } from "@/pages/agency
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
 import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
-import { AVETMISS_EXTRA_FIELDS, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingScreen, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
 import { academicPrefill } from "@/pages/agency/lib/educationLevels";
@@ -54,9 +55,10 @@ import { englishAlternatives, usiRequired } from "@/pages/agency/lib/admissionsR
 import EnglishAlternative, { ENGLISH_PATHWAY, EnglishNotMetDialog, type AusStudyAnswer, type CambridgeAnswer } from "@/pages/agency/components/EnglishAlternative";
 import { PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import { GuardianRequestForm, RequestChangeButton, StudentHandoffNotice } from "@/pages/agency/components/ApplicationHandoff";
+import { GuardianRequestForm, RequestChangeButton, SignPasswordFields, StudentHandoffNotice, type SignPassword } from "@/pages/agency/components/ApplicationHandoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
-import { declarationConsent } from "@/pages/agency/lib/handoff";
+import { declarationConsent, saveSignPassword } from "@/pages/agency/lib/handoff";
+import DrawSignature from "@/pages/agency/components/DrawSignature";
 import { logAdminAccess } from "@/pages/agency/lib/applicationPdf";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
@@ -234,6 +236,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [draftIssuingCountry, setDraftIssuingCountry] = useState("");
   const [savingAnswers, setSavingAnswers] = useState(false);
   const [answerSaveError, setAnswerSaveError] = useState("");
+  // AVETMISS-CHECK: fields the AVETMISS check refused on this screen (Next stays disabled until each is changed), and what other
+  // screens still need (a summary with links: values refused elsewhere, and on Submit what the student record lacks).
+  const [avetmissKeys, setAvetmissKeys] = useState<string[]>([]);
+  const [checkSummary, setCheckSummary] = useState<{ label: string; screen: string }[]>([]);
   const [institutionCourses, setInstitutionCourses] = useState<ApplicationCourseRow[] | null>(null);
   // Staff: the courses of Learning Management (rto_admin course_list, every status) by their CMS id; RTO Managers may add an intake from here.
   const [staffCourses, setStaffCourses] = useState<RtoCourse[] | null>(null);
@@ -260,6 +266,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const signsHere = role === "student";
   const studentLocked = signsHere && Boolean(handoff?.state);
   const declarationsRef = useRef<{ ticked: Record<string, string>; complete: boolean }>({ ticked: {}, complete: false });
+  // A student who opened the application from the link alone creates the password at the signature (owner, 2026-11-26).
+  const signPasswordRef = useRef<SignPassword>({ needed: false, password: "", valid: true });
+  // APPLICATION-DRAWN-SIGNATURE: the student draws their signature on the last screen.
+  const signatureRef = useRef<string | null>(null);
   const [sentToStudent, setSentToStudent] = useState(false);
   const [waitingGuardian, setWaitingGuardian] = useState(false);
   // Bumped when the new screens were filled from the draft (the phone box takes its starting value only when it mounts).
@@ -269,14 +279,26 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     documentsRef.current = documents;
   }, [documents]);
 
-  // APPLICATION-STUDENT-SIGNS: a student opening what their agent filled starts on the review summary (the declaration screen,
-  // with Edit per section); otherwise the wizard resumes at the first incomplete step as before.
-  const reviewOpened = useRef(false);
+  // STUDENT-CONFIRMS-ALL (owner, 2026-11-26): a student opening what their agent filled starts at the passport and confirms every
+  // screen with Next, start to end, before signing; the stepper never jumps past the furthest screen they have confirmed. Their
+  // progress is kept on this device per sending (a new sending after a change request starts again from the passport).
+  const confirmMode = signsHere && handoff?.state === "with_student";
+  const confirmKey = `slit-portal-wizard-confirmed:${portalScopeCacheKey()}:${applicationId}:${handoff?.sentAt ?? ""}`;
+  const confirmedUpTo = useRef(0);
+  const confirmOpened = useRef(false);
   useEffect(() => {
-    if (reviewOpened.current || !signsHere || handoff?.state !== "with_student" || loading) return;
-    reviewOpened.current = true;
-    void getWizardSummary(applicationId).then((summary) => { if (summary?.status === "Ready for Submission") setStep(LAST_STEP); }, () => undefined);
-  }, [signsHere, handoff?.state, loading, applicationId]);
+    if (confirmOpened.current || !confirmMode || loading) return;
+    confirmOpened.current = true;
+    let saved = 0;
+    try { saved = Math.max(0, Math.min(LAST_STEP, Number(window.localStorage.getItem(confirmKey)) || 0)); } catch { /* storage unavailable */ }
+    confirmedUpTo.current = saved;
+    setStep(saved);
+  }, [confirmMode, loading, confirmKey]);
+  useEffect(() => {
+    if (!confirmMode || !confirmOpened.current || step <= confirmedUpTo.current) return;
+    confirmedUpTo.current = step;
+    try { window.localStorage.setItem(confirmKey, String(step)); } catch { /* storage unavailable */ }
+  }, [confirmMode, step, confirmKey]);
 
   useEffect(() => {
     if (!inputVersion) return;
@@ -302,6 +324,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   }, [persist]);
 
   const leaveDraft = async () => {
+    // Save as draft keeps blank answers; only a filled-in invalid AVETMISS value stops it (shown under its field or in the summary).
+    if (!loadError && Object.keys(answers).length) {
+      const screen = step >= DOC_STEPS ? WIZARD_QUESTIONS[step - DOC_STEPS]?.id ?? "" : "";
+      if (!(await avetmissGate(screen, {}, "draft"))) return;
+    }
     if (await persist()) onCancel();
   };
 
@@ -597,7 +624,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         window.setTimeout(() => leaveOnce.current(), 2600);
         return;
       }
-      const receipt = await submitApplication(applicationId, declarationConsent(declarationsRef.current.ticked));
+      await saveSignPassword(signPasswordRef.current);
+      const receipt = await submitApplication(applicationId, declarationConsent(declarationsRef.current.ticked, signatureRef.current));
       try { window.localStorage.removeItem(wizardStepKey(applicationId)); } catch { /* storage unavailable */ }
       if (receipt.waitingGuardian) { setWaitingGuardian(true); void reloadHandoff(); return; }
       setSubmittedRef(receipt.reference || application?.reference || "Submitted");
@@ -605,6 +633,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (role !== "student") window.setTimeout(() => leaveOnce.current(), 2200);
     } catch (error) {
       const message = error instanceof Error ? error.message : "We could not submit the application.";
+      if (isCheckViolation(error)) { setFinishError(message); setFinishing(false); completingRef.current = false; return; }
       // "Required field missing: title" and the like: say which screen holds it, so the agent can go straight there.
       const field = message.match(/:\s*([a-z_]+)\s*$/)?.[1] ?? "";
       const screen = SCREEN_OF_FIELD.get(field) ?? OTHER_SCREENS[field] ?? "";
@@ -694,7 +723,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // Forward navigation cannot bypass documents marked required by the published admissions rule.
   const goTo = async (index: number, completed = false) => {
     if (loading || loadError || finishing) return;
-    const bounded = Math.max(0, Math.min(index, LAST_STEP));
+    // A student confirming the agent's work moves forward one screen at a time (Next), never past what they have confirmed.
+    const bounded = Math.max(0, Math.min(index, LAST_STEP, confirmMode ? Math.max(confirmedUpTo.current, step + 1) : LAST_STEP));
     if (completed && ALL_STEPS[step]) completedSteps.current.add(ALL_STEPS[step].id);
     const missing = bounded > step ? firstMissingBefore(bounded) : -1;
     let next = missing >= 0 ? missing : bounded;
@@ -909,6 +939,40 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   };
 
   /** Checks the screen's answers and saves them to the draft; false when something is missing or the save failed. */
+  /** Scrolls to and focuses a field by its form key. */
+  const focusField = (key: string) => window.requestAnimationFrame(() => {
+    const el = (document.getElementById(`wizard-${key}`) ?? document.querySelector(`[name="${key}"]`)) as HTMLElement | null;
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    el?.focus({ preventScroll: true });
+  });
+  /** AVETMISS-CHECK: the answers on screen (with this screen's cleaned values) checked by the database. Errors on this screen go under
+   * their fields; errors on other screens, and on Submit what the student record still lacks, go to the summary. True = may go on. */
+  const avetmissGate = async (screen: string, values: Record<string, unknown>, mode: "next" | "draft" | "submit"): Promise<boolean> => {
+    let check: Awaited<ReturnType<typeof avetmissCheckAnswers>> = null;
+    try { check = await avetmissCheckAnswers({ ...answers, ...values }, studentIdRef.current); }
+    catch { return true; } // the save itself still refuses a bad value (check_violation, shown as it is)
+    if (!check) return true;
+    const here: Record<string, string> = {};
+    const elsewhere: { label: string; screen: string }[] = [];
+    for (const [key, message] of Object.entries(check.fieldErrors)) {
+      const at = AVETMISS_FIELD_SCREEN[key] ?? SCREEN_OF_FIELD.get(key) ?? OTHER_SCREENS[key] ?? "";
+      if (at === screen) here[key] = message;
+      else elsewhere.push({ label: message, screen: at });
+    }
+    if (mode === "submit") for (const item of check.missingForSubmit) elsewhere.push({ label: `Missing: ${item}`, screen: avetmissMissingScreen(item) });
+    const keys = Object.keys(here);
+    setAvetmissKeys(keys);
+    if (keys.length) {
+      setAnswerErrors((prev) => ({ ...prev, ...here }));
+      focusField(keys[0]);
+    }
+    // Other screens block only the final Submit and Save as draft (Next moves on; that screen's own Next checks it again).
+    const blockingElsewhere = mode === "next" ? [] : elsewhere;
+    setCheckSummary(blockingElsewhere);
+    return !keys.length && !blockingElsewhere.length;
+  };
+  const avetmissPending = avetmissKeys.some((key) => answerErrors[key]);
+
   const saveAnswers = async (target: WizardQuestion): Promise<boolean> => {
     const errors: Record<string, string> = {};
     const values: Record<string, unknown> = {};
@@ -1014,6 +1078,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // One tick agrees and signs: the name is the student's own (from Personal details), never typed again.
       const signer = filled("declaration_name") || [filled("first_name"), filled("middle_name"), filled("last_name")].filter(Boolean).join(" ");
       if (signsHere && !declarationsRef.current.complete) errors.declaration_read = "Read and tick each declaration to sign.";
+      else if (signsHere && !signatureRef.current) errors.declaration_read = "Draw your signature in the box to sign.";
+      else if (signsHere && !signPasswordRef.current.valid) errors.declaration_read = "Create your password (at least the length shown, both the same) to sign.";
       else if (!signer) errors.declaration_read = "Add the student's name on Personal details first.";
       // What the full form used to fill itself: the checklist, USI consent, the agent block and the visa answer.
       const application = await getApplication(applicationId, false).catch(() => null);
@@ -1040,13 +1106,16 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         })(),
         ...(empty("holds_visa") ? { holds_visa: documentsRef.current.some((doc) => doc.category === "Visa") ? "Yes" : "No" } : {}),
       });
-    } else if (studentLocked) {
-      // Course and intake are the agent's (Request a change): nothing to check or save here.
     } else {
+      // STUDENT-CHANGES-COURSE (owner 2026-11-26): the student may change the course and intake the agent chose.
       if (!filled("course")) errors.course = "Choose the course.";
       const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
       if (filled("course") && intakeList?.length === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
       else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen))) errors.preferred_intake = "Choose the intake.";
+      // Australian / NZ citizens and permanent residents study on a VoE; everyone else may start on a CoE or a VoE, by their visa
+      // (owner, 2026-11-26).
+      else if (kind === "domestic" && intakeList?.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen && i.studyLoad && i.studyLoad !== "voe"))
+        errors.preferred_intake = "Australian and New Zealand citizens and permanent residents study on a VoE: choose a VoE start date.";
       if (filled("course")) {
         const staff = staffCourses ? staffCourseOf(answers.course) : null;
         const course: ApplicationCourseRow | null = staffCourses
@@ -1063,6 +1132,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     setAnswerErrors(errors);
     if (Object.values(errors).some(Boolean)) return false;
     setSavingAnswers(true);
+    const allowed = await avetmissGate(target.id, values, "next").finally(() => setSavingAnswers(false));
+    if (!allowed) return false;
+    setSavingAnswers(true);
     setAnswerSaveError("");
     try {
       await flushApplicationEdits(applicationId);
@@ -1072,7 +1144,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if ((target.id === "identifier" || target.id === "language" || target.id === "personal") && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
       return true;
     } catch (error) {
-      setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");
+      // A check_violation (23514) carries the database's own message for the user.
+      setAnswerSaveError(isCheckViolation(error) ? error.message : error instanceof Error ? error.message : "We could not save these answers. Try again.");
       return false;
     } finally {
       setSavingAnswers(false);
@@ -1081,6 +1154,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   const nextFromQuestion = async () => {
     if (!question || !(await saveAnswers(question))) return;
+    // Submit: every AVETMISS value valid and nothing missing from the student record (summary with links otherwise).
+    if (step === LAST_STEP && !(await avetmissGate(question.id, {}, "submit"))) return;
     if (step === LAST_STEP) setFinishing(true);
     else await goTo(step + 1, true);
   };
@@ -1201,12 +1276,16 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <WizardFinishSteps question={question} answers={answers} errors={answerErrors} onChange={setAnswer} onAddress={pickAddress} summary={summary} version={hydrated} passportCountry={passportCountry}
                 studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }}
                 onDeclarations={(ticked, complete) => { declarationsRef.current = { ticked, complete }; if (complete) setAnswerErrors((prev) => ({ ...prev, declaration_read: "" })); }}
+                signExtras={signsHere ? <>
+                  <DrawSignature onChange={(png) => { signatureRef.current = png; if (png) setAnswerErrors((prev) => ({ ...prev, declaration_read: "" })); }} />
+                  <SignPasswordFields applicationId={applicationId} onChange={(value) => { signPasswordRef.current = value; }} />
+                </> : null}
                 extraActions={studentLocked ? <RequestChangeButton applicationId={applicationId} onDone={() => void reloadHandoff()} label="Something your agent set is wrong? Request a change" /> : null} />
             ) : (
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
                 onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId}
                 defaultLoad={kind === "international" ? "coe" : undefined}
-                lockedNote={studentLocked ? <RequestChangeButton applicationId={applicationId} onDone={() => void reloadHandoff()} /> : undefined} />
+                onlyLoad={kind === "domestic" ? "voe" : undefined} />
             )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>
@@ -1307,7 +1386,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   return (
     <WizardShell
       title={"New application"}
-      subtitle={`Upload the documents, answer a few questions and submit. ${agencyName}`}
+      subtitle={confirmMode ? `Your agent has filled this in. Check every screen from the passport to the end and press Next to confirm it, then sign. ${agencyName}` : `Upload the documents, answer a few questions and submit. ${agencyName}`}
       onClose={() => void leaveDraft()}
       closeLabel="Save and close the wizard"
       stepper={
@@ -1344,7 +1423,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               </button>
             ) : null}
             {question && !isLast ? (
-              <button type="button" onClick={() => void nextFromQuestion()} disabled={savingAnswers} className={primaryClass}>
+              <button type="button" onClick={() => void nextFromQuestion()} disabled={savingAnswers || avetmissPending} title={avetmissPending ? "Fix the answers marked in red first" : undefined} className={primaryClass}>
                 {savingAnswers ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
               </button>
             ) : isLast ? (
@@ -1354,7 +1433,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
                     {signsHere ? "Submit now" : "Send now"}
                   </button>
                 ) : null}
-                <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers} className={primaryClass}>
+                <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers || avetmissPending} title={avetmissPending ? "Fix the answers marked in red first" : undefined} className={primaryClass}>
                   {finishing ? (
                     <>
                       <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
@@ -1426,6 +1505,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
                 ? `${expiredPassport.filename} has expired but could not be removed (${expiredPassport.error}). Delete it, then upload the student\u2019s current passport.`
                 : `${expiredPassport?.filename ?? "This passport"} expired${expiredPassport?.date ? ` on ${formatExpiryDate(expiredPassport.date)}` : ""} and was not saved. Upload the student\u2019s current passport to continue.`}
             </WizardNotice>
+          ) : null}
+
+          {checkSummary.length ? (
+            <div role="alert" className="mx-5 my-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 md:mx-6">
+              <p className="font-semibold">Fix these before you go on:</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {checkSummary.map((item, i) => {
+                  const at = WIZARD_QUESTIONS.findIndex((q) => q.id === item.screen);
+                  return <li key={i}>{item.label}{at >= 0 ? <> · <button type="button" className="font-semibold underline" onClick={() => { setCheckSummary([]); void goTo(DOC_STEPS + at); }}>{WIZARD_QUESTIONS[at].title}</button></> : null}</li>;
+                })}
+              </ul>
+            </div>
           ) : null}
 
           {finishError ? (

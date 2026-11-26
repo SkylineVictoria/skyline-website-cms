@@ -42,7 +42,8 @@ export const requestApplicationChange = (applicationId: string, note: string) =>
   rpc<{ state: HandoffState }>("portal_application_request_change", { p_application: applicationId, p_note: note });
 
 /** The ticked declarations as the server records them: { key: hash of the exact text shown }. */
-export const declarationConsent = (ticked: Record<string, string>) => ({ declarations: ticked });
+export const declarationConsent = (ticked: Record<string, string>, signature?: string | null) =>
+  ({ declarations: ticked, ...(signature ? { signature } : {}) });
 
 async function invokeInvite<T>(body: Record<string, unknown>, fallback: string): Promise<T> {
   const { data, error } = await supabase.functions.invoke("student-application-invite", { body });
@@ -55,7 +56,7 @@ async function invokeInvite<T>(body: Record<string, unknown>, fallback: string):
 
 /** The student (under 18) asks a parent / guardian to sign: they get an email link. */
 export const sendGuardianRequest = (applicationId: string, guardian: { name: string; relationship: string; email: string; mobile: string }) =>
-  invokeInvite<{ ok: true }>({ action: "guardian_send", applicationId, ...guardian }, "The email to your parent or guardian could not be sent. Try again.");
+  invokeInvite<{ ok: true; sms?: string }>({ action: "guardian_send", applicationId, ...guardian }, "The email to your parent or guardian could not be sent. Try again.");
 
 export interface GuardianView {
   studentName: string; reference: string | null; guardianName: string; relationship: string; email: string;
@@ -73,6 +74,8 @@ export const HANDOFF_EVENT_LABEL: Record<string, string> = {
   sent: "Sent to the student", resent: "Link sent again", accepted: "Opened by the student", change_requested: "Change requested",
   taken_back: "Taken back by the agent", signed: "Signed by the student", guardian_sent: "Sent to the parent / guardian",
   guardian_verified: "Parent / guardian verified their email", guardian_signed: "Signed by the parent / guardian", submitted: "Submitted",
+  sms_sent: "Text message sent", sms_failed: "Text message not sent", sms_skipped: "No text message",
+  email_confirmed: "Email confirmed", mobile_confirmed: "Mobile confirmed",
 };
 
 export const HANDOFF_STATE_LABEL: Record<HandoffState, string> = {
@@ -91,3 +94,33 @@ export function useHandoff(applicationId: string) {
   return { handoff, loaded, reload };
 }
 
+
+/** APPLICATION-INVITE-GUEST-START: what the invite link opens (an existing account signs in; a first-time email starts as a guest). */
+export interface InviteCheck { valid: boolean; email?: string; account?: "login" | "new"; google?: boolean; studentName?: string }
+export const inviteCheck = (token: string) => invokeInvite<InviteCheck>({ action: "invite_check", token }, "The invitation could not be checked. Try again.");
+/** First time: a one-time sign-in for the invited email (the link proves it); the password is created when the student signs. */
+export const inviteSession = (token: string) => invokeInvite<{ tokenHash: string; email: string }>({ action: "invite_session", token }, "Your application could not be opened. Try again.");
+/** INVITE-RETURNING-STUDENT: the signed-in student still has to create their own password before signing this application. */
+export async function signingPasswordNeeded(applicationId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc("portal_my_signing_password_needed", { p_application: applicationId });
+  return error ? false : data === true;
+}
+
+/** Saves the guest student's new password (before the signature, which needs it). */
+export async function saveSignPassword(value: { needed: boolean; password: string }): Promise<void> {
+  if (!value.needed) return;
+  const { error } = await supabase.auth.updateUser({ password: value.password });
+  if (error) throw new Error(error.message || "Your password could not be saved. Try another one.");
+  // Recorded, so the student's next invitation link asks them to sign in with it.
+  const { error: recordError } = await supabase.rpc("portal_my_password_created");
+  if (recordError) throw new Error("Your password was saved, but it could not be recorded. Try signing again.");
+}
+
+/** CONTACT-VERIFY: the signed-in person's email / mobile still to confirm with a code (the link came by the other channel). */
+export async function pendingContact(): Promise<{ kind: string; value: string } | null> {
+  const { data, error } = await supabase.rpc("contact_pending_mine");
+  return error || !data ? null : data as { kind: string; value: string };
+}
+export const sendContactCode = () => invokeInvite<{ ok: true; kind: string }>({ action: "contact_code_send" }, "A code could not be sent. Try again in a minute.");
+export const verifyContactCode = (code: string, applicationId: string) =>
+  rpc<{ ok: boolean; error?: string }>("contact_code_verify", { p_code: code, p_application: applicationId });

@@ -12,6 +12,56 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cleanEmail, cleanName } from "../_shared/user-input.ts";
 import { backendConfiguration } from "../_shared/config.ts";
 import { emailConflictBody } from "../_shared/identity-email.ts";
+import { contactCodeEmail, newCode, newLinkToken, sendText, sha256Hex } from "../_shared/contact-links.ts";
+import { readHrMailConfig, selectHrMailProvider } from "../_shared/hr-mail.ts";
+import { HR_MAIL_ENV } from "../_shared/hr-mail-drain.ts";
+import { normalizePhoneNumber } from "../_shared/notification/sms.ts";
+
+const mailEnv: Record<string, string> = {};
+for (const key of HR_MAIL_ENV) mailEnv[key] = Deno.env.get(key) ?? "";
+const TEXT_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * CONTACT-VERIFY (owner, 2026-11-26): a CMS user's invitation also goes by text when a mobile is given, with its own link
+ * (/admin/text-invite#t=). That link proves the mobile; the person then confirms their email with a 6-digit code, and only then gets
+ * a one-time set-password link (Auth recovery). The emailed invitation itself is unchanged (it proves the email). Link holders only:
+ * the token is the credential (rate-limited by the code rules in the database).
+ */
+// deno-lint-ignore no-explicit-any
+async function textInvite(admin: any, parsed: Record<string, unknown>) {
+  const action = String(parsed.action);
+  const token = String(parsed.token ?? "");
+  if (!TEXT_TOKEN.test(token)) return json({ error: "This link is invalid or has expired." }, 403);
+  const hash = await sha256Hex(token);
+  const { data: opened } = await admin.rpc("link_opened", { p_hash: hash });
+  if (opened?.scope !== "cms" || !opened?.subject || opened.via !== "sms") return json({ error: "This link is invalid or has expired." }, 403);
+  const { data: person } = await admin.rpc("link_person", { p_scope: "cms", p_subject: opened.subject });
+  if (!person?.email) return json({ error: "This link is invalid or has expired." }, 403);
+  if (action === "text_open") return json({ ok: true, name: person.name ?? "", emailTo: opened.emailTo ?? null, emailPending: opened.emailPending === true });
+  if (action === "text_code_send") {
+    if (!opened.emailPending) return json({ ok: true, confirmed: true });
+    const code = newCode();
+    const { data: issued, error } = await admin.rpc("link_code_issue", { p_scope: "cms", p_subject: opened.subject, p_code: code });
+    if (error) return json({ error: error.message }, 429);
+    const provider = selectHrMailProvider(mailEnv); const config = readHrMailConfig(mailEnv);
+    if (!provider || !config.from) return json({ error: "A code cannot be emailed right now." }, 503);
+    const message = contactCodeEmail({ name: person.name, code, purpose: "create your password" });
+    const outcome = await provider.send({ deliveryId: `cms-contact-${crypto.randomUUID()}`, from: config.from, to: issued.to, subject: message.subject, textBody: message.text, htmlBody: message.html });
+    return outcome.kind === "accepted" ? json({ ok: true, emailTo: opened.emailTo }) : json({ error: "The code could not be emailed. Try again in a minute." }, 502);
+  }
+  // text_code_verify: the right code confirms the email and hands out the one-time set-password link (the text link is then used up).
+  if (opened.emailPending) {
+    const { data: checked, error } = await admin.rpc("link_code_verify", { p_scope: "cms", p_subject: opened.subject, p_code: String(parsed.code ?? "").replace(/\D/g, "").slice(0, 6) });
+    if (error) return json({ error: "The code could not be checked." }, 400);
+    if (checked?.ok !== true) return json({ ok: false, reason: checked?.reason ?? "wrong", error: checked?.error ?? "That code is not right." });
+  }
+  const { data: used } = await admin.rpc("link_alias_use", { p_hash: hash });
+  if (used !== true) return json({ error: "This link was already used. Ask an administrator for a new invitation." }, 410);
+  const site = (mailEnv.EF_HR_PUBLIC_SITE_URL || "").replace(/\/+$/, "");
+  const { data: link, error: linkErr } = await admin.auth.admin.generateLink({ type: "recovery", email: person.email, options: site ? { redirectTo: `${site}/reset-password` } : undefined });
+  if (linkErr || !link?.properties?.action_link) return json({ error: "The password link could not be made. Ask an administrator to resend the invitation." }, 502);
+  return json({ ok: true, link: link.properties.action_link });
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -82,6 +132,11 @@ Deno.serve(async (req) => {
   if (configuration) return json(configuration, 503);
 
   try {
+    // CONTACT-VERIFY: the text invitation's own link (a link holder, not a signed-in admin).
+    const peek = await req.clone().json().catch(() => ({})) as Record<string, unknown>;
+    if (["text_open", "text_code_send", "text_code_verify"].includes(String(peek.action ?? ""))) {
+      return await textInvite(createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } }), peek);
+    }
     const authHeader = req.headers.get("Authorization") ?? "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
     if (!token) return json({ error: "Missing authorization token." }, 401);
@@ -182,7 +237,22 @@ Deno.serve(async (req) => {
           return await fail(conflict ?? { error: "Could not save the user profile." }, conflict ? 409 : 500);
         }
 
-        return json({ ok: true, authUserId, emailSent, inviteLink });
+        // CONTACT-VERIFY: a mobile was given: it is kept on the CMS user and the invitation also goes by text (its own link).
+        let text: string | null = null;
+        const mobile = typeof parsed.mobile === "string" && parsed.mobile.trim() ? normalizePhoneNumber(parsed.mobile) : null;
+        if (typeof parsed.mobile === "string" && parsed.mobile.trim() && !mobile) text = "invalid_mobile";
+        if (mobile) {
+          await admin.from("cms_users").update({ mobile }).eq("id", reserved.id);
+          const site = (mailEnv.EF_HR_PUBLIC_SITE_URL || (redirectTo ? new URL(redirectTo).origin : "")).replace(/\/+$/, "");
+          const textToken = newLinkToken();
+          const { data: added } = await admin.rpc("link_alias_add", { p_scope: "cms", p_subject: reserved.id, p_base_hash: null, p_alias_hash: await sha256Hex(textToken),
+            p_email: email, p_mobile: mobile, p_expires: new Date(Date.now() + 7 * 86400_000).toISOString() });
+          const sent = added === true && site ? await sendText(admin, { mobile, deliveryId: `cms-invite-${reserved.id}`,
+            body: `Hi ${name.split(" ")[0]}, you have been invited to the Skyline Institute of Technology CMS. We also emailed you; you will confirm your email with a code.\n${site}/admin/text-invite#t=${textToken}` })
+            : { state: "skipped" as const, code: "not_ready", to: "" };
+          text = sent.state === "sent" ? "sent" : sent.code || sent.state;
+        }
+        return json({ ok: true, authUserId, emailSent, inviteLink, text });
       }
 
       case "reset": {

@@ -1,0 +1,48 @@
+.integration-shell {
+  container-type: inline-size;
+}
+
+.integration-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.integration-details {
+  scroll-margin-top: 4.5rem;
+}
+
+.integration-workspace[data-show-details="true"] .integration-applications,
+.integration-workspace[data-show-details="false"] .integration-details {
+  display: none;
+}
+
+@container (min-width: 46rem) {
+  .integration-workspace {
+    grid-template-columns: minmax(16rem, min(32%, 23rem)) minmax(0, 1fr);
+    min-height: 29rem;
+  }
+
+  .integration-workspace[data-show-details] .integration-applications {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid theme('colors.background.200');
+  }
+
+  .integration-workspace[data-show-details] .integration-details {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .integration-applications,
+  .integration-details {
+    max-height: max(30rem, calc(100dvh - 12rem));
+  }
+
+  .integration-list {
+    overflow-y: auto;
+  }
+
+  .integration-details .integration-mobile-back {
+    display: none;
+  }
+}

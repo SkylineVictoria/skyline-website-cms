@@ -50,7 +50,7 @@ export const BAD_LINK_WINDOW = 600;
 /** Address searches per link per minute, and the shortest text worth a search (both as in the address-search function). */
 export const ADDRESS_SEARCH_LIMIT = 40;
 export const ADDRESS_SEARCH_MIN = 4;
-export const ACTIONS = ["open", "save", "bank_save", "address_search", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign", "offer_decline", "documents_link", "account_open", "account_setup", "my_document_url"] as const;
+export const ACTIONS = ["open", "save", "bank_save", "address_search", "upload", "remove", "expiry", "view_url", "extract", "submit", "offer_open", "offer_view_url", "offer_sign", "offer_decline", "documents_link", "account_open", "account_setup", "my_document_url", "contact_code_send", "contact_code_verify"] as const;
 export type OnboardingAction = (typeof ACTIONS)[number];
 
 export interface OnboardingRequest { action: string; token: unknown; ip: string | null; userAgent?: string | null; fields: Record<string, unknown>; file?: File | null;
@@ -78,6 +78,9 @@ export interface OnboardingDeps {
   now(): Date;
   /** The Geoscape lookup (searchAddresses with the function's key). Absent or failing: the page falls back to typing. */
   searchAddress?(query: string): Promise<{ kind: "ok"; suggestions: unknown[]; attribution: string } | { kind: "unavailable"; reason: string }>;
+  /** CONTACT-VERIFY: emails the code that confirms the email of a person who came by the text link. */
+  sendCodeEmail?(to: string, name: string, code: string): Promise<boolean>;
+  newCode?(): string;
   /** Auth admin: sets the password the person chose and confirms their email. Never logged. */
   setPassword?(userId: string, password: string): Promise<{ error: string | null }>;
 }
@@ -179,8 +182,12 @@ async function documentsLink(req: OnboardingRequest, deps: OnboardingDeps): Prom
 
 const SESSION_ACTIONS: readonly OnboardingAction[] = ["offer_open", "offer_view_url", "offer_sign", "offer_decline", "my_document_url"];
 
+const CONTACT_GATED: readonly OnboardingAction[] = ["account_setup", "submit", "offer_sign"];
+const EMAIL_UNCONFIRMED = { error: "Confirm your email with the code we send you first.", code: "email_unconfirmed" };
+
 async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps: OnboardingDeps): Promise<OnboardingResult> {
   let link: string;
+  let contact: { subject: string; emailPending: boolean; emailTo: string | null } | null = null;
   const hasToken = typeof req.token === "string" && req.token !== "";
   if (!hasToken && req.session && SESSION_ACTIONS.includes(action)) {
     // Signed in: the database resolves this user to their own record. Nobody else's offer or document can be reached this way.
@@ -199,6 +206,14 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
     if (action === "my_document_url") return { status: 401, body: { error: "Sign in to open your documents." } };
     if (typeof req.token !== "string" || !TOKEN.test(req.token)) return linkInvalid();
     link = await deps.hash(req.token);
+    // CONTACT-VERIFY (2026-11-26): the text carries its own link (an alias of the emailed one). Opened from the text, the mobile is
+    // proven and the email is confirmed with a code before the password, the documents or the signature (CONTACT_GATED below).
+    const opened = await deps.rpc("link_opened", { p_hash: link });
+    const state = opened.error ? null : opened.data as { scope?: string; subject?: string; base?: string; emailPending?: boolean; emailTo?: string | null } | null;
+    if (state?.scope === "staff" && state.subject) {
+      link = String(state.base ?? link);
+      contact = { subject: state.subject, emailPending: state.emailPending === true, emailTo: state.emailTo ?? null };
+    }
   }
   if (action === "address_search") {
     // Its own allowance (the student search's: 40 a minute), so typing an address never uses up the link's other calls.
@@ -217,13 +232,33 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
     return error ? fromDb(error) : { status: 200, body: { view: data } };
   };
   const docId = (): string | null => (typeof req.fields.id === "string" && UUID.test(req.fields.id) ? req.fields.id : null);
+  if (contact?.emailPending && CONTACT_GATED.includes(action)) return { status: 403, body: { ...EMAIL_UNCONFIRMED, emailTo: contact.emailTo } };
+  const withContact = (result: OnboardingResult): OnboardingResult => result.status === 200 && contact
+    ? { ...result, body: { ...result.body, contact: { emailPending: contact.emailPending, emailTo: contact.emailTo } } } : result;
 
   switch (action) {
+    case "contact_code_send": {
+      if (!contact?.emailPending) return bad("There is nothing to confirm.");
+      if (!deps.sendCodeEmail || !deps.newCode) return { status: 503, body: { error: "A code cannot be sent right now." } };
+      const code = deps.newCode();
+      const issued = await deps.rpc("link_code_issue", { p_scope: "staff", p_subject: contact.subject, p_code: code });
+      if (issued.error) return { status: 429, body: { error: issued.error.message ?? "A code could not be sent." } };
+      const to = String((issued.data as { to?: string }).to ?? "");
+      const person = await deps.rpc("link_person", { p_scope: "staff", p_subject: contact.subject });
+      if (!(await deps.sendCodeEmail(to, String((person.data as { name?: string } | null)?.name ?? ""), code))) return { status: 502, body: { error: "The code could not be emailed. Try again in a minute." } };
+      return { status: 200, body: { sent: true, to: contact.emailTo } };
+    }
+    case "contact_code_verify": {
+      if (!contact?.emailPending) return { status: 200, body: { ok: true } };
+      const checked = await deps.rpc("link_code_verify", { p_scope: "staff", p_subject: contact.subject, p_code: String(req.fields.code ?? "").replace(/\D/g, "").slice(0, 6) });
+      if (checked.error) return fromDb(checked.error);
+      return { status: 200, body: checked.data as Record<string, unknown> };
+    }
     case "account_open": {
       const { data, error } = await call("hr_svc_account_open");
       if (error) return fromDb(error);
       const view = data as { name: string; firstName: string; email: string; expiresAt: string };
-      return { status: 200, body: { view: { name: view.name, firstName: view.firstName, email: view.email, expiresAt: view.expiresAt }, passwordMin: PASSWORD_MIN } };
+      return withContact({ status: 200, body: { view: { name: view.name, firstName: view.firstName, email: view.email, expiresAt: view.expiresAt }, passwordMin: PASSWORD_MIN } });
     }
     case "account_setup": {
       if (!deps.setPassword) return { status: 503, body: { error: "Passwords cannot be set here." } };
@@ -245,7 +280,7 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
     }
     case "offer_open": {
       const { data, error } = await call("hr_svc_offer_open");
-      return error ? fromDb(error) : { status: 200, body: { view: data, consent: OFFER_CONSENT } };
+      return error ? fromDb(error) : withContact({ status: 200, body: { view: data, consent: OFFER_CONSENT } });
     }
     case "offer_view_url": {
       const which = req.fields.which === "signed" ? "signed" : "offer";
@@ -264,7 +299,7 @@ async function handleLink(action: OnboardingAction, req: OnboardingRequest, deps
       const { data, error } = await call("hr_svc_offer_decline", { p_reason: reason });
       return error ? fromDb(error) : { status: 200, body: { view: data, declined: true } };
     }
-    case "open": return view("hr_svc_onboarding_open");
+    case "open": return withContact(await view("hr_svc_onboarding_open"));
     case "submit": return view("hr_svc_onboarding_submit");
     case "save": {
       const patch = req.fields.patch;

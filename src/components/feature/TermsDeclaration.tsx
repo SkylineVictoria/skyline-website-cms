@@ -5,11 +5,13 @@ type TermsDeclarationProps = {
   terms: string[];
   /** Inside a page card (the compact application form): no box of its own and a neutral "agree to all" row. */
   plain?: boolean;
+  /** Every clause shown from the start (the one-page sign page). */
+  defaultOpen?: boolean;
 };
 
-export default function TermsDeclaration({ heading, terms, plain = false }: TermsDeclarationProps) {
+export default function TermsDeclaration({ heading, terms, plain = false, defaultOpen = false }: TermsDeclarationProps) {
   const [checked, setChecked] = useState<boolean[]>(() => terms.map(() => false));
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
 
   const agreedCount = checked.filter(Boolean).length;
   const allChecked = terms.length > 0 && agreedCount === terms.length;

@@ -6,9 +6,9 @@ const LEAVE_MESSAGE = "You have unsaved changes. They stay on this device as a d
 
 /** Placed once at the admin layout: tracks dirty editors and warns before in-app navigation (router blocker) and before the tab is closed or reloaded. */
 export function DraftProvider({ children }: { children: ReactNode }) {
-  const dirty = useRef(new Set<string>());
+  const dirty = useRef(new Map<string, string>());
   const registry = useMemo<DraftRegistry>(() => ({
-    setDirty: (key, value) => { if (value) dirty.current.add(key); else dirty.current.delete(key); },
+    setDirty: (key, value, leaveMessage = LEAVE_MESSAGE) => { if (value) dirty.current.set(key, leaveMessage); else dirty.current.delete(key); },
     clear: (key) => { dirty.current.delete(key); },
     anyDirty: () => dirty.current.size > 0,
   }), []);
@@ -27,7 +27,7 @@ export function DraftProvider({ children }: { children: ReactNode }) {
   const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty.current.size > 0 && (currentLocation.pathname !== nextLocation.pathname || currentLocation.search !== nextLocation.search));
   useEffect(() => {
     if (blocker.state !== "blocked") return;
-    if (window.confirm(LEAVE_MESSAGE)) blocker.proceed(); else blocker.reset();
+    if (window.confirm([...dirty.current.values()].find(message => message !== LEAVE_MESSAGE) ?? LEAVE_MESSAGE)) blocker.proceed(); else blocker.reset();
   }, [blocker]);
 
   return <DraftRegistryContext.Provider value={registry}>{children}</DraftRegistryContext.Provider>;

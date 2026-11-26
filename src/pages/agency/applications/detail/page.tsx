@@ -1,8 +1,12 @@
 import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
-import { AgentHandoffPanel, StudentHandoffNotice } from "@/pages/agency/components/ApplicationHandoff";
+import { AgentHandoffPanel } from "@/pages/agency/components/ApplicationHandoff";
+import { HANDOFF_STATE_LABEL } from "@/pages/agency/lib/handoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
+import StudentWithdraw from "@/pages/agency/components/StudentWithdraw";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
+import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
+import SignedApplicationCard from "@/pages/agency/components/SignedApplicationCard";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useState } from "react";
 
@@ -19,6 +23,7 @@ import {
   assignApplicationAgent,
   deleteApplicationDocument,
   getApplication,
+  listApplications,
   needsInitialWizard,
   getDocumentSignedUrl,
   listApplicationDocuments,
@@ -48,7 +53,7 @@ function ReviewIssuesReporter({ count, onCount }: { count: number; onCount: (n: 
   return null;
 }
 
-type Tab = "form" | "documents" | "history" | "messages" | "notifications";
+type Tab = "form" | "signing" | "documents" | "history" | "messages" | "notifications";
 
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: "form", label: "Application form", icon: "ri-file-edit-line" },
@@ -65,13 +70,20 @@ function wasWizardOpen(applicationId: string): boolean {
   try { return window.localStorage.getItem(wizardOpenKey(applicationId)) === "1"; } catch { return false; }
 }
 
+/** The document reader's state in plain words (was the raw status, e.g. "unreviewed"). */
+const EXTRACTION_LABEL: Record<string, string> = {
+  queued: "Waiting to be read", processing: "Being read", unreviewed: "Read", confirmed: "Read and checked",
+  rejected: "Read, details not used", no_fields: "Nothing to read", failed: "Could not be read", cancelled: "Cancelled",
+};
+const extractionLabel = (status: string | undefined) => (status ? EXTRACTION_LABEL[status] ?? status : "Not read");
+
 export default function ApplicationDetailPage() {
   const { id = "" } = useParams();
   const paths = useApplicationPaths();
   const navigate = useNavigate();
   const { role, profile, agency } = usePortalAuth();
   // APPLICATION-STUDENT-SIGNS: who has the application (the database enforces it; this keeps the screens in step).
-  const { handoff, reload: reloadHandoff } = useHandoff(id);
+  const { handoff, loaded: handoffLoaded, reload: reloadHandoff } = useHandoff(id);
 
   const [application, setApplication] = useState<ApplicationDetail | null>(null);
   const [history, setHistory] = useState<StatusHistoryRow[]>([]);
@@ -113,7 +125,6 @@ export default function ApplicationDetailPage() {
         return;
       }
       setApplication(detail);
-      if (needsInitialWizard(detail)) return;
       const [hist, docs] = await Promise.all([listStatusHistory(id), listApplicationDocuments(id)]);
       setHistory(hist);
       setDocuments(docs);
@@ -156,23 +167,17 @@ export default function ApplicationDetailPage() {
     }
   };
 
+  // Preview on the page (owner 2026-11-26), not a new tab.
+  const [preview, setPreview] = useState<{ doc: DocumentRow; url: string } | null>(null);
   const handleDocumentAction = async (doc: DocumentRow, action: "preview" | "download" | "retry" | "delete") => {
     setDocumentBusy(`${action}:${doc.id}`);
     setActionError("");
     try {
       if (action === "preview" || action === "download") {
-        // Open the tab first, while the click still counts as a user action; popup blockers refuse a tab opened after the awaits.
-        const tab = action === "preview" ? window.open("", "_blank") : null;
-        try {
-          if (isSlit) await logAdminAccess(id, action === "download" ? "document_downloaded" : "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category });
-          const signedUrl = await getDocumentSignedUrl(doc.storagePath, 300, action === "download" ? doc.filename : undefined);
-          if (action === "download") window.location.assign(signedUrl);
-          else if (tab) { tab.opener = null; tab.location.href = signedUrl; }
-          else window.location.assign(signedUrl);
-        } catch (error) {
-          tab?.close();
-          throw error;
-        }
+        if (isSlit) await logAdminAccess(id, action === "download" ? "document_downloaded" : "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category });
+        const signedUrl = await getDocumentSignedUrl(doc.storagePath, 300, action === "download" ? doc.filename : undefined);
+        if (action === "download") window.location.assign(signedUrl);
+        else setPreview({ doc, url: signedUrl });
       } else if (action === "retry") {
         await queueDocumentExtraction(doc.id, true);
         await load();
@@ -195,6 +200,20 @@ export default function ApplicationDetailPage() {
     setWorkspaceKey((key) => key + 1);
     await load();
   };
+
+  // STUDENT-FIRST-WIZARD (owner 2026-11-26): a student's FIRST application is finished in the document wizard; once the student has
+  // an application past draft (submitted before), a new one opens as the one page where only course and intake need changing.
+  // An application the agent prepared and sent to the student (handoff) always opens as the one page to check and sign.
+  const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded && !handoff?.state;
+  const [studentReturning, setStudentReturning] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!studentBlank) return;
+    let live = true;
+    listApplications()
+      .then((rows) => { if (live) setStudentReturning(rows.some((row) => row.id !== id && (!!row.submittedAt || (row.status ?? "draft") !== "draft"))); })
+      .catch(() => { if (live) setStudentReturning(false); });
+    return () => { live = false; };
+  }, [studentBlank, id]);
 
   // Do not unmount an open wizard during a background detail refresh. Its
   // document and form state are independently persisted by the wizard/RPCs.
@@ -220,7 +239,20 @@ export default function ApplicationDetailPage() {
     );
   }
 
-  if (needsInitialWizard(application)) {
+  // ONE-PAGE (owner 2026-11-26): once the agent has prepared the application and sent it to the student, it opens as one page with
+  // every answer (the student checks, edits and signs there); the document wizard is only for a blank application.
+  if (needsInitialWizard(application) && !handoffLoaded) return <PortalLoading label="Loading application…" />;
+  // A returning student gets the one page (course and intake were chosen when starting); a first application goes through the wizard.
+  if (studentBlank && studentReturning === null) return <PortalLoading label="Loading application…" />;
+  if (studentBlank && studentReturning === false) {
+    return (
+      <ApplicationWizard key={application.id} applicationId={application.id}
+        agencyName={application.agencyName || agency?.name || ""}
+        onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); navigate(paths.list, { replace: true }); }} />
+    );
+  }
+  const returningStudent = role === "student";
+  if (needsInitialWizard(application) && !handoff?.state && !returningStudent) {
     return (
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -242,8 +274,11 @@ export default function ApplicationDetailPage() {
   // whether a record is editable; RLS separately determines who may edit it.
   const handoffBlocks = role === "student"
     ? ["with_agent", "change_requested", "waiting_guardian"].includes(handoff?.state ?? "")
-    : ["with_student", "waiting_guardian"].includes(handoff?.state ?? "");
-  const readOnly = !isEditableStatus(workflow, application.status) || handoffBlocks;
+    : handoff?.state === "waiting_guardian"; // the agent and staff edit while the student has it too (migration 20261127020517)
+  // ADMIN-EDIT-SUBMITTED (owner 2026-11-26): SLIT admins correct a submitted application on the same page, until an offer is issued.
+  // The same two statuses portal_lock_draft lets SLIT admins save (migration 20261127010517).
+  const adminEdits = isSlit && (application.status === "submitted" || application.status === "under_review");
+  const readOnly = (!isEditableStatus(workflow, application.status) && !adminEdits) || handoffBlocks;
   const nextHint = statusInfo(workflow, application.status).hint;
   const agentName = application.agentName || profile?.fullName || "";
   const agencyName = application.agencyName || agency?.name || "";
@@ -271,6 +306,7 @@ export default function ApplicationDetailPage() {
             <span className="rounded-full bg-accent-100 px-2.5 py-1 text-2xs font-semibold uppercase text-accent-900">Test data</span>
           ) : null}
           <div className="ml-auto flex flex-wrap items-center gap-2">
+            {role === "student" ? <StudentWithdraw applicationId={application.id} status={application.status} onDone={(m) => { toast.show(m); void load(); }} /> : null}
             {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Student" size="sm" variant="ghost" /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Agent" size="sm" variant="ghost" /> : null}
@@ -285,7 +321,7 @@ export default function ApplicationDetailPage() {
                 PDF
               </button>
             ) : null}
-            {!readOnly ? (
+            {!readOnly && !(role === "student" && handoff?.state) ? (
               <button
                 type="button"
                 onClick={openWizard}
@@ -318,15 +354,23 @@ export default function ApplicationDetailPage() {
         </p>
       </header>
 
-      {handoff?.state && role !== "student" ? <div className="mt-4"><AgentHandoffPanel applicationId={application.id} handoff={handoff}
-        onChanged={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1); }} /></div> : null}
-      {role === "student" ? <div className="mt-4"><StudentHandoffNotice applicationId={application.id} handoff={handoff} onChanged={() => void reloadHandoff()} /></div> : null}
+      {/* The student review and signature (timeline, what the student changed, Take back / Resend / Request a change) is its own tab. */}
+      {handoff?.state ? (
+        <button type="button" onClick={() => setTab("signing")} data-testid="handoff-strip"
+          className="mt-4 flex w-full cursor-pointer flex-wrap items-center gap-2 rounded-card border border-background-200 bg-background-50 px-4 py-2.5 text-left text-sm hover:border-primary-300">
+          <i className="ri-quill-pen-line text-base text-primary-600" aria-hidden="true" />
+          <span className="font-medium text-foreground-900">Student review and signature</span>
+          <span className="rounded-full bg-background-200 px-2 py-0.5 text-xs font-semibold text-foreground-800">{HANDOFF_STATE_LABEL[handoff.state]}</span>
+          <span className="ml-auto text-xs font-semibold text-primary-700">Open <i className="ri-arrow-right-line" aria-hidden="true" /></span>
+        </button>
+      ) : null}
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
       {/* OFFER-DEPOSIT: acceptance and deposit at a glance; staff and the agent remind, staff set the automatic reminders. */}
       <OfferDepositCard applicationId={application.id} canRemind={isSlit || role === "agent" || role === "agency_admin"} canConfigure={isSlit} refreshKey={application.status} />
 
       <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-background-200 pb-px">
-        {(paths.area === "cms" ? [...TABS, { id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : TABS).map((item) => (
+        {[...TABS.slice(0, 1), ...(handoff?.state ? [{ id: "signing" as Tab, label: "Review & signature", icon: "ri-quill-pen-line" }] : []), ...TABS.slice(1),
+          ...(paths.area === "cms" ? [{ id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : [])].map((item) => (
           <button
             key={item.id}
             type="button"
@@ -379,6 +423,9 @@ export default function ApplicationDetailPage() {
             agentPhone={application.agentPhone || (role === "agent" ? profile?.phone ?? "" : "")}
             agencyName={agencyName}
             readOnly={readOnly}
+            onePage
+            initialEdit={searchParams.get("edit") === "course" ? "courses_of_interest" : undefined}
+            sentToStudent={handoff?.state === "with_student"}
             auditAccess={isSlit}
             reviewBar={isSlit ? (issues: number) => <ReviewIssuesReporter count={issues} onCount={setReviewIssues} /> : undefined}
             onSaved={refreshAfterSave}
@@ -389,6 +436,7 @@ export default function ApplicationDetailPage() {
           />
         ) : null}
 
+        {tab === "documents" ? <SignedApplicationCard application={application} /> : null}
         {tab === "documents" ? <OfferLettersList applicationId={application.id} refreshKey={application.status} /> : null}
         {tab === "documents" ? (
           documents.length === 0 ? (
@@ -417,7 +465,7 @@ export default function ApplicationDetailPage() {
                       <td className="px-4 py-3 text-xs text-foreground-700">{doc.filename}</td>
                       <td className="px-4 py-3 text-xs text-foreground-700">{doc.reviewState}</td>
                       <td className="px-4 py-3 text-xs text-foreground-700">
-                        {String((doc.metadata.extraction as { status?: string } | undefined)?.status ?? "Not requested")}
+                        {extractionLabel((doc.metadata.extraction as { status?: string } | undefined)?.status)}
                       </td>
                       <td className="px-4 py-3 text-xs text-foreground-600">{formatDate(doc.createdAt)}</td>
                       <td className="px-4 py-3 text-xs">
@@ -433,8 +481,15 @@ export default function ApplicationDetailPage() {
                   ))}
                 </tbody>
               </ResponsiveTable>
+              {preview ? <DocumentPreviewModal url={preview.url} filename={preview.doc.filename} onClose={() => setPreview(null)}
+                onDownload={() => { const d = preview.doc; setPreview(null); void handleDocumentAction(d, "download"); }} /> : null}
             </div>
           )
+        ) : null}
+
+        {tab === "signing" && handoff?.state ? (
+          <AgentHandoffPanel applicationId={application.id} handoff={handoff} viewer={role === "student" ? "student" : "staff"}
+            onChanged={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1); }} />
         ) : null}
 
         {tab === "history" ? (
@@ -477,7 +532,7 @@ export default function ApplicationDetailPage() {
         ) : null}
       </div>
 
-      {wizardOpen ? (
+      {wizardOpen && !(role === "student" && handoff?.state) ? (
         <ApplicationWizard
           applicationId={application.id}
           agencyName={agencyName}

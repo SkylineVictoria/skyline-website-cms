@@ -121,7 +121,8 @@ export default function ApplicationReview({
     .map((stage) => ({ key: stage.id, title: stage.title, steps: stage.sections.filter((index) => isConditionMet(sections[index]?.showIf, flat)).map(stepOf) }))
     .filter((group) => group.steps.length > 0);
   // Every missing or invalid item in form order of the stages, each pointing at its field (found by its label on that step).
-  const issues: ReviewIssue[] = groups.flatMap((group) => group.steps.flatMap((step) => step.issues.map((text, n) => {
+  const studentOnly = (index: number) => !studentSigns && sections[index].fields.some((f) => f.type === "terms" || f.name === "digital_signature");
+  const issues: ReviewIssue[] = groups.flatMap((group) => group.steps.filter((step) => !studentOnly(step.index)).flatMap((step) => step.issues.map((text, n) => {
     const field = sections[step.index].fields.find((candidate) => candidate.label === text) ?? (fieldProblems[step.index] ?? []).filter((problem) => problem.text === text).map((problem) => ({ name: problem.field }))[0];
     const documentField = sections[step.index].fields.find((candidate) => candidate.type === "file")?.name;
     return { key: `${step.index}-${n}`, step: step.title, text, onJump: () => onJumpToField(step.index, field?.name ?? documentField) };
@@ -138,6 +139,8 @@ export default function ApplicationReview({
         </div>
         <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3" data-testid="application-cards">
           {steps.map((step) => {
+            // The declaration is the student's: staff and agents never fill or sign it, so its gaps are not links for them.
+            const studentPart = !studentSigns && sections[step.index].fields.some((f) => f.type === "terms" || f.name === "digital_signature");
             const ok = step.issues.length === 0;
             return (
               <section key={step.index} className={`flex min-w-0 flex-col rounded-xl border p-4 ${ok ? "border-background-200 bg-background-50" : "border-amber-300 bg-amber-50/50"}`} data-testid="application-card">
@@ -147,7 +150,7 @@ export default function ApplicationReview({
                       : <i className="ri-error-warning-fill text-base text-amber-500" aria-label="needs details" />}
                     <span className="truncate">{step.title}</span>
                   </h3>
-                  {readOnly ? null : !studentSigns && sections[step.index].fields.some((f) => f.type === "terms") ? (
+                  {studentPart ? (
                     <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-2xs font-semibold text-amber-900">Signed by the student</span>
                   ) : (
                     <button type="button" onClick={() => onEditSection(step.index)} className="inline-flex min-h-8 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-background-300 px-2.5 text-xs font-semibold text-foreground-700 hover:border-primary-300 hover:text-primary-700">
@@ -165,7 +168,9 @@ export default function ApplicationReview({
                     ))}
                   </dl>
                 ) : <p className="mt-3 text-xs text-foreground-500">Nothing entered yet.</p>}
-                {step.issues.length ? (
+                {studentPart && !ok ? (
+                  <p className="mt-3 border-t border-amber-100 pt-2 text-xs text-amber-900">Only the student ticks the declarations and signs, on their sign page.</p>
+                ) : step.issues.length ? (
                   <ul className="mt-3 space-y-0.5 border-t border-amber-100 pt-2">
                     {step.issues.map((text) => (
                       <li key={text}>

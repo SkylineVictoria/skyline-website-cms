@@ -25,6 +25,7 @@ import { BORN_IN_PASSPORT_COUNTRY, PASSPORT_COUNTRY_LABEL } from "@/pages/agency
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
 import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
+import { carriedFromLabel } from "@/pages/agency/lib/documentAttachments";
 import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingField, avetmissMissingScreen, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
@@ -115,6 +116,7 @@ function toWizardDoc(row: DocumentRow): WizardDoc {
   return {
     id: row.id, category: row.category, filename: row.filename, fileSize: row.fileSize, storagePath: row.storagePath, extraction: state, error,
     extracted: formatExtractionCandidates(extraction?.extracted), mismatch: Boolean(extraction?.source?.categoryMismatch),
+    carriedFrom: carriedFromLabel(row.metadata),
   };
 }
 

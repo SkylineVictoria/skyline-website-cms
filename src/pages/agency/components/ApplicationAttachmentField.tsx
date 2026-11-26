@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppField } from "@/data/applicationForms";
 import { MAX_DOCUMENT_BYTES, type DocumentRow as StoredDocument } from "@/pages/agency/lib/portalApplications";
-import { extractionStatus } from "@/pages/agency/lib/documentAttachments";
+import { carriedFromLabel, extractionStatus } from "@/pages/agency/lib/documentAttachments";
 import DocumentReadingState from "@/components/shared/application-form/DocumentReadingState";
 import { DocumentRow, Dropzone, ReadFailure, RowAction, type Pill } from "@/components/shared/application-form/DocumentUpload";
 
@@ -136,6 +136,11 @@ export default function ApplicationAttachmentField({ field, documents, disabled,
               </>
             }
           >
+            {carriedFromLabel(document.metadata) ? (
+              <p className="mt-1.5 flex items-center gap-1.5 text-xs text-foreground-600" data-testid="doc-carried-from">
+                <i className="ri-history-line" aria-hidden="true" />{carriedFromLabel(document.metadata)}. Replace it if it has changed.
+              </p>
+            ) : null}
             {failed ? (
               <ReadFailure
                 message={state === "no_fields" ? "We couldn’t find any details on this one." : "We couldn’t read this one."}

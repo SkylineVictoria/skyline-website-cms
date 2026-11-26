@@ -30,3 +30,22 @@ export interface FinishSummary {
   documents: string[];
 }
 
+
+/** AVETMISS-CHECK: the wizard screen holding each field avetmiss_check_answers can flag. */
+export const AVETMISS_FIELD_SCREEN: Record<string, string> = {
+  gender: "personal", dob: "personal", birth_country: "personal",
+  au_zip: "address", au_state: "address",
+  language_home: "language", language_other: "language",
+  atsi: "identifier", school_level: "identifier", year_completed: "identifier", employment: "identifier", disability: "identifier",
+  prior_ed: "identifier", secondary_enrolled: "identifier",
+  study_reason: "study",
+};
+/** The screen that fixes each item of missingForSubmit (public.avetmiss_student_missing). */
+export function avetmissMissingScreen(item: string): string {
+  const t = item.toLowerCase();
+  if (/name|date of birth|gender|country of birth/.test(t)) return "personal";
+  if (/language|english/.test(t)) return t.includes("english") ? "identifier" : "language";
+  if (/street|suburb|postcode|state/.test(t)) return "address";
+  if (/aboriginal|school|employment|disability|prior/.test(t)) return "identifier";
+  return "";
+}

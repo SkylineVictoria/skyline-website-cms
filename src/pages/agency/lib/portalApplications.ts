@@ -21,13 +21,30 @@ if (typeof window !== "undefined") window.addEventListener("portal-scope-changed
   draftVersions.clear(); wizardSaveStamps.clear(); draftQueues.clear();
 });
 export async function flushApplicationEdits(id: string): Promise<void> { await draftQueues.get(id); }
+/** An Error carrying the Postgres code (23514 = check_violation: its message is meant for the user). */
+export function dbError(error: { message: string; code?: string }): Error & { code?: string } {
+  return Object.assign(new Error(error.message), { code: error.code });
+}
+export const isCheckViolation = (e: unknown): e is Error => e instanceof Error && (e as { code?: string }).code === "23514";
+
+/** AVETMISS-CHECK: answers checked against the AVETMISS code lists (public.avetmiss_check_answers). fieldErrors only flags values that
+ * are filled in and invalid (blank passes); missingForSubmit lists what the student's record still lacks to submit. Null when the
+ * database has no such check (the save itself still refuses a bad value). */
+export interface AvetmissCheck { fieldErrors: Record<string, string>; missingForSubmit: string[] }
+export async function avetmissCheckAnswers(values: Record<string, unknown>, studentId: string | null): Promise<AvetmissCheck | null> {
+  const { data, error } = await supabase.rpc("avetmiss_check_answers", { p_values: values, p_student: studentId });
+  if (error) { if (error.code === "PGRST202") return null; throw new Error(error.message); }
+  const row = (data ?? {}) as { fieldErrors?: Record<string, string>; missingForSubmit?: string[] };
+  return { fieldErrors: row.fieldErrors ?? {}, missingForSubmit: Array.isArray(row.missingForSubmit) ? row.missingForSubmit.map(String) : [] };
+}
+
 async function draftCommand(id: string, fn: string, args: Record<string, unknown>): Promise<unknown> {
   const prior = draftQueues.get(id) ?? Promise.resolve();
   const task = prior.catch(() => undefined).then(async () => {
     if (!draftVersions.has(id)) throw new Error("Reload the application before editing.");
     const stamp = fn === "portal_wizard_save" ? { p_saved_at: wizardSaveStamps.get(id) ?? null } : {};
     const { data, error } = await supabase.rpc(fn, { p_application_id: id, p_expected_version: draftVersions.get(id), ...stamp, ...args });
-    if (error) throw new Error(error.message);
+    if (error) throw dbError(error);
     draftVersions.set(id, Number(typeof data === "number" ? data : data.draft_version));
     if (fn === "portal_wizard_save") wizardSaveStamps.set(id, data.saved_at ?? null);
     return data;
@@ -776,7 +793,7 @@ export async function submitApplication(
     p_application_id: applicationId, p_expected_version: draftVersions.get(applicationId),
     p_request_key: key, p_consent: consent,
   });
-  if (error) throw new Error(error.message);
+  if (error) throw dbError(error);
   return { reference: String(data?.reference ?? ""), waitingGuardian: data?.state === "waiting_guardian" };
 }
 

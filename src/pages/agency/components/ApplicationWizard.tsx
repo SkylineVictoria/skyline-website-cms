@@ -13,6 +13,8 @@ import {
   saveWizardDraft,
   submitApplication,
   sendApplicationInvitation,
+  avetmissCheckAnswers,
+  isCheckViolation,
   uploadApplicationDocument,
   type ApplicationCourseRow,
   type DocumentRow,
@@ -23,7 +25,7 @@ import { BORN_IN_PASSPORT_COUNTRY, PASSPORT_COUNTRY_LABEL } from "@/pages/agency
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
 import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
-import { AVETMISS_EXTRA_FIELDS, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingScreen, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
 import { academicPrefill } from "@/pages/agency/lib/educationLevels";
@@ -234,6 +236,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [draftIssuingCountry, setDraftIssuingCountry] = useState("");
   const [savingAnswers, setSavingAnswers] = useState(false);
   const [answerSaveError, setAnswerSaveError] = useState("");
+  // AVETMISS-CHECK: fields the AVETMISS check refused on this screen (Next stays disabled until each is changed), and what other
+  // screens still need (a summary with links: values refused elsewhere, and on Submit what the student record lacks).
+  const [avetmissKeys, setAvetmissKeys] = useState<string[]>([]);
+  const [checkSummary, setCheckSummary] = useState<{ label: string; screen: string }[]>([]);
   const [institutionCourses, setInstitutionCourses] = useState<ApplicationCourseRow[] | null>(null);
   // Staff: the courses of Learning Management (rto_admin course_list, every status) by their CMS id; RTO Managers may add an intake from here.
   const [staffCourses, setStaffCourses] = useState<RtoCourse[] | null>(null);
@@ -318,6 +324,11 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   }, [persist]);
 
   const leaveDraft = async () => {
+    // Save as draft keeps blank answers; only a filled-in invalid AVETMISS value stops it (shown under its field or in the summary).
+    if (!loadError && Object.keys(answers).length) {
+      const screen = step >= DOC_STEPS ? WIZARD_QUESTIONS[step - DOC_STEPS]?.id ?? "" : "";
+      if (!(await avetmissGate(screen, {}, "draft"))) return;
+    }
     if (await persist()) onCancel();
   };
 
@@ -622,6 +633,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if (role !== "student") window.setTimeout(() => leaveOnce.current(), 2200);
     } catch (error) {
       const message = error instanceof Error ? error.message : "We could not submit the application.";
+      if (isCheckViolation(error)) { setFinishError(message); setFinishing(false); completingRef.current = false; return; }
       // "Required field missing: title" and the like: say which screen holds it, so the agent can go straight there.
       const field = message.match(/:\s*([a-z_]+)\s*$/)?.[1] ?? "";
       const screen = SCREEN_OF_FIELD.get(field) ?? OTHER_SCREENS[field] ?? "";
@@ -927,6 +939,40 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   };
 
   /** Checks the screen's answers and saves them to the draft; false when something is missing or the save failed. */
+  /** Scrolls to and focuses a field by its form key. */
+  const focusField = (key: string) => window.requestAnimationFrame(() => {
+    const el = (document.getElementById(`wizard-${key}`) ?? document.querySelector(`[name="${key}"]`)) as HTMLElement | null;
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    el?.focus({ preventScroll: true });
+  });
+  /** AVETMISS-CHECK: the answers on screen (with this screen's cleaned values) checked by the database. Errors on this screen go under
+   * their fields; errors on other screens, and on Submit what the student record still lacks, go to the summary. True = may go on. */
+  const avetmissGate = async (screen: string, values: Record<string, unknown>, mode: "next" | "draft" | "submit"): Promise<boolean> => {
+    let check: Awaited<ReturnType<typeof avetmissCheckAnswers>> = null;
+    try { check = await avetmissCheckAnswers({ ...answers, ...values }, studentIdRef.current); }
+    catch { return true; } // the save itself still refuses a bad value (check_violation, shown as it is)
+    if (!check) return true;
+    const here: Record<string, string> = {};
+    const elsewhere: { label: string; screen: string }[] = [];
+    for (const [key, message] of Object.entries(check.fieldErrors)) {
+      const at = AVETMISS_FIELD_SCREEN[key] ?? SCREEN_OF_FIELD.get(key) ?? OTHER_SCREENS[key] ?? "";
+      if (at === screen) here[key] = message;
+      else elsewhere.push({ label: message, screen: at });
+    }
+    if (mode === "submit") for (const item of check.missingForSubmit) elsewhere.push({ label: `Missing: ${item}`, screen: avetmissMissingScreen(item) });
+    const keys = Object.keys(here);
+    setAvetmissKeys(keys);
+    if (keys.length) {
+      setAnswerErrors((prev) => ({ ...prev, ...here }));
+      focusField(keys[0]);
+    }
+    // Other screens block only the final Submit and Save as draft (Next moves on; that screen's own Next checks it again).
+    const blockingElsewhere = mode === "next" ? [] : elsewhere;
+    setCheckSummary(blockingElsewhere);
+    return !keys.length && !blockingElsewhere.length;
+  };
+  const avetmissPending = avetmissKeys.some((key) => answerErrors[key]);
+
   const saveAnswers = async (target: WizardQuestion): Promise<boolean> => {
     const errors: Record<string, string> = {};
     const values: Record<string, unknown> = {};
@@ -1086,6 +1132,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     setAnswerErrors(errors);
     if (Object.values(errors).some(Boolean)) return false;
     setSavingAnswers(true);
+    const allowed = await avetmissGate(target.id, values, "next").finally(() => setSavingAnswers(false));
+    if (!allowed) return false;
+    setSavingAnswers(true);
     setAnswerSaveError("");
     try {
       await flushApplicationEdits(applicationId);
@@ -1095,7 +1144,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       if ((target.id === "identifier" || target.id === "language" || target.id === "personal") && studentIdRef.current) await syncApplicationAvetmiss(studentIdRef.current, values);
       return true;
     } catch (error) {
-      setAnswerSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");
+      // A check_violation (23514) carries the database's own message for the user.
+      setAnswerSaveError(isCheckViolation(error) ? error.message : error instanceof Error ? error.message : "We could not save these answers. Try again.");
       return false;
     } finally {
       setSavingAnswers(false);
@@ -1104,6 +1154,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
 
   const nextFromQuestion = async () => {
     if (!question || !(await saveAnswers(question))) return;
+    // Submit: every AVETMISS value valid and nothing missing from the student record (summary with links otherwise).
+    if (step === LAST_STEP && !(await avetmissGate(question.id, {}, "submit"))) return;
     if (step === LAST_STEP) setFinishing(true);
     else await goTo(step + 1, true);
   };
@@ -1371,7 +1423,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               </button>
             ) : null}
             {question && !isLast ? (
-              <button type="button" onClick={() => void nextFromQuestion()} disabled={savingAnswers} className={primaryClass}>
+              <button type="button" onClick={() => void nextFromQuestion()} disabled={savingAnswers || avetmissPending} title={avetmissPending ? "Fix the answers marked in red first" : undefined} className={primaryClass}>
                 {savingAnswers ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
               </button>
             ) : isLast ? (
@@ -1381,7 +1433,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
                     {signsHere ? "Submit now" : "Send now"}
                   </button>
                 ) : null}
-                <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers} className={primaryClass}>
+                <button type="button" onClick={() => void nextFromQuestion()} disabled={finishing || savingAnswers || avetmissPending} title={avetmissPending ? "Fix the answers marked in red first" : undefined} className={primaryClass}>
                   {finishing ? (
                     <>
                       <i className="ri-loader-4-line animate-spin" aria-hidden="true" />
@@ -1453,6 +1505,18 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
                 ? `${expiredPassport.filename} has expired but could not be removed (${expiredPassport.error}). Delete it, then upload the student\u2019s current passport.`
                 : `${expiredPassport?.filename ?? "This passport"} expired${expiredPassport?.date ? ` on ${formatExpiryDate(expiredPassport.date)}` : ""} and was not saved. Upload the student\u2019s current passport to continue.`}
             </WizardNotice>
+          ) : null}
+
+          {checkSummary.length ? (
+            <div role="alert" className="mx-5 my-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 md:mx-6">
+              <p className="font-semibold">Fix these before you go on:</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {checkSummary.map((item, i) => {
+                  const at = WIZARD_QUESTIONS.findIndex((q) => q.id === item.screen);
+                  return <li key={i}>{item.label}{at >= 0 ? <> · <button type="button" className="font-semibold underline" onClick={() => { setCheckSummary([]); void goTo(DOC_STEPS + at); }}>{WIZARD_QUESTIONS[at].title}</button></> : null}</li>;
+                })}
+              </ul>
+            </div>
           ) : null}
 
           {finishError ? (

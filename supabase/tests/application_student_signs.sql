@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(81);
+select plan(91);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -280,6 +280,22 @@ select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000
   'then the student signs and submits');
 reset role;
 select ok(pg_temp.events('e5100000-0000-0000-0000-000000000007') like '%mobile_confirmed%email_confirmed%', 'both confirmations on the timeline');
+
+-- 13. CONTACT-VERIFY everyone: employee / CMS / signing links use the same method (generic link aliases, proofs and codes).
+select ok(public.link_alias_add('staff', 'f5100000-0000-0000-0000-000000000001', pg_temp.hash(pg_temp.tok(21)), pg_temp.hash(pg_temp.tok(22)),
+  'Staff.Person@example.test', '+61412345678', now() + interval '7 days'), 'an employee link gets a text alias');
+select is(public.link_opened(pg_temp.hash(pg_temp.tok(22)))->>'via', 'sms', 'the text alias is recognised');
+select is(public.link_opened(pg_temp.hash(pg_temp.tok(22)))->>'base', pg_temp.hash(pg_temp.tok(21)), 'the text alias opens the emailed link''s record');
+select ok(public.link_email_pending('staff', 'f5100000-0000-0000-0000-000000000001'), 'opened from the text: the email waits for a code');
+select is(public.link_code_issue('staff', 'f5100000-0000-0000-0000-000000000001', '246810')->>'to', 'staff.person@example.test', 'the code goes to the email');
+select throws_ok($$select public.link_code_issue('staff', 'f5100000-0000-0000-0000-000000000001', '135791')$$, '22023',
+  'A code was just sent. Wait a minute before asking for another', 'one code a minute');
+select is(public.link_code_verify('staff', 'f5100000-0000-0000-0000-000000000001', '000000')->>'ok', 'false', 'a wrong code is refused');
+select is(public.link_code_verify('staff', 'f5100000-0000-0000-0000-000000000001', '246810')->>'ok', 'true', 'the right code confirms the email');
+select ok(not public.link_email_pending('staff', 'f5100000-0000-0000-0000-000000000001'), 'nothing left to confirm');
+select public.link_alias_add('cms', 'f5100000-0000-0000-0000-000000000002', null, pg_temp.hash(pg_temp.tok(23)), 'cms.person@example.test', '+61412345679', now() + interval '7 days');
+select public.link_opened(pg_temp.hash(pg_temp.tok(23)));
+select ok(public.link_alias_use(pg_temp.hash(pg_temp.tok(23))) and public.link_alias_use(pg_temp.hash(pg_temp.tok(23))) is null, 'a CMS text link is used once');
 
 select * from finish();
 rollback;

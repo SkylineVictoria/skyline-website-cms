@@ -13,7 +13,7 @@ import {
   findAgentByProfile,
   getApplication,
   agentPickable, listActiveAgentsElsewhere, listAgentsOfBusiness,
-  sendApplicationInvitation,
+  sendApplicationInvitation, saveWizardDraft, INVITE_SMS_LABEL,
   studentAgencyOptions,
   chooseStudentAgency,
   type BusinessAgentOption,
@@ -156,10 +156,12 @@ export default function NewApplicationPage() {
         ? (await createApplicationForStudent(key, existing.id)).id
         : await createStudentDraft(student.email, chosen!.agent.id, key);
       clientKeyRef.current = newClientKey();
+      // CONTACT-LINKS: the mobile from the first screen goes on the application (the invitation texts it from there).
+      if (student.mobile) await saveWizardDraft(id, { values: { mobile: student.mobile } }).catch(() => push("The mobile could not be saved. Add it in the application.", "error"));
       if (student.invite) {
         try {
-          await sendApplicationInvitation(id);
-          push("Application invitation sent.");
+          const sms = await sendApplicationInvitation(id, undefined, Boolean(student.sendText));
+          push(["Application invitation sent by email.", INVITE_SMS_LABEL[sms]].filter(Boolean).join(" "));
         } catch (e) {
           push(e instanceof Error ? e.message : "Invitation failed. Try again from Finish Application.", "error");
         }

@@ -1,3 +1,4 @@
+import ContactLinkFields from "@/components/shared/ContactLinkFields";
 import { useEffect, useState } from "react";
 import { Button, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -192,12 +193,9 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
               onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
           </Field>
           <div className="sm:col-span-2">
-            {/* The shared phone control: country code plus number, checked the same way as every other phone field. */}
-            <p className="mb-1.5 text-label font-medium text-foreground-800">Phone</p>
-            <div onInput={(e) => { const target = e.target as HTMLInputElement; if (target.name === "agent_phone") setPhone(target.value); }}>
-              <PhoneInput key={open ? agent?.agentId ?? "new" : "closed"} id="add-agent-phone" name="agent_phone" value={phone} locked={busy} placeholder="041 234 5678" />
-            </div>
-            <p className="mt-1 text-xs text-foreground-500">Optional. Choose the country code, then the number, for example 041 234 5678.</p>
+            {/* CONTACT-LINKS: the same mobile block as the student, business and employee forms. */}
+            <ContactLinkFields key={open ? agent?.agentId ?? "new" : "closed"} id="agent" mobile={phone} onMobile={setPhone} locked={busy}
+              note="Saved on their agent record. Their sign-in invitation goes by email; links they sign (agreements) also go by text to this mobile." />
           </div>
         </div>
 

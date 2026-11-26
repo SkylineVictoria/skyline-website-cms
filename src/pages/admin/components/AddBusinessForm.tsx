@@ -608,7 +608,7 @@ export default function AddBusinessForm({ onCreated, onUseExisting, cancel, inDi
 
       {ready ? box(<>
           <h2 className="font-heading text-base font-semibold">Business admin agent (point of contact)</h2>
-          <p className="mt-1 text-xs text-foreground-500">ABN Lookup does not supply contact details. This person becomes the business&rsquo;s first agent, as its business admin agent. The email and mobile below are theirs and are saved on their agent record; their sign-in invitation goes to this email once the business is activated.</p>
+          <p className="mt-1 text-xs text-foreground-500">ABN Lookup does not supply contact details. This person becomes the business&rsquo;s first agent, as its business admin agent. The email and mobile below are theirs and are saved on their agent record; their sign-in invitation goes to this email once the business is activated. The agent application link goes to this email and, with a mobile, also by text message (either link opens it; from the text they confirm the email with a 6-digit code).</p>
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
               <Field label="Full name" required hint={errors.givenName || errors.primaryContact ? undefined : omaraAgents.length

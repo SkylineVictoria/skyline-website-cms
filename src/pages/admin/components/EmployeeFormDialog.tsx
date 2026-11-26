@@ -12,6 +12,8 @@ import EmailField from "@/components/identity/EmailField";
 import StaffRolePicker from "@/pages/admin/components/hrms/StaffRolePicker";
 import type { StaffRoleType } from "@/lib/staffRolesApi";
 import { isEmailTakenError } from "@/lib/identity/email";
+import ContactLinkFields from "@/components/shared/ContactLinkFields";
+import { textableMobile } from "@/lib/textableMobile";
 
 type Problems = Partial<Record<keyof EmployeeForm, string>>;
 type BankProblems = Partial<Record<keyof EmployeeBank, string>>;
@@ -74,7 +76,7 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
       if (!personId && mode === "onboard") {
         // HR-02 "Add staff member": creates their application and emails the document link (staff-admin).
         try {
-          const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), roleType: role?.key ?? null, offerFirst: true });
+          const result = await staffAdminActions.add({ firstName: form.firstName.trim(), lastName: form.lastName.trim(), email: form.email.trim().toLowerCase(), phone: textableMobile(form.phone) ? form.phone : undefined, roleType: role?.key ?? null, offerFirst: true });
           personId = result.profileId ?? null;
           // STAFF-OFFER-FULL-PART-TIME: nothing is emailed yet; the offer letter (with their set-password link) is the first email.
           message = "Added. Now enter the offer details (position, job type, salary or rate, hours, start date), then send the offer letter. They create their password, accept or decline, and add their documents after signing.";
@@ -163,7 +165,11 @@ export default function EmployeeFormDialog({ id, initial, onClose, onSaved }: {
             <StaffRolePicker value={role} onChange={(next) => { setRole(next); if (next) setRoleProblem(""); }} disabled={busy || Boolean(savedId)} problem={roleProblem} />
           </div>
         ) : null}
-        {simple ? null : <>
+        {simple ? (
+          // CONTACT-LINKS: the same mobile block as the student, business and agent forms; with a mobile, their links also go by text.
+          <ContactLinkFields id="employee" mobile={form.phone} onMobile={(phone) => patch({ phone })} locked={busy || Boolean(savedId)}
+            note="With a mobile, the offer and sign-up links also go by text message (either one opens their account)." />
+        ) : <>
         {/* The same phone field as the student and agent forms: country code + number, formatted and checked as you type. */}
         <div data-testid="employee-phone" onInput={(e) => { const t = e.target as HTMLInputElement; if (t.name === "employee_phone") patch({ phone: t.value }); }}>
           <p className="mb-1.5 text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>

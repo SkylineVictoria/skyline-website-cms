@@ -13,7 +13,7 @@ import { avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
  * surrounding form when Next is pressed, so the phone control keeps its own formatting and validation. The label, input,
  * error line and the emergency contact fields are the shared wizard components (also used by staff onboarding).
  */
-export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0, applicationId, defaultLoad, lockedNote }: {
+export default function WizardQuestionStep({ question, answers, errors, courseOptions, courseIdOf, onChange, onIntake, onIntakesLoaded, canAddIntake = false, onAddIntake, intakeReload = 0, applicationId, defaultLoad, onlyLoad, lockedNote }: {
   question: WizardQuestion;
   answers: Record<string, string>;
   errors: Record<string, string>;
@@ -31,6 +31,8 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   intakeReload?: number;
   /** CoE for an international student (picked to start with on the intake). */
   defaultLoad?: "coe" | "voe";
+  /** International = CoE only, domestic = VoE only (the other greyed out). */
+  onlyLoad?: "coe" | "voe";
   /** APPLICATION-STUDENT-SIGNS: the student sees the course and intake their agent set, view-only, with this (Request a change). */
   lockedNote?: ReactNode;
   /** The application (USI screen: Verify / find / create the USI with usi-service). */
@@ -117,7 +119,7 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
           <div>
             <Label htmlFor="wizard-preferred_intake">Intake</Label>
             <IntakeSelect id="wizard-preferred_intake" courseId={answers.course ? courseIdOf(answers.course) : null} value={intakeKey(answers.intake_id, answers.preferred_intake, answers.intake_join_date)} error={errors.preferred_intake}
-              className={INPUT} onChange={onIntake} onLoaded={onIntakesLoaded} canAdd={canAddIntake} onAdd={onAddIntake} reloadToken={intakeReload} defaultLoad={defaultLoad} />
+              className={INPUT} onChange={onIntake} onLoaded={onIntakesLoaded} canAdd={canAddIntake} onAdd={onAddIntake} reloadToken={intakeReload} defaultLoad={defaultLoad} onlyLoad={onlyLoad} />
             <FieldError text={errors.preferred_intake} />
           </div>
         </div>

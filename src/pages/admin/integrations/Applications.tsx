@@ -1,9 +1,15 @@
 import { Button, TextInput } from '@/pages/admin/components/ui';
-import { isEnvironmentManaged, type Connection, type Definition } from './api';
+import { isEnvironmentManaged, type Connection, type Definition, type ServerSecret } from './api';
 import { ConnectionStatus } from './shared';
 
-function availabilityLabel(isAdmin: boolean, definition?: Definition) {
-  if (isEnvironmentManaged(definition)) return 'Server-managed';
+/** A server-managed service is Connected once every required secret is set, Needs attention while one is missing. */
+function serverSecretLabel(secrets?: ServerSecret[]) {
+  if (!secrets?.length) return 'Server-managed';
+  return secrets.every(s => s.set || !s.required) ? 'Connected' : 'Needs attention';
+}
+
+function availabilityLabel(isAdmin: boolean, definition?: Definition, secrets?: ServerSecret[]) {
+  if (isEnvironmentManaged(definition)) return serverSecretLabel(secrets);
   // rule-policy: security integration-snapshot-access Restricted accounts only see connection status for visible records.
   if (!isAdmin) return 'No accessible connection';
   return definition?.availability === 'requires_approval' ? 'Requires approval' : 'Not connected';
@@ -49,7 +55,7 @@ export function ProviderIcon({ application, large = false }: { application: Appl
 const filters = ['All', 'Connected', 'Needs attention'] as const;
 type Filter = typeof filters[number];
 
-export function Applications({ applications, selected, query, setQuery, filter, setFilter, choose, statusOf, isAdmin, busy }: {
+export function Applications({ applications, selected, query, setQuery, filter, setFilter, choose, statusOf, isAdmin, busy, serverSecrets }: {
   applications: Application[];
   selected: string;
   query: string;
@@ -60,11 +66,16 @@ export function Applications({ applications, selected, query, setQuery, filter, 
   statusOf: (connection: Connection) => string;
   isAdmin: boolean;
   busy: boolean;
+  serverSecrets?: Record<string, ServerSecret[]>;
 }) {
   const phrase = query.trim().toLowerCase();
   const visible = applications.filter(app => {
     const matches = [app.name, app.id, app.description].some(value => value.toLowerCase().includes(phrase));
     if (!matches || filter === 'All') return matches;
+    if (isEnvironmentManaged(app.definition)) {
+      const label = serverSecretLabel(serverSecrets?.[app.id]);
+      return filter === 'Connected' ? label === 'Connected' : label === 'Needs attention';
+    }
     // rule-policy: technical integration-status-filter Filters by existing visible connection states.
     return app.connections.some(item => {
       // rule-policy: technical integration-status-filter-label Matches actual registry status to the derived filter.
@@ -99,7 +110,7 @@ export function Applications({ applications, selected, query, setQuery, filter, 
                 <span className="min-w-0 flex-1 break-words font-semibold text-foreground-950">{app.name}</span>
                 {/* // rule-policy: technical integration-status-view Renders the current snapshot status. */}
                 <span className="text-right" data-testid={item ? `connection-status-${app.id}` : undefined}>
-                  <ConnectionStatus status={item ? statusOf(item) : availabilityLabel(isAdmin, app.definition)} />
+                  <ConnectionStatus status={item ? statusOf(item) : availabilityLabel(isAdmin, app.definition, serverSecrets?.[app.id])} />
                 </span>
               </button>
             </li>
@@ -111,8 +122,9 @@ export function Applications({ applications, selected, query, setQuery, filter, 
   );
 }
 
-export function ApplicationHeader({ application, connection, statusOf, isAdmin }: {
+export function ApplicationHeader({ application, connection, statusOf, isAdmin, serverSecrets }: {
   application: Application;
+  serverSecrets?: Record<string, ServerSecret[]>;
   connection?: Connection;
   isAdmin: boolean;
   statusOf: (connection: Connection) => string;
@@ -123,7 +135,7 @@ export function ApplicationHeader({ application, connection, statusOf, isAdmin }
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h2 className="break-words font-heading text-xl font-bold text-foreground-950">{application.name}</h2>
-          <ConnectionStatus status={connection ? statusOf(connection) : availabilityLabel(isAdmin, application.definition)} />
+          <ConnectionStatus status={connection ? statusOf(connection) : availabilityLabel(isAdmin, application.definition, serverSecrets?.[application.id])} />
         </div>
         {application.description && <p className="mt-1 text-sm text-foreground-600">{application.description}</p>}
       </div>

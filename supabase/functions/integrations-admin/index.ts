@@ -3,6 +3,7 @@ import { pkceChallenge, oauthCallback, oauthConfig, oauthProviders, readOAuthCre
 import { accessToken } from '../_shared/integrations/credentials.ts';
 import { testProvider } from '../_shared/integrations/provider.ts';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
+import { serverSecretStatus } from '../_shared/integrations/server-secrets.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -35,7 +36,7 @@ Deno.serve(async(req:Request)=>{
    results.forEach(r=>check(r.error));
    const eligible=isAdmin?await caller.rpc('integration_eligible_users',{p_tenant:tenant}):{data:[],error:null};check(eligible.error);
    const connections=await Promise.all((results[1].data??[]).map(async(c)=>({...c,can_operate:isAdmin||(await caller.rpc('integration_access',{p_connection:c.id,p_operate:true})).data===true})));
-   return json({isAdmin,eligibleUsers:eligible.data,permissions:results[7].data,eventAttempts:results[8].data,definitions:results[0].data,connections,jobs:results[2].data,logs:results[3].data,events:results[4].data,registrations:results[6].data,settings:results[5].data?.[0]??{timeout_seconds:10,max_retries:1,alerts_enabled:true}});
+   return json({isAdmin,eligibleUsers:eligible.data,permissions:results[7].data,eventAttempts:results[8].data,definitions:results[0].data,connections,jobs:results[2].data,logs:results[3].data,events:results[4].data,registrations:results[6].data,settings:results[5].data?.[0]??{timeout_seconds:10,max_retries:1,alerts_enabled:true},serverSecrets:isAdmin?serverSecretStatus():{}});
   }
   if(action==='add'){
    const {data:def,error}=await caller.from('integration_definitions').select('id').eq('id',body.connectorId).maybeSingle();check(error);

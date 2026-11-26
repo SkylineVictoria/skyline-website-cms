@@ -227,6 +227,34 @@ export const studentLinks = (id: string) =>
 /** Deletes the student with everything linked to them, enrolled or not (owner 2026-11-25; migration 20261125070517). */
 export const purgeStudentRecord = (id: string) =>
   call<{ deleted: boolean; applicationsDeleted?: number; filesQueued?: number }>("admin_student_purge", { p_student: id, p_confirm: "DELETE" }, "We could not delete this student.");
+/** STUDENT-DELETE-FILES (2026-11-26): what the Delete confirmation shows: the student and each application. */
+export type StudentDeletePreview = {
+  student: { id: string; name: string | null; email: string | null; status: string | null; archived: boolean; hasLogin: boolean };
+  applications: { id: string; reference: string | null; status: string; submittedAt: string | null; completion: number | null; documents: number; files: number; offerLetters: number }[];
+  logins?: { email: string | null; delete: boolean; keepReason: string | null }[];
+  links: { table: string; count: number }[];
+};
+const missingRpc = (e: unknown) => (e as { cause?: { code?: string } })?.cause?.code === "PGRST202";
+/** null while migration 20261127080517 is not applied (the dialog then uses admin_student_links). */
+export async function studentDeletePreview(id: string): Promise<StudentDeletePreview | null> {
+  try { return await call<StudentDeletePreview>("admin_student_delete_preview", { p_student: id }, "We could not read this student's applications."); }
+  catch (e) { if (missingRpc(e)) return null; throw e; }
+}
+/** Deletes the student with every application and record (admin_student_purge) and their portal login unless it is used for anything
+ * else, then removes the applications' files. */
+export async function deleteStudentEverything(id: string): Promise<{ applicationsDeleted: number; filesRemoved: number; filesFailed: number; loginsDeleted: number }> {
+  let result: { applicationsDeleted?: number; applicationIds?: string[]; cleanupIds?: number[]; loginsDeleted?: number };
+  try { result = await call("admin_student_delete_all", { p_student: id, p_confirm: "DELETE" }, "We could not delete this student."); }
+  catch (e) { if (!missingRpc(e)) throw e; result = await purgeStudentRecord(id); }
+  const applicationIds = result.applicationIds ?? [], cleanupIds = result.cleanupIds ?? [];
+  let filesRemoved = 0, filesFailed = 0;
+  if (applicationIds.length || cleanupIds.length) {
+    // The student is already deleted; a file that could not be removed stays queued and is reported, never blocking.
+    const { data, error } = await supabase.functions.invoke("portal-application-delete", { body: { action: "student_files", applicationIds, cleanupIds } });
+    if (error || !data?.ok) filesFailed = Number(data?.failed ?? cleanupIds.length) || 1; else filesRemoved = Number(data.removed ?? 0);
+  }
+  return { applicationsDeleted: result.applicationsDeleted ?? applicationIds.length, filesRemoved, filesFailed, loginsDeleted: result.loginsDeleted ?? 0 };
+}
 export const deleteStudentRecord = (id: string) =>
   call<{ deleted: boolean; archived?: boolean; applicationsDeleted?: number; filesQueued?: number }>("admin_student_delete", { p_student: id }, "We could not delete this student.");
 

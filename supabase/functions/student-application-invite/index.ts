@@ -220,7 +220,12 @@ async function textLink(admin: any, kind: "student" | "guardian", id: string, li
     if (!to) { await record("skipped", "no_mobile"); return "no_mobile"; }
     const provider = createClickSendProvider({ username: settings.username, apiKey: settings.apiKey, senderId: settings.from ?? undefined });
     const outcome = await provider.send({ deliveryId: id, to, body: `${wording(String(target.name ?? "").trim(), String(target.studentName ?? ""))}\n${link}` });
-    if (outcome.kind === "accepted") { await record("sent", "", to); return "sent"; }
+    if (outcome.kind === "accepted") {
+      // SMS-DELIVERY-REPORTS: keep ClickSend's message id so its delivery report can mark the text Delivered / Not delivered.
+      await admin.rpc("sms_message_sent", { p_message_id: outcome.messageId, p_application: target.applicationId, p_who: kind, p_last_digits: to.slice(-3) })
+        .then(() => undefined, () => undefined);
+      await record("sent", "", to); return "sent";
+    }
     await record("failed", outcome.code, to);
     return "failed";
   } catch {

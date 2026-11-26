@@ -7,7 +7,9 @@ export type Job = { id: string; connection_id: string; status: string; created_a
 export type Log = { id: string; connector_id: string; severity: string; code: string; created_at: string; correlation_id: string };
 export type Event = { id: string; connection_id: string; event_type: string; provider_event_id: string; status: string; attempts: number; retry_count: number; verified_at: string|null; created_at: string };
 export type Settings = { timeout_seconds: number; max_retries: number; alerts_enabled: boolean };
-export type Snapshot = { isAdmin: boolean; eligibleUsers: {id:string;label:string}[]; permissions: {connection_id:string;user_id:string;role:string}[]; eventAttempts: {id:string;event_id:string;status:string;code:string;created_at:string;correlation_id:string}[]; definitions: Definition[]; connections: Connection[]; jobs: Job[]; logs: Log[]; events: Event[]; registrations: { id:string; connection_id:string; provider_id:string; endpoint_url:string; event_types:string[] }[]; settings: Settings };
+/** Edge Function secret of a server-managed integration: its name and whether it is set (never its value). */
+export type ServerSecret = { name: string; required: boolean; note: string; set: boolean };
+export type Snapshot = { serverSecrets?: Record<string, ServerSecret[]>; isAdmin: boolean; eligibleUsers: {id:string;label:string}[]; permissions: {connection_id:string;user_id:string;role:string}[]; eventAttempts: {id:string;event_id:string;status:string;code:string;created_at:string;correlation_id:string}[]; definitions: Definition[]; connections: Connection[]; jobs: Job[]; logs: Log[]; events: Event[]; registrations: { id:string; connection_id:string; provider_id:string; endpoint_url:string; event_types:string[] }[]; settings: Settings };
 export async function integrationRequest<T>(action: string, values: Record<string, unknown> = {}): Promise<T> {
   const { data, error } = await supabase.functions.invoke('integrations-admin', { body: { ...values, action, tenantId: currentTenantSite()?.tenantId ?? null } });
   if (error) {

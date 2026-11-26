@@ -72,7 +72,9 @@ const SMS_REASON: Record<string, string> = {
 const smsReason = (detail: Record<string, unknown> | undefined) => {
   const code = typeof detail?.code === "string" ? detail.code : "";
   const to = typeof detail?.endsWith === "string" ? ` (to the number ending ${detail.endsWith})` : "";
-  return code ? `${SMS_REASON[code] ?? code}${to}` : to ? to.slice(2, -1) : "";
+  // SMS-DELIVERY-REPORTS: ClickSend's own words for a text the phone did not receive.
+  const reason = typeof detail?.reason === "string" ? `ClickSend: ${detail.reason}` : "";
+  return code ? `${SMS_REASON[code] ?? code}${to}` : reason ? `${reason}${to}` : to ? to.slice(2, -1) : "";
 };
 
 function Timeline({ handoff }: { handoff: Handoff }) {
@@ -84,7 +86,7 @@ function Timeline({ handoff }: { handoff: Handoff }) {
           <span className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-primary-500" aria-hidden="true" />
           <span className="font-medium text-foreground-900">{HANDOFF_EVENT_LABEL[e.event] ?? e.event}</span>
           <span className="text-foreground-500"> · {when(e.at)}{e.actorName ? ` · ${e.actorName}` : ""}</span>
-          {(e.event === "sms_failed" || e.event === "sms_skipped") && smsReason(e.detail) ? <p className="mt-0.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900" data-testid="handoff-sms-reason">Why: {smsReason(e.detail)}</p> : null}
+          {(e.event === "sms_failed" || e.event === "sms_skipped" || e.event === "sms_undelivered") && smsReason(e.detail) ? <p className="mt-0.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900" data-testid="handoff-sms-reason">Why: {smsReason(e.detail)}</p> : null}
           {e.event === "change_requested" && typeof e.detail?.note === "string" ? <p className="mt-0.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-900">“{e.detail.note}”</p> : null}
         </li>
       ))}

@@ -6,7 +6,7 @@ import { Button, Card, ConfirmDialog, DangerDialog } from "@/pages/admin/compone
 import { ApplicationStatusPills } from "@/pages/admin/components/AgencyStatus";
 import { ListMessage, Pager, SearchBox, StatusTabs } from "@/pages/admin/components/ListControls";
 import { useToast } from "@/pages/admin/components/toastContext";
-import { purgeStudentRecord, studentLinks, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PORTAL_ACCESS_LABEL, sendStudentInvitation, setStudentStatus, type EnrolmentStage, type PortalAccess, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
+import { deleteStudentEverything, studentDeletePreview, studentLinks, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PORTAL_ACCESS_LABEL, sendStudentInvitation, setStudentStatus, type EnrolmentStage, type PortalAccess, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
 import EditStudentDialog from "@/pages/admin/components/EditStudentDialog";
 import { StatusBadge } from "@/pages/agency/components/PortalUI";
 import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
@@ -176,22 +176,22 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
     }
   };
 
-  // Deleting a student deletes all of their applications too. Files of applications still being worked on are removed
-  // here first (the document-delete function keeps files of submitted ones); the database then deletes every
-  // application with its records and queues any remaining files for removal, then the student.
+  // Deleting a student deletes all of their applications too (owner 2026-11-26): the database deletes every application with
+  // its records and documents, then the student (admin_student_delete_all); portal-application-delete then removes the files.
   const submittedCount = (row: StudentRow) => (row.applicationRows ?? []).filter((application) => application.status !== "draft").length;
   // Owner 2026-11-25: Delete asks first, listing everything the student is linked to; Yes deletes the student with all of it
   // (real or test, enrolled or not). Files of their applications are queued for removal by the server.
-  const [deleteAsk, setDeleteAsk] = useState<{ row: StudentRow; items: string[] } | null>(null);
+  const [deleteAsk, setDeleteAsk] = useState<{ row: StudentRow; items: string[]; applications: number } | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const deleteStudent = async (row: StudentRow) => {
     setBusyId(row.id); setDeleteError("");
     try {
-      const result = await purgeStudentRecord(row.id);
-      const count = result.applicationsDeleted ?? row.applications;
+      const result = await deleteStudentEverything(row.id);
+      const count = result.applicationsDeleted;
       setRows((current) => current.filter((r) => r.id !== row.id));
       setTotal((n) => Math.max(0, n - 1));
-      push(`${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"} and everything linked.`);
+      const files = result.filesFailed ? ` ${result.filesFailed} file${result.filesFailed === 1 ? "" : "s"} could not be removed yet.` : result.filesRemoved ? ` ${result.filesRemoved} file${result.filesRemoved === 1 ? "" : "s"} removed.` : "";
+      push(`${row.name || row.email} deleted, with ${count} application${count === 1 ? "" : "s"} and their documents${result.loginsDeleted ? " and portal login" : ""}.${files}`, result.filesFailed ? "error" : "success");
       setDeleteAsk(null);
       setReload((n) => n + 1);
     } catch (e) {
@@ -204,13 +204,20 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
   const askDelete = async (row: StudentRow) => {
     setBusyId(row.id);
     try {
-      const found = await studentLinks(row.id);
-      const items = [`The student ${row.name || row.email || ""}`.trim(),
-        ...(found.applications ? [`${found.applications} application${found.applications === 1 ? "" : "s"}, with their documents and history`] : []),
-        ...found.links.filter((l) => l.table !== "enrollment_applications").map((l) => `${l.count} ${linkLabel(l.table)}`)];
+      // STUDENT-DELETE-FILES (owner 2026-11-26): Are you sure, with the student's status and every application (status, documents).
+      const preview = await studentDeletePreview(row.id);
+      const found = preview ? { applications: preview.applications.length, links: preview.links } : await studentLinks(row.id);
+      const n = found.applications;
+      const status = [preview?.student.status ?? row.status ?? "Active", preview?.student.archived ? "archived" : ""].filter(Boolean).join(", ");
+      const facts = [`Status: ${status}`, row.portalAccess ? `Portal: ${PORTAL_ACCESS_LABEL[row.portalAccess]}` : "", row.enrolment ? `Enrolment: ${ENROLMENT_LABEL[row.enrolment.stage]}` : ""].filter(Boolean).join(" · ");
+      const items = [`Student: ${row.name || row.email || ""} · ${facts}`,
+        `${n} application${n === 1 ? "" : "s"}${n ? ", with all their documents and files:" : ""}`,
+        ...(preview?.applications ?? []).map((a) => `${a.reference ?? "Draft"} · ${statusInfo(workflow, a.status).label}${a.submittedAt ? "" : " (not submitted)"}${a.completion != null && !a.submittedAt ? ` · ${a.completion}%` : ""} · ${a.documents} document${a.documents === 1 ? "" : "s"}${a.offerLetters ? ` · ${a.offerLetters} offer letter${a.offerLetters === 1 ? "" : "s"}` : ""}`),
+        ...(preview?.logins ?? []).map((l) => l.delete ? `Portal login ${l.email ?? ""} (the student's workspace) is deleted too` : `Portal login ${l.email ?? ""} is kept (${l.keepReason}); only unlinked`),
+        ...found.links.filter((l) => l.table !== "enrollment_applications" && l.table !== "enrollment_application_documents" && l.table !== "agency_memberships").map((l) => `${l.count} ${linkLabel(l.table)}`)];
       setDeleteError("");
       setConfirmDelete(row);
-      setDeleteAsk({ row, items });
+      setDeleteAsk({ row, items, applications: n });
     } catch (e) {
       push(e instanceof Error ? e.message : "We could not read what this student is linked to.", "error");
     } finally {
@@ -386,7 +393,7 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
         onCancel={() => { if (!busyId) setMove(null); }}
       />
       <DangerDialog open={Boolean(deleteAsk)} title={`Delete ${deleteAsk?.row.name || deleteAsk?.row.email || "this student"}?`}
-        intro="This student has the records below. Do you really want to delete the student and all of them?"
+        intro={`Are you sure? This deletes the student, their ${deleteAsk?.applications ?? 0} application${deleteAsk?.applications === 1 ? "" : "s"} and every application document and file below.`}
         items={deleteAsk?.items ?? []} confirmLabel="Yes, delete" busy={Boolean(busyId)} error={deleteError}
         onConfirm={() => { if (deleteAsk && !busyId) void deleteStudent(deleteAsk.row); }}
         onCancel={() => { if (!busyId) { setDeleteAsk(null); setConfirmDelete(null); } }} />

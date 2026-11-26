@@ -180,6 +180,15 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
           ) : null}
           {radios("secondary_enrolled", "Is the student still enrolled in secondary (high) school?")}
           {select("school_level", "Highest completed school level")}
+          {/* AVETMISS-SUBMIT-FIX (owner 2026-11-26): NCVER needs the year the highest school level was completed (not for "did not go to school"). */}
+          {v("school_level") && !/ - 02$/.test(v("school_level")) ? (
+            <div>
+              <Label htmlFor="wizard-year_completed" required>Year that school level was completed</Label>
+              <input id="wizard-year_completed" name="year_completed" inputMode="numeric" maxLength={4} placeholder="e.g. 2015" value={v("year_completed")}
+                aria-invalid={Boolean(errors.year_completed)} className={INPUT} onChange={(e) => onChange("year_completed", e.target.value.replace(/\D/g, "").slice(0, 4))} />
+              <FieldError text={errors.year_completed} />
+            </div>
+          ) : null}
           {radios("prior_ed", "Has the student successfully completed any prior education?")}
           {v("prior_ed") === "Yes" ? (
             <fieldset>

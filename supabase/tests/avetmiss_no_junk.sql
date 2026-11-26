@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- AVETMISS-NO-JUNK (20261127050517): application answers are checked on every write (changed answers only, blanks pass, old answers
 -- kept), and every AVETMISS column has a guard. The installed trigger function is exercised on a scratch copy of the table, so no real
 -- application is touched. Rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(10);
+select plan(13);
 
 -- Every AVETMISS code column has a foreign key, a check or a validating trigger: a new column added without one fails here.
 select is((select count(*)::int from public.avetmiss_guard_gaps()), 0, 'no AVETMISS column without a guard');
@@ -35,6 +35,13 @@ select is(pg_temp.refused($$update avetmiss_junk_t.apps set data = jsonb_set(dat
 select ok(pg_temp.refused($$update avetmiss_junk_t.apps set data = jsonb_set(data, '{values,gender}', '"Alien"') where id = 4$$) like 'refused:%', 'old junk cannot be replaced by new junk');
 
 select ok(exists (select 1 from pg_trigger where tgname = 'avetmiss_application_values' and tgrelid = 'public.enrollment_applications'::regclass), 'the trigger is on enrollment_applications');
+
+-- AVETMISS-SUBMIT-FIX (20261127100517): the student's answers reach the student record the submit check reads.
+select ok(exists (select 1 from pg_trigger where tgname = 'avetmiss_answers_to_student' and tgrelid = 'public.enrollment_applications'::regclass), 'application answers are copied to the student record');
+-- AVETMISS-PAGE-CHECK (20261127110517): each wizard page is checked against the same required answers as Submit.
+select ok(cardinality(public.avetmiss_answers_missing('{}'::jsonb)) >= 12, 'an empty application misses every required AVETMISS answer');
+select ok('year highest school level completed' = any(public.avetmiss_answers_missing('{"school_level": "Year 12 or equivalent - 12"}'::jsonb)),
+  'a school level without the year completed is reported');
 
 select * from finish();
 rollback;

@@ -25,7 +25,7 @@ import { BORN_IN_PASSPORT_COUNTRY, PASSPORT_COUNTRY_LABEL } from "@/pages/agency
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
 import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
-import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingScreen, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingField, avetmissMissingScreen, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
 import { academicPrefill } from "@/pages/agency/lib/educationLevels";
@@ -960,6 +960,16 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       else elsewhere.push({ label: message, screen: at });
     }
     if (mode === "submit") for (const item of check.missingForSubmit) elsewhere.push({ label: `Missing: ${item}`, screen: avetmissMissingScreen(item) });
+    // AVETMISS-PAGE-CHECK (owner 2026-11-26): every page's Next also stops while an answer this page holds is still missing for AVETMISS
+    // (the same list Submit checks), shown under its field, or in the summary when the field is not on this page.
+    const missingHere: { label: string; screen: string }[] = [];
+    if (mode === "next") for (const item of check.missingInAnswers) {
+      if (avetmissMissingScreen(item) !== screen) continue;
+      const key = avetmissMissingField(item);
+      const message = `Required for AVETMISS reporting: ${item}.`;
+      const shown = key && (document.getElementById(`wizard-${key}`) ?? document.querySelector(`[name="${key}"]`));
+      if (shown && !here[key]) here[key] = message; else if (!shown) missingHere.push({ label: `Missing: ${item}`, screen });
+    }
     const keys = Object.keys(here);
     setAvetmissKeys(keys);
     if (keys.length) {
@@ -967,7 +977,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       focusField(keys[0]);
     }
     // Other screens block only the final Submit and Save as draft (Next moves on; that screen's own Next checks it again).
-    const blockingElsewhere = mode === "next" ? [] : elsewhere;
+    const blockingElsewhere = mode === "next" ? missingHere : elsewhere;
     setCheckSummary(blockingElsewhere);
     return !keys.length && !blockingElsewhere.length;
   };
@@ -1053,6 +1063,14 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       const priorRows = parsePriorEducation(filled("prior_education")).filter((r) => r.code || r.recognition || r.name.trim());
       if (filled("prior_ed") === "Yes" && priorEducationProblem(priorRows)) errors.prior_education = priorEducationProblem(priorRows);
       values.english_proficiency_code = otherLanguage ? (filled("english_proficiency_code") || "2") : "";
+      // AVETMISS-SUBMIT-FIX: the year the highest school level was completed (4 digits, after age 5, not in the future).
+      const schoolLevel = filled("school_level");
+      if (schoolLevel && !/ - 02$/.test(schoolLevel)) {
+        const year = filled("year_completed"); const born = Number(String(answers.dob ?? "").slice(0, 4)); const now = new Date().getFullYear();
+        if (!/^\d{4}$/.test(year)) errors.year_completed = "Enter the year (4 digits).";
+        else if (Number(year) > now || (born && Number(year) < born + 5)) errors.year_completed = `Enter a year between ${born ? born + 5 : 1900} and ${now}.`;
+        values.year_completed = year;
+      } else values.year_completed = "";
       values.disability_types = filled("disability") === "Yes" ? filled("disability_types") : "";
       values.prior_education = filled("prior_ed") === "Yes" ? JSON.stringify(priorRows) : "";
     } else if (target.id === "study") {

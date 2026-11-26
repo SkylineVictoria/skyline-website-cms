@@ -40,6 +40,16 @@ export const AVETMISS_FIELD_SCREEN: Record<string, string> = {
   prior_ed: "identifier", secondary_enrolled: "identifier",
   study_reason: "study",
 };
+/** AVETMISS-PAGE-CHECK: the wizard field that answers each item of missingInAnswers / missingForSubmit (to show the error under it). */
+export function avetmissMissingField(item: string): string {
+  const t = item.toLowerCase();
+  const pairs: [RegExp, string][] = [[/^name$/, "first_name"], [/date of birth/, "dob"], [/^gender/, "gender"], [/country of birth/, "birth_country"],
+    [/english/, "english_proficiency_code"], [/language/, "language_home"], [/aboriginal/, "atsi"], [/year/, "year_completed"],
+    [/highest school level/, "school_level"], [/secondary school/, "secondary_enrolled"], [/employment/, "employment"],
+    [/disability type/, "disability_types"], [/disability/, "disability"], [/prior qualifications/, "prior_education"], [/prior education/, "prior_ed"],
+    [/street/, "au_street"], [/suburb/, "au_suburb"], [/postcode/, "au_zip"], [/state/, "au_state"]];
+  return pairs.find(([re]) => re.test(t))?.[1] ?? "";
+}
 /** The screen that fixes each item of missingForSubmit (public.avetmiss_student_missing). */
 export function avetmissMissingScreen(item: string): string {
   const t = item.toLowerCase();

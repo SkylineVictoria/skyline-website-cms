@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(990);
+select plan(1001);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1889,5 +1889,19 @@ select is(public.acn_from_abn('86 603 584 676','Australian Private Company'),'60
 select is(public.acn_from_abn('86603584676','Individual/Sole Trader'),null,'ACN: none for an entity that is not a company');
 select is(public.agency_onboarding_office_fix('{"office_province":"3029","office_state":"VIC"}'),'{"office_state":"VIC","office_postcode":"3029"}'::jsonb,'stored values: a Province postcode leaves the Province');
 select is(public.agency_onboarding_office_fix('{"office_province":"3029","office_suburb":"Altona North"}'),'{"office_suburb":"Altona North 3029"}'::jsonb,'stored values: the postcode joins a named suburb');
+-- STUDENT-DELETE-FILES (20261127080517): the Delete preview and delete-all are admin-only (anon cannot run them; a caller who
+-- is not a SLIT admin is refused by admin_business_require).
+select ok(not has_function_privilege('anon', 'public.admin_student_delete_preview(uuid)', 'execute'), 'anon cannot read a student delete preview');
+select ok(not has_function_privilege('anon', 'public.admin_student_delete_all(uuid, text)', 'execute'), 'anon cannot delete a student');
+select throws_ok($$select public.admin_student_delete_preview(gen_random_uuid())$$, null, null, 'a non-admin caller is refused the preview');
+select throws_ok($$select public.admin_student_delete_all(gen_random_uuid(), 'DELETE')$$, null, null, 'a non-admin caller is refused the delete');
+-- SMS-DELIVERY-REPORTS (20261127090517): reports are applied only by the service role with the right key; the key is admin-only.
+select ok(not has_function_privilege('authenticated', 'public.sms_receipt_apply(text, text, text, text, text)', 'execute'), 'a signed-in user cannot apply a delivery report');
+select ok(not has_function_privilege('anon', 'public.sms_receipt_apply(text, text, text, text, text)', 'execute'), 'anon cannot apply a delivery report');
+select ok(not has_function_privilege('authenticated', 'public.sms_message_sent(text, uuid, text, text)', 'execute'), 'a signed-in user cannot record a sent text');
+select is(public.sms_receipt_apply(repeat('0', 48), 'NO-SUCH-MESSAGE', 'Delivered', '201', ''), 'refused', 'a report with a wrong key is refused');
+select throws_ok($$select public.sms_receipt_key_rotate()$$, null, null, 'a non-admin caller cannot make a delivery report key');
+select ok(not has_function_privilege('anon', 'public.admin_student_login_plan(uuid)', 'execute'), 'anon cannot read a student login plan');
+select throws_ok($$select public.admin_student_login_plan(gen_random_uuid())$$, null, null, 'a non-admin caller is refused the login plan');
 select * from finish();
 rollback;

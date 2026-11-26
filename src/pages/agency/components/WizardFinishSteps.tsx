@@ -13,6 +13,8 @@ import { OTHER_LANGUAGE } from "@/pages/agency/lib/wizardConfig";
 import { PriorEducationInput } from "@/pages/admin/components/avetmiss/AvetmissInputs";
 import { parseCodeList, parsePriorEducation, serializeCodeList, serializePriorEducation } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { DeclarationTicks } from "@/pages/agency/components/ApplicationHandoff";
+import { formatMobile } from "@/lib/employeeRules";
+import { textableMobile } from "@/lib/textableMobile";
 
 const PERSONAL_LABELS: Record<string, string> = {
   title: "Title", gender: "Gender", first_name: "Given name", middle_name: "Middle name", last_name: "Surname", dob: "Date of birth",
@@ -57,6 +59,13 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
   useEffect(() => {
     setPrefilled(new Set(PERSONAL_FIELDS.filter((name) => String(answers[name] ?? "").trim())));
     // Captured when the screen opens or the answers are refilled from the draft, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version, question.id]);
+  // The mobile taken on the first screen (or earlier) is not asked again: it shows in the summary with Change (owner 2026-11-26).
+  const [mobileKnown, setMobileKnown] = useState(false);
+  useEffect(() => {
+    setMobileKnown(textableMobile(String(answers.mobile ?? "")));
+    // Captured when the screen opens or the draft is refilled, not on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, question.id]);
   const ask = (name: string) => !prefilled.has(name) || Boolean(errors[name]) || !String(answers[name] ?? "").trim();
@@ -204,16 +213,18 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
 
       {question.id === "declare" ? (
         <div className="space-y-5">
-          <div>
+          {mobileKnown && !errors.mobile ? null : <div>
             <Label htmlFor="wizard-mobile" required={ruleBool("admissions.application_mobile_required", true)}>Mobile</Label>
             <PhoneInput key={`mobile-${version}`} id="wizard-mobile" name="mobile" value={v("mobile")} required={ruleBool("admissions.application_mobile_required", true)} placeholder="041 234 5678" onValueChange={(value) => onChange("mobile", value)} />
             <FieldError text={errors.mobile} />
-          </div>
+          </div>}
           <div className="rounded-lg border border-background-200 bg-background-100/60 p-4 text-sm">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5">
               <dt className="text-foreground-500">Student</dt><dd className="font-medium text-foreground-900">{summary.name || "—"}</dd>
               <dt className="text-foreground-500">Course</dt><dd className="font-medium text-foreground-900">{summary.course || "—"}</dd>
               <dt className="text-foreground-500">Intake</dt><dd className="font-medium text-foreground-900">{summary.intake || "—"}</dd>
+              {mobileKnown && !errors.mobile ? <><dt className="text-foreground-500">Mobile</dt><dd className="font-medium text-foreground-900">{formatMobile(v("mobile"))}
+                <button type="button" onClick={() => setMobileKnown(false)} className="ml-2 cursor-pointer text-xs font-semibold text-primary-700 hover:underline" data-testid="wizard-mobile-change">Change</button></dd></> : null}
               <dt className="text-foreground-500">Documents</dt><dd className="text-foreground-800">{summary.documents.length ? summary.documents.join(", ") : "—"}</dd>
             </dl>
             <div className="mt-3 flex flex-wrap gap-3 text-xs font-semibold text-primary-700">

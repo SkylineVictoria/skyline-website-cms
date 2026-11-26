@@ -91,3 +91,23 @@ export function useHandoff(applicationId: string) {
   return { handoff, loaded, reload };
 }
 
+
+/** APPLICATION-INVITE-GUEST-START: what the invite link opens (an existing account signs in; a first-time email starts as a guest). */
+export interface InviteCheck { valid: boolean; email?: string; account?: "login" | "new"; google?: boolean; studentName?: string }
+export const inviteCheck = (token: string) => invokeInvite<InviteCheck>({ action: "invite_check", token }, "The invitation could not be checked. Try again.");
+/** First time: a one-time sign-in for the invited email (the link proves it); the password is created when the student signs. */
+export const inviteSession = (token: string) => invokeInvite<{ tokenHash: string; email: string }>({ action: "invite_session", token }, "Your application could not be opened. Try again.");
+/** The signed-in student's account has a password or Google (needed before signing). */
+export async function hasPortalLogin(): Promise<boolean> {
+  const { data } = await supabase.auth.getUser();
+  if (data.user?.identities?.some((identity) => identity.provider === "google")) return true;
+  const { data: set, error } = await supabase.rpc("portal_my_password_set");
+  return error ? true : set === true;
+}
+
+/** Saves the guest student's new password (before the signature, which needs it). */
+export async function saveSignPassword(value: { needed: boolean; password: string }): Promise<void> {
+  if (!value.needed) return;
+  const { error } = await supabase.auth.updateUser({ password: value.password });
+  if (error) throw new Error(error.message || "Your password could not be saved. Try another one.");
+}

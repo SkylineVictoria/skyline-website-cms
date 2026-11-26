@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(58);
+select plan(62);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -108,7 +108,14 @@ select lives_ok($$select public.portal_wizard_invite_begin('e5100000-0000-0000-0
 reset role;
 select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-0000-000000000005'), true);
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000005');
-select throws_ok($$select public.portal_wizard_invite_accept(pg_temp.tok(5))$$, '42501', 'Create your password (or sign in with Google) before opening the application', 'accept needs a password or Google');
+reset role;
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(5)))->>'account', 'new', 'lookup: first-time email opens as a guest');
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(1)))->>'account', 'login', 'lookup: an email with a password signs in');
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(98)))->>'valid', 'false', 'lookup: unknown link invalid');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000005');
+select is(public.portal_wizard_invite_accept(pg_temp.tok(5)), 'e5100000-0000-0000-0000-000000000005'::uuid, 'first-time student opens the application without a password');
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000005', pg_temp.dv('e5100000-0000-0000-0000-000000000005'), 'k-nopass', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  '42501', 'Create your password before signing, so you can sign in to your SLIT account later', 'signing needs the password first');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select is(public.portal_wizard_invite_accept(pg_temp.tok(1)), 'e5100000-0000-0000-0000-000000000002'::uuid, 'student accepts with a password');
 select throws_ok($$select public.portal_wizard_invite_accept(pg_temp.tok(99))$$, '42501', null, 'unknown link refused');

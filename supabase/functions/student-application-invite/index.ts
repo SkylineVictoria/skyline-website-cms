@@ -229,6 +229,25 @@ Deno.serve(async (request) => {
       return json({ error: "Office 365 mailbox lookup failed." }, 502);
     }
   }
+  // APPLICATION-INVITE-GUEST-START: the student's link page. invite_check says whether the invited email already has an account
+  // (then: sign in) or not (then: invite_session opens the application from the link alone; the password is made when signing).
+  if (body?.action === "invite_check" || body?.action === "invite_session") {
+    if (typeof body.token !== "string" || !tokenShape.test(body.token)) return json({ valid: false });
+    const { data: found, error: lookupError } = await admin.rpc("portal_wizard_invite_lookup", { p_hash: await sha256Hex(body.token) });
+    if (lookupError) return json({ error: "The invitation could not be checked. Try again." }, 503);
+    if (!found?.valid) return json({ valid: false });
+    if (body.action === "invite_check") return json(found);
+    // Never a link-only sign-in to an account that has a password or Google: that person signs in.
+    if (found.account !== "new") return json({ error: "This email already has a SLIT account. Sign in to continue." }, 409);
+    const created = await admin.auth.admin.createUser({ email: found.email, email_confirm: true });
+    if (created.error && !/already|registered|exists/i.test(created.error.message)) {
+      return json({ error: "Your application could not be opened. Try again." }, 502);
+    }
+    const link = await admin.auth.admin.generateLink({ type: "magiclink", email: found.email });
+    const tokenHash = link.data?.properties?.hashed_token;
+    if (link.error || !tokenHash) return json({ error: "Your application could not be opened. Try again." }, 502);
+    return json({ tokenHash, email: found.email });
+  }
   if (typeof body?.action === "string" && body.action.startsWith("guardian_")) {
     const caller = createClient(url, anon, { ...config, global: { headers: { Authorization: authorization } } });
     return guardian(body.action, body, request, admin, caller, ports);

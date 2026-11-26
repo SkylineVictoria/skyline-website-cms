@@ -6,7 +6,7 @@
  */
 import { isAnswerable, isAssessorOnly } from "./registry";
 import { taskStepsHtml } from "./definition";
-import type { EvidenceFile, Outcome, Question, Responses, Task, UnitOutcome } from "./types";
+import type { Definition, EvidenceFile, Outcome, Question, Responses, Section, Task, UnitOutcome } from "./types";
 
 const NOT_STUDENT = new Set(["declaration", "adjustment_record"]);
 
@@ -14,6 +14,27 @@ const NOT_STUDENT = new Set(["declaration", "adjustment_record"]);
 export function studentQuestions(task: Task): Question[] {
   return task.sections.flatMap((s) => s.questions).filter((q) => isAnswerable(q) && !isAssessorOnly(q) && !NOT_STUDENT.has(q.type));
 }
+
+/** ASM-IMPORT-SIMPLE: the wizard's steps, one per section of every task in reading order (sections with nothing in them skipped). */
+export interface StudentStep { task: Task; taskIndex: number; section: Section }
+export function studentSteps(def: Definition): StudentStep[] {
+  return def.tasks.flatMap((task, taskIndex) => task.sections.filter((s) => s.questions.some((q) => !NOT_STUDENT.has(q.type))).map((section) => ({ task, taskIndex, section })));
+}
+
+/**
+ * The trainer's optional reasonable adjustment note on the marking screen, kept in the attempt's assessor responses under this key
+ * (never a question id: the response checks only read question ids, so it is stored without a question of its own).
+ */
+export const REASONABLE_ADJUSTMENT_KEY = "reasonableAdjustment";
+
+/** The declaration of the wizard's last step, unless the assessment's settings word it otherwise. */
+/**
+ * What the student signs to acknowledge a released result: the workbook summary sheet's own wording (owner 2026-11-26), stored as
+ * the statement of the student_acknowledgement signature.
+ */
+export const ACKNOWLEDGEMENT_TEXT = "I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.";
+
+export const DECLARATION_TEXT ="I declare that this is my own work. I have not copied it from anyone else or from any other source without saying so, and I have kept a copy of my answers.";
 
 export interface ReferenceItem { id: string; title: string; html: string; page: number | null; hasPicture: boolean; hasTable: boolean }
 

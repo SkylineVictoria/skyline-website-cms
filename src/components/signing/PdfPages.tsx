@@ -8,10 +8,12 @@ type PdfPage = { getViewport(o: { scale: number }): { width: number; height: num
  * A PDF drawn page by page at the width of its container (so it reads on a phone without zooming), with room for an overlay on every
  * page: the fields a signer fills, or the boxes an administrator places. `overlay` gets the page number and its drawn size in CSS pixels.
  */
-export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900, zoom = 1 }: {
+export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900, zoom = 1, lazy = false }: {
   source: string | Uint8Array; overlay?: (page: number, size: { width: number; height: number }) => ReactNode; onLoaded?: (pages: number) => void; maxWidth?: number;
   /** 1 fits the container; above 1 the pages grow past it and scroll sideways (the signing page's zoom buttons). */
   zoom?: number;
+  /** Draw a page only once it comes near the view (a 100-page workbook would otherwise draw every page at once). */
+  lazy?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<PdfDocument | null>(null);
@@ -55,7 +57,7 @@ export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900, zo
     {doc && width > 0 && pages.map((page) => {
       const size = { width, height: width * page.height / page.width };
       return <div key={page.number} data-pdf-page={page.number} className="relative mx-auto mb-4 border border-background-300 bg-white shadow-sm" style={size}>
-        <PageCanvas doc={doc} number={page.number} width={size.width} height={size.height} />
+        <PageCanvas doc={doc} number={page.number} width={size.width} height={size.height} lazy={lazy} />
         {overlay && <div className="absolute inset-0">{overlay(page.number, size)}</div>}
         <span className="pointer-events-none absolute bottom-1 right-2 rounded bg-white/80 px-1 text-2xs text-foreground-500">Page {page.number} of {pages.length}</span>
       </div>;
@@ -63,9 +65,17 @@ export default function PdfPages({ source, overlay, onLoaded, maxWidth = 900, zo
   </div>;
 }
 
-function PageCanvas({ doc, number, width, height }: { doc: PdfDocument; number: number; width: number; height: number }) {
+function PageCanvas({ doc, number, width, height, lazy }: { doc: PdfDocument; number: number; width: number; height: number; lazy: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
+  const [near, setNear] = useState(!lazy || typeof IntersectionObserver === "undefined");
   useEffect(() => {
+    const element = canvas.current; if (near || !element) return;
+    const observer = new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) { setNear(true); observer.disconnect(); } }, { rootMargin: "1200px 0px" });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [near]);
+  useEffect(() => {
+    if (!near) return;
     let task: { promise: Promise<void>; cancel(): void } | null = null; let cancelled = false;
     void (async () => {
       const page = await doc.getPage(number);
@@ -78,6 +88,6 @@ function PageCanvas({ doc, number, width, height }: { doc: PdfDocument; number: 
       await task.promise.catch(() => undefined);
     })();
     return () => { cancelled = true; task?.cancel(); };
-  }, [doc, number, width]);
+  }, [doc, number, width, near]);
   return <canvas ref={canvas} style={{ width, height }} className="block" />;
 }

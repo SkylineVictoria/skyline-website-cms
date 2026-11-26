@@ -1,11 +1,13 @@
 /**
- * ASM-AI-IMPORT stage 3 (owner, 2026-11-25; mockups docs/mockups/assessment-flow-mockups.pdf pages 3-4): the student's assessment.
+ * The student's assessment (ASM-IMPORT-SIMPLE, owner 2026-11-26): an assessment is a template, done as a wizard.
  *   Before you start  details filled in (student, student ID, trainer, qualification, unit), what you'll do, the full instructions one
- *                     tap away, the declaration tick and the student's signature (asm_sign student_declaration), Start.
- *   One task a page   task rail with "4 of 6 answered", autosave, questions as cards, parts as compact rows, evidence uploads inline,
- *                     briefs / tables / drawings in the Reference drawer (never inline above the questions).
- *   Review & submit   answered / unanswered per task, then submit (the declaration signed at the start goes with it).
- *   Results           per-task outcome and feedback; the student signs to acknowledge the feedback (asm_sign student_acknowledgement).
+ *                     tap away, Start.
+ *   One step a section  each task's sections in reading order: instructions to read, questions with one answer box each (a form
+ *                     question's box starts with its printed fields and headings), uploads; numbers exactly as printed; autosave.
+ *   Declaration       the fixed last step: unanswered questions listed, "this is my own work" ticked with the student's name and
+ *                     today's date, then submit (the declaration is saved with the submission: asm_attempts.declaration).
+ *   Results           per question Satisfactory / Not satisfactory with the assessor's comment, per task (worked out from its
+ *                     questions), the overall outcome; the student signs to acknowledge the feedback (asm_sign student_acknowledgement).
  * The workbook layout appears only in "Export as workbook PDF".
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -18,11 +20,17 @@ import SignatureField, { SignatureImage } from "@/components/assessment/Signatur
 import { useAttemptHistory } from "@/components/assessment/useAttemptHistory";
 import { historyFromAttempts } from "@/lib/assessment/resultsSheet";
 import { downloadWorkbookPdf } from "@/lib/assessment/workbookExport";
-import { workbookNumbering } from "@/lib/assessment/workbookLayout";
-import { isAnswered, referenceItems, studentQuestions, taskProgress } from "@/lib/assessment/studentFlow";
+/** The number printed in the workbook (kept on the item by the import), or null. */
+const printedNumber = (q: Question): string | null => q.importMeta?.number ?? null;
+import { isAnswered, studentQuestions, studentSteps, taskProgress, ACKNOWLEDGEMENT_TEXT, DECLARATION_TEXT } from "@/lib/assessment/studentFlow";
+import { downloadWorkbook, loadPdfAttempt, loadStudentTemplate, pdfSign, pdfSignatures, type PdfSignature } from "@/lib/assessment/pdfTemplate/api";
+import type { PdfBundle } from "@/lib/assessment/pdfTemplate/output";
+import PdfResults from "./PdfResults";
+import type { PdfTemplate } from "@/lib/assessment/pdfTemplate/model";
+import PdfWizard from "./PdfWizard";
 import { attachmentSettings, isAnswerable } from "@/lib/assessment/registry";
 import {
-  asmSign, asmSignatures, asmStudent, evidenceUrl, fmtDate, fmtDateTime, keepSignature, OUTCOME_LABEL, removeEvidenceObject, uploadEvidence,
+  asmSign, asmSignatures, asmStudent, evidenceUrl, fmtDate, fmtDateTime, keepSignature, removeEvidenceObject, uploadEvidence,
   type AttemptSignature, type SignatureValue,
 } from "@/lib/assessment/api";
 import type { Attempt, Definition, EvidenceFile, Question, Responses, ValidationError } from "@/lib/assessment/types";
@@ -33,12 +41,13 @@ interface Opened {
   settings: { declarationText: string; instructions: string; maxAttempts: number; lateSubmission: string; evidenceMaxMb: number; evidenceAllowedTypes: string[] };
   attempt: Attempt; history: Attempt[];
 }
-type View = { kind: "start" } | { kind: "task"; index: number } | { kind: "review" };
+type View = { kind: "start" } | { kind: "step"; index: number } | { kind: "declare" };
 
 const CARD = "rounded-2xl border border-background-200 bg-white p-4 sm:p-5";
 const PRIMARY = "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-primary-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50";
 const SECONDARY = "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-background-300 bg-white px-4 py-2.5 text-sm font-semibold text-foreground-800 hover:border-primary-300 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-50";
 const FIELD = "w-full rounded-lg border border-background-300 bg-background-50 px-3 py-2 text-sm text-foreground-900 focus:border-primary-400 focus:bg-white focus:outline-none";
+const taskLabel = (t: { number?: string | null; title: string }, i: number) => `${t.number || `Task ${i + 1}`} · ${t.title}`;
 
 function Drawer({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
@@ -69,18 +78,21 @@ export default function StudentAssessmentPage() {
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [view, setView] = useState<View>({ kind: "start" });
   const [signatures, setSignatures] = useState<AttemptSignature[]>([]);
-  const [declared, setDeclared] = useState(false);
-  const [sig, setSig] = useState<SignatureValue | null>(null);
+  const [agreed, setAgreed] = useState(false);
+  const [declName, setDeclName] = useState("");
   const [busy, setBusy] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [refOpen, setRefOpen] = useState<string | null>(null);
-  const [refDrawer, setRefDrawer] = useState(false);
-  const [allParts, setAllParts] = useState<Record<string, boolean>>({});
   const [ackSig, setAckSig] = useState<SignatureValue | null>(null);
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
   const [exporting, setExporting] = useState(false);
   const [receipt, setReceipt] = useState<string | null>(null);
+  // ASM-PDF-TEMPLATE phase 2: an assessment answered on its workbook PDF (its template and the file)
+  const [pdfTpl, setPdfTpl] = useState<{ template: PdfTemplate; bytes: Uint8Array | null } | null>(null);
+  const [pdfErrors, setPdfErrors] = useState<string[]>([]);
+  const [pdfSigs, setPdfSigs] = useState<PdfSignature[]>([]);
+  const [pdfChecked, setPdfChecked] = useState(false);
+  const [prevPdf, setPrevPdf] = useState<PdfBundle | null>(null);
   const timer = useRef<number | null>(null);
   const [, tick] = useState(0);
   useEffect(() => { const t = window.setInterval(() => tick((n) => n + 1), 20_000); return () => window.clearInterval(t); }, []);
@@ -91,25 +103,40 @@ export default function StudentAssessmentPage() {
       const d = await asmStudent<Opened>("assessment_open", { assignmentId: id });
       setData(d); setResponses(d.attempt.responses ?? {}); rowVersionRef.current = d.attempt.rowVersion; setError("");
       void loadSignatures(d.attempt.id);
+      const tpl = await loadStudentTemplate(d.attempt.id);
+      if (tpl) {
+        void pdfSignatures(d.attempt.id).then(setPdfSigs);
+        setPdfTpl((cur) => cur?.template.pdf.path === tpl.pdf.path ? { ...cur, template: tpl } : { template: tpl, bytes: null });
+        void downloadWorkbook(tpl.pdf.path).then((bytes) => setPdfTpl((cur) => cur && cur.template.pdf.path === tpl.pdf.path ? { ...cur, bytes } : cur)).catch(() => setError("The workbook PDF could not be opened."));
+      } else setPdfTpl(null);
+      setPdfChecked(true);
     } catch (e) { setError(e instanceof Error ? e.message : "The assessment did not load."); }
   }, [id, loadSignatures]);
   useEffect(() => { void load(); }, [load]);
 
   const attempt = data?.attempt; const definition = data?.version.definition;
   const editable = attempt?.state === "draft" && data?.assignment.status === "open";
-  const declaration = signatures.find((s) => s.attemptId === attempt?.id && s.kind === "student_declaration") ?? null;
   const ackOf = (attemptId: string) => signatures.find((s) => s.attemptId === attemptId && s.kind === "student_acknowledgement") ?? null;
-  // a returning student who signed this attempt goes straight to the work
+  // a returning student who has started this attempt goes straight to the work
   const opened = useRef(false);
   useEffect(() => {
     if (opened.current || !attempt) return;
-    // the declaration is signed for every attempt (a reassessment starts with the earlier answers copied in)
-    if (declaration) { opened.current = true; setView({ kind: "task", index: 0 }); }
-  }, [declaration, attempt]);
+    opened.current = true;
+    if (Object.keys(attempt.responses ?? {}).length || attempt.evidence.length) setView({ kind: "step", index: 0 });
+  }, [attempt]);
 
   const decided = useMemo(() => (data ? [...data.history, data.attempt] : []).filter((a) => a.state === "returned" || a.state === "final").sort((a, b) => a.attemptNo - b.attemptNo), [data]);
   const history = useAttemptHistory(attempt?.id, decided, null, decided.map((a) => a.id + a.state).join() + (attempt?.state ?? ""));
-  const numbers = useMemo(() => (definition ? workbookNumbering(definition) : new Map()), [definition]);
+  const steps = useMemo(() => (definition ? studentSteps(definition) : []), [definition]);
+  const prevReturned = useMemo(() => (data?.history ?? []).filter((h) => h.state === "returned").sort((x, y) => x.attemptNo - y.attemptNo).pop()?.id ?? null, [data?.history]);
+  useEffect(() => {
+    if (!pdfTpl || !prevReturned) { setPrevPdf(null); return; }
+    let off = false;
+    void loadPdfAttempt(prevReturned).then((b) => { if (!off) setPrevPdf(b); }).catch(() => { if (!off) setPrevPdf(null); });
+    return () => { off = true; };
+  }, [pdfTpl, prevReturned]);
+  // the student's name for the declaration (editable, filled in from their record)
+  useEffect(() => { if (!declName && history?.student?.name) setDeclName(history.student.name); }, [history?.student?.name, declName]);
 
   const save = useCallback(async (r: Responses) => {
     if (!attempt) return; setSaving(true);
@@ -132,34 +159,13 @@ export default function StudentAssessmentPage() {
   const onRemoveEvidence = async (f: EvidenceFile) => { try { await asmStudent("evidence_remove", { id: f.id }); await removeEvidenceObject(f.path); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Not removed."); } };
   const openEvidence = async (f: EvidenceFile) => { const w = window.open("", "_blank"); try { const u = await evidenceUrl(f.path); if (w) { w.opener = null; w.location.href = u; } } catch (e) { w?.close(); setError(e instanceof Error ? e.message : "The file could not be opened."); } };
 
-  /** The declaration questions of the workbook are answered by the declaration signed at the start. */
-  const withDeclaration = useCallback((r: Responses, name: string): Responses => {
-    if (!definition) return r;
-    const out = { ...r };
-    for (const t of definition.tasks) for (const s of t.sections) for (const q of s.questions) if (q.type === "declaration" && !out[q.id]) out[q.id] = { agreed: true, signature: name };
-    return out;
-  }, [definition]);
-
-  const start = async () => {
-    if (!attempt || !data || !sig) return;
-    setBusy(true); setError("");
-    try {
-      await asmSign(attempt.id, "student_declaration", sig.method, sig.png, data.settings.declarationText);
-      await keepSignature(sig);
-      await loadSignatures(attempt.id);
-      setView({ kind: "task", index: 0 }); window.scrollTo({ top: 0 });
-    } catch (e) { setError(e instanceof Error ? e.message : "The declaration was not signed."); }
-    finally { setBusy(false); }
-  };
   const submit = async () => {
-    if (!attempt || !definition) return;
-    const name = declaration?.signerName ?? history?.student?.name ?? "Student";
-    const r = withDeclaration(responses, name);
+    if (!attempt || !definition || !agreed || declName.trim().length < 2) return;
     if (timer.current) window.clearTimeout(timer.current);
     setBusy(true);
     try {
-      await save(r);
-      const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string }>("submit", { attemptId: attempt.id, responses: r, rowVersion: rowVersionRef.current, declaration: { signature: name, agreed: true, signatureId: declaration?.id ?? null }, requestId: (submitRequestId.current ??= crypto.randomUUID()) });
+      await save(responses);
+      const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersionRef.current, declaration: { signature: declName.trim(), agreed: true }, requestId: (submitRequestId.current ??= crypto.randomUUID()) });
       if (!out.ok) { setErrors(out.errors ?? []); return; }
       submitRequestId.current = null; setReceipt(out.receiptNo ?? ""); await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Not submitted."); }
@@ -168,7 +174,7 @@ export default function StudentAssessmentPage() {
   const acknowledge = async (attemptId: string) => {
     if (!ackSig) return;
     setBusy(true); setError("");
-    try { await asmSign(attemptId, "student_acknowledgement", ackSig.method, ackSig.png, "I have read the feedback on this assessment."); await keepSignature(ackSig); await load(); }
+    try { await asmSign(attemptId, "student_acknowledgement", ackSig.method, ackSig.png, ACKNOWLEDGEMENT_TEXT); await keepSignature(ackSig); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "Not signed."); } finally { setBusy(false); }
   };
   const exportPdf = async (a: Attempt) => {
@@ -178,14 +184,14 @@ export default function StudentAssessmentPage() {
   };
 
   if (error && !data) return <div className="p-4"><PortalError message={error} onRetry={() => void load()} /><Link className="mt-3 inline-block text-sm underline" to="/agency/assessments">Back to my assessments</Link></div>;
-  if (!data || !attempt || !definition) return <PortalLoading label="Loading the assessment…" />;
+  if (!data || !attempt || !definition || !pdfChecked) return <PortalLoading label="Loading the assessment…" />;
 
   const tasks = definition.tasks;
   const unitCode = data.assignment.unitCode ?? definition.source?.unit?.code ?? "";
   const unitName = data.assignment.unitName ?? definition.source?.unit?.name ?? data.assignment.title;
   const due = attempt.dueAt ?? data.assignment.dueAt;
   const savedLabel = saving ? "Saving…" : savedAt ? (Date.now() - savedAt < 60_000 ? "✓ Saved just now" : `✓ Saved ${new Date(savedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`) : "Your work saves as you go";
-  const numberOf = (q: Question, ti: number, qi: number) => q.importMeta?.number ?? numbers.get(q.id)?.number ?? `${ti + 1}.${qi + 1}`;
+  const go = (v: View) => { setView(v); window.scrollTo({ top: 0 }); };
 
   const topBar = (
     <div className="sticky top-0 z-30 -mx-4 mb-5 flex items-center justify-between gap-3 border-b border-background-200 bg-white/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
@@ -196,10 +202,24 @@ export default function StudentAssessmentPage() {
   );
 
   /* ---------------- results / submitted ---------------- */
+  /* ---------------- ASM-PDF-TEMPLATE: a submitted attempt on the workbook PDF (replaces the results view below) ---------------- */
+  if (pdfTpl && (!editable || shownParam)) {
+    const all = [...data.history, attempt];
+    const shown = (shownParam ? all.find((a) => a.id === shownParam) : null) ?? attempt;
+    if (shown.state !== "draft") return <div className="px-0 sm:px-2" data-testid="student-results">
+      {topBar}
+      {error ? <div className="mb-3"><PortalError message={error} /></div> : null}
+      <PdfResults attemptId={shown.id} unit={`${unitCode} ${unitName}`.trim()} receipt={shown.id === attempt.id ? receipt ?? shown.receiptNo ?? null : shown.receiptNo ?? null}
+        otherAttempts={all.filter((x) => x.id !== shown.id && x.state !== "draft" && x.state !== "void").map((x) => ({ id: x.id, attemptNo: x.attemptNo, state: x.state }))}
+        nextOpen={attempt.state === "draft" && attempt.id !== shown.id} />
+    </div>;
+  }
+
   if (!editable || shownParam) {
     const shown = (shownParam ? [...data.history, attempt].find((a) => a.id === shownParam) : null) ?? attempt;
     const showResults = shown.state === "returned" || shown.state === "final";
     const outcomeOf = (taskId: string) => shown.taskResults.find((t) => t.taskId === taskId);
+    const markOf = (qid: string) => (shown.results ?? []).find((r) => r.questionId === qid && !r.criterionId);
     const assessorSign = signatures.find((s) => s.attemptId === shown.id && s.kind === "assessor_signoff");
     return (
       <div className="mx-auto max-w-3xl px-0 pb-12 sm:px-2" data-testid="student-results">
@@ -214,22 +234,28 @@ export default function StudentAssessmentPage() {
           </div>
         ) : (
           <>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              {tasks.map((t, i) => { const r = outcomeOf(t.id); const ok = r?.outcome === "S"; return (
-                <div key={t.id} className={CARD} data-testid="task-result">
-                  <div className="flex items-start justify-between gap-2"><p className="font-heading text-base font-semibold text-foreground-950">Task {i + 1} · {t.title}</p>
-                    {r?.outcome ? <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${ok ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`}>{ok ? "Satisfactory" : "Not satisfactory"}</span> : null}</div>
-                  <p className="mt-2 text-xs font-semibold text-foreground-600">Feedback</p>
-                  <p className="mt-0.5 whitespace-pre-wrap text-sm text-foreground-800">{r?.feedback || "No feedback for this task."}</p>
-                </div>
-              ); })}
-            </div>
-            <div className={`${CARD} mt-3`}>
+            <div className={`${CARD} mt-5`}>
               <p className="text-sm text-foreground-600">Attempt {shown.attemptNo} outcome</p>
-              <p className={`font-heading text-2xl font-bold ${shown.outcome === "S" ? "text-green-700" : "text-amber-800"}`}>{shown.outcome === "S" ? "Competent (C)" : shown.outcome ? "Not Yet Competent (NYC)" : "–"}</p>
+              <p className={`font-heading text-2xl font-bold ${shown.outcome === "S" ? "text-green-700" : "text-amber-800"}`} data-testid="overall-outcome">{shown.outcome === "S" ? "Competent (C)" : shown.outcome ? "Not Yet Competent (NYC)" : "–"}</p>
               {shown.overallFeedback ? <p className="mt-1 whitespace-pre-wrap text-sm text-foreground-800">{shown.overallFeedback}</p> : null}
               {assessorSign ? <p className="mt-2 text-xs text-foreground-500">Signed off by {assessorSign.signerName} on {fmtDate(assessorSign.signedAt)}</p> : null}
             </div>
+            {tasks.map((t, i) => { const r = outcomeOf(t.id); const ok = r?.outcome === "S"; const qs = studentQuestions(t); return (
+              <section key={t.id} className={`${CARD} mt-3`} data-testid="task-result">
+                <div className="flex items-start justify-between gap-2"><h2 className="font-heading text-base font-semibold text-foreground-950">{taskLabel(t, i)}</h2>
+                  {r?.outcome ? <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${ok ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`}>{ok ? "Satisfactory" : "Not satisfactory"}</span> : null}</div>
+                {r?.feedback ? <p className="mt-1 whitespace-pre-wrap text-sm text-foreground-800">{r.feedback}</p> : null}
+                <ul className="mt-2 divide-y divide-background-100">
+                  {qs.map((q) => { const m = markOf(q.id); return (
+                    <li key={q.id} className="flex items-start gap-3 py-2 text-sm">
+                      <span className="w-16 shrink-0 font-semibold text-foreground-900">{printedNumber(q) ?? ""}</span>
+                      <span className="min-w-0 flex-1"><span className="line-clamp-2 text-foreground-700">{q.label}</span>{m?.feedback ? <span className="mt-0.5 block whitespace-pre-wrap text-foreground-900"><i className="ri-chat-1-line mr-1 text-foreground-500" aria-hidden="true" />{m.feedback}</span> : null}</span>
+                      {m?.outcome ? <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${m.outcome === "S" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`}>{m.outcome === "S" ? "Yes" : "No"}</span> : null}
+                    </li>
+                  ); })}
+                </ul>
+              </section>
+            ); })}
             <div className={`${CARD} mt-3`} data-testid="acknowledge">
               {ackOf(shown.id) ? (
                 <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-foreground-800"><i className="ri-checkbox-circle-line mr-1 text-green-600" aria-hidden="true" />You acknowledged the feedback on {fmtDate(ackOf(shown.id)?.signedAt)}.</p><SignatureImage png={ackOf(shown.id)?.signaturePng ?? null} name={ackOf(shown.id)?.signerName} /></div>
@@ -264,6 +290,31 @@ export default function StudentAssessmentPage() {
   }
 
   /* ---------------- before you start ---------------- */
+  /* ---------------- ASM-PDF-TEMPLATE: answered on the workbook PDF ---------------- */
+  if (pdfTpl) {
+    const studentName = history?.student?.name ?? declName;
+    const submitPdf = async () => {
+      if (timer.current) window.clearTimeout(timer.current);
+      setBusy(true); setPdfErrors([]);
+      try {
+        await save(responses);
+        const out = await asmStudent<{ ok: boolean; errors?: ValidationError[]; receiptNo?: string }>("submit", { attemptId: attempt.id, responses, rowVersion: rowVersionRef.current,
+          declaration: { signature: (studentName || "Student").trim(), agreed: true }, requestId: (submitRequestId.current ??= crypto.randomUUID()) });
+        if (!out.ok) { setPdfErrors((out.errors ?? []).map((e) => e.message)); return; }
+        submitRequestId.current = null; setReceipt(out.receiptNo ?? ""); await load();
+      } catch (e) { setError(e instanceof Error ? e.message : "Not submitted."); }
+      finally { setBusy(false); }
+    };
+    return <div className="px-0 sm:px-2">
+      {error ? <div className="mb-3"><PortalError message={error} /></div> : null}
+      <PdfWizard previous={prevPdf ? previousOf(prevPdf) : null} template={pdfTpl.template} pdfBytes={pdfTpl.bytes} responses={responses} onChange={change} saving={saving} savedLabel={savedAt || saving ? savedLabel : ""}
+        dueLabel={`Due ${fmtDate(due)}`} signatures={pdfSigs} busy={busy} serverErrors={pdfErrors} onSubmit={submitPdf}
+        onSign={async (slot, v, statement) => { await pdfSign(attempt.id, slot, v ? (v.method === "saved" ? "saved" : v.method) : "saved", v?.png ?? null, statement); if (v) await keepSignature({ ...v, keep: true }); setPdfSigs(await pdfSignatures(attempt.id)); }}
+        record={{ studentName: studentName ?? "", studentRef: history?.student?.ref ?? "", studentEmail: history?.student?.email ?? "", trainer: (history?.trainers ?? []).join(", "),
+          unitCode, unitName, qualificationCode: history?.assessment?.qualification?.code ?? "", qualificationName: history?.assessment?.qualification?.name ?? "" }} />
+    </div>;
+  }
+
   if (view.kind === "start") {
     const rules = definition.instructions || data.settings.instructions;
     return (
@@ -284,68 +335,79 @@ export default function StudentAssessmentPage() {
         <section className={`${CARD} mt-3`}>
           <h2 className="font-heading text-base font-semibold text-foreground-950">What you’ll do</h2>
           <ol className="mt-3 space-y-2.5">
-            {tasks.map((t, i) => { const qs = studentQuestions(t); const files = qs.some((q) => q.type === "file_upload" || q.config?.allowAttachment === true); return (
+            {tasks.map((t, i) => { const qs = studentQuestions(t); const files = qs.some((q) => q.type === "file_upload"); return (
               <li key={t.id} className="flex items-start gap-3 text-sm"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary-50 font-semibold text-primary-700">{i + 1}</span>
-                <span className="pt-1 text-foreground-800"><strong className="text-foreground-950">{t.title}</strong> · {qs.length} question{qs.length === 1 ? "" : "s"}{files ? ", upload your evidence" : ""}</span></li>
+                <span className="pt-1 text-foreground-800"><strong className="text-foreground-950">{taskLabel(t, i)}</strong> · {qs.length} item{qs.length === 1 ? "" : "s"} to answer{files ? ", including uploads" : ""}</span></li>
             ); })}
+            <li className="flex items-start gap-3 text-sm"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary-50 font-semibold text-primary-700"><i className="ri-quill-pen-line" aria-hidden="true" /></span><span className="pt-1 text-foreground-800">Declare the work is your own, then submit</span></li>
           </ol>
           {rules ? <button type="button" className="mt-3 cursor-pointer text-sm font-semibold text-primary-700 underline underline-offset-2" onClick={() => setRulesOpen(true)}>Read the full instructions and rules ›</button> : null}
         </section>
-        <section className={`${CARD} mt-3 space-y-4`}>
-          <label className="flex cursor-pointer items-start gap-3 text-sm text-foreground-800"><input type="checkbox" className="mt-0.5 h-5 w-5 accent-primary-600" checked={declared} onChange={(e) => setDeclared(e.target.checked)} data-testid="declare" />
-            <span className="whitespace-pre-wrap">{data.settings.declarationText || "I declare this work is my own, I have read the plagiarism and collusion rules, and I agree my work may be checked by a plagiarism service."}</span></label>
-          {declared ? <SignatureField value={sig} onChange={setSig} /> : null}
-        </section>
-        <button type="button" className={`${PRIMARY} mt-4 w-full`} disabled={!declared || !sig || busy} onClick={() => void start()} data-testid="start-task">{busy ? "Signing…" : `Start Task 1 →`}</button>
+        <button type="button" className={`${PRIMARY} mt-4 w-full`} disabled={!steps.length} onClick={() => go({ kind: "step", index: 0 })} data-testid="start-task">Start →</button>
         {rulesOpen ? <Drawer title="Instructions and rules" onClose={() => setRulesOpen(false)}><div className="rounded-xl bg-white p-4"><AssessmentInfo text={rules} /></div></Drawer> : null}
       </div>
     );
   }
 
-  /* ---------------- review & submit ---------------- */
+  /* ---------------- the step rail ---------------- */
   const rail = (
-    <nav className={`${CARD} space-y-1 p-3`} aria-label="Tasks">
-      <button type="button" className="flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-foreground-600 hover:bg-background-100" onClick={() => setView({ kind: "start" })} disabled={Boolean(declaration)}>Before you start {declaration ? <i className="ri-check-line text-green-600" aria-label="Done" /> : null}</button>
-      {tasks.map((t, i) => { const p = taskProgress(t, responses, attempt.evidence); const on = view.kind === "task" && view.index === i; return (
-        <button key={t.id} type="button" onClick={() => { setView({ kind: "task", index: i }); window.scrollTo({ top: 0 }); }} aria-current={on ? "page" : undefined} data-testid="task-rail-item"
-          className={`block w-full cursor-pointer rounded-lg px-3 py-2 text-left ${on ? "bg-primary-50" : "hover:bg-background-100"}`}>
-          <span className={`block text-sm font-semibold ${on ? "text-primary-800" : "text-foreground-900"}`}>Task {i + 1} · {t.title.replace(/^Task\s*\d+\s*[:·-]?\s*/i, "").split(/[(:]/)[0].trim() || t.title}</span>
-          <span className="block text-xs text-foreground-500">{p.answered} of {p.total} answered</span>
-          {on ? <span className="mt-1 block h-1 overflow-hidden rounded-full bg-primary-100"><span className="block h-full rounded-full bg-primary-600" style={{ width: `${p.total ? Math.round(100 * p.answered / p.total) : 0}%` }} /></span> : null}
-        </button>
+    <nav className={`${CARD} space-y-1 p-3`} aria-label="Steps">
+      {tasks.map((t, ti) => { const p = taskProgress(t, responses, attempt.evidence); const mine = steps.map((s, i) => ({ s, i })).filter(({ s }) => s.taskIndex === ti); return (
+        <div key={t.id}>
+          <p className="px-3 pt-2 text-sm font-semibold text-foreground-900">{taskLabel(t, ti)}</p>
+          <p className="px-3 text-xs text-foreground-500">{p.answered} of {p.total} answered</p>
+          {mine.map(({ s, i }) => { const on = view.kind === "step" && view.index === i; return (
+            <button key={s.section.id} type="button" onClick={() => go({ kind: "step", index: i })} aria-current={on ? "page" : undefined} data-testid="step-rail-item"
+              className={`block w-full cursor-pointer rounded-lg px-3 py-2 text-left text-sm ${on ? "bg-primary-50 font-semibold text-primary-800" : "text-foreground-700 hover:bg-background-100"}`}>{s.section.title || (mine.length > 1 ? `Part ${i - mine[0].i + 1}` : "Questions")}</button>
+          ); })}
+        </div>
       ); })}
-      <button type="button" className={`w-full cursor-pointer rounded-lg px-3 py-2 text-left text-sm ${view.kind === "review" ? "bg-primary-50 font-semibold text-primary-800" : "text-foreground-600 hover:bg-background-100"}`} onClick={() => { setView({ kind: "review" }); window.scrollTo({ top: 0 }); }}>Review &amp; submit</button>
+      <button type="button" className={`w-full cursor-pointer rounded-lg px-3 py-2 text-left text-sm ${view.kind === "declare" ? "bg-primary-50 font-semibold text-primary-800" : "text-foreground-600 hover:bg-background-100"}`} onClick={() => go({ kind: "declare" })} data-testid="step-declare">Declaration &amp; submit</button>
     </nav>
   );
 
-  if (view.kind === "review") {
+  /* ---------------- declaration & submit (the fixed last step) ---------------- */
+  if (view.kind === "declare") {
     const errorIds = new Set(errors.map((e) => e.questionId.split(".")[0]));
+    const unanswered = tasks.flatMap((t) => studentQuestions(t).filter((q) => !isAnswered(q, responses, attempt.evidence)).map((q) => ({ q, t })));
+    const stepOf = (qid: string) => steps.findIndex((s) => s.section.questions.some((q) => q.id === qid));
+    const today = fmtDate(new Date().toISOString());
     return (
       <div className="pb-12">
         {topBar}
-        <div className="grid gap-5 lg:grid-cols-[230px_minmax(0,1fr)]">
+        <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">
           <div className="hidden lg:block">{rail}</div>
-          <div className="min-w-0 space-y-4" data-testid="review-submit">
-            <h1 className="font-heading text-2xl font-bold text-foreground-950">Review &amp; submit</h1>
+          <div className="min-w-0 space-y-4" data-testid="declare-submit">
+            <h1 className="font-heading text-2xl font-bold text-foreground-950">Declaration &amp; submit</h1>
             {error ? <PortalError message={error} /> : null}
             {errors.length ? <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{errors.length} answer{errors.length === 1 ? " is" : "s are"} still needed before you can submit.</p> : null}
-            {tasks.map((t, ti) => { const qs = studentQuestions(t); const p = taskProgress(t, responses, attempt.evidence); return (
-              <section key={t.id} className={CARD}>
-                <div className="flex items-center justify-between gap-2"><h2 className="font-heading text-base font-semibold text-foreground-950">Task {ti + 1} · {t.title}</h2><span className={`text-xs font-semibold ${p.answered === p.total ? "text-green-700" : "text-amber-800"}`}>{p.answered} of {p.total} answered</span></div>
-                <ul className="mt-2 divide-y divide-background-100">
-                  {qs.map((q, qi) => { const ok = isAnswered(q, responses, attempt.evidence); return (
-                    <li key={q.id}><button type="button" className="flex w-full cursor-pointer items-center gap-3 py-2 text-left" onClick={() => { setView({ kind: "task", index: ti }); window.setTimeout(() => document.getElementById(`q-${q.id}`)?.scrollIntoView({ block: "center" }), 50); }}>
-                      {ok ? <i className="ri-checkbox-circle-fill text-green-600" aria-label="Answered" /> : <i className={`ri-checkbox-blank-circle-line ${errorIds.has(q.id) ? "text-amber-600" : "text-foreground-400"}`} aria-label="Not answered" />}
-                      <span className="w-14 shrink-0 text-sm font-semibold text-foreground-900">{numberOf(q, ti, qi)}</span>
-                      <span className={`min-w-0 flex-1 truncate text-sm ${ok ? "text-foreground-600" : "text-foreground-900"}`}>{q.label}</span>
-                    </button></li>
-                  ); })}
-                </ul>
-              </section>
-            ); })}
             <section className={CARD}>
-              <p className="text-sm text-foreground-800">When you submit, your answers are locked and you get a receipt number. Your declaration{declaration ? `, signed ${fmtDateTime(declaration.signedAt)},` : ""} goes with it.</p>
-              <button type="button" className={`${PRIMARY} mt-3`} disabled={busy} onClick={() => void submit()} data-testid="submit">{busy ? "Submitting…" : "Submit assessment"}</button>
+              {unanswered.length ? (
+                <>
+                  <p className="text-sm font-semibold text-amber-900">{unanswered.length} item{unanswered.length === 1 ? " is" : "s are"} not answered yet</p>
+                  <ul className="mt-2 divide-y divide-background-100">
+                    {unanswered.map(({ q }) => (
+                      <li key={q.id}><button type="button" className="flex w-full cursor-pointer items-center gap-3 py-2 text-left" onClick={() => { go({ kind: "step", index: Math.max(0, stepOf(q.id)) }); window.setTimeout(() => document.getElementById(`q-${q.id}`)?.scrollIntoView({ block: "center" }), 50); }}>
+                        <i className={`ri-checkbox-blank-circle-line ${errorIds.has(q.id) ? "text-amber-600" : "text-foreground-400"}`} aria-hidden="true" />
+                        <span className="w-16 shrink-0 text-sm font-semibold text-foreground-900">{printedNumber(q) ?? ""}</span>
+                        <span className="min-w-0 flex-1 truncate text-sm text-foreground-900">{q.label}</span>
+                      </button></li>
+                    ))}
+                  </ul>
+                </>
+              ) : <p className="text-sm text-green-800"><i className="ri-checkbox-circle-fill mr-1 text-green-600" aria-hidden="true" />Every item is answered.</p>}
+            </section>
+            <section className={`${CARD} space-y-4`} data-testid="declaration">
+              <label className="flex cursor-pointer items-start gap-3 text-sm text-foreground-800"><input type="checkbox" className="mt-0.5 h-5 w-5 accent-primary-600" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} data-testid="declare" />
+                <span className="whitespace-pre-wrap">{data.settings.declarationText || DECLARATION_TEXT}</span></label>
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+                <label className="block text-xs font-semibold text-foreground-600">Your full name
+                  <input className={`${FIELD} mt-1`} value={declName} onChange={(e) => setDeclName(e.target.value)} autoComplete="name" data-testid="declare-name" />
+                </label>
+                <div><p className="text-xs font-semibold text-foreground-600">Date</p><p className="mt-1 py-2 text-sm font-semibold text-foreground-900" data-testid="declare-date">{today}</p></div>
+              </div>
+              <p className="text-sm text-foreground-600">When you submit, your answers are locked and you get a receipt number. Your declaration, name and the date are saved with the submission.</p>
+              <button type="button" className={PRIMARY} disabled={busy || !agreed || declName.trim().length < 2} onClick={() => void submit()} data-testid="submit">{busy ? "Submitting…" : "Submit assessment"}</button>
             </section>
           </div>
         </div>
@@ -353,79 +415,51 @@ export default function StudentAssessmentPage() {
     );
   }
 
-  /* ---------------- one task a page ---------------- */
-  const ti = view.index; const task = tasks[ti];
-  const questions = studentQuestions(task);
-  const refs = referenceItems(task, ti + 1);
+  /* ---------------- one step a section ---------------- */
+  const si = Math.min(view.index, Math.max(0, steps.length - 1)); const step = steps[si];
+  if (!step) return <div className="pb-12">{topBar}<p className={CARD}>This assessment has nothing to show yet.</p></div>;
+  const task = step.task;
   const errorFor = (qid: string) => errors.find((e) => e.questionId === qid || e.questionId.startsWith(`${qid}.`))?.message;
-  const renderParts = (q: Question) => {
-    const parts = (q.children ?? []).filter((c) => isAnswerable(c));
-    const scope = (responses[q.id] as Responses | undefined) ?? {};
-    const shown = allParts[q.id] ? parts : parts.slice(0, 3);
-    const setPart = (cid: string, v: unknown) => change({ ...responses, [q.id]: { ...scope, [cid]: v } });
-    const letter = (c: Question, i: number) => (c.importMeta?.number?.match(/[a-z]+$/)?.[0]) ?? String.fromCharCode(97 + i);
-    return (
-      <div className="space-y-2">
-        {shown.map((c, i) => (
-          <div key={c.id} className="grid grid-cols-[1.5rem_minmax(0,1fr)] items-start gap-2 sm:grid-cols-[1.5rem_minmax(0,14rem)_minmax(0,1fr)] sm:items-center" data-part={c.id}>
-            <span className="pt-2 text-sm font-semibold text-foreground-600 sm:pt-0">{letter(c, i)}</span>
-            <span className="text-sm text-foreground-700 sm:text-foreground-600">{c.label}</span>
-            <div className="col-span-2 sm:col-span-1">{["short_answer", "long_answer"].includes(c.type)
-              ? <input className={FIELD} value={String(scope[c.id] ?? "").replace(/<[^>]*>/g, "")} onChange={(e) => setPart(c.id, e.target.value)} aria-label={`${letter(c, i)}. ${c.label}`} />
-              : <TypeInput q={c} value={scope[c.id]} onChange={(v) => setPart(c.id, v)} evidence={attempt.evidence} onUpload={onUpload} onRemoveEvidence={onRemoveEvidence} openEvidence={(f) => void openEvidence(f)} />}</div>
-          </div>
-        ))}
-        {parts.length > 3 && !allParts[q.id] ? <button type="button" className="cursor-pointer text-sm text-foreground-600 hover:text-primary-700" onClick={() => setAllParts((m) => ({ ...m, [q.id]: true }))}>+ {parts.length - 3} more parts ({letter(parts[3], 3)}–{letter(parts[parts.length - 1], parts.length - 1)})</button> : null}
-      </div>
-    );
-  };
-  const referencePanel = (
-    <div className="space-y-3">
-      {refs.map((r) => (
-        <div key={r.id} className="overflow-hidden rounded-xl border border-background-200 bg-white" data-testid="reference-item">
-          {r.hasPicture ? <div className="asm-content max-h-40 overflow-hidden bg-background-100 [&_img]:mx-auto [&_img]:max-h-40 [&_img]:object-contain [&_p]:hidden" dangerouslySetInnerHTML={{ __html: sanitize(r.html.replace(/<(p|figcaption|table)[\s\S]*?<\/\1>/gi, "")) }} /> : null}
-          <button type="button" className="block w-full cursor-pointer px-3 py-2 text-left hover:bg-background-50" onClick={() => setRefOpen(r.id)}>
-            <span className="block text-sm font-semibold text-foreground-900">{r.title}{r.page ? <span className="font-normal text-foreground-500"> · from page {r.page}</span> : null}</span>
-            {!r.hasPicture ? <span className="mt-0.5 line-clamp-2 block text-xs text-foreground-600">{r.html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()}</span> : null}
-          </button>
-        </div>
-      ))}
-    </div>
-  );
-  const openRef = refs.find((r) => r.id === refOpen);
+  const last = si + 1 >= steps.length;
   return (
     <div className="pb-12">
       {topBar}
-      <div className="grid gap-5 lg:grid-cols-[230px_minmax(0,1fr)_260px]">
+      <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">
         <div className="hidden lg:block">{rail}</div>
         <div className="min-w-0 space-y-4" data-testid="task-page">
-          <div className="lg:hidden"><details className={`${CARD} p-3`}><summary className="cursor-pointer text-sm font-semibold text-foreground-900">Task {ti + 1} of {tasks.length} · {taskProgress(task, responses, attempt.evidence).answered} of {questions.length} answered</summary><div className="mt-2">{rail}</div></details></div>
-          <div className="flex items-start justify-between gap-3">
-            <h1 className="font-heading text-xl font-bold text-foreground-950 sm:text-2xl">Task {ti + 1} · {task.title.replace(/^Task\s*\d+\s*[:·-]?\s*/i, "")}</h1>
-            {refs.length ? <button type="button" className={`${SECONDARY} shrink-0 lg:hidden`} onClick={() => setRefDrawer(true)}>Reference ({refs.length})</button> : null}
+          <div className="lg:hidden"><details className={`${CARD} p-3`}><summary className="cursor-pointer text-sm font-semibold text-foreground-900">Step {si + 1} of {steps.length + 1} · {taskLabel(task, step.taskIndex)}</summary><div className="mt-2">{rail}</div></details></div>
+          <div>
+            <h1 className="font-heading text-xl font-bold text-foreground-950 sm:text-2xl">{taskLabel(task, step.taskIndex)}</h1>
+            {step.section.title ? <p className="mt-1 text-sm font-semibold uppercase tracking-wide text-foreground-500" data-testid="step-section">{step.section.title}</p> : null}
           </div>
           {error ? <PortalError message={error} /> : null}
-          {questions.map((q, qi) => {
+          {step.section.questions.map((q) => {
+            if (!isAnswerable(q)) {
+              const html = String(q.config?.html ?? "");
+              return html.replace(/<[^>]*>/g, "").trim() ? <section key={q.id} className="asm-content rounded-2xl bg-background-50 px-4 py-3 text-sm text-foreground-800 [&_p]:mb-1.5" data-instruction={q.id} dangerouslySetInnerHTML={{ __html: sanitize(html) }} /> : null;
+            }
             const err = errorFor(q.id);
             return (
               <section key={q.id} id={`q-${q.id}`} data-question={q.id} className={`${CARD} ${err ? "border-amber-400" : ""}`}>
-                <p className="text-base text-foreground-950"><span className="mr-1.5 font-semibold text-primary-600">{numberOf(q, ti, qi)}</span>{q.label}</p>
+                <p className="whitespace-pre-wrap text-base text-foreground-950">{printedNumber(q) ? <span className="mr-1.5 font-semibold text-primary-600">{printedNumber(q)}</span> : null}{q.label}</p>
                 {q.helpText ? <p className="mt-0.5 text-xs text-foreground-600">{q.helpText}</p> : null}
-                <div className="mt-3">{q.children?.length ? renderParts(q) : <TypeInput q={q} value={responses[q.id]} onChange={(v) => change({ ...responses, [q.id]: v })} evidence={attempt.evidence} onUpload={onUpload} onRemoveEvidence={onRemoveEvidence} openEvidence={(f) => void openEvidence(f)} />}</div>
+                <div className="mt-3"><TypeInput q={q} value={responses[q.id]} onChange={(v) => change({ ...responses, [q.id]: v })} evidence={attempt.evidence} onUpload={onUpload} onRemoveEvidence={onRemoveEvidence} openEvidence={(f) => void openEvidence(f)} /></div>
                 {err ? <p role="alert" className="mt-2 text-xs font-medium text-amber-800">{err}</p> : null}
               </section>
             );
           })}
-          {!questions.length ? <p className={CARD}>Nothing to answer in this task: read the reference material.</p> : null}
           <div className="flex items-center justify-between gap-3 pt-1">
-            <button type="button" className="cursor-pointer text-sm font-semibold text-foreground-600 hover:text-foreground-900" onClick={() => { setView(ti === 0 ? (declaration ? { kind: "task", index: 0 } : { kind: "start" }) : { kind: "task", index: ti - 1 }); window.scrollTo({ top: 0 }); }} disabled={ti === 0 && Boolean(declaration)}>{ti === 0 ? (declaration ? "" : "← Before you start") : `← Task ${ti}`}</button>
-            <button type="button" className={PRIMARY} onClick={() => { setView(ti + 1 < tasks.length ? { kind: "task", index: ti + 1 } : { kind: "review" }); window.scrollTo({ top: 0 }); }} data-testid="next">{ti + 1 < tasks.length ? `Next: Task ${ti + 2} →` : "Review & submit →"}</button>
+            <button type="button" className="cursor-pointer text-sm font-semibold text-foreground-600 hover:text-foreground-900" onClick={() => go(si === 0 ? { kind: "start" } : { kind: "step", index: si - 1 })}>← Back</button>
+            <button type="button" className={PRIMARY} onClick={() => go(last ? { kind: "declare" } : { kind: "step", index: si + 1 })} data-testid="next">{last ? "Declaration & submit →" : "Next →"}</button>
           </div>
         </div>
-        {refs.length ? <aside className="hidden lg:block"><div className={`${CARD} sticky top-20 p-3`}><p className="mb-2 font-heading text-sm font-semibold text-foreground-950">Reference</p>{referencePanel}</div></aside> : <div className="hidden lg:block" />}
       </div>
-      {refDrawer ? <Drawer title={`Reference (${refs.length})`} onClose={() => setRefDrawer(false)}>{referencePanel}</Drawer> : null}
-      {openRef ? <Drawer title={openRef.title} onClose={() => setRefOpen(null)}><div className="asm-content rounded-xl bg-white p-4 text-sm [&_img]:max-w-full [&_table]:w-full" dangerouslySetInnerHTML={{ __html: sanitize(openRef.html) }} /></Drawer> : null}
     </div>
   );
+}
+
+/** The marks of the returned attempt, shown inside the next attempt's wizard. */
+function previousOf(b: PdfBundle) {
+  const a = b.attempts.find((x) => x.attemptNo === b.attemptNo);
+  return a ? { attemptNo: a.attemptNo, overallFeedback: a.overallFeedback ?? "", marks: Object.fromEntries(a.results.filter((r) => !r.criterionId).map((r) => [r.questionId, { outcome: r.outcome, feedback: r.feedback ?? "" }])) } : null;
 }

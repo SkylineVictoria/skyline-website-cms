@@ -1,26 +1,29 @@
 /**
- * ASM-AI-IMPORT stage 4 (owner, 2026-11-25; mockups docs/mockups/assessment-flow-mockups.pdf pages 5-6):
- * /staff/assessments/attempts/:id
- *   Marking desk  one question at a time: the question and the student's answer, the model answer / what to look for folded under it;
- *                 large Satisfactory / Not satisfactory buttons, an optional comment, keys S / N / -> (next) / <- , a grid of the
- *                 questions coloured by state. Marks save as they are made (asm_trainer mark_save). No "mark all".
- *   Sign off      after every question is marked: one results sheet per task filled in from the marking (S / NS, attempt, date,
- *                 assessor) with the trainer's feedback, the assessment summary (all tasks S -> Competent, otherwise Not Yet
- *                 Competent), the reasonable adjustment record, the assessor declaration with the saved signature, "Sign & release
- *                 results" (asm_sign assessor_signoff, then mark_return).
+ * /staff/assessments/attempts/:id (ASM-IMPORT-SIMPLE, owner 2026-11-26)
+ *   Marking desk  one question at a time: the question (number as printed) and the student's answer; Satisfactory Yes / No and an
+ *                 optional comment, keys S / N / -> (next) / <- , a grid of the questions coloured by state. Marks save as they are
+ *                 made (asm_trainer mark_save). No "mark all".
+ *   Sign off      after every question is marked: each task's result is automatic (Satisfactory when every question is Yes, else Not
+ *                 Satisfactory; the database works it out too: asm_task_results_auto), the trainer chooses the overall outcome
+ *                 (Competent / Not Yet Competent) with a comment, an optional reasonable adjustment note, the assessor declaration with
+ *                 the saved signature, "Sign & release results" (asm_sign assessor_signoff, then mark_return).
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { ruleNumber } from "@/lib/businessRules";
 import PdfPages from "@/components/signing/PdfPages";
+import { loadPdfAttempt } from "@/lib/assessment/pdfTemplate/api";
+import type { PdfBundle } from "@/lib/assessment/pdfTemplate/output";
+import PdfMarking from "./PdfMarking";
 import SignatureField, { SignatureImage } from "@/components/assessment/SignatureField";
 import { TypeInput, TypeView } from "@/components/assessment/TypeParts";
 import { useAttemptHistory } from "@/components/assessment/useAttemptHistory";
 import { downloadWorkbookPdf, workbookPdfBytes } from "@/lib/assessment/workbookExport";
-import { workbookNumbering } from "@/lib/assessment/workbookLayout";
+/** The number printed in the workbook (kept on the item by the import), or null. */
+const printedNumber = (q: Question): string | null => q.importMeta?.number ?? null;
 import { isAnswerable, isAssessorOnly } from "@/lib/assessment/registry";
-import { taskOutcomeFromMarks, unitOutcome } from "@/lib/assessment/studentFlow";
+import { REASONABLE_ADJUSTMENT_KEY, taskOutcomeFromMarks, unitOutcome } from "@/lib/assessment/studentFlow";
 import {
   asmSign, asmSignatures, asmTrainer, evidenceUrl, fmtDate, fmtDateTime, keepSignature, OUTCOME_LABEL, STATE_LABEL, uploadEvidence,
   type AttemptSignature, type SignatureValue,
@@ -37,14 +40,26 @@ const SECONDARY = "inline-flex cursor-pointer items-center justify-center gap-1.
 const ordinal = (n: number) => `${n}${n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th"}`;
 const NOT_MARKED = new Set(["declaration", "adjustment_record"]);
 
+/** ASM-PDF-TEMPLATE phase 3: an attempt on a workbook PDF is marked on the PDF itself; any other attempt on the marking desk below. */
 export default function MarkingPage() {
+  const { id = "" } = useParams();
+  const [pdf, setPdf] = useState<{ bundle: PdfBundle | null } | null>(null);
+  useEffect(() => { let off = false; setPdf(null); void loadPdfAttempt(id).then((bundle) => { if (!off) setPdf({ bundle }); }).catch(() => { if (!off) setPdf({ bundle: null }); }); return () => { off = true; }; }, [id]);
+  if (!pdf) return <div className="min-h-screen bg-background-100 p-6 text-sm text-foreground-600">Loading the attempt…</div>;
+  if (pdf.bundle) return <PdfMarking attemptId={id} initial={pdf.bundle} />;
+  return <DefinitionMarking />;
+}
+
+function DefinitionMarking() {
   const { id = "" } = useParams();
   const [signedOut, setSignedOut] = useState(false);
   const [data, setData] = useState<Loaded | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [marks, setMarks] = useState<Map<string, Mark>>(new Map());
-  const [taskFeedback, setTaskFeedback] = useState<Record<string, string>>({});
+  /** The overall comment to the student, and the overall outcome the trainer chose (null: not chosen yet, the suggestion shows). */
+  const [comment, setComment] = useState("");
+  const [overall, setOverall] = useState<Outcome | null>(null);
   const [assessorResponses, setAssessorResponses] = useState<Responses>({});
   const [index, setIndex] = useState(0);
   const [view, setView] = useState<"desk" | "signoff">("desk");
@@ -53,7 +68,6 @@ export default function MarkingPage() {
   const [signatures, setSignatures] = useState<AttemptSignature[]>([]);
   const [declared, setDeclared] = useState(false);
   const [sig, setSig] = useState<SignatureValue | null>(null);
-  const [adjustOpen, setAdjustOpen] = useState(false);
   const [preview, setPreview] = useState<{ bytes: Uint8Array | null; error: string } | null>(null);
   const [message, setMessage] = useState("");
   const [unitForm, setUnitForm] = useState<{ open: boolean; outcome: "C" | "NYC"; tick: boolean; notes: string }>({ open: false, outcome: "C", tick: false, notes: "" });
@@ -71,7 +85,7 @@ export default function MarkingPage() {
       const d = await asmTrainer<Loaded>("attempt_get", { id });
       setData(d); rowVersion.current = d.rowVersion; setError("");
       setMarks(new Map(d.results.filter((r) => !r.criterionId).map((r) => [r.questionId, { outcome: r.outcome, feedback: r.feedback ?? "" }])));
-      setTaskFeedback(Object.fromEntries(d.taskResults.map((t) => [t.taskId, t.feedback ?? ""])));
+      setComment(d.overallFeedback ?? ""); setOverall(d.state === "returned" || d.state === "final" ? d.outcome : null);
       setAssessorResponses(d.assessorResponses ?? {});
       setSignatures(await asmSignatures(d.id));
     } catch (e) { setError(e instanceof Error ? e.message : "The attempt did not load."); }
@@ -80,21 +94,18 @@ export default function MarkingPage() {
   const history = useAttemptHistory(data?.id, data ? [data] : [], data?.studentName, `${data?.state}${data?.rowVersion}`);
 
   const definition = data?.definition;
-  const numbers = useMemo(() => (definition ? workbookNumbering(definition) : new Map()), [definition]);
   const items: Item[] = useMemo(() => {
     if (!definition) return [];
     const out: Item[] = [];
     definition.tasks.forEach((task, ti) => {
-      let n = 0;
       for (const q of task.sections.flatMap((s) => s.questions)) {
         if (!isAnswerable(q) || NOT_MARKED.has(q.type) || (q.markingMode ?? "criteria") === "none") continue;
-        n += 1;
-        out.push({ task, taskIndex: ti, q, number: q.importMeta?.number ?? numbers.get(q.id)?.number ?? `${ti + 1}.${n}` });
+        // the number exactly as printed in the workbook (none when none was printed)
+        out.push({ task, taskIndex: ti, q, number: printedNumber(q) ?? "" });
       }
     });
     return out;
-  }, [definition, numbers]);
-  const keyOf = (qid: string) => data?.keys.find((k) => k.questionId === qid);
+  }, [definition]);
   const markOf = (qid: string): Mark => marks.get(qid) ?? { outcome: null, feedback: "" };
   const marked = items.filter((it) => markOf(it.q.id).outcome).length;
   const left = items.length - marked;
@@ -103,28 +114,29 @@ export default function MarkingPage() {
   const outcomes = definition ? Object.fromEntries(definition.tasks.filter((t) => items.some((it) => it.task.id === t.id)).map((t) => [t.id, taskOutcome(t)])) : {};
   const unit = definition ? unitOutcome(definition.tasks.filter((t) => items.some((it) => it.task.id === t.id)), outcomes) : null;
 
-  const payload = useCallback((m: Map<string, Mark>, fb: Record<string, string>, ar: Responses) => {
+  const payload = useCallback((m: Map<string, Mark>, c: string, ar: Responses) => {
     const markMap = Object.fromEntries([...m].map(([k, v]) => [k, v.outcome]));
     return {
       results: [...m].map(([questionId, v]) => ({ questionId, criterionId: null, outcome: v.outcome, feedback: v.feedback })),
-      taskResults: (definition?.tasks ?? []).filter((t) => items.some((it) => it.task.id === t.id)).map((t) => ({ taskId: t.id, outcome: taskOutcomeFromMarks(items.filter((it) => it.task.id === t.id).map((it) => it.q.id), markMap), feedback: fb[t.id] ?? "" })),
+      // automatic (the database works the same rule out itself and keeps its own answer: asm_task_results_auto)
+      taskResults: (definition?.tasks ?? []).filter((t) => items.some((it) => it.task.id === t.id)).map((t) => ({ taskId: t.id, outcome: taskOutcomeFromMarks(items.filter((it) => it.task.id === t.id).map((it) => it.q.id), markMap), feedback: "" })),
       assessorResponses: ar,
-      overallFeedback: (definition?.tasks ?? []).map((t, i) => (fb[t.id] ? `Task ${i + 1}: ${fb[t.id]}` : "")).filter(Boolean).join("\n"),
+      overallFeedback: c,
     };
   }, [definition, items]);
   /** Saves run one after another (each needs the row version the previous one returned). */
   const chain = useRef<Promise<unknown>>(Promise.resolve());
-  const save = useCallback((m: Map<string, Mark>, fb: Record<string, string>, ar: Responses): Promise<Loaded | null> => {
+  const save = useCallback((m: Map<string, Mark>, c: string, ar: Responses): Promise<Loaded | null> => {
     if (locked) return Promise.resolve(null);
     const run = chain.current.catch(() => undefined).then(async () => {
       setSaving(true);
-      try { const d = await asmTrainer<Loaded>("mark_save", { id, rowVersion: rowVersion.current, ...payload(m, fb, ar) }); rowVersion.current = d.rowVersion; setError(""); return d; }
+      try { const d = await asmTrainer<Loaded>("mark_save", { id, rowVersion: rowVersion.current, ...payload(m, c, ar) }); rowVersion.current = d.rowVersion; setError(""); return d; }
       catch (e) { setError(e instanceof Error ? e.message : "Not saved."); return null; } finally { setSaving(false); }
     });
     chain.current = run;
     return run;
   }, [id, locked, payload]);
-  const queue = (m: Map<string, Mark>, fb = taskFeedback, ar = assessorResponses) => { if (timer.current) window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void save(m, fb, ar), 700); };
+  const queue = (m: Map<string, Mark>, c = comment, ar = assessorResponses) => { if (timer.current) window.clearTimeout(timer.current); timer.current = window.setTimeout(() => void save(m, c, ar), 700); };
   useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
 
   const setMark = (qid: string, patch: Partial<Mark>) => setMarks((prev) => { const n = new Map(prev); n.set(qid, { ...(prev.get(qid) ?? { outcome: null, feedback: "" }), ...patch }); queue(n); return n; });
@@ -154,23 +166,24 @@ export default function MarkingPage() {
 
   const signoff = signatures.find((s) => s.attemptId === data?.id && s.kind === "assessor_signoff") ?? null;
   const maxAttempts = Number(data?.settings.max_attempts ?? ruleNumber("assessment.attempts_default", 3));
-  const adjustment = definition?.tasks.flatMap((t) => t.sections.flatMap((s) => s.questions)).find((q) => q.type === "adjustment_record") ?? null;
-  const adjustmentValue = adjustment ? assessorResponses[adjustment.id] as Record<string, unknown> | undefined : undefined;
-  const adjustmentSummary = !adjustment ? null : !adjustmentValue || !Object.keys(adjustmentValue).length ? "not recorded yet" : JSON.stringify(adjustmentValue).match(/"(applied|adjusted|made)"\s*:\s*true/) ? "recorded" : "none";
+  /** The overall outcome: the trainer's choice, else the suggestion from the task results (every task S -> Competent). */
+  const suggested: Outcome | null = unit === "C" ? "S" : unit === "NYC" ? "NYS" : null;
+  const chosen: Outcome | null = overall ?? suggested;
+  const adjustmentNote = String(assessorResponses[REASONABLE_ADJUSTMENT_KEY] ?? "");
+  const setAdjustmentNote = (v: string) => { const ar = { ...assessorResponses, [REASONABLE_ADJUSTMENT_KEY]: v }; setAssessorResponses(ar); queue(marks, comment, ar); };
 
   const release = async () => {
-    if (!data || !sig || !declared || unit === null) return;
+    if (!data || !sig || !declared || !chosen || left > 0) return;
     setBusy(true); setError("");
     try {
       if (timer.current) window.clearTimeout(timer.current);
-      const saved = await save(marks, taskFeedback, assessorResponses);
+      const saved = await save(marks, comment, assessorResponses);
       if (!saved) return;
       await asmSign(data.id, "assessor_signoff", sig.method, sig.png, "I have assessed this student's work against the unit requirements, recorded the results above, and given feedback to the student.");
-      const p = payload(marks, taskFeedback, assessorResponses);
-      const out = await asmTrainer<{ ok: boolean; errors?: { message: string }[]; nextAttemptId?: string | null }>("mark_return", { id: data.id, rowVersion: rowVersion.current, outcome: unit === "C" ? "S" : "NYS", overallFeedback: p.overallFeedback });
-      if (!out.ok) { setError(out.errors?.map((e) => e.message).join(" ") ?? "The results were not released."); if (adjustment) setAdjustOpen(true); await load(); return; }
+      const out = await asmTrainer<{ ok: boolean; errors?: { message: string }[]; nextAttemptId?: string | null }>("mark_return", { id: data.id, rowVersion: rowVersion.current, outcome: chosen, overallFeedback: comment });
+      if (!out.ok) { setError(out.errors?.map((e) => e.message).join(" ") ?? "The results were not released."); await load(); return; }
       await keepSignature(sig);
-      setNote(unit === "C" ? "Results released: Competent." : out.nextAttemptId ? "Results released: Not Yet Competent. A reassessment attempt is open for the student." : "Results released: Not Yet Competent (final).");
+      setNote(chosen === "S" ? "Results released: Competent." : out.nextAttemptId ? "Results released: Not Yet Competent. A reassessment attempt is open for the student." : "Results released: Not Yet Competent (final).");
       await load();
     } catch (e) { setError(e instanceof Error ? e.message : "The results were not released."); }
     finally { setBusy(false); }
@@ -222,35 +235,40 @@ export default function MarkingPage() {
         {header}{banner}
         <main className="mx-auto max-w-4xl space-y-4 px-4 pt-6 sm:px-6" data-testid="sign-off">
           <h1 className="font-heading text-2xl font-bold text-foreground-950 sm:text-3xl">{released ? "Results" : "Sign off and release results"}</h1>
-          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Results sheets · filled in from your marking</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Task results · automatic: Satisfactory when every question is Yes</p>
           <div className="grid gap-3 md:grid-cols-2">
             {definition.tasks.filter((t) => items.some((it) => it.task.id === t.id)).map((t) => {
               const ti = definition.tasks.indexOf(t); const qs = items.filter((it) => it.task.id === t.id); const s = qs.filter((it) => markOf(it.q.id).outcome === "S").length; const o = outcomes[t.id];
               return (
                 <section key={t.id} className={CARD} data-testid="results-sheet-task">
-                  <div className="flex items-start justify-between gap-2"><h2 className="font-heading text-base font-semibold text-foreground-950">Task {ti + 1} · {t.title.replace(/^Task\s*\d+\s*[:·-]?\s*/i, "").split(/[(:]/)[0].trim() || t.title}</h2>
-                    {o ? <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${o === "S" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`}>{o === "S" ? "Satisfactory" : "Not satisfactory"}</span> : null}</div>
-                  <p className="mt-1 text-sm text-foreground-600">{s} of {qs.length} questions S · {ordinal(data.attemptNo)} attempt · {released ? fmtDate(data.returnedAt) : today}{signoff ? ` · ${signoff.signerName}` : ""}</p>
-                  <label className="mt-3 block text-xs font-semibold text-foreground-600">Feedback to student
-                    <textarea rows={3} className="mt-1 w-full rounded-lg border border-background-300 bg-white px-3 py-2 text-sm text-foreground-900 focus:border-primary-400 focus:outline-none" disabled={released || locked} value={taskFeedback[t.id] ?? ""}
-                      onChange={(e) => { const fb = { ...taskFeedback, [t.id]: e.target.value }; setTaskFeedback(fb); queue(marks, fb); }} aria-label={`Feedback to student, task ${ti + 1}`} />
-                  </label>
+                  <div className="flex items-start justify-between gap-2"><h2 className="font-heading text-base font-semibold text-foreground-950">Task {ti + 1} · {t.title}</h2>
+                    {o ? <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-semibold ${o === "S" ? "bg-green-100 text-green-800" : "bg-amber-100 text-amber-900"}`} data-testid="task-outcome">{o === "S" ? "Satisfactory" : "Not satisfactory"}</span> : null}</div>
+                  <p className="mt-1 text-sm text-foreground-600">{s} of {qs.length} questions Yes · {ordinal(data.attemptNo)} attempt · {released ? fmtDate(data.returnedAt) : today}{signoff ? ` · ${signoff.signerName}` : ""}</p>
                 </section>
               );
             })}
           </div>
-          <p className="pt-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">Assessment summary</p>
-          <section className={`${CARD} flex flex-wrap items-center justify-between gap-3`} data-testid="assessment-summary">
-            <div><p className="text-sm text-foreground-600">Unit outcome</p>
-              <p className={`font-heading text-2xl font-bold ${unit === "C" ? "text-green-700" : "text-amber-800"}`}>{unit === "C" ? "Competent (C)" : unit === "NYC" ? "Not Yet Competent (NYC)" : "Not decided"}</p>
-              <p className="text-sm text-foreground-600">{unit === "C" ? (Object.keys(outcomes).length === 2 ? "Both tasks satisfactory" : "Every task satisfactory") : `${Object.values(outcomes).filter((o) => o === "NYS").length} task(s) not satisfactory`}{adjustmentSummary ? ` · reasonable adjustment: ${adjustmentSummary}` : ""}</p></div>
-            {adjustment && !released ? <button type="button" className="cursor-pointer text-sm font-semibold text-primary-700 underline underline-offset-2" onClick={() => setAdjustOpen((o) => !o)}>{adjustOpen ? "Hide the reasonable adjustment record" : "Record a reasonable adjustment"}</button> : null}
+          <p className="pt-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">Overall outcome</p>
+          <section className={`${CARD} space-y-3`} data-testid="assessment-summary">
+            <p className="text-sm text-foreground-600">{unit === "C" ? "Every task is satisfactory: Competent is suggested." : unit === "NYC" ? `${Object.values(outcomes).filter((o) => o === "NYS").length} task(s) not satisfactory: Not Yet Competent is suggested.` : "Mark every question to see the suggestion."} You decide.</p>
+            <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Overall outcome">
+              {(["S", "NYS"] as const).map((o) => (
+                <button key={o} type="button" role="radio" aria-checked={chosen === o} disabled={released || locked} onClick={() => setOverall(o)} data-testid={`overall-${o}`}
+                  className={`min-h-[44px] cursor-pointer rounded-xl border-2 px-4 py-2 text-sm font-bold disabled:cursor-not-allowed ${chosen === o ? (o === "S" ? "border-green-700 bg-green-50 text-green-800" : "border-amber-600 bg-amber-50 text-amber-900") : "border-background-300 bg-white text-foreground-700 hover:border-primary-300"}`}>
+                  {o === "S" ? "Competent (C)" : "Not Yet Competent (NYC)"}
+                </button>
+              ))}
+            </div>
+            {chosen && suggested && chosen !== suggested ? <p className="text-sm text-amber-900" role="status"><i className="ri-error-warning-line mr-1" aria-hidden="true" />This differs from the task results: say why in the comment.</p> : null}
+            <label className="block text-xs font-semibold text-foreground-600">Comment to the student
+              <textarea rows={3} className="mt-1 w-full rounded-lg border border-background-300 bg-white px-3 py-2 text-sm font-normal text-foreground-900 focus:border-primary-400 focus:outline-none" disabled={released || locked} value={comment}
+                onChange={(e) => { setComment(e.target.value); queue(marks, e.target.value); }} data-testid="overall-comment" />
+            </label>
+            <label className="block text-xs font-semibold text-foreground-600">Reasonable adjustment (optional)
+              <textarea rows={2} className="mt-1 w-full rounded-lg border border-background-300 bg-white px-3 py-2 text-sm font-normal text-foreground-900 focus:border-primary-400 focus:outline-none" disabled={released || locked} value={adjustmentNote}
+                placeholder="Any adjustment made for this student, and why" onChange={(e) => setAdjustmentNote(e.target.value)} data-testid="reasonable-adjustment" />
+            </label>
           </section>
-          {adjustment && adjustOpen && !released ? (
-            <section className={CARD} data-adjustment>
-              <TypeInput q={adjustment} value={assessorResponses[adjustment.id]} onChange={(v) => { const ar = { ...assessorResponses, [adjustment.id]: v }; setAssessorResponses(ar); queue(marks, taskFeedback, ar); }} />
-            </section>
-          ) : null}
           <p className="pt-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">Assessor declaration</p>
           <section className={CARD} data-testid="assessor-declaration">
             {signoff ? (
@@ -274,7 +292,7 @@ export default function MarkingPage() {
             <div className="flex flex-col-reverse gap-2 sm:flex-row">
               <button type="button" className={SECONDARY} onClick={() => void openPreview()} disabled={!history} data-testid="signoff-preview">Preview PDF</button>
               {released ? <button type="button" className={SECONDARY} onClick={() => void exportPdf()} disabled={!history}>Export as workbook PDF</button>
-                : <button type="button" className={PRIMARY} disabled={busy || locked || !declared || !sig || unit === null} onClick={() => void release()} data-testid="sign-release">{busy ? "Releasing…" : "Sign & release results"}</button>}
+                : <button type="button" className={PRIMARY} disabled={busy || locked || !declared || !sig || !chosen || left > 0} onClick={() => void release()} data-testid="sign-release">{busy ? "Releasing…" : "Sign & release results"}</button>}
             </div>
           </div>
           {!released ? <p className="text-sm text-foreground-600">The student signs to acknowledge the feedback when they open their results. The PDF then carries both signatures.</p> : null}
@@ -306,7 +324,6 @@ export default function MarkingPage() {
 
   /* ---------------- marking desk ---------------- */
   const it = items[Math.min(index, Math.max(0, items.length - 1))];
-  const key = it ? keyOf(it.q.id) : undefined;
   const m = it ? markOf(it.q.id) : { outcome: null, feedback: "" };
   const renderView = (q: Question, scope: Responses): ReactNode => <TypeView key={q.id} q={q} value={isAssessorOnly(q) ? assessorResponses[q.id] : scope[q.id]} evidence={data.evidence} openEvidence={(f) => void openEvidence(f)} renderChildren={(children, r) => children.map((c) => (
     <div key={c.id} className="mt-2"><p className="text-xs font-semibold text-foreground-600">{c.label}</p>{renderView(c, r)}</div>
@@ -317,32 +334,24 @@ export default function MarkingPage() {
       {!it ? <p className="mx-auto max-w-6xl px-6 pt-6 text-sm text-foreground-600">There is nothing to mark in this assessment.</p> : (
         <main className="mx-auto grid max-w-6xl gap-5 px-4 pt-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_320px]" data-testid="marking-desk">
           <section className={`${CARD} self-start`} data-question={it.q.id}>
-            <p className="text-sm font-semibold text-primary-700">Task {it.taskIndex + 1} · Question {it.number}</p>
-            <h1 className="mt-2 text-base font-semibold text-foreground-950 sm:text-lg">{it.q.label}</h1>
+            <p className="text-sm font-semibold text-primary-700">Task {it.taskIndex + 1}{it.number ? ` · ${it.number}` : ""}</p>
+            <h1 className="mt-2 whitespace-pre-wrap text-base font-semibold text-foreground-950 sm:text-lg">{it.q.label}</h1>
             <div className="mt-4 rounded-xl bg-background-100 p-4" data-testid="student-answer">
               <p className="text-2xs font-bold uppercase tracking-wide text-foreground-500">{isAssessorOnly(it.q) ? "Your record" : "Student’s answer"}</p>
               <div className="mt-1 text-sm text-foreground-900">
                 {isAssessorOnly(it.q) && !locked
-                  ? <TypeInput key={it.q.id} q={it.q} value={assessorResponses[it.q.id]} onChange={(v) => { const ar = { ...assessorResponses, [it.q.id]: v }; setAssessorResponses(ar); queue(marks, taskFeedback, ar); }} evidence={data.evidence} openEvidence={(f) => void openEvidence(f)} onUpload={uploadAssessor} />
+                  ? <TypeInput key={it.q.id} q={it.q} value={assessorResponses[it.q.id]} onChange={(v) => { const ar = { ...assessorResponses, [it.q.id]: v }; setAssessorResponses(ar); queue(marks, comment, ar); }} evidence={data.evidence} openEvidence={(f) => void openEvidence(f)} onUpload={uploadAssessor} />
                   : renderView(it.q, data.responses)}
               </div>
             </div>
-            <details className="mt-3 rounded-xl border border-background-200 px-4 py-3" data-testid="model-answer">
-              <summary className="cursor-pointer text-sm font-semibold text-foreground-900">{key?.assessorGuidance && !key?.modelAnswer ? "What to look for" : "Model answer"}</summary>
-              <div className="mt-2 space-y-2 text-sm text-foreground-800">
-                {key?.modelAnswer ? <p className="whitespace-pre-wrap">{key.modelAnswer}</p> : null}
-                {key?.assessorGuidance ? <p className="whitespace-pre-wrap"><span className="font-semibold">What to look for: </span>{key.assessorGuidance}</p> : null}
-                {!key?.modelAnswer && !key?.assessorGuidance ? <p className="text-foreground-500">No model answer for this question.</p> : null}
-              </div>
-            </details>
           </section>
           <div className="space-y-4">
             <section className={CARD}>
-              <p className="text-sm font-semibold text-foreground-900">Is this response satisfactory?</p>
+              <p className="text-sm font-semibold text-foreground-900">Satisfactory?</p>
               <button type="button" disabled={locked} onClick={() => decide("S")} aria-pressed={m.outcome === "S"} data-testid="mark-s"
-                className={`mt-3 flex w-full cursor-pointer items-center justify-between rounded-xl px-4 py-3.5 text-base font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${m.outcome === "S" ? "bg-green-700 text-white ring-2 ring-green-300" : "bg-green-600 text-white hover:bg-green-700"}`}>Satisfactory<span className="text-sm font-semibold opacity-80">S</span></button>
+                className={`mt-3 flex w-full cursor-pointer items-center justify-between rounded-xl px-4 py-3.5 text-base font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${m.outcome === "S" ? "bg-green-700 text-white ring-2 ring-green-300" : "bg-green-600 text-white hover:bg-green-700"}`}>Yes<span className="text-sm font-semibold opacity-80">S</span></button>
               <button type="button" disabled={locked} onClick={() => decide("NYS")} aria-pressed={m.outcome === "NYS"} data-testid="mark-n"
-                className={`mt-3 flex w-full cursor-pointer items-center justify-between rounded-xl border-2 px-4 py-3.5 text-base font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${m.outcome === "NYS" ? "border-amber-600 bg-amber-50 text-amber-900" : "border-amber-300 bg-white text-amber-800 hover:bg-amber-50"}`}>Not satisfactory<span className="text-sm font-semibold opacity-80">N</span></button>
+                className={`mt-3 flex w-full cursor-pointer items-center justify-between rounded-xl border-2 px-4 py-3.5 text-base font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${m.outcome === "NYS" ? "border-amber-600 bg-amber-50 text-amber-900" : "border-amber-300 bg-white text-amber-800 hover:bg-amber-50"}`}>No<span className="text-sm font-semibold opacity-80">N</span></button>
               <label className="mt-4 block text-sm font-semibold text-foreground-800">Comment (optional)
                 <textarea rows={3} className="mt-1 w-full rounded-lg border border-background-300 px-3 py-2 text-sm font-normal focus:border-primary-400 focus:outline-none" placeholder="Feedback for the student…" disabled={locked} value={m.feedback} onChange={(e) => setMark(it.q.id, { feedback: e.target.value })} /></label>
               <p className="mt-2 text-xs text-foreground-500">S / N to mark · → next question · ← back</p>
@@ -353,13 +362,13 @@ export default function MarkingPage() {
                 <div className="mt-2 flex flex-wrap gap-2">
                   {qs.map(({ x, i }) => { const o = markOf(x.q.id).outcome; const on = i === index; return (
                     <button key={x.q.id} type="button" onClick={() => setIndex(i)} aria-label={`Question ${x.number}${o ? `, ${o === "S" ? "satisfactory" : "not satisfactory"}` : ", not marked"}`} aria-current={on ? "true" : undefined}
-                      className={`min-w-[3rem] cursor-pointer rounded-lg px-2 py-1.5 text-xs font-semibold ${o === "S" ? "bg-green-100 text-green-800" : o === "NYS" ? "bg-amber-100 text-amber-900" : "bg-background-100 text-foreground-600"} ${on ? "ring-2 ring-primary-600" : ""}`}>{x.number}</button>
+                      className={`min-w-[3rem] cursor-pointer rounded-lg px-2 py-1.5 text-xs font-semibold ${o === "S" ? "bg-green-100 text-green-800" : o === "NYS" ? "bg-amber-100 text-amber-900" : "bg-background-100 text-foreground-600"} ${on ? "ring-2 ring-primary-600" : ""}`}>{x.number || i + 1}</button>
                   ); })}
                 </div>
                 {ti === 0 ? <p className="mt-2 text-xs text-foreground-500">Green = S · orange = NS · grey = not marked</p> : null}
               </section>
             ); })}
-            <button type="button" className={`${PRIMARY} w-full`} disabled={left > 0} onClick={() => { if (timer.current) { window.clearTimeout(timer.current); void save(marks, taskFeedback, assessorResponses); } setView("signoff"); window.scrollTo({ top: 0 }); }} data-testid="finish-sign-off">{left ? `Finish & sign off (${left} left)` : "Finish & sign off →"}</button>
+            <button type="button" className={`${PRIMARY} w-full`} disabled={left > 0} onClick={() => { if (timer.current) { window.clearTimeout(timer.current); void save(marks, comment, assessorResponses); } setView("signoff"); window.scrollTo({ top: 0 }); }} data-testid="finish-sign-off">{left ? `Finish & sign off (${left} left)` : "Finish & sign off →"}</button>
           </div>
         </main>
       )}

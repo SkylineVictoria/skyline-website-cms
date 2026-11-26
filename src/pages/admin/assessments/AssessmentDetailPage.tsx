@@ -27,9 +27,10 @@ import { issuesOf } from "@/lib/assessment/overview";
 import { supabase } from "@/pages/admin/lib/supabase";
 import type { Responses } from "@/lib/assessment/types";
 import MappingPanel from "./panels/MappingPanel";
+import PdfTemplatePanel from "./panels/PdfTemplatePanel";
 
 const TABS = [
-  { id: "overview", label: "Overview", icon: "ri-file-list-3-line" }, { id: "builder", label: "Builder", icon: "ri-layout-masonry-line" }, { id: "mapping", label: "Unit mapping", icon: "ri-links-line" },
+  { id: "overview", label: "Overview", icon: "ri-file-list-3-line" }, { id: "pdf", label: "PDF template", icon: "ri-file-pdf-2-line" }, { id: "builder", label: "Builder", icon: "ri-layout-masonry-line" }, { id: "mapping", label: "Unit mapping", icon: "ri-links-line" },
   { id: "assignments", label: "Assignments", icon: "ri-group-line" }, { id: "versions", label: "Versions & export", icon: "ri-git-branch-line" }, { id: "settings", label: "Settings", icon: "ri-settings-3-line" },
 ];
 
@@ -172,6 +173,7 @@ export default function AssessmentDetailPage() {
       {tab === "builder" ? <Builder definition={definition} keys={keys} onChange={onBuilderChange} readOnly={!editable} declarationText={String(detail.effectiveSettings.declaration_text ?? "")} editor={{ id: user?.id ?? null, name: user?.name ?? null }} /> : null}
       {tab === "mapping" ? <MappingPanel assessmentId={detail.id} definition={definition} unitId={detail.unitId} unitCode={units.find((u) => u.id === detail.unitId)?.code ?? null} elements={detail.elements} mappings={mappings} onChange={onMappingsChange} onElementsChanged={() => void load()} readOnly={!editable} /> : null}
       {tab === "assignments" ? <AssignmentsPanel assessmentId={detail.id} courseId={detail.courseId} assignments={detail.assignments} canAssign={canAssign} onChanged={() => void load()} onOpenAttempt={setAttempt} /> : null}
+      {tab === "pdf" ? <PdfTemplatePanel assessmentId={detail.id} editable={editable} onChanged={() => void load()} /> : null}
       {tab === "versions" ? <VersionsPanel detail={detail} onChanged={() => void load()} /> : null}
       {tab === "settings" ? <SettingsPanel detail={detail} units={units} onChanged={() => void load()} /> : null}
       {preview ? <PdfPreviewDialog preview={preview} title={`Preview PDF · ${detail.title}`} fileName={`${(detail.code || detail.title).replace(/[^A-Za-z0-9-]+/g, "_")}.pdf`} onClose={() => setPreview(null)} /> : null}

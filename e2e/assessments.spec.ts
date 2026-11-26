@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { anonClient, createAdmin, createAuthUser, createStudentLogin, person, shot, signInAsAdmin, signInThroughTheForm, PASSWORD, signOutEverywhere, sql, choose, selectOf } from "./support";
+import { anonClient, createAdmin, createAuthUser, createStudentLogin, person, serviceClient, shot, signInAsAdmin, signInThroughTheForm, PASSWORD, signOutEverywhere, sql, choose, selectOf } from "./support";
 
 /**
  * Assessment Management (ASM-01) in the browser, against the LOCAL lab only: an Admin builds and publishes an assessment with two
@@ -40,21 +40,27 @@ async function drawSignature(page: Page, scope: ReturnType<Page["locator"]> | Pa
   for (const [x, y] of [[0.3, 0.3], [0.4, 0.7], [0.5, 0.35], [0.65, 0.65], [0.8, 0.4]]) await page.mouse.move(box.x + box.width * x, box.y + box.height * y, { steps: 4 });
   await page.mouse.up();
 }
-/** Before you start: tick the declaration, sign, Start Task 1 (skipped when this attempt is already signed). */
-async function startWithDeclaration(page: Page): Promise<void> {
+/** The walkthrough below (rewritten in phase 2) still uses the old name. */
+const startWithDeclaration = (page: Page) => startAttempt(page);
+/** Before you start: Start (ASM-IMPORT-SIMPLE: the declaration is the wizard's last step; skipped when the attempt is under way). */
+async function startAttempt(page: Page): Promise<void> {
   const before = page.getByTestId("before-you-start");
   await Promise.race([before.waitFor({ timeout: 20_000 }), page.getByTestId("task-page").waitFor({ timeout: 20_000 })]).catch(() => undefined);
   if (!(await before.isVisible())) return;
-  await page.getByTestId("declare").check();
-  const saved = page.getByText("Your saved signature");
-  if (!(await saved.isVisible().catch(() => false))) await drawSignature(page);
   await page.getByTestId("start-task").click();
   await expect(page.getByTestId("task-page")).toBeVisible({ timeout: 20_000 });
 }
 /** Answers every visible field of the open task page (text, dates, numbers, first radio of each group, check boxes). */
 async function answerTaskPage(page: Page, tag: string): Promise<void> {
   const form = page.locator("[data-testid=task-page] [data-question]");
-  for (const box of await form.locator("textarea:visible").all()) if (!(await box.inputValue())) await box.fill(`${tag} answer`);
+  // an upload item gets one small PDF (once); first, because an upload reloads the attempt (typed text waits for its autosave)
+  for (const q of await form.filter({ has: page.locator("input[type=file]") }).all()) {
+    if ((await q.textContent())?.includes("evidence.pdf")) continue;
+    await q.locator("input[type=file]").first().setInputFiles({ name: "evidence.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF") });
+    await expect(q).toContainText("evidence.pdf", { timeout: 20_000 });
+  }
+  // ASM-IMPORT-SIMPLE: a form question's box starts with its printed fields (the prefill): the answer is written after them
+  for (const box of await form.locator("textarea:visible").all()) { const v = await box.inputValue(); if (!v.includes(tag)) await box.fill(v ? `${v}\n${tag} answer` : `${tag} answer`); }
   for (const box of await form.locator("input[type=text]:visible, input:not([type]):visible").all()) if (!(await box.inputValue())) await box.fill(tag);
   for (const box of await form.locator("input[type=date]:visible").all()) await box.fill("2026-11-20");
   for (const box of await form.locator("input[type=number]:visible").all()) if (!(await box.inputValue())) await box.fill("1");
@@ -65,17 +71,22 @@ async function answerTaskPage(page: Page, tag: string): Promise<void> {
   for (let k = 0; k < 50 && (await more.count()); k += 1) await more.first().click();
   for (const box of await form.locator("input:not([type]):visible, input[type=text]:visible").all()) if (!(await box.inputValue())) await box.fill(tag);
 }
-/** Every task answered page by page, then Review & submit -> Submit; returns the receipt number. */
+/** Every step answered page by page, then the declaration step: tick "my own work", the name, Submit; returns the receipt number. */
 async function answerAllAndSubmit(page: Page, tag: string): Promise<string> {
-  for (let i = 0; i < 20; i += 1) {
+  for (let i = 0; i < 40; i += 1) {
     await answerTaskPage(page, tag);
     await page.waitForTimeout(1200); // autosave
     const next = page.getByTestId("next");
     const label = (await next.textContent()) ?? "";
     await next.click();
-    if (/Review/.test(label)) break;
+    if (/Declaration/.test(label)) break;
   }
-  await expect(page.getByTestId("review-submit")).toBeVisible();
+  await expect(page.getByTestId("declare-submit")).toBeVisible();
+  await expect(page.getByTestId("submit")).toBeDisabled(); // nothing is submitted before the declaration is ticked
+  await page.getByTestId("declare").check();
+  const name = page.getByTestId("declare-name");
+  if (!(await name.inputValue())) await name.fill("E2E Student");
+  await expect(page.getByTestId("declare-date")).toHaveText(/\d/);
   await page.getByTestId("submit").click();
   const receipt = page.getByText(/receipt ASM-\d{4}-\d{6}/i).first();
   await expect(receipt).toBeVisible({ timeout: 20_000 });
@@ -83,8 +94,8 @@ async function answerAllAndSubmit(page: Page, tag: string): Promise<string> {
 }
 
 /**
- * The marking desk (ASM-AI-IMPORT stage 4): marks every question, the first by keyboard (S / N), the rest with the large buttons;
- * `notSatisfactory(eyebrow)` says which questions get N (eyebrow "Task 2 · Question 2.1.1"). Assessor checklists are ticked.
+ * The marking desk: marks every question Satisfactory Yes / No, the first by keyboard (S / N), the rest with the large buttons;
+ * `notSatisfactory(eyebrow)` says which questions get N (eyebrow "Assessment Task - 2 · Q2.1.1"). Assessor checklists are ticked.
  */
 async function markOnDesk(page: Page, notSatisfactory: (eyebrow: string) => boolean = () => false, shotName?: string): Promise<void> {
   await expect(page.getByTestId("marking-desk")).toBeVisible({ timeout: 30_000 });
@@ -96,7 +107,6 @@ async function markOnDesk(page: Page, notSatisfactory: (eyebrow: string) => bool
     const eyebrow = (await page.locator("[data-testid=marking-desk] [data-question] p").first().textContent()) ?? "";
     const no = notSatisfactory(eyebrow);
     if (i === 0) {
-      await page.getByTestId("model-answer").locator("summary").click();
       if (shotName && process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, `${shotName}.png`) });
       await page.locator("body").click({ position: { x: 5, y: 5 } });
       await page.keyboard.press(no ? "n" : "s");
@@ -107,9 +117,14 @@ async function markOnDesk(page: Page, notSatisfactory: (eyebrow: string) => bool
   await page.getByTestId("finish-sign-off").click();
   await expect(page.getByTestId("sign-off")).toBeVisible();
 }
-/** The sign-off: feedback per task, the assessor declaration and signature, Sign & release results. */
-async function signOffAndRelease(page: Page, feedback: string, shotName?: string): Promise<void> {
-  for (const box of await page.getByTestId("results-sheet-task").locator("textarea").all()) await box.fill(feedback);
+/**
+ * The sign-off: the task results are automatic (no click per task), the overall outcome is the suggestion unless `outcome` picks
+ * one, the overall comment, the assessor declaration and signature, Sign & release results.
+ */
+async function signOffAndRelease(page: Page, feedback: string, shotName?: string, outcome?: "S" | "NYS"): Promise<void> {
+  await expect(page.getByTestId("results-sheet-task").locator("textarea")).toHaveCount(0);
+  if (outcome) await page.getByTestId(`overall-${outcome}`).click();
+  await page.getByTestId("overall-comment").fill(feedback);
   await page.getByTestId("assessor-declare").check();
   const saved = page.getByTestId("assessor-declaration").getByText("Your saved signature");
   if (!(await saved.isVisible().catch(() => false))) await drawSignature(page, page.getByTestId("assessor-declaration"));
@@ -183,9 +198,9 @@ test("the admin builds, publishes and assigns an assessment in the browser", asy
   await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/);
   assessmentUrl = page.url().replace(/\?.*$/, "");
 
-  // Builder: the wizard made Task 1; a short answer and a single choice go into it.
+  // Builder: the wizard made Task 1; two written questions go into it
   await addQuestion(page, "short_answer", "Name two items of PPE and say what each protects.");
-  await addQuestion(page, "single_choice", "Which comes first?");
+  await addQuestion(page, "long_answer", "Which comes first, and why?");
   await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
 
   await page.getByTestId("publish-version").click();
@@ -205,12 +220,13 @@ test("the student completes and submits it with the declaration and gets a recei
   await expect(page.getByRole("heading", { name: "My assessments" })).toBeVisible();
   await page.getByRole("button", { name: "Start" }).click();
   await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
-  // ASM-AI-IMPORT stage 3: Before you start (declaration + signature), one task a page, Review & submit
-  await startWithDeclaration(page);
+  // ASM-IMPORT-SIMPLE: Before you start, one step a section, then the declaration step (my own work, name, date) and submit
+  await startAttempt(page);
   await page.locator("[data-question] textarea, [data-question] input:not([type]), [data-question] input[type=text]").first().fill("Gloves protect the hands and glasses protect the eyes.");
-  await page.locator("[data-question] input[type=radio]").first().check();
   await answerAllAndSubmit(page, "E2E");
-  expect(sql(`select string_agg(kind || ':' || signer_role || ':' || method || ':' || (login ? 'userId')::text, ',') from public.asm_attempt_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.student_id = '${student.student}'`)).toBe("student_declaration:student:drawn:true");
+  // the declaration is saved with the submission (no signature before starting any more)
+  expect(sql(`select (declaration->>'agreed') || ':' || (char_length(declaration->>'signature') >= 2)::text || ':' || (declaration ? 'signedAt')::text from public.asm_attempts where student_id = '${student.student}'`)).toBe("true:true:true");
+  expect(sql(`select count(*) from public.asm_attempt_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.student_id = '${student.student}' and s.kind = 'student_declaration'`)).toBe("0");
   expect(sql(`select state from public.asm_attempts where student_id = '${student.student}'`)).toBe("submitted");
   expect(sql(`select count(*) from public.asm_notifications n join auth.users u on u.id = n.recipient_auth_user where u.email = '${student.email}' and n.event = 'submitted'`)).toBe("1");
 });
@@ -220,12 +236,15 @@ test("the trainer marks it Satisfactory and records the unit outcome", async ({ 
   await expect(page.getByRole("heading", { name: "Assessments" })).toBeVisible();
   await page.getByRole("button", { name: "Mark", exact: true }).first().click();
   await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
-  // ASM-AI-IMPORT stage 4: the marking desk, then Sign off and release results
+  // the marking desk (Yes / No per question), then Sign off: task results automatic, overall outcome suggested, then released
   await markOnDesk(page);
-  await expect(page.getByTestId("assessment-summary")).toContainText("Competent (C)");
+  await expect(page.getByTestId("task-outcome").first()).toHaveText("Satisfactory");
+  await expect(page.getByTestId("overall-S")).toHaveAttribute("aria-checked", "true");
+  await page.getByTestId("reasonable-adjustment").fill("Extra 10 minutes agreed for reading.");
   await signOffAndRelease(page, "Clear and complete.");
-  expect(sql(`select state || '/' || outcome from public.asm_attempts where student_id = '${student.student}'`)).toBe("final/S");
-  expect(sql(`select string_agg(kind || ':' || signer_role, ',' order by kind) from public.asm_attempt_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.student_id = '${student.student}'`)).toBe("assessor_signoff:assessor,student_declaration:student");
+  expect(sql(`select state || '/' || outcome || '/' || overall_feedback || '/' || (assessor_responses->>'reasonableAdjustment') from public.asm_attempts where student_id = '${student.student}'`)).toBe("final/S/Clear and complete./Extra 10 minutes agreed for reading.");
+  expect(sql(`select string_agg(r.outcome, ',') from public.asm_task_results r join public.asm_attempts a on a.id = r.attempt_id where a.student_id = '${student.student}'`)).toBe("S");
+  expect(sql(`select string_agg(kind || ':' || signer_role, ',' order by kind) from public.asm_attempt_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.student_id = '${student.student}'`)).toBe("assessor_signoff:assessor");
 
   await page.getByRole("button", { name: "Record unit outcome" }).click();
   await page.getByLabel(/I declare that I have conducted/).check();
@@ -254,7 +273,7 @@ test("the admin publishes version 2 while the student's attempt stays on version
   await page.goto(`${assessmentUrl}?tab=builder`); // ASM-OVERVIEW: the page opens on the Overview; questions are added in the Builder
   await expect(page.getByText(/Version 1 is published/)).toBeVisible();
   // the first change to a published version starts draft v2 (D-06)
-  await addQuestion(page, "short_answer", "Version 2 only: describe one hazard you removed.");
+  await addQuestion(page, "long_answer", "Version 2 only: describe one hazard you removed.");
   await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: /^Publish v2/ }).click();
   await page.getByRole("button", { name: "Publish", exact: true }).click();
@@ -293,10 +312,9 @@ test("reassessment: the admin reopens, the student resubmits, the trainer return
   await expect(page.getByText(/Attempt 2 in progress/)).toBeVisible();
   await page.getByRole("button", { name: "Open" }).click();
   await page.waitForURL(/\/agency\/assessments\/[0-9a-f-]{36}/);
-  await startWithDeclaration(page); // a further attempt is signed again
+  await startAttempt(page); // a further attempt opens on its work (it carries the earlier answers)
   await expect(page.locator("[data-testid=task-page] [data-question]")).toHaveCount(2);
   await page.locator("[data-question] textarea, [data-question] input:not([type]), [data-question] input[type=text]").first().fill("Gloves and glasses; resubmitted.");
-  await page.locator("[data-question] input[type=radio]").first().check();
   await answerAllAndSubmit(page, "Resubmitted");
 
   // the trainer returns attempt 2 Not Yet Satisfactory: attempt 3 opens inside the reassessment window
@@ -304,7 +322,8 @@ test("reassessment: the admin reopens, the student resubmits, the trainer return
   await page.getByRole("button", { name: "Mark", exact: true }).first().click();
   await page.waitForURL(/\/staff\/assessments\/attempts\/[0-9a-f-]{36}/);
   await markOnDesk(page, () => true);
-  await expect(page.getByTestId("assessment-summary")).toContainText("Not Yet Competent (NYC)");
+  await expect(page.getByTestId("task-outcome").first()).toHaveText("Not satisfactory");
+  await expect(page.getByTestId("overall-NYS")).toHaveAttribute("aria-checked", "true");
   await signOffAndRelease(page, "Not yet: name the PPE.");
   await expect(page.getByText(/A reassessment attempt is open for the student/)).toBeVisible();
   expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where student_id = '${student.student}'`)).toBe("1:final:S,2:returned:NYS,3:draft:-");
@@ -1355,3 +1374,265 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
   });
 });
 
+
+// ASM-PDF-TEMPLATE (2026-11-26): the workbook PDF used as it is, like an e-sign template: the admin uploads it on the PDF template tab,
+// its answer boxes, the trainer's marks and the record values are found on its pages, shown on the PDF and saved on the draft.
+test("the admin uploads the workbook PDF and its fields are found and saved on the draft", async ({ page }) => {
+  const file = [process.env.ASM_WORKBOOK, "DNT_RII50520_RIICWD525E_Select Pavement surfacing.pdf", path.join(os.homedir(), "Downloads", "DNT_RII50520_RIICWD525E_Select Pavement surfacing.pdf")].find((p) => p && existsSync(p));
+  test.skip(!file, "the RIICWD525E workbook is not on this machine (set ASM_WORKBOOK)");
+  test.setTimeout(180_000);
+  await signInAsAdmin(page, admin.email);
+  await page.goto(`${assessmentUrl}?tab=pdf`);
+  await expect(page.getByTestId("pdf-template-upload")).toBeVisible();
+  await page.getByTestId("pdf-template-file").setInputFiles(file!);
+  await expect(page.getByTestId("pdf-template-summary")).toContainText("103 pages · 28 questions · 2 tasks", { timeout: 90_000 });
+  await expect(page.getByTestId("pdf-template-questions")).toContainText("2.1.8");
+  await expect(page.getByTestId("placed-field").first()).toBeAttached();
+  await shot(page, "asm-pdf-template");
+  await page.getByTestId("pdf-template-save").click();
+  await expect(page.getByTestId("pdf-template-summary")).toContainText("Draft v", { timeout: 30_000 });
+  await expect(page.getByTestId("pdf-template-summary")).not.toContainText("Not saved");
+  const id = assessmentUrl.split("/").pop();
+  expect(Number(sql(`select jsonb_array_length(template->'fields') from public.asm_versions where assessment_id = '${id}' and status = 'draft'`))).toBeGreaterThan(900);
+  expect(sql(`select count(*) from storage.objects where bucket_id = 'assessment-templates' and name like '${id}/%.pdf'`)).toBe("1");
+  expect(sql(`select count(*) from public.asm_audit_log where action = 'template_save' and detail->>'assessmentId' = '${id}'`)).toBe("1");
+});
+
+// ASM-PDF-TEMPLATE phase 2 (2026-11-26): the student answers on the workbook PDF itself (both workbooks when they are on this machine)
+const workbook = (name: string, env?: string) => [env ? process.env[env] : undefined, name, path.join(os.homedir(), "Downloads", name)].find((p) => p && existsSync(p));
+const RII_PDF = workbook("DNT_RII50520_RIICWD525E_Select Pavement surfacing.pdf", "ASM_WORKBOOK");
+const CPC_PDF = workbook("CPC30620_CPCCPD2012_Use painting and decorating tools and equipment.pdf", "ASM_WORKBOOK_2");
+const GRID = "[data-testid=answer-table] [data-testid=table-grid]";
+
+/** The admin adds an assessment, uploads the workbook on the PDF template tab, publishes it and assigns it to G1; returns the assignment. */
+async function publishWorkbook(page: Page, file: string, questions: number): Promise<string> {
+  await signInAsAdmin(page, admin.email);
+  await page.goto("/admin/assessments");
+  await page.getByRole("button", { name: "New assessment" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Add assessment" });
+  await dialog.getByTestId("start-empty").click();
+  await choose(dialog.getByLabel("Qualification"), courseId);
+  await choose(dialog.getByLabel("Unit"), unitId);
+  await dialog.getByRole("button", { name: "Create and open the builder" }).click();
+  await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/);
+  const url = page.url().replace(/\?.*$/, "");
+  const id = url.split("/").pop()!;
+  await page.goto(`${url}?tab=pdf`);
+  await page.getByTestId("pdf-template-file").setInputFiles(file);
+  await expect(page.getByTestId("pdf-template-summary")).toContainText(`${questions} questions`, { timeout: 90_000 });
+  await page.getByTestId("pdf-template-save").click();
+  await expect(page.getByTestId("pdf-template-summary")).not.toContainText("Not saved", { timeout: 30_000 });
+  await page.getByTestId("publish-version").click();
+  await page.getByRole("button", { name: "Publish", exact: true }).last().click();
+  await expect(page.getByTestId("status-badge")).toHaveText("Published", { timeout: 15_000 });
+  await page.getByRole("button", { name: "Assignments" }).click();
+  await page.getByRole("button", { name: "Assign to intakes" }).click();
+  await page.getByRole("dialog", { name: "Assign to intakes" }).locator("label").filter({ hasText: /^G1/ }).locator("input[type=checkbox]").check();
+  await page.getByRole("button", { name: "Assign", exact: true }).click();
+  await expect.poll(() => sql(`select count(*) from public.asm_assignments where assessment_id = '${id}'`), { timeout: 15_000 }).toBe("1");
+  return sql(`select id from public.asm_assignments where assessment_id = '${id}'`);
+}
+
+/** Fills the step on screen as the rules ask: every text answer; every cell of a table with printed rows; the first row of a blank-row table. */
+async function answerStep(page: Page, text: string): Promise<void> {
+  const q = page.getByTestId("step-question");
+  for (const input of await q.locator("[data-testid=answer-text], [data-testid=answer-line]").all()) await input.fill(text);
+  for (const grid of await q.locator(GRID).all()) {
+    const fixed = (await grid.locator("tbody th").count()) > 0;
+    const cells = fixed ? grid.getByTestId("table-cell") : grid.locator("tbody tr").first().getByTestId("table-cell");
+    for (const cell of await cells.all()) await cell.fill(text);
+  }
+}
+const CPC_KEYS = ["1.1", "1.2", "1.3", "2.1", "2.2", "2.3", "2.4", "2.5", "2.6", "2.7", "2.8", "2.9", "2.10", "2.11"];
+let cpcAssignment = "";
+
+/** Ticks every Evidence Outcome row of the marking checklists (Yes or No) on the page. */
+async function tickEvidence(page: Page, option: "yes" | "no"): Promise<void> {
+  const rows = page.locator(`[data-testid=trainer-field][data-checklist=evidence][data-option=${option}]`);
+  await expect(rows).toHaveCount(13);
+  for (const row of await rows.all()) { await row.scrollIntoViewIfNeeded(); await row.click(); }
+}
+
+/** Signs the declaration on screen: the first time drawn (kept as the saved signature), then one tap. */
+async function signHere(page: Page, scope: ReturnType<Page["locator"]>): Promise<void> {
+  // the saved signature is looked up first: wait for the Sign button before deciding whether to draw
+  await expect(scope.getByTestId("sign-button")).toBeVisible({ timeout: 15_000 });
+  if (await scope.getByTestId("signature-pad").count()) await drawSignature(page, scope);
+  await scope.getByTestId("sign-button").click();
+}
+
+test("PDF-WORKBOOK CPCCPD2012 on its workbook: questions cropped from the PDF, tables as grids or cards, autosave, review, each declaration signed and submit", async ({ page }) => {
+  test.skip(!CPC_PDF, "the CPCCPD2012 workbook is not on this machine (set ASM_WORKBOOK_2)");
+  test.setTimeout(600_000);
+  cpcAssignment = await publishWorkbook(page, CPC_PDF!, 14);
+  const base = `/agency/assessments/${cpcAssignment}`;
+  await signInStaff(page, student.email, base);
+  await expect(page.getByTestId("pdf-wizard")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("wizard-step-count")).toHaveText("Step 1 of 21");
+  await expect(page.getByTestId("record-fields")).toContainText(student.email);
+  // a text question: the question as printed, the answer, how it fits its box
+  await page.goto(`${base}?step=q-1.1`);
+  await expect(page.getByTestId("question-crop").locator("canvas")).toBeVisible();
+  await page.getByTestId("answer-text").first().fill("Brushes, rollers and spray equipment are cleaned straight after use with the right solvent, dried and stored hanging so the bristles keep their shape. ".repeat(4).trim());
+  await expect(page.getByTestId("autosave")).toContainText(/Saved/, { timeout: 10_000 });
+  await expect(page.getByTestId("fit-preview")).toBeVisible();
+  await shot(page, "pdf-wizard-text-question");
+  // Q3: the fixed rows (tool names) as row titles on a grid; cards on a phone; every cell is required
+  await page.goto(`${base}?step=q-1.3`);
+  await expect(page.getByTestId("answer-table")).toHaveAttribute("data-rows", "22");
+  const grid = page.locator(GRID);
+  await expect(grid.locator("tbody tr").first().locator("th")).toHaveText("Brushware and accessories");
+  await grid.getByTestId("table-cell").nth(0).fill("Natural or synthetic bristles; flat, sash and fitch shapes.");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByTestId("table-card").first()).toContainText("Brushware and accessories");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(page.getByTestId("autosave")).toContainText(/Saved/, { timeout: 10_000 });
+  await page.goto(`${base}?step=review`);
+  await expect(page.getByTestId("review-missing")).toContainText("Task 1 · Q3: 65 empty cells in the table.");
+  await expect(page.getByTestId("review-missing")).toContainText("Sign the Task 1 declaration.");
+  await expect(page.getByTestId("submit")).toBeDisabled();
+  await page.getByTestId("missing-item").filter({ hasText: "Task 1 · Q2 is not answered yet." }).first().click();
+  await expect(page).toHaveURL(/step=q-1\.2/);
+  // answer everything as the rules ask
+  for (const key of CPC_KEYS) {
+    await page.goto(`${base}?step=q-${key}`);
+    await expect(page.getByTestId("step-question")).toHaveAttribute("data-question-key", key);
+    await answerStep(page, `Answer to ${key}`);
+    await expect(page.getByTestId("autosave")).toContainText(/Saved/, { timeout: 10_000 });
+  }
+  // each declaration signed at its moment: Task 1's at the end of Task 1 (drawn once), Task 2's with one tap
+  await page.goto(`${base}?step=decl-1-19`);
+  await signHere(page, page.getByTestId("sign-declaration"));
+  await expect(page.getByTestId("signed")).toContainText("Signed by", { timeout: 10_000 });
+  await shot(page, "pdf-wizard-declaration");
+  await page.goto(`${base}?step=decl-2-46`);
+  await expect(page.getByTestId("sign-declaration").getByTestId("signature-pad")).toHaveCount(0);
+  await page.getByTestId("sign-button").click();
+  await expect(page.getByTestId("signed")).toBeVisible({ timeout: 10_000 });
+  // the whole-pack declaration on the submit step
+  await page.goto(`${base}?step=review`);
+  await expect(page.getByTestId("review-missing")).toContainText("Sign the student declaration (page 7).");
+  await page.getByTestId("pack-declaration").getByTestId("sign-button").click();
+  await expect(page.getByTestId("review-ready")).toBeVisible({ timeout: 10_000 });
+  await shot(page, "pdf-wizard-review-ready");
+  await page.getByTestId("submit").click();
+  await expect(page.getByTestId("pdf-results")).toContainText(/receipt/i, { timeout: 20_000 });
+  expect(sql(`select a.state || ':' || (a.declaration->>'text' like '%I have read and understood%' and a.declaration->>'text' like '%I declare that the answers I have provided are my own work.%')::text || ':' || (select string_agg(slot, ',' order by slot) from public.asm_pdf_signatures s where s.attempt_id = a.id)
+    || ':' || (select count(*) from public.asm_attempt_snapshots s where s.attempt_id = a.id and s.signatures ?& array['decl:1', 'decl:2', 'pack']) from public.asm_attempts a where a.assignment_id = '${cpcAssignment}'`)).toBe("submitted:true:decl:1,decl:2,pack:1");
+  expect(sql(`select count(distinct date_trunc('second', signed_at)) from public.asm_pdf_signatures s join public.asm_attempts a on a.id = s.attempt_id where a.assignment_id = '${cpcAssignment}'`)).toBe("3");
+});
+
+test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, returns attempt 1; attempt 2 starts from the answers; Competent; the final PDF is stored with the snapshot hash; the student acknowledges", async ({ page }) => {
+  test.skip(!CPC_PDF || !cpcAssignment, "needs the CPCCPD2012 submission above");
+  test.setTimeout(600_000);
+  const attempt1 = sql(`select id from public.asm_attempts where assignment_id = '${cpcAssignment}' and attempt_no = 1`);
+  await signInStaff(page, trainer.email, `/staff/assessments/attempts/${attempt1}`);
+  await expect(page.getByTestId("pdf-marking")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator("[data-pdf-page='13'] canvas")).toBeVisible({ timeout: 30_000 });
+  for (const key of CPC_KEYS) await page.locator(`[data-testid=marking-question][data-key='${key}']`).getByTestId(key === "2.3" ? "mark-NYS" : "mark-S").click();
+  await page.locator("[data-testid=marking-question][data-key='2.3'] input").fill("Add the safe method of use for each tool.");
+  await expect(page.getByTestId("task-auto").nth(0)).toHaveText("Satisfactory");
+  await expect(page.getByTestId("task-auto").nth(1)).toHaveText("Not satisfactory");
+  await page.getByTestId("task-feedback").nth(1).fill("Q3 needs the safe methods of use.");
+  await page.getByTestId("overall-NYS").click();
+  await page.getByTestId("overall-feedback").fill("Nearly there: complete the safe methods in Task 2 Q3.");
+  await drawSignature(page, page.getByTestId("signoff"));
+  await page.getByTestId("signoff-sign").click();
+  await expect(page.getByTestId("signoff-done")).toBeVisible({ timeout: 10_000 });
+  // the release waits for the Evidence Outcome rows (clicked on the marking checklists, pages 17 and 43)
+  await expect(page.getByTestId("marking-missing")).toContainText('Marking checklist, page 17: "Submitted written answers covering all the questions." has no Yes / No.');
+  await expect(page.getByTestId("decide")).toBeDisabled();
+  await tickEvidence(page, "yes");
+  await expect(page.getByTestId("marking-missing")).toHaveCount(0);
+  await expect(page.getByTestId("marking-saved")).toContainText("Saved", { timeout: 10_000 });
+  await page.locator("[data-testid=marking-question][data-key='2.3'] button").first().click();
+  await expect(page.locator("[data-pdf-page='38'] canvas")).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(1500);
+  await shot(page, "pdf-marking");
+  await page.getByTestId("decide").click();
+  await expect(page.getByTestId("decided")).toContainText("Returned for resubmission", { timeout: 20_000 });
+  expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where assignment_id = '${cpcAssignment}'`)).toBe("1:returned:NYS,2:draft:-");
+  expect(sql(`select string_agg(r.task_id || ':' || r.outcome, ',' order by r.task_id) from public.asm_task_results r join public.asm_attempts a on a.id = r.attempt_id where a.assignment_id = '${cpcAssignment}' and a.attempt_no = 1`)).toBe("1:S,2:NYS");
+
+  // attempt 2: the answers of attempt 1 filled in, the trainer's marks beside the questions
+  const base = `/agency/assessments/${cpcAssignment}`;
+  await signInStaff(page, student.email, base);
+  await expect(page.getByTestId("resubmission")).toContainText("Attempt 2", { timeout: 30_000 });
+  await page.goto(`${base}?step=q-2.3`);
+  await expect(page.getByTestId("previous-mark")).toContainText("Not yet satisfactory in attempt 1: Add the safe method of use for each tool.");
+  await expect(page.locator(GRID).getByTestId("table-cell").first()).toHaveValue("Answer to 2.3");
+  await page.locator(GRID).getByTestId("table-cell").nth(4).fill("Hold the scraper flat and push away from the body.");
+  await expect(page.getByTestId("autosave")).toContainText(/Saved/, { timeout: 10_000 });
+  await shot(page, "pdf-attempt-2");
+  for (const step of ["decl-1-19", "decl-2-46"]) { await page.goto(`${base}?step=${step}`); await page.getByTestId("sign-button").click(); await expect(page.getByTestId("signed")).toBeVisible({ timeout: 10_000 }); }
+  await page.goto(`${base}?step=review`);
+  await page.getByTestId("pack-declaration").getByTestId("sign-button").click();
+  await expect(page.getByTestId("review-ready")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("submit").click();
+  await expect(page.getByTestId("pdf-results")).toContainText(/receipt/i, { timeout: 20_000 });
+
+  // the trainer marks attempt 2 Competent and releases it: the final PDF is stored with the snapshot hash
+  const attempt2 = sql(`select id from public.asm_attempts where assignment_id = '${cpcAssignment}' and attempt_no = 2`);
+  await signInStaff(page, trainer.email, `/staff/assessments/attempts/${attempt2}`);
+  await expect(page.getByTestId("pdf-marking")).toBeVisible({ timeout: 30_000 });
+  for (const key of CPC_KEYS) await page.locator(`[data-testid=marking-question][data-key='${key}']`).getByTestId("mark-S").click();
+  await expect(page.getByTestId("marking-missing")).toContainText("page 43");
+  await tickEvidence(page, "yes");
+  await expect(page.getByTestId("marking-missing")).toHaveCount(0);
+  await page.getByTestId("overall-S").click();
+  await page.getByTestId("overall-feedback").fill("Competent: all tasks satisfactory.");
+  await page.getByTestId("signoff-sign").click();
+  await expect(page.getByTestId("signoff-done")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("decide").click();
+  await expect(page.getByTestId("decided")).toContainText("Final PDF stored", { timeout: 60_000 });
+  // attempt 1 keeps its own answers, marks and checklists: opened from attempt 2's history, read-only
+  await page.getByTestId("earlier-attempts").getByRole("link", { name: "Attempt 1" }).click();
+  await expect(page.getByTestId("decided")).toContainText("Returned for resubmission", { timeout: 30_000 });
+  await expect(page.locator("[data-testid=marking-question][data-key='2.3']").getByTestId("mark-NYS")).toHaveAttribute("aria-pressed", "true");
+  expect(sql(`select (select count(*) from jsonb_object_keys(assessor_responses->'pdfChoice')) from public.asm_attempts where id = '${attempt1}'`)).toBe("13");
+  expect(sql(`select (o.snapshot_hash = s.hash)::text || ':' || (o.path = a.id || '/final-' || o.pdf_sha256 || '.pdf')::text from public.asm_attempt_outputs o join public.asm_attempt_snapshots s on s.attempt_id = o.attempt_id join public.asm_attempts a on a.id = o.attempt_id where o.attempt_id = '${attempt2}'`)).toBe("true:true");
+  const outPath = sql(`select path from public.asm_attempt_outputs where attempt_id = '${attempt2}'`);
+  const { data } = await serviceClient().storage.from("assessment-output").download(outPath);
+  const bytes = Buffer.from(await data!.arrayBuffer());
+  const { createHash } = await import("node:crypto");
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe(sql(`select pdf_sha256 from public.asm_attempt_outputs where attempt_id = '${attempt2}'`));
+  if (process.env.E2E_SHOTS_DIR) writeFileSync(`${process.env.E2E_SHOTS_DIR}/cpc-final.pdf`, bytes);
+
+  // the student reads the result and signs the acknowledgement (the summary sheet's wording)
+  await signInStaff(page, student.email, base);
+  await expect(page.getByTestId("overall-outcome")).toHaveText("Competent", { timeout: 30_000 });
+  await page.getByTestId("acknowledge-sign").click();
+  await expect(page.getByTestId("acknowledged")).toBeVisible({ timeout: 10_000 });
+  expect(sql(`select statement from public.asm_attempt_signatures where attempt_id = '${attempt2}' and kind = 'student_acknowledgement'`)).toBe("I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.");
+  await page.getByTestId("show-workbook").click();
+  await expect(page.getByTestId("stamped-workbook").locator("[data-pdf-page='48']")).toBeAttached({ timeout: 60_000 });
+  await shot(page, "pdf-results");
+  // the student opens attempt 1's own result and workbook from the attempt list
+  await page.getByRole("link", { name: "Attempt 1" }).click();
+  await expect(page.getByTestId("overall-outcome")).toHaveText("Not Yet Competent", { timeout: 30_000 });
+  await page.getByTestId("show-workbook").click();
+  await expect(page.getByTestId("stamped-workbook").locator("[data-pdf-page='17']")).toBeAttached({ timeout: 60_000 });
+});
+
+test("PDF-WORKBOOK RIICWD525E on its workbook: 36 steps, 1.2 asks for its parts a-p, Appendix B optional, nothing of the trainer's", async ({ page }) => {
+  test.skip(!RII_PDF, "the RIICWD525E workbook is not on this machine (set ASM_WORKBOOK)");
+  test.setTimeout(300_000);
+  const assignment = await publishWorkbook(page, RII_PDF!, 28);
+  const base = `/agency/assessments/${assignment}`;
+  await signInStaff(page, student.email, base);
+  await expect(page.getByTestId("wizard-step-count")).toHaveText("Step 1 of 36", { timeout: 30_000 });
+  await page.goto(`${base}?step=q-1.2`);
+  await expect(page.getByTestId("answer-text")).toHaveCount(16);
+  await expect(page.locator("label", { hasText: "e. Geotechnical management" })).toBeVisible();
+  await page.getByTestId("answer-text").first().fill("AS 2150 Hot mix asphalt; AS 1289 soil testing; Austroads guides.");
+  await expect(page.getByTestId("autosave")).toContainText(/Saved/, { timeout: 10_000 });
+  await page.goto(`${base}?step=q-2.1.9`);
+  await expect(page.getByTestId("answer-table")).toHaveCount(2);
+  await expect(page.getByTestId("step-question").getByRole("columnheader")).not.toContainText(["Signature / Authority (Assessor Use)"]);
+  await page.goto(`${base}?step=evaluation`);
+  await expect(page.getByTestId("rating-row")).toHaveCount(18);
+  await page.goto(`${base}?step=review`);
+  await expect(page.getByTestId("review-missing")).toContainText("Q1.2:");
+  await expect(page.getByTestId("review-missing")).toContainText("Sign the student declaration (page 7).");
+  await expect(page.getByTestId("review-missing")).not.toContainText("valuation");
+});

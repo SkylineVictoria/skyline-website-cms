@@ -30,9 +30,19 @@ async function failure(error: unknown, fallback: string): Promise<string> {
 
 /** Every agent, grouped by business (A-Z), matching a business name, agent name or email. */
 export async function listViewAgents(query: string): Promise<ViewAgentGroup[]> {
+  // Read from the database for the signed-in administrator (migration 20261126230517); the function's list is the fallback.
+  const direct = await supabase.rpc("admin_view_as_agents_list", { p_query: query.slice(0, 80) });
+  if (!direct.error && Array.isArray(direct.data)) return direct.data as ViewAgentGroup[];
+  if (direct.error?.code === "42501") throw new Error("Administrator access required.");
   const { data, error } = await supabase.functions.invoke("admin-view-as", { body: { kind: "agent", action: "agents", query } });
-  if (error || !Array.isArray(data?.groups)) throw new Error(await failure(error, "The list could not be loaded."));
+  if (error || !Array.isArray(data?.groups)) throw new Error(await failure(error, "The list could not be loaded. Is the Sign in as update applied?"));
   return data.groups as ViewAgentGroup[];
+}
+
+/** Signing in by agent needs admin-view-as with the agent path (an older one would open the test account instead). */
+async function agentSwitchReady(): Promise<boolean> {
+  const { data } = await supabase.functions.invoke("admin-view-as", { body: { action: "version" } }).catch(() => ({ data: null }));
+  return Number(data?.version ?? 0) >= 2;
 }
 
 /** Closes the admin's open switch in the audit (Back to admin, or before the next switch). Best effort. */
@@ -77,6 +87,9 @@ export async function switchView(kind: ViewKind, person?: { userId?: string; age
   }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Sign in again to switch view.");
+  if (person?.agentId && !(await agentSwitchReady())) {
+    throw new Error("Signing in as an agent needs the admin-view-as update to be deployed (Deploy Edge Functions on GitHub). The list is ready; ask an administrator to run the deploy.");
+  }
   const { data, error } = await supabase.functions.invoke("admin-view-as", { body: person?.agentId ? { kind, agentId: person.agentId } : person ? { kind, userId: person.userId } : { kind } });
   if (error || !data?.tokenHash) {
     let message = "Switch view is not available yet.";

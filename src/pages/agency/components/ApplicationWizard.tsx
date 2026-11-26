@@ -1053,6 +1053,14 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       const priorRows = parsePriorEducation(filled("prior_education")).filter((r) => r.code || r.recognition || r.name.trim());
       if (filled("prior_ed") === "Yes" && priorEducationProblem(priorRows)) errors.prior_education = priorEducationProblem(priorRows);
       values.english_proficiency_code = otherLanguage ? (filled("english_proficiency_code") || "2") : "";
+      // AVETMISS-SUBMIT-FIX: the year the highest school level was completed (4 digits, after age 5, not in the future).
+      const schoolLevel = filled("school_level");
+      if (schoolLevel && !/ - 02$/.test(schoolLevel)) {
+        const year = filled("year_completed"); const born = Number(String(answers.dob ?? "").slice(0, 4)); const now = new Date().getFullYear();
+        if (!/^\d{4}$/.test(year)) errors.year_completed = "Enter the year (4 digits).";
+        else if (Number(year) > now || (born && Number(year) < born + 5)) errors.year_completed = `Enter a year between ${born ? born + 5 : 1900} and ${now}.`;
+        values.year_completed = year;
+      } else values.year_completed = "";
       values.disability_types = filled("disability") === "Yes" ? filled("disability_types") : "";
       values.prior_education = filled("prior_ed") === "Yes" ? JSON.stringify(priorRows) : "";
     } else if (target.id === "study") {

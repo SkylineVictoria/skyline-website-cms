@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(434);
+select plan(517);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -59,10 +59,11 @@ insert into public.intake_trainers(intake_id, staff_id) values ('f5000000-0000-0
 -- placements are made by the system only (guard intake_enrolments_auto_only, 20261118180000): the fixture places its students as the
 -- system's planner does, for this insert only
 select set_config('rto.carry_over_planning', 'on', true);
--- AVETMISS (hosted 20261125025533) refuses an enrolment without the student's AVETMISS details: the fixture students have them.
+-- AVETMISS (hosted 20261125025533, 20261126124153) refuses an enrolment without the student's AVETMISS details: the fixture students have them.
 update public.enrollment_students set sex_code = 'M', birth_country_code = '1101', home_language_code = '1201', indigenous_status_code = '4',
-  school_level_code = '12', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N',
-  details = coalesce(details, '{}'::jsonb) || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb
+  school_level_code = '12', school_level_year = '2017', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N',
+  details = coalesce(details, '{}'::jsonb) || jsonb_build_object('first_name', split_part(full_name, ' ', 1), 'last_name', split_part(full_name, ' ', 2))
+    || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_street": "1 Test St", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb
  where id in ('e5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000012', 'e5000000-0000-0000-0000-000000000013');
 insert into public.intake_enrolments(intake_id, student_id, study_reason_code) values
  ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000011', '01'), ('f5000000-0000-0000-0000-000000000011', 'e5000000-0000-0000-0000-000000000013', '01'),
@@ -76,40 +77,29 @@ create function pg_temp.as_user(p uuid) returns void language plpgsql as $$
 begin perform set_config('role', 'authenticated', true); perform set_config('request.jwt.claim.sub', p::text, true); end $$;
 create function pg_temp.as_postgres() returns void language plpgsql as $$
 begin perform set_config('role', 'postgres', true); end $$;
-create function pg_temp.definition() returns jsonb language sql immutable as $j$ select $d${"instructions":"Read everything first.","tasks":[
- {"id":"t1","title":"Knowledge questions","sections":[{"id":"s1","title":"Part A","questions":[
-  {"id":"q_intro","type":"instruction","label":"Welcome","markingMode":"none"},
-  {"id":"q_short","type":"short_answer","label":"Describe PPE","required":true,"markingMode":"criteria","responseSchema":{"type":"string","minWords":2,"maxWords":50},"criteria":[{"id":"c1","text":"Names two items"},{"id":"c2","text":"Explains use"}]},
-  {"id":"q_long","type":"long_answer","label":"Explain the process","required":false,"markingMode":"rubric","responseSchema":{"type":"string","maxWords":400},"rubric":{"levels":[{"id":"r1","label":"Developing","score":1},{"id":"r2","label":"Competent","score":2}]}},
-  {"id":"q_single","type":"single_choice","label":"Pick one","required":true,"markingMode":"auto","config":{"options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]},"responseSchema":{"type":"string","enum":["a","b"]}},
-  {"id":"q_cond","type":"short_answer","label":"Why A?","required":true,"markingMode":"criteria","showIf":{"questionId":"q_single","op":"eq","value":"a"},"responseSchema":{"type":"string"}},
-  {"id":"q_multi","type":"multi_choice","label":"Pick many","required":true,"markingMode":"auto","responseSchema":{"type":"array","items":{"type":"string","enum":["x","y","z"]},"minItems":1}},
-  {"id":"q_tf","type":"true_false","label":"The sky is blue","required":true,"markingMode":"auto","responseSchema":{"type":"boolean"}},
-  {"id":"q_match","type":"matching","label":"Match","required":true,"markingMode":"auto","responseSchema":{"type":"object","requiredKeys":["l1","l2"]}},
-  {"id":"q_order","type":"ordering","label":"Order","required":true,"markingMode":"auto","responseSchema":{"type":"array","minItems":3,"maxItems":3,"uniqueItems":true}},
-  {"id":"q_blank","type":"fill_blanks","label":"Fill","required":true,"markingMode":"auto","responseSchema":{"type":"array","minItems":2,"maxItems":2}},
-  {"id":"q_grid","type":"table_grid","label":"Grid","required":true,"markingMode":"criteria","responseSchema":{"type":"object"}},
-  {"id":"q_likert","type":"likert","label":"Rate","required":false,"markingMode":"none","responseSchema":{"type":"integer","minimum":1,"maximum":5}},
-  {"id":"q_num","type":"number","label":"How many","required":true,"markingMode":"auto","responseSchema":{"type":"number","minimum":0,"maximum":100}},
-  {"id":"q_date","type":"date","label":"When","required":true,"markingMode":"criteria","responseSchema":{"type":"string","format":"date"}},
-  {"id":"q_file","type":"file_upload","label":"Upload evidence","required":true,"markingMode":"criteria","config":{"maxFiles":3,"maxMb":10},"responseSchema":{"type":"array","minFiles":1,"maxFiles":3}},
-  {"id":"q_url","type":"url","label":"Link","required":false,"markingMode":"criteria","responseSchema":{"type":"string","format":"url"}}
- ]}]},
- {"id":"t2","title":"Practical","sections":[{"id":"s2","title":"Scenario","questions":[
-  {"id":"q_case","type":"case_study","label":"Case","markingMode":"criteria","children":[{"id":"q_case_a","type":"short_answer","label":"What first?","required":true,"markingMode":"criteria","responseSchema":{"type":"string"}}]},
-  {"id":"q_rep","type":"repeating_group","label":"Hazards","required":true,"markingMode":"criteria","responseSchema":{"type":"array","minItems":1,"maxItems":5},"children":[{"id":"q_rep_h","type":"short_answer","label":"Hazard","required":true,"markingMode":"none","responseSchema":{"type":"string"}},{"id":"q_rep_r","type":"number","label":"Risk","required":true,"markingMode":"none","responseSchema":{"type":"integer","minimum":1,"maximum":5}}]},
-  {"id":"q_obs","type":"observation_checklist","label":"Observed","required":true,"markingMode":"observation","responseSchema":{"type":"object","requiredKeys":["o1","o2"]},"config":{"items":[{"id":"o1","text":"Wears PPE"},{"id":"o2","text":"Isolates power"}]}},
-  {"id":"q_tp","type":"third_party_report","label":"Supervisor report","required":false,"markingMode":"observation","responseSchema":{"type":"object"}}
- ]}]}]}$d$::jsonb $j$;
-create function pg_temp.keys() returns jsonb language sql immutable as $j$ select $d$[
- {"questionId":"q_short","modelAnswer":"Gloves and safety glasses protect hands and eyes","assessorGuidance":"Accept any two items of PPE"},
- {"questionId":"q_single","answerKey":"a"},{"questionId":"q_multi","answerKey":["x","y"]},{"questionId":"q_tf","answerKey":true},
- {"questionId":"q_match","answerKey":{"l1":"r1","l2":"r2"}},{"questionId":"q_order","answerKey":["1","2","3"]},
- {"questionId":"q_blank","answerKey":["hammer",["saw","handsaw"]]},{"questionId":"q_num","answerKey":{"min":5,"max":10}}]$d$::jsonb $j$;
-create function pg_temp.responses() returns jsonb language sql immutable as $j$ select $d${"q_short":"Gloves and safety glasses protect hands and eyes","q_long":"First isolate, then inspect.",
- "q_single":"a","q_cond":"Because A is safest","q_multi":["x","y"],"q_tf":false,"q_match":{"l1":"r1","l2":"r2"},"q_order":["1","2","3"],"q_blank":["Hammer","saw"],
- "q_grid":{"r1":{"c1":"v"}},"q_likert":4,"q_num":7,"q_date":"2026-11-20","q_file":["f1"],"q_url":"https://example.test/x",
- "q_case":{"q_case_a":"Call for help"},"q_rep":[{"q_rep_h":"Dust","q_rep_r":3}]}$d$::jsonb $j$;
+-- ASM-PDF-TEMPLATE phase 4 (2026-11-26): an assessment is its workbook PDF template. The fixture's workbook: task 1 with Q1 and Q2,
+-- task 2 with Q1 (keys 1.1, 1.2, 2.1, as printed), one answer box each (all required), the trainer's Yes / No per question.
+create function pg_temp.tplmain(p_path text) returns jsonb language sql immutable as $$
+ select jsonb_build_object('version', 1, 'pdf', jsonb_build_object('path', p_path, 'sha256', repeat('c', 64), 'pages', 3, 'fileName', 'work-safely.pdf'),
+  'pages', '[{"page":1,"kind":"cover","audience":"student","task":null},{"page":2,"kind":"question","audience":"student","task":1},{"page":3,"kind":"question","audience":"student","task":2}]'::jsonb,
+  'tasks', '[{"number":"1","title":"Knowledge questions","firstPage":2,"lastPage":2},{"number":"2","title":"Practical","firstPage":3,"lastPage":3}]'::jsonb,
+  'declarations', '[]'::jsonb,
+  'questions', '[{"key":"1.1","seq":"Q1","label":"Describe the PPE you wear","task":1,"header":{"page":2,"x":0.07,"y":0.1,"w":0.86,"h":0.05},"areas":[{"page":2,"x":0.07,"y":0.15,"w":0.86,"h":0.3}]},
+   {"key":"1.2","seq":"Q2","label":"Is it safe to work on a live circuit?","task":1,"header":{"page":2,"x":0.07,"y":0.5,"w":0.86,"h":0.05},"areas":[{"page":2,"x":0.07,"y":0.55,"w":0.86,"h":0.3}]},
+   {"key":"2.1","seq":"Q1","label":"Isolate the power and report","task":2,"header":{"page":3,"x":0.07,"y":0.1,"w":0.86,"h":0.05},"areas":[{"page":3,"x":0.07,"y":0.15,"w":0.86,"h":0.3}]}]'::jsonb,
+  'fields', '[{"id":"s11","page":2,"x":0.08,"y":0.16,"w":0.84,"h":0.28,"role":"student","kind":"text","questionKey":"1.1","label":"Answer"},
+   {"id":"s12","page":2,"x":0.08,"y":0.56,"w":0.84,"h":0.28,"role":"student","kind":"text","questionKey":"1.2","label":"Answer"},
+   {"id":"s21","page":3,"x":0.08,"y":0.16,"w":0.84,"h":0.28,"role":"student","kind":"text","questionKey":"2.1","label":"Answer"},
+   {"id":"t11y","page":2,"x":0.8,"y":0.11,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":"1.1","label":"Satisfactory","option":"yes","group":"q.1.1"},
+   {"id":"t11n","page":2,"x":0.85,"y":0.11,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":"1.1","label":"Satisfactory","option":"no","group":"q.1.1"},
+   {"id":"a1","page":1,"x":0.3,"y":0.88,"w":0.6,"h":0.03,"role":"auto","kind":"auto","questionKey":null,"label":"Student Name","dataKey":"student_name"}]'::jsonb,
+  'detected', '{"by":"asm-pdf-detect/1","at":"2026-11-26T00:00:00Z"}'::jsonb);
+$$;
+-- every question marked (Q2 of task 1 as given, the rest S): a task's result is worked out from its questions (asm_task_results_auto)
+create function pg_temp.all_marks(p_q12 text) returns jsonb language sql immutable as $$
+ select jsonb_build_array(jsonb_build_object('questionId', '1.1', 'outcome', 'S'), jsonb_build_object('questionId', '1.2', 'outcome', p_q12), jsonb_build_object('questionId', '2.1', 'outcome', 'S')) $$;
+create function pg_temp.responses() returns jsonb language sql immutable as $$
+ select '{"pdf":{"s11":"Gloves and safety glasses protect hands and eyes","s12":"No: isolate it first","s21":"Isolated the power and reported it"},"pdfChoice":{}}'::jsonb $$;
 
 -- ---------------------------------------------------------------- unit elements and the assessment (admin)
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
@@ -125,41 +115,42 @@ select ok(pg_temp.v('assessment') is not null, 'an assessment is created on cour
 select is((select count(*)::int from public.asm_versions where assessment_id = pg_temp.v('assessment') and status = 'draft'), 1, 'it starts with one draft version');
 select is((select tenant_id from public.asm_assessments where id = pg_temp.v('assessment')), null, 'the legacy course binds the legacy (null) tenant');
 
--- the definition may never carry assessor data
-select is((public.asm_admin('draft_save', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'definition', '{"tasks":[{"id":"t","title":"x","sections":[{"id":"s","questions":[{"id":"q","type":"short_answer","modelAnswer":"leak"}]}]}]}'::jsonb)))->'errors'->0->>'code', 'assessor_data', 'a definition carrying a model answer is refused');
-select is((public.asm_admin('draft_save', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'definition', '{"tasks":[{"id":"t","title":"x","sections":[{"id":"s","questions":[{"id":"q","type":"short_answer"},{"id":"q","type":"number"}]}]}]}'::jsonb)))->'errors'->0->>'code', 'duplicate_id', 'duplicate question ids are refused');
-select pg_temp.put('draft', (public.asm_admin('draft_save', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'definition', pg_temp.definition(), 'keys', pg_temp.keys(),
-  'mappings', jsonb_build_array(jsonb_build_object('questionId', 'q_short', 'criterionId', 'c1', 'elementId', pg_temp.v('el_pc')), jsonb_build_object('questionId', 'q_single', 'elementId', pg_temp.v('el_ke'))))))::text);
-select is((pg_temp.s('draft')::jsonb->>'ok')::boolean, true, 'the full definition (every question type, conditional logic, repeating group, case study, observation) saves');
+-- the workbook PDF template: the file under the assessment, then the template on the draft (no PDF, no publishing)
+select is((public.asm_admin('version_publish', jsonb_build_object('assessmentId', pg_temp.v('assessment'))))->'errors'->0->>'message', 'Upload the workbook PDF before publishing.', 'P4 nothing publishes without the workbook PDF');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-templates', '%s/%s.pdf')$$, pg_temp.v('assessment'), repeat('c', 64)), 'the admin uploads the workbook PDF');
+select is((public.asm_template_save(pg_temp.v('assessment')::uuid, pg_temp.tplmain(pg_temp.s('assessment') || '/' || repeat('c', 64) || '.pdf')))->>'ok', 'true', 'the workbook PDF template saves on the draft');
+select pg_temp.put('draft', (public.asm_admin('draft_save', jsonb_build_object('assessmentId', pg_temp.v('assessment'),
+  'mappings', jsonb_build_array(jsonb_build_object('questionId', '1.1', 'elementId', pg_temp.v('el_pc')), jsonb_build_object('questionId', '1.2', 'elementId', pg_temp.v('el_ke'))))))::text);
+select throws_ok(format($$select public.asm_admin('draft_save', '{"assessmentId": "%s", "mappings": [{"questionId": "q_short", "elementId": "%s"}]}')$$, pg_temp.v('assessment'), pg_temp.v('el_pc')), '22023', 'Question q_short is not in the workbook PDF', 'P4 the mapping is keyed by the workbook''s printed question numbers');
+select is((pg_temp.s('draft')::jsonb->>'ok')::boolean, true, 'the unit mapping saves, keyed by the printed question numbers');
 select pg_temp.put('v1', pg_temp.s('draft')::jsonb->>'versionId');
-select is((select count(*)::int from public.asm_version_questions where version_id = pg_temp.v('v1')), 23, 'the flattened question view sees every question including children');
-select is((select count(*)::int from public.asm_question_keys where version_id = pg_temp.v('v1')), 8, 'keys live in their own table');
+select is((select count(*)::int from public.asm_unit_mappings where version_id = pg_temp.v('v1')), 2, 'the mapping rows are on the draft');
 select is(jsonb_array_length(public.asm_admin('coverage', jsonb_build_object('versionId', pg_temp.v('v1')))->'gaps'), 1, 'coverage shows the unmapped element as a gap');
+select is(public.asm_admin('coverage', jsonb_build_object('versionId', pg_temp.v('v1')))->'unmappedQuestions', '["2.1"]'::jsonb, 'P4 coverage lists the workbook questions not mapped yet');
 
 -- publishing freezes the version
 select throws_ok(format($$select public.asm_admin('version_publish', '{"assessmentId": "%s"}')$$, '00000000-0000-0000-0000-000000000000'), 'P0002', null, 'publishing an unknown assessment fails');
 select is((public.asm_admin('version_publish', jsonb_build_object('assessmentId', pg_temp.v('assessment')))->>'ok')::boolean, true, 'the draft publishes');
 select is((select status from public.asm_versions where id = pg_temp.v('v1')), 'published', 'version 1 is published');
-select is((select checksum from public.asm_versions where id = pg_temp.v('v1')), (select encode(sha256(convert_to(definition::text, 'UTF8')), 'hex') from public.asm_versions where id = pg_temp.v('v1')), 'the checksum is the sha-256 of the definition');
+select is((select checksum from public.asm_versions where id = pg_temp.v('v1')), (select encode(sha256(convert_to(template::text, 'UTF8')), 'hex') from public.asm_versions where id = pg_temp.v('v1')), 'the checksum is the sha-256 of the workbook PDF template');
 select pg_temp.as_postgres();
-select throws_ok(format($$update public.asm_versions set definition = '{"tasks": []}' where id = '%s'$$, pg_temp.v('v1')), '42501', null, 'a published definition cannot be changed, even by the database owner');
+select throws_ok(format($$update public.asm_versions set template = jsonb_set(template, '{tasks,0,title}', '"changed"') where id = '%s'$$, pg_temp.v('v1')), '42501', null, 'a published workbook template cannot be changed, even by the database owner');
 select throws_ok(format($$update public.asm_versions set status = 'draft' where id = '%s'$$, pg_temp.v('v1')), '42501', null, 'a published version cannot go back to draft');
 select throws_ok(format($$delete from public.asm_versions where id = '%s'$$, pg_temp.v('v1')), '42501', null, 'a published version cannot be deleted');
 
 -- editing after publish creates version 2 as a draft, version 1 stays published
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select pg_temp.put('draft2', (public.asm_admin('draft_save', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'definition', jsonb_set(pg_temp.definition(), '{tasks,0,title}', '"Knowledge questions (v2)"'))))::text);
+select pg_temp.put('draft2', (public.asm_admin('draft_save', jsonb_build_object('assessmentId', pg_temp.v('assessment'))))::text);
 select is((pg_temp.s('draft2')::jsonb->>'versionNo')::int, 2, 'an edit after publishing opens version 2 as a draft');
 select pg_temp.put('v2', pg_temp.s('draft2')::jsonb->>'versionId');
-select is((select count(*)::int from public.asm_question_keys where version_id = pg_temp.v('v2')), 8, 'the new draft inherits the keys');
+select is((select (template is not null)::text || ':' || (select count(*) from public.asm_unit_mappings m where m.version_id = v.id) from public.asm_versions v where id = pg_temp.v('v2')), 'true:2', 'the new draft inherits the workbook PDF template and the mapping');
 select is((select status from public.asm_versions where id = pg_temp.v('v1')), 'published', 'version 1 is still published');
-select throws_ok(format($$select public.asm_admin('draft_save', '{"assessmentId": "%s", "definition": {"tasks": []}, "expectedUpdatedAt": "2000-01-01T00:00:00Z"}')$$, pg_temp.v('assessment')), '40001', null, 'a stale draft save is refused (concurrency)');
+select throws_ok(format($$select public.asm_admin('draft_save', '{"assessmentId": "%s", "expectedUpdatedAt": "2000-01-01T00:00:00Z"}')$$, pg_temp.v('assessment')), '40001', null, 'a stale draft save is refused (concurrency)');
 
 -- ---------------------------------------------------------------- permissions on the admin surface
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000002');
 select throws_ok($$select public.asm_admin('assessment_list')$$, '42501', null, 'an Editor cannot use the assessment admin');
 select is((select count(*)::int from public.asm_assessments), 0, 'an Editor reads no assessment rows');
-select is((select count(*)::int from public.asm_question_keys), 0, 'an Editor reads no keys');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
 select throws_ok($$select public.asm_admin('assessment_list')$$, '42501', null, 'a student cannot use the assessment admin');
 select throws_ok($$select public.asm_trainer('my_assignments')$$, '42501', null, 'a student is not a trainer');
@@ -216,7 +207,6 @@ select ok(not has_function_privilege('authenticated', 'public.asm_start_attempt(
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
 select is(public.asm_jsonb_forbidden_key(pg_temp.s('open')::jsonb), null, 'the student payload carries no key, model answer or assessor guidance');
 select ok(not (pg_temp.s('open')::jsonb ? 'keys'), 'the student payload has no keys collection');
-select is((select count(*)::int from public.asm_question_keys), 0, 'the student reads no key rows directly');
 select is((select count(*)::int from public.asm_results), 0, 'the student reads no result rows before the attempt is returned');
 select is((select count(*)::int from public.asm_assessments), 1, 'the student reads the assigned assessment only');
 select is((select count(*)::int from public.asm_versions), 1, 'the student reads the assigned published version and not the draft');
@@ -228,22 +218,19 @@ select throws_ok($$insert into storage.objects(bucket_id, name) values ('assessm
 select pg_temp.put('ev', (public.asm_student('evidence_register', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'questionId', 'q_file', 'path', pg_temp.v('attempt') || '/q_file/evidence.pdf', 'fileName', 'evidence.pdf', 'mime', 'application/pdf', 'bytes', 1234)))->>'id');
 select ok(pg_temp.v('ev') is not null, 'the uploaded file is registered as evidence');
 -- ASM-IMPORT: an attachment under a text question (config.allowAttachment) is evidence of that question; the answer stays the text
-select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-evidence', '%s/q_short/photo.png')$$, pg_temp.v('attempt')), 'ASM-IMPORT the student can attach a file under a text question');
-select pg_temp.put('ev_att', (public.asm_student('evidence_register', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'questionId', 'q_short', 'path', pg_temp.v('attempt') || '/q_short/photo.png', 'fileName', 'photo.png', 'mime', 'image/png', 'bytes', 2048)))->>'id');
-select is((select question_id from public.asm_evidence_files where id = pg_temp.v('ev_att')::uuid), 'q_short', 'ASM-IMPORT the attachment is registered as evidence of that question');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-evidence', '%s/1.1/photo.png')$$, pg_temp.v('attempt')), 'ASM-IMPORT the student can attach a file under a text question');
+select pg_temp.put('ev_att', (public.asm_student('evidence_register', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'questionId', '1.1', 'path', pg_temp.v('attempt') || '/1.1/photo.png', 'fileName', 'photo.png', 'mime', 'image/png', 'bytes', 2048)))->>'id');
+select is((select question_id from public.asm_evidence_files where id = pg_temp.v('ev_att')::uuid), '1.1', 'ASM-IMPORT the attachment is registered as evidence of that question');
 select is((public.asm_student('evidence_remove', jsonb_build_object('id', pg_temp.v('ev_att'))))->>'ok', 'true', 'ASM-IMPORT the student can remove the attachment while the attempt is a draft');
-select is(jsonb_array_length(public.asm_validate_responses('{"tasks":[{"id":"t","title":"T","sections":[{"id":"s","title":"S","questions":[{"id":"q_att","type":"short_answer","label":"Describe","required":true,"markingMode":"criteria","config":{"allowAttachment":true,"attachmentMaxFiles":3},"responseSchema":{"type":"string"}}]}]}]}'::jsonb, '{"q_att": "See the attached photo"}'::jsonb, 'student')), 0, 'ASM-IMPORT asm_validate_responses accepts an answer to a question that takes attachments');
 select throws_ok(format($$select public.asm_student('evidence_register', '{"attemptId": "%s", "questionId": "q_file", "path": "%s/q_file/missing.pdf"}')$$, pg_temp.v('attempt'), pg_temp.v('attempt')), 'P0002', null, 'a path with no uploaded object cannot be registered');
 
 -- drafts, validation, submission
-select pg_temp.put('save1', (public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'responses', '{"q_short": "Gloves"}'::jsonb)))::text);
+select pg_temp.put('save1', (public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'responses', '{"pdf": {"s11": "Gloves"}}'::jsonb)))::text);
 select is((pg_temp.s('save1')::jsonb->>'ok')::boolean, true, 'a draft saves');
 select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId": "%s", "responses": {}, "rowVersion": 1}')$$, pg_temp.v('attempt')), '40001', null, 'a save with a stale row version is refused');
-select pg_temp.put('sub_bad', (public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'responses', pg_temp.responses() - 'q_short' || '{"q_num": 500}'::jsonb, 'declaration', '{"signature": "Sam Student", "agreed": true}'::jsonb)))::text);
-select is((pg_temp.s('sub_bad')::jsonb->>'ok')::boolean, false, 'a submission with a missing required answer and an out-of-range number is refused');
-select is((select count(*)::int from jsonb_array_elements(pg_temp.s('sub_bad')::jsonb->'errors') e where e->>'questionId' in ('q_short', 'q_num')), 2, 'both problems are named');
-select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'responses', pg_temp.responses() - 'q_cond', 'declaration', '{"signature": "Sam Student", "agreed": true}'::jsonb)))->'errors'->0->>'questionId', 'q_cond', 'conditional logic: the follow-up is required when A was chosen');
-select is(jsonb_array_length(public.asm_validate_responses(pg_temp.definition(), (pg_temp.responses() - 'q_cond') || '{"q_single": "b"}'::jsonb, 'student')), 0, 'conditional logic: choosing B hides the follow-up and nothing is required');
+select pg_temp.put('sub_bad', (public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'responses', pg_temp.responses() #- '{pdf,s11}' #- '{pdf,s21}', 'declaration', '{"signature": "Sam Student", "agreed": true}'::jsonb)))::text);
+select is((pg_temp.s('sub_bad')::jsonb->>'ok')::boolean, false, 'a submission with missing required answers is refused');
+select is((select count(*)::int from jsonb_array_elements(pg_temp.s('sub_bad')::jsonb->'errors') e where e->>'questionKey' in ('1.1', '2.1')), 2, 'both missing answers are named');
 select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "", "agreed": true}'::jsonb)))->'errors'->0->>'code', 'declaration', 'the declaration needs a typed name');
 select pg_temp.put('sub', (public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attempt'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sam Student", "agreed": true}'::jsonb)))::text);
 select is((pg_temp.s('sub')::jsonb->>'ok')::boolean, true, 'a complete submission with the declaration succeeds');
@@ -259,11 +246,6 @@ select pg_temp.as_postgres();
 select throws_ok(format($$update public.asm_attempts set responses = '{}' where id = '%s'$$, pg_temp.v('attempt')), '42501', null, 'submitted responses are locked at the database');
 select throws_ok(format($$update public.asm_attempts set version_id = '%s' where id = '%s'$$, pg_temp.v('v2'), pg_temp.v('attempt')), '42501', null, 'an attempt can never move to another version');
 select throws_ok(format($$delete from public.asm_attempts where id = '%s'$$, pg_temp.v('attempt')), '42501', null, 'attempts are never deleted');
-select is((select suggested_outcome from public.asm_results where attempt_id = pg_temp.v('attempt') and question_id = 'q_single'), 'S', 'auto-check suggests Satisfactory for a right single choice');
-select is((select suggested_outcome from public.asm_results where attempt_id = pg_temp.v('attempt') and question_id = 'q_tf'), 'NYS', 'auto-check suggests Not Yet Satisfactory for a wrong true/false');
-select is((select suggested_outcome from public.asm_results where attempt_id = pg_temp.v('attempt') and question_id = 'q_blank'), 'S', 'fill-in-the-blanks accepts alternatives, ignoring case');
-select is((select suggested_outcome from public.asm_results where attempt_id = pg_temp.v('attempt') and question_id = 'q_num'), 'S', 'a number inside the key range is suggested Satisfactory');
-select is((select count(*)::int from public.asm_results where attempt_id = pg_temp.v('attempt') and outcome is not null), 0, 'auto-check never writes a confirmed outcome');
 select is((select count(*)::int from public.asm_unit_outcomes where assessment_id = pg_temp.v('assessment')), 0, 'nothing is marked Competent automatically');
 
 -- ownership: the classmate and the other trainer see nothing of this attempt
@@ -277,47 +259,49 @@ select is((select count(*)::int from public.asm_notifications where recipient_au
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
 select is(jsonb_array_length(public.asm_trainer('pending_marking')), 0, 'the trainer of another batch has nothing to mark');
 select is((select count(*)::int from public.asm_attempts), 0, 'the trainer of another batch reads no attempt');
-select is((select count(*)::int from public.asm_question_keys), 0, 'the trainer of another batch reads no keys');
 select throws_ok(format($$select public.asm_trainer('attempt_get', '{"id": "%s"}')$$, pg_temp.v('attempt')), '42501', null, 'the trainer of another batch cannot open the attempt');
 select throws_ok(format($$select public.asm_trainer('mark_return', '{"id": "%s", "outcome": "S"}')$$, pg_temp.v('attempt')), '42501', null, 'the trainer of another batch cannot decide it');
 
 -- ---------------------------------------------------------------- the assessor marks
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select is(jsonb_array_length(public.asm_trainer('pending_marking')), 1, 'the batch trainer sees the submission to mark');
-select is((select count(*)::int from public.asm_question_keys where version_id = pg_temp.v('v1')), 8, 'the batch trainer reads the keys of the assigned version');
 select is((select count(*)::int from storage.objects where bucket_id = 'assessment-evidence' and name like pg_temp.v('attempt') || '/%'), 2, 'the batch trainer reads the evidence objects (the q_file evidence and the ASM-IMPORT attachment object)');
 select pg_temp.put('tget', (public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('attempt'))))::text);
-select ok(exists (select 1 from jsonb_array_elements(pg_temp.s('tget')::jsonb->'keys') k where k->>'questionId' = 'q_short'), 'the marking view carries the model answers and guidance');
-select is((select count(*)::int from jsonb_array_elements(pg_temp.s('tget')::jsonb->'results') r where r->>'suggestedOutcome' is not null), 7, 'the marking view shows the auto-check suggestions');
-select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt'), 'outcome', 'S')))->'errors'->0->>'questionId', 'q_obs', 'the decision waits for the observation checklist');
+select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt'), 'outcome', 'S')))->'errors'->0->>'message', 'Task 1 · Q1 is not marked yet.', 'the decision waits for every question''s mark');
 select pg_temp.put('mark', (public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attempt'),
-  'results', '[{"questionId":"q_short","criterionId":"c1","outcome":"S","feedback":"Good"},{"questionId":"q_short","criterionId":"c2","outcome":"S"},{"questionId":"q_short","outcome":"S"},{"questionId":"q_long","outcome":"S","rubricLevelId":"r2","score":2},{"questionId":"q_single","outcome":"S"},{"questionId":"q_cond","outcome":"S"},{"questionId":"q_multi","outcome":"S"},{"questionId":"q_tf","outcome":"NYS","feedback":"Check again"},{"questionId":"q_match","outcome":"S"},{"questionId":"q_order","outcome":"S"},{"questionId":"q_blank","outcome":"S"},{"questionId":"q_grid","outcome":"S"},{"questionId":"q_num","outcome":"S"},{"questionId":"q_date","outcome":"S"},{"questionId":"q_file","outcome":"S"},{"questionId":"q_url","outcome":"S"},{"questionId":"q_case","outcome":"S"},{"questionId":"q_case_a","outcome":"S"},{"questionId":"q_rep","outcome":"S"},{"questionId":"q_obs","outcome":"S"},{"questionId":"q_tp","outcome":"S"}]'::jsonb,
-  'taskResults', '[{"taskId":"t1","outcome":"NYS","feedback":"Redo the true/false"},{"taskId":"t2","outcome":"S"}]'::jsonb,
-  'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb, 'overallFeedback', 'Nearly there')))::text);
+  'results', pg_temp.all_marks('NYS') || '[{"questionId":"1.2","outcome":"NYS","feedback":"Never: isolate first"}]'::jsonb,
+  'taskResults', '[{"taskId":"1","feedback":"Redo Q2"},{"taskId":"2"}]'::jsonb, 'overallFeedback', 'Nearly there')))::text);
 select is(pg_temp.s('mark')::jsonb->>'state', 'marking', 'marking moves the attempt to marking');
-select is((select rollup_suggested from public.asm_task_results where attempt_id = pg_temp.v('attempt') and task_id = 't1'), 'NYS', 'the task rollup suggests Not Yet Satisfactory when a question is');
-select is((select rollup_suggested from public.asm_task_results where attempt_id = pg_temp.v('attempt') and task_id = 't2'), 'S', 'and Satisfactory when every question is');
+select is((select string_agg(task_id || '=' || outcome, ',' order by task_id) from public.asm_task_results where attempt_id = pg_temp.v('attempt')), '1=NYS,2=S', 'ASM-IMPORT-SIMPLE: each task''s result is automatic: task 1 Not Satisfactory (its Q2 is No), task 2 Satisfactory (every question Yes)');
 select throws_ok(format($$select public.asm_trainer('mark_return', '{"id": "%s", "outcome": "NYS", "rowVersion": 1}')$$, pg_temp.v('attempt')), '40001', null, 'a decision with a stale row version is refused');
-select pg_temp.put('ret', (public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt'), 'outcome', 'NYS', 'overallFeedback', 'Fix the true/false and resubmit')))::text);
+select pg_temp.put('ret', (public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt'), 'outcome', 'NYS', 'overallFeedback', 'Fix Q2 and resubmit')))::text);
 select is((pg_temp.s('ret')::jsonb->>'ok')::boolean, true, 'the assessor returns the attempt as Not Yet Satisfactory');
 select pg_temp.put('attempt2', pg_temp.s('ret')::jsonb->>'nextAttemptId');
 select is((select state from public.asm_attempts where id = pg_temp.v('attempt')), 'returned', 'attempt 1 is returned');
 select is((select state || '/' || attempt_no from public.asm_attempts where id = pg_temp.v('attempt2')), 'draft/2', 'attempt 2 opens as a draft (reassessment)');
-select is((select responses->>'q_short' from public.asm_attempts where id = pg_temp.v('attempt2')), 'Gloves and safety glasses protect hands and eyes', 'attempt 2 carries the previous answers');
+select is((select responses->'pdf'->>'s11' from public.asm_attempts where id = pg_temp.v('attempt2')), 'Gloves and safety glasses protect hands and eyes', 'attempt 2 carries the previous answers');
 select is((select count(*)::int from public.asm_evidence_files where attempt_id = pg_temp.v('attempt2')), 1, 'attempt 2 carries the previous evidence');
 select is((select state from public.asm_reassessments where attempt_id = pg_temp.v('attempt')), 'opened', 'the reassessment is recorded');
 select pg_temp.as_postgres();
-select throws_ok(format($$update public.asm_results set outcome = 'S' where attempt_id = '%s' and question_id = 'q_tf'$$, pg_temp.v('attempt')), '42501', null, 'results of a returned attempt are frozen');
+select throws_ok(format($$update public.asm_results set outcome = 'S' where attempt_id = '%s' and question_id = '1.2'$$, pg_temp.v('attempt')), '42501', null, 'results of a returned attempt are frozen');
 
 -- the student sees the feedback and completes attempt 2
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
-select is((select count(*)::int from public.asm_results where attempt_id = pg_temp.v('attempt')), 21, 'once returned, the student reads the results');
-select is((public.asm_student('results', jsonb_build_object('attemptId', pg_temp.v('attempt'))))->>'overallFeedback', 'Fix the true/false and resubmit', 'the student reads the overall feedback');
-select is((select count(*)::int from jsonb_array_elements((public.asm_student('results', jsonb_build_object('attemptId', pg_temp.v('attempt'))))->'results') r where r ? 'suggestedOutcome' and r->>'suggestedOutcome' is not null), 0, 'the student never sees the auto-check suggestion');
+select is((select count(*)::int from public.asm_results where attempt_id = pg_temp.v('attempt')), 3, 'once returned, the student reads the results');
+select is((public.asm_student('results', jsonb_build_object('attemptId', pg_temp.v('attempt'))))->>'overallFeedback', 'Fix Q2 and resubmit', 'the student reads the overall feedback');
 select is((select count(*)::int from public.asm_notifications where recipient_auth_user = 'a5000000-0000-0000-0000-000000000011' and event = 'reassessment'), 1, 'the student is told about the reassessment');
-select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attempt2'), 'responses', pg_temp.responses() || '{"q_tf": true}'::jsonb, 'declaration', '{"signature": "Sam Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'attempt 2 submits');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attempt2'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sam Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'attempt 2 submits');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
-select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attempt2'), 'results', '[{"questionId":"q_tf","outcome":"S"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"S"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'attempt 2 is marked');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attempt2'), 'results', '[{"questionId":"1.2","outcome":"S"}]'::jsonb, 'taskResults', '[{"taskId":"1","outcome":"S"},{"taskId":"2","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'attempt 2: Q2 of task 1 marked');
+-- ASM-IMPORT-SIMPLE: the task results the caller sends are not taken: with only one question marked both tasks stay undecided, and the decision waits
+select is((select count(*)::int from public.asm_task_results where attempt_id = pg_temp.v('attempt2') and outcome is not null), 0, 'ASM-IMPORT-SIMPLE: a task stays undecided while any of its questions is unmarked, whatever the caller sends');
+select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt2'), 'outcome', 'S')))->'errors'->0->>'code', 'unmarked', 'ASM-IMPORT-SIMPLE: the sign-off waits until every question is marked (automatic task results)');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attempt2'), 'results', pg_temp.all_marks('S'), 'taskResults', '[{"taskId":"1","outcome":"NYS"}]'::jsonb)))->>'state', 'marking', 'attempt 2: every question marked Yes');
+select is((select string_agg(task_id || '=' || outcome, ',' order by task_id) from public.asm_task_results where attempt_id = pg_temp.v('attempt2')), '1=S,2=S', 'ASM-IMPORT-SIMPLE: every question Yes: both tasks Satisfactory (the NYS the caller sent for task 1 is not taken)');
+select pg_temp.as_postgres();
+update public.asm_task_results set outcome = 'NYS' where attempt_id = pg_temp.v('attempt2') and task_id = '2';
+select is((select outcome from public.asm_task_results where attempt_id = pg_temp.v('attempt2') and task_id = '2'), 'S', 'ASM-IMPORT-SIMPLE: a task result written directly is put back to the rule');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt2'), 'outcome', 'S')))->>'outcome', 'S', 'attempt 2 is Satisfactory');
 select is((select state from public.asm_attempts where id = pg_temp.v('attempt2')), 'final', 'a Satisfactory attempt is final');
 select is((select count(*)::int from public.asm_attempts where student_id = 'e5000000-0000-0000-0000-000000000011'), 2, 'the history keeps both attempts');
@@ -326,7 +310,7 @@ select is((select count(*)::int from public.asm_attempts where student_id = 'e50
 select pg_temp.put('hist', public.asm_attempt_history(pg_temp.v('attempt')::uuid)::text);
 select is((select jsonb_agg(a->>'outcome' order by (a->>'attemptNo')::int) from jsonb_array_elements(pg_temp.s('hist')::jsonb->'attempts') a), '["NYS", "S"]'::jsonb, 'history: both attempts of the assignment with their outcomes, in order (asked from attempt 1)');
 select is(pg_temp.s('hist')::jsonb->'attempts'->1->>'assessor', 'Tara Trainer', 'history: the assessor who decided attempt 2 is named');
-select is((select r->>'outcome' || '/' || (r->>'assessor') from jsonb_array_elements(pg_temp.s('hist')::jsonb->'attempts'->1->'tasks') r where r->>'taskId' = 't2'), 'S/Tara Trainer', 'history: each task''s outcome and who signed it, per attempt');
+select is((select r->>'outcome' || '/' || (r->>'assessor') from jsonb_array_elements(pg_temp.s('hist')::jsonb->'attempts'->1->'tasks') r where r->>'taskId' = '2'), 'S/Tara Trainer', 'history: each task''s outcome and who signed it, per attempt');
 -- AVETMISS (hosted 20261124173444): every student has a permanent student number, which is the Student ID
 select ok((pg_temp.s('hist')::jsonb->'student'->>'name') || '/' || (pg_temp.s('hist')::jsonb->'student'->>'ref') ~ '^Sam Student/(SK[0-9]+|E5000000)$', 'history: cover details (student name, the student number or the short id)');
 select ok(pg_temp.s('hist') !~ '(modelAnswer|answerKey|assessorGuidance)', 'history: no assessor keys');
@@ -368,10 +352,10 @@ select is((select count(*)::int from public.asm_attempts where version_id = pg_t
 select is((select current_version_id from public.asm_assessments where id = pg_temp.v('assessment')), pg_temp.v('v2'), 'new assignments default to version 2');
 select is((select (public.asm_admin('report', jsonb_build_object('kind', 'cohort', 'batchId', 'f5000000-0000-0000-0000-000000000011'))->0->>'unitOutcome')), 'C', 'the cohort report shows the unit outcome');
 select is((select count(*)::int from jsonb_array_elements(public.asm_admin('overview')->'pendingMarking') p where p->>'assignmentId' = pg_temp.s('assignment')), 0, 'nothing is pending after the decisions');
-select is((public.asm_admin('assessment_export', jsonb_build_object('id', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'))))->'mappings'->0->>'elementCode', '1.1', 'export carries the mapping by element code');
-select pg_temp.put('imported', (public.asm_admin('assessment_create', jsonb_build_object('courseId', 'course-asm-test', 'unitId', 'unit-asm-2', 'title', 'Imported copy', 'import', public.asm_admin('assessment_export', jsonb_build_object('id', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'))))))::jsonb->>'id');
-select is((select count(*)::int from public.asm_question_keys k join public.asm_versions v on v.id = k.version_id where v.assessment_id = pg_temp.v('imported')), 8, 'import re-creates the keys on the new draft');
-select is((select count(*)::int from public.asm_unit_elements where unit_id = 'unit-asm-2'), 2, 'import creates the mapped elements on the other unit');
+-- P4: copying an assessment copies its workbook PDF template (pointed at the new assessment's folder) and its mapping
+select pg_temp.put('copy', public.asm_admin('assessment_create', jsonb_build_object('courseId', 'course-asm-test', 'unitId', 'unit-asm-1', 'title', 'A copy', 'fromAssessmentId', pg_temp.v('assessment')))::text);
+select is(pg_temp.s('copy')::jsonb->'copyPdf'->>'to', (pg_temp.s('copy')::jsonb->>'id') || '/' || repeat('c', 64) || '.pdf', 'P4 the copy''s template points at its own folder (the browser copies the file there)');
+select is((select (v.template->'pdf'->>'path') || ':' || (select count(*) from public.asm_unit_mappings m where m.version_id = v.id) from public.asm_versions v where v.assessment_id = (pg_temp.s('copy')::jsonb->>'id')::uuid), (pg_temp.s('copy')::jsonb->'copyPdf'->>'to') || ':2', 'P4 the copy has the template and the mapping');
 
 -- ---------------------------------------------------------------- calendar (D-10)
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
@@ -408,7 +392,7 @@ select throws_ok(format($$update public.asm_attempts set state = 'final' where i
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select throws_ok(format($$insert into public.asm_unit_outcomes(student_id, unit_id, outcome, signed_by, signed_role, signed_name) values ('e5000000-0000-0000-0000-000000000011', 'unit-asm-1', 'C', '%s', 'trainer', 'x')$$, 'a5000000-0000-0000-0000-000000000003'), '42501', null, 'a trainer cannot insert an outcome directly');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
-select throws_ok(format($$insert into public.asm_results(attempt_id, question_id, outcome) values ('%s', 'q_tf', 'S')$$, pg_temp.v('attempt')), '42501', null, 'a student cannot write results');
+select throws_ok(format($$insert into public.asm_results(attempt_id, question_id, outcome) values ('%s', '1.2', 'S')$$, pg_temp.v('attempt')), '42501', null, 'a student cannot write results');
 select throws_ok(format($$update public.asm_notifications set read_at = now() where recipient_auth_user = '%s'$$, 'a5000000-0000-0000-0000-000000000011'), '42501', null, 'notifications are read through the RPC, not written directly');
 select is((public.asm_student('notification_read'))->>'ok', 'true', 'the student marks their notifications read');
 select is((select count(*)::int from public.asm_notifications where recipient_auth_user = 'a5000000-0000-0000-0000-000000000011' and read_at is null), 0, 'and they are read');
@@ -420,10 +404,7 @@ select throws_ok($$select public.asm_admin('me')$$, '42501', null, 'T2 anon: asm
 select throws_ok($$select public.asm_trainer('me')$$, '42501', null, 'T2 anon: asm_trainer is not executable');
 select throws_ok($$select public.asm_student('me')$$, '42501', null, 'T2 anon: asm_student is not executable');
 select throws_ok($$select public.asm_calendar(current_date, current_date)$$, '42501', null, 'T2 anon: asm_calendar is not executable');
-select throws_ok($$select public.asm_validate_responses('{}', '{}')$$, '42501', null, 'T2 anon: the validators are not executable');
 select throws_ok($$select public.asm_evidence_path_readable('x')$$, '42501', null, 'T2 anon: the storage path helpers are not executable');
-select throws_ok($$select count(*) from public.asm_version_questions$$, '42501', null, 'T2 anon: the question view is not readable');
-select throws_ok($$select count(*) from public.asm_question_keys$$, '42501', null, 'T2 anon: assessor keys are not readable');
 select throws_ok($$select count(*) from public.asm_attempts$$, '42501', null, 'T2 anon: attempts are not readable');
 select pg_temp.as_postgres();
 select is((select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'asm\_%' and p.proconfig is null), 0, 'T2 every asm_* function pins its search_path');
@@ -434,7 +415,7 @@ select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select pg_temp.put('draftA', (public.asm_admin('attempt_reopen', jsonb_build_object('id', pg_temp.v('attempt2'), 'reason', 'T2 fixture')))->>'attemptId');
 -- student B (student2, batch G2) against student A's work
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
-select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId":"%s","responses":{"q_short":"mine"}}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 student B cannot save student A''s draft');
+select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId":"%s","responses":{"pdf":{"s11":"mine"}}}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 student B cannot save student A''s draft');
 select throws_ok(format($$select public.asm_student('submit', '{"attemptId":"%s","responses":{},"declaration":{"signature":"Sue","agreed":true}}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 student B cannot submit student A''s draft');
 select throws_ok(format($$select public.asm_student('results', '{"attemptId":"%s"}')$$, pg_temp.v('attempt2')), 'P0002', null, 'T2 student B cannot read student A''s results');
 select throws_ok(format($$select public.asm_student('evidence_register', '{"attemptId":"%s","path":"%s/q_file/x.pdf"}')$$, pg_temp.v('draftA'), pg_temp.v('draftA')), 'P0002', null, 'T2 student B cannot register evidence on student A''s attempt');
@@ -445,7 +426,6 @@ select is(public.asm_evidence_path_readable(pg_temp.s('attempt2') || '/q_file/x.
 select is(public.asm_evidence_path_writable(pg_temp.s('draftA') || '/q_file/x.pdf'), false, 'T2 student B cannot upload under student A''s draft');
 select throws_ok(format($$insert into storage.objects(bucket_id, name, owner) values ('assessment-evidence', '%s/q_file/x.pdf', auth.uid())$$, pg_temp.v('draftA')), '42501', null, 'T2 storage refuses student B''s upload under student A''s attempt');
 select is((select count(*)::int from public.asm_attempts where student_id = 'e5000000-0000-0000-0000-000000000011'), 0, 'T2 RLS hides student A''s attempts from student B');
-select is((select count(*)::int from public.asm_question_keys), 0, 'T2 a student never reads assessor keys');
 select throws_ok(format($$select public.asm_trainer('attempt_get', '{"id":"%s"}')$$, pg_temp.v('attempt2')), '42501', null, 'T2 a student cannot use the trainer RPC');
 select throws_ok($$select public.asm_admin('assessment_list')$$, '42501', null, 'T2 a student cannot use the admin RPC');
 -- trainer of G2 (Tom) against G1 work
@@ -459,7 +439,6 @@ select throws_ok($$select public.asm_trainer('student_progress', '{"studentId":"
 select is(public.asm_trainer_on_assignment(pg_temp.v('assignment'), 'b5000000-0000-0000-0000-000000000003'), false, 'T2 the scope helper does not answer for another trainer''s profile');
 select is(public.asm_trainer_on_assignment(pg_temp.v('assignment')), false, 'T2 the G2 trainer is not on the G1 assignment');
 select is((select count(*)::int from public.asm_attempts where assignment_id = pg_temp.v('assignment')), 0, 'T2 RLS hides G1 attempts from the G2 trainer');
-select is((select count(*)::int from public.asm_question_keys where version_id = pg_temp.v('v1')), 0, 'T2 keys of a version not assigned to the trainer are hidden');
 select is(public.asm_evidence_path_readable(pg_temp.s('attempt2') || '/q_file/x.pdf'), false, 'T2 the G2 trainer cannot read G1 evidence');
 select is(public.asm_evidence_path_writable(pg_temp.s('attempt') || '/assessor/x.pdf'), false, 'T2 the G2 trainer cannot upload assessor files on G1');
 -- tenant 2 (Other Institute, its own domain) with the same CMS admin login
@@ -488,7 +467,6 @@ select is(jsonb_array_length(public.asm_admin('assignment_list')), 0, 'T2 the as
 select is(jsonb_array_length(public.asm_admin('outcomes_list')), 0, 'T2 the outcomes list shows nothing of tenant 1');
 select is(jsonb_array_length(public.asm_admin('audit_list')), 0, 'T2 the audit list shows nothing of tenant 1');
 select is(jsonb_array_length(public.asm_admin('batch_list')), 0, 'T2 the batch list shows nothing of tenant 1');
-select is(jsonb_array_length(public.asm_admin('bank_list')), 0, 'T2 the question bank shows nothing of tenant 1');
 select is((public.asm_admin('overview'))->>'assignments', '0', 'T2 the overview counts nothing of tenant 1');
 select is(jsonb_array_length(public.asm_calendar(date '2026-01-01', date '2026-12-31')), 0, 'T2 the calendar shows nothing of tenant 1');
 select pg_temp.put('other_as', (public.asm_admin('assessment_create', '{"courseId":"course-asm-other","title":"Other tenant assessment"}'))->>'id');
@@ -519,14 +497,14 @@ select is((public.asm_admin('assignment_create', jsonb_build_object('assessmentI
 select pg_temp.put('assignment2', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and intake_id = 'f5000000-0000-0000-0000-000000000012'));
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
 select pg_temp.put('attemptB', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment2'))))->'attempt'->>'id');
-select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attemptB'), 'responses', pg_temp.responses() || '{"q_tf": true}'::jsonb, 'declaration', '{"signature": "Sue Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T3 student 2 submits on G2');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('attemptB'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sue Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T3 student 2 submits on G2');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
 select is((public.asm_trainer('me'))->>'isTrainer', 'false', 'T3 Tom has no trainer role');
 select is((public.asm_trainer('me'))->>'requireTrainerRole', 'true', 'T3 and the workspace knows the role is required');
 select is((select x->>'canAssess' from jsonb_array_elements(public.asm_trainer('my_assignments')) x where x->>'id' = pg_temp.s('assignment2')), 'false', 'T3 the G2 assignment is listed for Tom as not assessable');
 select is((public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('attemptB'))))->>'state', 'submitted', 'T3 a batch trainer without the role still reads the submission');
 select is((public.asm_trainer('attempt_get', jsonb_build_object('id', pg_temp.v('attemptB'))))->>'canAssess', 'false', 'T3 and is told they cannot mark it');
-select throws_ok(format($$select public.asm_trainer('mark_save', '{"id":"%s","results":[{"questionId":"q_tf","outcome":"S"}]}')$$, pg_temp.v('attemptB')), '42501', null, 'T3 a batch trainer without the trainer role cannot mark');
+select throws_ok(format($$select public.asm_trainer('mark_save', '{"id":"%s","results":[{"questionId":"1.2","outcome":"S"}]}')$$, pg_temp.v('attemptB')), '42501', null, 'T3 a batch trainer without the trainer role cannot mark');
 select throws_ok(format($$select public.asm_trainer('mark_return', '{"id":"%s","outcome":"S"}')$$, pg_temp.v('attemptB')), '42501', null, 'T3 nor decide');
 select throws_ok(format($$select public.asm_trainer('evidence_register', '{"attemptId":"%s","path":"%s/assessor/notes.pdf"}')$$, pg_temp.v('attemptB'), pg_temp.v('attemptB')), '42501', null, 'T3 nor attach assessor files');
 select is(public.asm_evidence_path_writable(pg_temp.s('attemptB') || '/assessor/notes.pdf'), false, 'T3 nor upload them (storage policy)');
@@ -538,7 +516,7 @@ select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select lives_ok(format($$select public.asm_admin('assignment_update', '{"id":"%s","trainerStaffIds":["b5000000-0000-0000-0000-000000000004"]}')$$, pg_temp.v('assignment2')), 'T3 the admin names Tom as assessor on the G2 assignment');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
 select is(public.asm_can_assess(pg_temp.v('assignment2')), true, 'T3 a named assessor may assess without the role');
-select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attemptB'), 'results', '[{"questionId":"q_tf","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T3 and marks');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attemptB'), 'results', '[{"questionId":"1.2","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T3 and marks');
 select is(public.asm_evidence_path_writable(pg_temp.s('attemptB') || '/assessor/notes.pdf'), true, 'T3 and may upload assessor files');
 select pg_temp.put('uoB', (public.asm_trainer('unit_outcome_record', jsonb_build_object('studentId', 'e5000000-0000-0000-0000-000000000012', 'unitId', 'unit-asm-1', 'outcome', 'NYC', 'signOff', true, 'batchId', 'f5000000-0000-0000-0000-000000000012', 'assessmentId', pg_temp.v('assessment'))))->>'id');
 select is((select signed_staff_id::text || '|' || outcome from public.asm_unit_outcomes where id = pg_temp.v('uoB')), 'b5000000-0000-0000-0000-000000000004|NYC', 'T3 a named assessor signs the unit off');
@@ -557,7 +535,7 @@ select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select is((select bool_and(require_trainer_role)::text from public.asm_settings), 'false', 'T3 the admin switches the role requirement off');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
 select is(public.asm_can_assess(pg_temp.v('assignment2')), true, 'T3 with the requirement off every active batch trainer may assess');
-select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attemptB'), 'results', '[{"questionId":"q_tf","outcome":"S"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"S"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T3 Tom marks as a plain batch trainer');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attemptB'), 'results', pg_temp.all_marks('S'), 'taskResults', '[{"taskId":"1","outcome":"S"},{"taskId":"2","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T3 Tom marks as a plain batch trainer');
 select lives_ok($$select public.asm_trainer('unit_outcome_record', '{"studentId": "e5000000-0000-0000-0000-000000000012", "unitId": "unit-asm-2", "outcome": "NYC", "signOff": true}')$$, 'T3 and signs off a unit of the course without an assignment');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select pg_temp.as_postgres();
@@ -599,10 +577,10 @@ select is((select version_id from public.asm_attempts where id = pg_temp.v('s3a'
 select throws_ok(format($$insert into public.asm_attempts(assignment_id, version_id, student_id, attempt_no) values ('%s', '%s', 'e5000000-0000-0000-0000-000000000013', 9)$$, pg_temp.v('assignment'), pg_temp.v('v1')), '23505', null, 'T4 a second open attempt is refused by the index');
 -- autosave conflicts and immutability
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
-select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', '{"q_short": "a"}'::jsonb, 'rowVersion', 1)))->>'rowVersion', '2', 'T4 a save with the current row version moves it');
-select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId": "%s", "responses": {"q_short": "b"}, "rowVersion": 1}')$$, pg_temp.v('s3a')), '40001', null, 'T4 a save from a stale window is refused');
+select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', '{"pdf": {"s11": "a"}}'::jsonb, 'rowVersion', 1)))->>'rowVersion', '2', 'T4 a save with the current row version moves it');
+select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId": "%s", "responses": {"pdf": {"s11": "b"}}, "rowVersion": 1}')$$, pg_temp.v('s3a')), '40001', null, 'T4 a save from a stale window is refused');
 select throws_ok(format($$select public.asm_student('submit', '{"attemptId": "%s", "responses": {}, "rowVersion": 1, "declaration": {"signature": "Sid Student", "agreed": true}}')$$, pg_temp.v('s3a')), '40001', null, 'T4 a submit from a stale window is refused');
-select is((select responses->>'q_short' from public.asm_attempts where id = pg_temp.v('s3a')), 'a', 'T4 the stale writes changed nothing');
+select is((select responses->'pdf'->>'s11' from public.asm_attempts where id = pg_temp.v('s3a')), 'a', 'T4 the stale writes changed nothing');
 -- late rules: allow + late_until in the past refuses; block refuses after due without late_until; block + late_until ahead accepts and flags
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "availableFrom": "%s", "dueAt": "%s", "lateUntil": "%s"}')$$, pg_temp.v('assignment'), (now() - interval '5 days')::text, (now() - interval '3 days')::text, (now() - interval '1 day')::text), 'T4 fixture: due three days ago, late submissions closed yesterday');
@@ -619,27 +597,27 @@ select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
 select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T4 block mode accepts inside late_until');
 select is((select declaration->>'late' from public.asm_attempts where id = pg_temp.v('s3a')), 'true', 'T4 and the submission is flagged late');
-select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId": "%s", "responses": {"q_short": "later"}, "rowVersion": 99}')$$, pg_temp.v('s3a')), '42501', null, 'T4 a submitted attempt is locked for the student');
+select throws_ok(format($$select public.asm_student('draft_save', '{"attemptId": "%s", "responses": {"pdf": {"s11": "later"}}, "rowVersion": 99}')$$, pg_temp.v('s3a')), '42501', null, 'T4 a submitted attempt is locked for the student');
 select pg_temp.as_postgres();
 select throws_ok(format($$update public.asm_attempts set responses = '{}' where id = '%s'$$, pg_temp.v('s3a')), '42501', null, 'T4 a submitted attempt is immutable even for the owner role');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select lives_ok($$select public.asm_admin('settings_save', '{"lateSubmission": "allow"}')$$, 'T4 fixture: back to allow');
 -- max_attempts: NYS decisions open attempts only under the limit (institution 3, voids not counted); the assessor cannot reopen beyond it, the admin only with overrideLimit
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
-select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3a'), 'results', '[{"questionId":"q_tf","outcome":"NYS"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"NYS"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 2');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3a'), 'results', pg_temp.all_marks('NYS'), 'taskResults', '[{"taskId":"1","outcome":"NYS"},{"taskId":"2","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 2');
 select pg_temp.put('s3b', (public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('s3a'), 'outcome', 'NYS')))->>'nextAttemptId');
 select is((select attempt_no || '|' || state from public.asm_attempts where id = pg_temp.v('s3b')), '3|draft', 'T4 NYS opens attempt 3 (one counted so far)');
 select ok((select due_at between now() + interval '4 days 23 hours' and now() + interval '5 days 1 hour' from public.asm_attempts where id = pg_temp.v('s3b')), 'T4 the reassessment window is reassessment_days (5)');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
 select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3b'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T4 attempt 3 submits');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
-select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3b'), 'results', '[{"questionId":"q_tf","outcome":"NYS"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"NYS"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 3');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3b'), 'results', pg_temp.all_marks('NYS'), 'taskResults', '[{"taskId":"1","outcome":"NYS"},{"taskId":"2","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 3');
 select pg_temp.put('s3c', (public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('s3b'), 'outcome', 'NYS')))->>'nextAttemptId');
 select is((select attempt_no || '|' || state from public.asm_attempts where id = pg_temp.v('s3c')), '4|draft', 'T4 the second counted NYS opens attempt 4 (the third counted attempt)');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
 select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3c'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->>'ok', 'true', 'T4 attempt 4 submits');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
-select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3c'), 'results', '[{"questionId":"q_tf","outcome":"NYS"}]'::jsonb, 'taskResults', '[{"taskId":"t1","outcome":"NYS"},{"taskId":"t2","outcome":"S"}]'::jsonb, 'assessorResponses', '{"q_obs": {"o1": true, "o2": true}}'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 4');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3c'), 'results', pg_temp.all_marks('NYS'), 'taskResults', '[{"taskId":"1","outcome":"NYS"},{"taskId":"2","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 4');
 select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('s3c'), 'outcome', 'NYS')))->>'nextAttemptId', null, 'T4 the third counted NYS finalises: no attempt 5');
 select is((select state || '|' || outcome from public.asm_attempts where id = pg_temp.v('s3c')), 'final|NYS', 'T4 attempt 4 is final NYS');
 select throws_ok(format($$select public.asm_trainer('attempt_reopen', '{"id": "%s"}')$$, pg_temp.v('s3c')), '42501', null, 'T4 the assessor cannot reopen beyond the limit');
@@ -796,10 +774,10 @@ select is((select unit_id from public.intake_units where intake_id = 'f5000000-0
 -- ASM-BUILDER: AI mapping suggestions are ticks to confirm (who and when kept); training.gov.au content is the Edge Function's only
 select pg_temp.as_postgres();
 insert into public.asm_mapping_suggestions(assessment_id, question_id, element_id, confidence, reason, model)
- values (pg_temp.v('assessment')::uuid, 'q_short', pg_temp.v('el_pc')::uuid, 0.8, 'Asks which PPE to select', 'mock'),
-        (pg_temp.v('assessment')::uuid, 'q_single', pg_temp.v('el_ke')::uuid, 0.4, 'Shares a word', 'mock');
-select pg_temp.put('sug1', (select id::text from public.asm_mapping_suggestions where assessment_id = pg_temp.v('assessment')::uuid and question_id = 'q_short'));
-select pg_temp.put('sug2', (select id::text from public.asm_mapping_suggestions where assessment_id = pg_temp.v('assessment')::uuid and question_id = 'q_single'));
+ values (pg_temp.v('assessment')::uuid, '1.1', pg_temp.v('el_pc')::uuid, 0.8, 'Asks which PPE to select', 'mock'),
+        (pg_temp.v('assessment')::uuid, '1.2', pg_temp.v('el_ke')::uuid, 0.4, 'Shares a word', 'mock');
+select pg_temp.put('sug1', (select id::text from public.asm_mapping_suggestions where assessment_id = pg_temp.v('assessment')::uuid and question_id = '1.1'));
+select pg_temp.put('sug2', (select id::text from public.asm_mapping_suggestions where assessment_id = pg_temp.v('assessment')::uuid and question_id = '1.2'));
 select throws_ok($$insert into public.tga_unit_content(code, details) values ('not a code', '{}')$$, '23514', null, 'MAP the training.gov.au cache is kept per unit code');
 select ok(pg_get_functiondef('public.asm_admin(text,jsonb)'::regprocedure) !~ 'delete from asm_tmp_(keep|scope);', 'MAP asm_admin empties its temp tables with a WHERE (the API refuses a bare DELETE)');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
@@ -820,21 +798,6 @@ select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select throws_ok(format($$select public.asm_mapping_suggestions_list('%s')$$, pg_temp.v('assessment')), '42501', null, 'MAP a trainer cannot list suggestions');
 select pg_temp.as_postgres();
 
--- ASM-IMPORT-CLASSIFY (2026-11-25): auto-resolved import differences are written to the assessment's audit log
-select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select is(public.asm_import_auto_resolved(pg_temp.v('assessment')::uuid, '[{"questionId":"q_h4","rule":"heading_number","text":"4.","note":"\"4. Supporting Calculations\" on page 66 is a section heading","page":66,"reopened":false},{"questionId":"q_ap","rule":"response_label","text":"Short answer","note":"Ignored \"Short answer\" on page 67","page":67,"reopened":true},{"questionId":"x","rule":"made_up","text":"x","note":"x","page":1}]'::jsonb)->>'logged', '2', 'AUTO an admin logs the auto-resolved notes (an unknown rule is skipped)');
-select pg_temp.as_postgres();
-select is((select count(*)::int from public.asm_audit_log where target_type = 'assessment' and target_id = pg_temp.s('assessment') and action = 'import_auto_resolved' and detail->>'rule' = 'heading_number' and detail->>'text' = '4.' and (detail->>'page')::int = 66), 1, 'AUTO the note keeps its rule, the ignored text and the page');
-select is((select count(*)::int from public.asm_audit_log where target_id = pg_temp.s('assessment') and action = 'import_auto_resolve_reopened' and detail->>'rule' = 'response_label'), 1, 'AUTO a reopened note is logged as reopened');
-select ok((select actor is not null from public.asm_audit_log where target_id = pg_temp.s('assessment') and action = 'import_auto_resolved' limit 1), 'AUTO the admin who imported is the actor');
-select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
-select throws_ok(format($$select public.asm_import_auto_resolved('%s', '[]')$$, pg_temp.v('assessment')), '42501', null, 'AUTO a student cannot write import notes');
-select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select throws_ok($$select public.asm_import_auto_resolved(gen_random_uuid(), '[]')$$, 'P0002', null, 'AUTO an unknown assessment is refused');
-select throws_ok(format($$select public.asm_import_auto_resolved('%s', '{"a":1}')$$, pg_temp.v('assessment')), '22023', null, 'AUTO notes must be a list');
-select pg_temp.as_postgres();
-select ok(not has_function_privilege('anon', 'public.asm_import_auto_resolved(uuid,jsonb)', 'execute'), 'AUTO anonymous callers cannot write import notes');
-
 -- ASM-UNIT-CHECK (2026-11-25): the unit decision of Add assessment goes to the audit log; kept without a reason is refused
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select is(public.asm_import_unit_check(pg_temp.v('assessment')::uuid, '{"kind":"switched","reason":"","foundCode":"RIICWD525E","foundTitle":"Select pavement surfacing","selectedCode":"BSBHRM613","selectedTitle":"Contribute to the development of learning and development strategies"}'::jsonb)->>'decision', 'switched', 'UNIT switching to the workbook''s unit is recorded');
@@ -847,42 +810,253 @@ select is((select detail->>'reason' from public.asm_audit_log where target_id = 
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
 select throws_ok(format($$select public.asm_import_unit_check('%s', '{"kind":"switched"}')$$, pg_temp.v('assessment')), '42501', null, 'UNIT a student cannot record a unit decision');
 select pg_temp.as_postgres();
--- ASM-OVERVIEW (2026-11-25): a block edited in the Overview's drawer is saved like the Builder's autosave and audited in the same
--- transaction; a published version is never changed (the next draft is made); a running import of the same file is reattached
-create temp table ov_before as
- select v.version_no, md5(v.definition::text) as h from public.asm_versions v where v.assessment_id = pg_temp.v('assessment')::uuid and v.status = 'published';
-create temp table ov_def as
- select jsonb_set(v.definition, '{tasks,0,instructions}', to_jsonb('<p>Bring a calculator (overview edit).</p>'::text)) as d
- from public.asm_versions v where v.assessment_id = pg_temp.v('assessment')::uuid order by v.version_no desc limit 1;
-grant select on ov_before, ov_def to authenticated;
-select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select is((public.asm_overview_save(pg_temp.v('assessment')::uuid, jsonb_build_object('definition', (select d from ov_def), 'block',
-  jsonb_build_object('kind', 'instructions', 'id', 't1', 'label', 'Task 1 learner instructions', 'before', 'old text', 'after', 'Bring a calculator (overview edit).'))))->>'ok', 'true', 'OV an admin saves a block from the Overview');
-select throws_ok(format($$select public.asm_overview_save('%s', jsonb_build_object('definition', '{"tasks":[]}'::jsonb, 'block', '{"kind":"everything"}'::jsonb))$$, pg_temp.v('assessment')), '22023', 'Unknown block kind', 'OV an unknown block kind is refused');
-select is((public.asm_overview_save(pg_temp.v('assessment')::uuid, '{"definition":{"tasks":"no"},"block":{"kind":"question","id":"q","before":"a","after":"b"}}'::jsonb))->>'ok', 'false', 'OV a definition the validator refuses is not saved');
-select pg_temp.as_postgres();
-select is((select count(*)::int from ov_before b join public.asm_versions v on v.assessment_id = pg_temp.v('assessment')::uuid and v.version_no = b.version_no and md5(v.definition::text) = b.h), (select count(*)::int from ov_before), 'OV every published version is unchanged');
-select ok(exists (select 1 from public.asm_versions where assessment_id = pg_temp.v('assessment')::uuid and status = 'draft' and definition::text ~ 'overview edit'), 'OV the draft carries the edit');
-select is((select count(*)::int from public.asm_audit_log where action = 'overview_edit' and detail->>'assessmentId' = pg_temp.s('assessment') and detail->>'block' = 'instructions'
-  and detail->>'before' = 'old text' and detail->>'after' ~ 'overview edit' and (detail->>'versionNo')::int = (select version_no from public.asm_versions where assessment_id = pg_temp.v('assessment')::uuid and status = 'draft') and actor is not null), 1, 'OV one audit row: who, the block, before / after, the version');
-select is((select count(*)::int from public.asm_audit_log where action = 'overview_edit' and detail->>'assessmentId' = pg_temp.s('assessment')), 1, 'OV a refused save is not logged');
-select is((select count(*)::int from public.asm_attempts t join public.asm_versions v on v.id = t.version_id where v.assessment_id = pg_temp.v('assessment')::uuid and v.definition::text ~ 'overview edit'), 0, 'OV attempts stay on the version they began with');
-select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
-select throws_ok(format($$select public.asm_overview_save('%s', '{"block":{"kind":"question"}}')$$, pg_temp.v('assessment')), '42501', null, 'OV a student cannot edit');
-select pg_temp.as_postgres();
-select ok(not has_function_privilege('anon', 'public.asm_overview_save(uuid,jsonb)', 'execute'), 'OV anonymous callers cannot edit');
+-- ASM-PDF-TEMPLATE phase 4 (2026-11-26): the old pipeline is gone (import jobs, questions JSON helpers, model answers, question bank)
+select is((select count(*)::int from pg_proc where pronamespace = 'public'::regnamespace and proname in ('asm_import_start', 'asm_import_claim', 'asm_import_dispatch', 'asm_import_status', 'asm_import_recent',
+  'asm_import_key_trace', 'asm_import_auto_resolved', 'asm_definition_questions', 'asm_question_tree', 'asm_validate_definition', 'asm_validate_responses', 'asm_validate_questions', 'asm_autocheck',
+  'asm_autocheck_one', 'asm_rollup', 'asm_overview_save', 'asm_condition_met', 'asm_value_present')), 0, 'P4 the import and questions JSON functions are removed');
+select is((select count(*)::int from pg_class where relnamespace = 'public'::regnamespace and relname in ('asm_import_jobs', 'asm_question_keys', 'asm_question_bank', 'asm_question_bank_versions', 'asm_version_questions')), 0, 'P4 the import jobs, model answers, question bank and question view are removed');
+select is((select count(*)::int from pg_policies where schemaname = 'storage' and policyname like 'asm_import_%'), 0, 'P4 the asm-imports bucket has no policies left');
+select ok(not exists (select 1 from pg_namespace where nspname = 'cron') or not exists (select 1 from cron.job where jobname = 'asm-import-worker'), 'P4 the import worker cron job is unscheduled');
+select ok(to_regprocedure('public.asm_import_unit_check(uuid,jsonb)') is not null, 'P4 the unit-mismatch audit stays');
 
--- the same file still being read: the running job is returned (never read twice); Force starts another; the admin's recent list
+-- ASM-PDF-TEMPLATE (2026-11-26): the workbook PDF as an e-sign style template: validated like the browser, saved on the draft,
+-- the PDF in a private bucket under the assessment, a published version's template frozen and carried to the next draft
+create function pg_temp.tpl(p_path text, p_fields jsonb default null) returns jsonb language sql as $$
+ select jsonb_build_object('version', 1, 'pdf', jsonb_build_object('path', p_path, 'sha256', repeat('a', 64), 'pages', 3, 'fileName', 'wb.pdf'),
+  'pages', '[{"page":1,"kind":"cover","audience":"student","task":null},{"page":2,"kind":"question","audience":"student","task":1},{"page":3,"kind":"declaration","audience":"student","task":1}]'::jsonb, 'tasks', '[]'::jsonb,
+  'declarations', '[{"task":1,"page":3,"text":"I declare that the answers I have provided are my own work.","rect":{"page":3,"x":0.3,"y":0.2,"w":0.6,"h":0.3}}]'::jsonb,
+  'questions', '[{"key":"1.1","seq":"Q1","label":"Name the legislation","task":1,"header":{"page":2,"x":0.07,"y":0.2,"w":0.86,"h":0.06},"areas":[{"page":2,"x":0.07,"y":0.26,"w":0.86,"h":0.5}]}]'::jsonb,
+  'fields', coalesce(p_fields, '[{"id":"p2-1","page":2,"x":0.08,"y":0.27,"w":0.84,"h":0.48,"role":"student","kind":"text","questionKey":"1.1","label":"Answer"},
+   {"id":"p2-2","page":2,"x":0.8,"y":0.22,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":"1.1","label":"Satisfactory","option":"yes","group":"q.1.1"},
+   {"id":"p1-3","page":1,"x":0.3,"y":0.88,"w":0.6,"h":0.03,"role":"auto","kind":"auto","questionKey":null,"label":"Student Name","dataKey":"student_name"}]'::jsonb),
+  'detected', '{"by":"asm-pdf-detect/1","at":"2026-11-26T00:00:00Z"}'::jsonb);
+$$;
+grant execute on function pg_temp.tpl(text, jsonb) to authenticated;
+create temp table tp as select pg_temp.s('assessment') || '/' || repeat('a', 64) || '.pdf' as path;
+grant select on tp to authenticated;
+select is(jsonb_array_length(public.asm_template_validate(pg_temp.tpl((select path from tp)))), 0, 'TPL a complete template has no problems');
+select is(jsonb_array_length(public.asm_template_validate(pg_temp.tpl((select path from tp), '[{"id":"a","page":1,"x":0.1,"y":0.1,"w":0.1,"h":0.1,"role":"auto","kind":"auto","label":"x"},
+  {"id":"a","page":9,"x":0.1,"y":0.1,"w":0.1,"h":0.1,"role":"student","kind":"text","label":"x"},
+  {"id":"b","page":1,"x":0.95,"y":0.1,"w":0.1,"h":0.1,"role":"student","kind":"text","questionKey":"9.9","label":"x"},
+  {"id":"c","page":1,"x":0.1,"y":0.1,"w":0.1,"h":0.1,"role":"trainer","kind":"yes_no","label":"x"}]'::jsonb))), 6, 'TPL every problem is reported (record value, id twice, page, outside, question, choice)');
+select is(public.asm_template_validate('{"version":2,"fields":[]}'::jsonb)->>0, 'The template version is not supported.', 'TPL an unknown template version is refused');
+select is(jsonb_array_length(public.asm_template_validate(pg_temp.tpl((select path from tp), '[{"id":"m","page":1,"x":0.1,"y":0.1,"w":0.02,"h":0.02,"role":"auto","kind":"auto","label":"Online submission via LMS","dataKey":"submission_method","option":"lms"},
+  {"id":"s","page":3,"x":0.3,"y":0.6,"w":0.2,"h":0.05,"role":"student","kind":"signature","label":"Student: Signature","attempt":1,"step":"acknowledge"},
+  {"id":"d","page":3,"x":0.3,"y":0.66,"w":0.1,"h":0.02,"role":"auto","kind":"auto","label":"Date","dataKey":"acknowledged_date","attempt":1,"step":"acknowledge"}]'::jsonb))), 0, 'TPL the submission method box and the acknowledgement row are valid');
+select is(jsonb_array_length(public.asm_template_validate(pg_temp.tpl((select path from tp), '[{"id":"m","page":1,"x":0.1,"y":0.1,"w":0.02,"h":0.02,"role":"auto","kind":"auto","label":"x","dataKey":"submission_method"},
+  {"id":"t","page":3,"x":0.3,"y":0.6,"w":0.2,"h":0.05,"role":"trainer","kind":"signature","label":"x","step":"acknowledge"},
+  {"id":"u","page":3,"x":0.3,"y":0.7,"w":0.2,"h":0.05,"role":"student","kind":"text","label":"x","step":"later"}]'::jsonb))), 3, 'TPL a method box needs its method; only the student''s signature and date wait for the acknowledgement; unknown steps refused');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-templates', '%s')$$, (select path from tp)), '42501', null, 'TPL a student cannot upload a workbook');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-create temp table ov_job as select (public.asm_import_start('workbook', repeat('c', 64), 'ov.pdf', 10, 2, '{}', false, 4))->>'id' as id;
+select is((public.asm_template_save(pg_temp.v('assessment')::uuid, pg_temp.tpl((select path from tp))))->'errors'->>0, 'Upload the PDF before saving its template.', 'TPL the PDF is uploaded first');
+select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-templates', '%s/workbook.pdf')$$, pg_temp.v('assessment')), '42501', null, 'TPL the file is named by its hash');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-templates', '%s')$$, (select path from tp)), 'TPL an admin uploads the workbook under the assessment');
+select is((public.asm_template_save(pg_temp.v('assessment')::uuid, pg_temp.tpl('00000000-0000-0000-0000-000000000000/' || repeat('a', 64) || '.pdf')))->'errors'->>0, 'The template''s PDF belongs to another assessment.', 'TPL a PDF of another assessment is refused');
+select is((public.asm_template_save(pg_temp.v('assessment')::uuid, pg_temp.tpl((select path from tp))))->>'ok', 'true', 'TPL an admin saves the template');
+select is((public.asm_template_get(pg_temp.v('assessment')::uuid))->>'status', 'draft', 'TPL the template is read from the draft');
+select is(jsonb_array_length((public.asm_template_get(pg_temp.v('assessment')::uuid))->'template'->'fields'), 3, 'TPL its fields come back');
+select throws_ok(format($$select public.asm_template_save('%s', pg_temp.tpl((select path from tp)), '2000-01-01T00:00:00Z')$$, pg_temp.v('assessment')), '40001', null, 'TPL a stale save is refused');
 select pg_temp.as_postgres();
-update public.asm_import_jobs set state = 'running' where id = (select id from ov_job)::uuid;
-grant select on ov_job to authenticated;
+select is((select count(*)::int from public.asm_versions where assessment_id = pg_temp.v('assessment')::uuid and status = 'published' and template->'pdf'->>'sha256' <> repeat('c', 64)), 0, 'TPL the published versions are not changed (they keep their own workbook)');
+select is((select count(*)::int from public.asm_audit_log where action = 'template_save' and detail->>'assessmentId' = pg_temp.s('assessment') and (detail->>'fields')::int = 3), 1, 'TPL the save is logged once (refused saves are not)');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select throws_ok(format($$select public.asm_template_save('%s', '{}')$$, pg_temp.v('assessment')), '42501', null, 'TPL a student cannot save a template');
+select is((select count(*)::int from storage.objects where bucket_id = 'assessment-templates' and name = (select path from tp)), 0, 'TPL a student cannot read the draft''s workbook file');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select is((public.asm_import_start('workbook', repeat('c', 64), 'ov.pdf', 10, 2, '{}', false, 4))->>'id', (select id from ov_job), 'IMPORT the running job of the same file is reattached');
-select isnt((public.asm_import_start('workbook', repeat('c', 64), 'ov.pdf', 10, 2, '{}', true, 4))->>'id', (select id from ov_job), 'IMPORT Force starts a new job');
-select ok(public.asm_import_recent() @> jsonb_build_array(jsonb_build_object('id', (select id from ov_job), 'state', 'running', 'fileName', 'ov.pdf')), 'IMPORT the admin''s recent imports list the running job (no result body)');
+select is((public.asm_admin('version_publish', jsonb_build_object('assessmentId', pg_temp.v('assessment'))))->>'ok', 'true', 'TPL the draft with its template publishes');
+select is((public.asm_admin('draft_save', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'definition',
+  (select v.definition from public.asm_versions v join public.asm_assessments a on a.current_version_id = v.id where a.id = pg_temp.v('assessment')::uuid))))->>'ok', 'true', 'TPL the Builder starts the next draft');
 select pg_temp.as_postgres();
-select ok(not has_function_privilege('anon', 'public.asm_import_recent()', 'execute'), 'IMPORT anonymous callers cannot list imports');
+select is((select jsonb_array_length(template->'fields') from public.asm_versions where assessment_id = pg_temp.v('assessment')::uuid and status = 'draft'), 3, 'TPL the next draft carries the published template');
+select throws_ok(format($$update public.asm_versions set template = null where assessment_id = '%s' and status = 'published'$$, pg_temp.v('assessment')), '42501', null, 'TPL a published template never changes');
+select ok(not has_function_privilege('anon', 'public.asm_template_save(uuid,jsonb,timestamptz)', 'execute'), 'TPL anonymous callers cannot save templates');
+
+-- ASM-PDF-TEMPLATE phase 2: the student answers on the workbook: the published template version assigned to G2, opened by its student
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select is(((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'batchIds', '["f5000000-0000-0000-0000-000000000012"]'::jsonb, 'dueAt', (now() + interval '10 days')::text)))->>'created')::int, 1, 'PDF the workbook version is assigned to G2');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select pg_temp.put('pdf_attempt', (select (public.asm_student('assessment_open', jsonb_build_object('assignmentId', a.id)))->'attempt'->>'id' from public.asm_assignments a where a.assessment_id = pg_temp.v('assessment')::uuid and a.intake_id = 'f5000000-0000-0000-0000-000000000012' and a.version_id = (select current_version_id from public.asm_assessments where id = pg_temp.v('assessment')::uuid) limit 1));
+select is((select string_agg(f->>'role' || ':' || (f->>'kind'), ',' order by f->>'id') from jsonb_array_elements(public.asm_student_template(pg_temp.v('pdf_attempt'))->'fields') f), 'auto:auto,student:text', 'PDF the student sees their own and the record''s fields, never the trainer''s');
+select is((select count(*)::int from storage.objects where bucket_id = 'assessment-templates' and name = (select path from tp)), 1, 'PDF the student reads the workbook file of their version');
+select is((select string_agg(e->>'code', ',' order by e->>'code') from jsonb_array_elements((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('pdf_attempt'), 'declaration', '{"signature":"Sue Student","agreed":true}'::jsonb)))->'errors') e),
+  'declaration,unanswered', 'PDF submit is refused while a question is unanswered and the task declaration is not signed');
+-- signatures keep the login details; an earlier tenant check left the request headers empty
+select set_config('request.headers', '{}', true);
+select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('pdf_attempt'), 'responses', '{"pdf":{"p2-1":"Gloves protect the hands."}}'::jsonb)))->>'ok', 'true', 'PDF the answer autosaves');
+select throws_ok(format($$select public.asm_pdf_sign('%s', 'ack', 'typed')$$, pg_temp.v('pdf_attempt')), '22023', null, 'PDF only declarations are signed this way (the acknowledgement waits for the result)');
+select pg_temp.put('decl1', public.asm_pdf_sign(pg_temp.v('pdf_attempt')::uuid, 'decl:1', 'typed', null, 'I declare that the answers I have provided are my own work.')::text);
+select is(pg_temp.s('decl1')::jsonb->>'slot', 'decl:1', 'PDF the student signs the Task 1 declaration');
+select is((public.asm_pdf_sign(pg_temp.v('pdf_attempt')::uuid, 'decl:1', 'typed'))->>'signedAt', pg_temp.s('decl1')::jsonb->>'signedAt', 'PDF signing it again keeps the first signature and its date');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('pdf_attempt'), 'declaration', '{"signature":"Sue Student","agreed":true}'::jsonb)))->>'ok', 'true', 'PDF answered and the declaration signed: submitted');
+select throws_ok(format($$select public.asm_pdf_sign('%s', 'decl:2', 'typed')$$, pg_temp.v('pdf_attempt')), '22023', null, 'PDF nothing is signed after the submission');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
+select throws_ok(format($$select public.asm_student_template('%s')$$, pg_temp.v('pdf_attempt')), '42501', null, 'PDF another student cannot read the attempt''s template');
+select throws_ok(format($$select public.asm_pdf_attempt('%s')$$, pg_temp.v('pdf_attempt')), '42501', null, 'PDF another student cannot read the attempt');
+select pg_temp.as_postgres();
+select is((select declaration->>'text' from public.asm_attempts where id = pg_temp.v('pdf_attempt')::uuid), 'I declare that the answers I have provided are my own work.', 'PDF the workbook''s own declaration wording is kept with the submission');
+-- the locked snapshot of the submission
+select is((select s.answers->'pdf'->>'p2-1' || ' | ' || (s.signatures ? 'decl:1')::text || ' | ' || (s.record->>'studentName') from public.asm_attempt_snapshots s where s.attempt_id = pg_temp.v('pdf_attempt')::uuid),
+  'Gloves protect the hands. | true | Sue Student', 'PDF the submission keeps a snapshot of the answers, the signatures and the record');
+select is((select s.hash = public.asm_snapshot_hash(s.answers, s.signatures, s.record, s.template_sha256) from public.asm_attempt_snapshots s where s.attempt_id = pg_temp.v('pdf_attempt')::uuid), true, 'PDF the snapshot''s hash is the SHA-256 of what it holds');
+select throws_ok(format($$update public.asm_attempt_snapshots set answers = '{}' where attempt_id = '%s'$$, pg_temp.v('pdf_attempt')), '42501', null, 'PDF a snapshot is never changed');
+select throws_ok(format($$delete from public.asm_pdf_signatures where attempt_id = '%s'$$, pg_temp.v('pdf_attempt')), '42501', null, 'PDF a declaration signature is never removed');
+select pg_temp.put('snap_hash', (select hash from public.asm_attempt_snapshots where attempt_id = pg_temp.v('pdf_attempt')::uuid));
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select is((public.asm_pdf_attempt(pg_temp.v('pdf_attempt')::uuid))->'attempts'->0->'snapshot'->>'hash', pg_temp.s('snap_hash'), 'PDF the student reads their submitted attempt (drawn from its snapshot)');
+select is(jsonb_array_length((public.asm_pdf_attempt(pg_temp.v('pdf_attempt')::uuid))->'attempts'->0->'results'), 0, 'PDF no marks reach the student before the result is released');
+-- ASM-PDF-TEMPLATE phase 3: marking on the template: task results from the question marks, the release, the final PDF (G2's trainer, given the trainer role)
+select pg_temp.as_postgres();
+insert into hr.staff_roles(profile_id, role, granted_by) values ('b5000000-0000-0000-0000-000000000004', 'trainer', 'a5000000-0000-0000-0000-000000000001') on conflict do nothing;
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('pdf_attempt'), 'results', '[{"questionId":"1.1","outcome":"S","feedback":"Clear."}]'::jsonb, 'taskResults', '[{"taskId":"1","feedback":"Well done."}]'::jsonb,
+  'assessorResponses', '{"pdf":{},"pdfChoice":{}}'::jsonb)))->>'state', 'marking', 'MARK the trainer marks the question on the workbook');
+select is((select outcome from public.asm_task_results where attempt_id = pg_temp.v('pdf_attempt')::uuid and task_id = '1'), 'S', 'MARK the task result follows its questions'' marks (all Yes = Satisfactory)');
+select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('pdf_attempt'), 'outcome', 'S', 'overallFeedback', 'Competent.')))->>'ok', 'true', 'MARK every task of the template has a result: the result is released');
+select throws_ok(format($$select public.asm_pdf_output_record('%s', '%s/final-%s.pdf', '%s')$$, pg_temp.v('pdf_attempt'), pg_temp.v('pdf_attempt'), repeat('d', 64), repeat('d', 64)), 'P0002', 'Upload the PDF first', 'MARK the final PDF is uploaded before it is recorded');
+select throws_ok(format($$select public.asm_pdf_output_record('%s', '%s/final-x.pdf', 'x')$$, pg_temp.v('pdf_attempt'), pg_temp.v('pdf_attempt')), '22023', null, 'MARK the file is named by its SHA-256');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/final-%s.pdf')$$, pg_temp.v('pdf_attempt'), repeat('d', 64)), 'MARK an assessor uploads the final PDF of a final attempt');
+select is((public.asm_pdf_output_record(pg_temp.v('pdf_attempt')::uuid, pg_temp.v('pdf_attempt') || '/final-' || repeat('d', 64) || '.pdf', repeat('d', 64)))->>'snapshot_hash',
+  pg_temp.s('snap_hash'), 'MARK the stored final PDF records the snapshot hash it was drawn from');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select is((select count(*)::int from storage.objects where bucket_id = 'assessment-output'), 1, 'MARK the student reads their final PDF');
+select is((public.asm_pdf_attempt(pg_temp.v('pdf_attempt')::uuid))->'attempts'->0->'results'->0->>'feedback', 'Clear.', 'MARK once released the student reads the marks and comments');
+select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/final-%s.pdf')$$, pg_temp.v('pdf_attempt'), repeat('e', 64)), '42501', null, 'MARK a student cannot store a final PDF');
+select pg_temp.as_postgres();
+select throws_ok(format($$delete from public.asm_attempt_outputs where attempt_id = '%s'$$, pg_temp.v('pdf_attempt')), '42501', null, 'MARK a stored final PDF record is never removed');
+select is(public.asm_template_missing(pg_temp.tpl('a/b.pdf', '[{"id":"s","page":3,"x":0.3,"y":0.6,"w":0.2,"h":0.05,"role":"student","kind":"signature","label":"Student Signature","slot":"pack"},
+  {"id":"t","page":2,"x":0.1,"y":0.3,"w":0.8,"h":0.3,"role":"student","kind":"text","questionKey":"1.1","label":"b. Part two","required":true},
+  {"id":"u","page":2,"x":0.1,"y":0.7,"w":0.8,"h":0.1,"role":"student","kind":"text","questionKey":"1.1","label":"Answer"}]'::jsonb), '{"pdf":{"u":"x"}}'::jsonb, '{decl:1,pack}')->>0,
+  '{"code": "required", "fieldId": "t", "message": "Q1: \"b. Part two\" is empty.", "questionKey": "1.1"}', 'PDF a required part left empty is named like the browser names it');
+select is((select string_agg(m->>'message', ' | ') from jsonb_array_elements(public.asm_template_missing(pg_temp.tpl('a/b.pdf', '[{"id":"s","page":3,"x":0.3,"y":0.6,"w":0.2,"h":0.05,"role":"student","kind":"signature","label":"Student Signature","slot":"pack"}]'::jsonb), '{}'::jsonb, '{}')) m),
+  'Sign the Task 1 declaration. | Sign the student declaration (page 3).', 'PDF each declaration is signed on its own: the task''s and the whole pack''s');
+select is((select string_agg(m->>'message', ' | ') from jsonb_array_elements(public.asm_template_missing(jsonb_build_object('pages', '[]'::jsonb, 'questions', '[{"key":"1.3","seq":"Q3","display":"Q3","task":1},{"key":"2.11","seq":"Q11","display":"Q11","task":2}]'::jsonb,
+  'fields', '[{"id":"a","page":1,"role":"student","kind":"table_cell","questionKey":"1.3","label":"x","table":{"row":0,"col":0,"group":"1.3#1","rowKey":"a","fixed":true}},
+   {"id":"b","page":1,"role":"student","kind":"table_cell","questionKey":"1.3","label":"x","table":{"row":1,"col":0,"group":"1.3#1","rowKey":"b","fixed":true}},
+   {"id":"c","page":1,"role":"student","kind":"table_cell","questionKey":"2.11","label":"x","table":{"row":0,"col":0,"group":"2.11#1","rowKey":"c"}},
+   {"id":"d","page":1,"role":"student","kind":"table_cell","questionKey":"2.11","label":"x","table":{"row":0,"col":1,"group":"2.11#1","rowKey":"c"}}]'::jsonb), '{"pdf":{"a":"Brushes","c":"Roller"}}'::jsonb, '{}')) m),
+  'Q3: 1 empty cell in the table. | Q11: fill in at least one complete row of the table.', 'PDF tables: every cell of printed rows, at least one complete blank row (as in the browser)');
+select is((select string_agg(m->>'message', ' | ') from jsonb_array_elements(public.asm_template_missing(jsonb_build_object('pages', '[]'::jsonb, 'questions', '[{"key":"1.2","seq":"Q2","display":"Q2","task":1},{"key":"2.2","seq":"Q2","display":"Q2","task":2}]'::jsonb, 'fields', '[{"id":"a","page":1,"role":"student","kind":"text","questionKey":"1.2","label":"x"},{"id":"b","page":1,"role":"student","kind":"text","questionKey":"2.2","label":"x"}]'::jsonb), '{}', '{}')) m), 'Task 1 · Q2 is not answered yet. | Task 2 · Q2 is not answered yet.', 'PDF a number printed in two tasks is named with its task, as in the browser');
+-- ASM-PDF-TEMPLATE review (owner 2026-11-26): the real submit refuses incomplete tables with the browser's words; each attempt keeps
+-- its own snapshot (attempt 1's never changes after a return); the trainer's side locks once released; the final PDF records the marks.
+-- A workbook shaped like CPCCPD2012: Task 1 Q3 (a table of printed rows), Task 2 Q3 (a text answer), Task 2 Q11 (two blank-row tables).
+create function pg_temp.tpl2(p_path text) returns jsonb language sql as $$
+ select jsonb_build_object('version', 1, 'pdf', jsonb_build_object('path', p_path, 'sha256', repeat('b', 64), 'pages', 4, 'fileName', 'cpc.pdf'),
+  'pages', '[{"page":1,"kind":"question","audience":"student","task":1},{"page":2,"kind":"question","audience":"student","task":2},{"page":3,"kind":"question","audience":"student","task":2},{"page":4,"kind":"marking_checklist","audience":"trainer","task":2}]'::jsonb,
+  'tasks', '[{"number":"1","title":"Questioning","firstPage":1,"lastPage":1},{"number":"2","title":"Workshop","firstPage":2,"lastPage":4}]'::jsonb,
+  'questions', '[{"key":"1.3","seq":"Q3","display":"Q3","label":"Tools","task":1,"header":{"page":1,"x":0.07,"y":0.1,"w":0.86,"h":0.05},"areas":[]},
+    {"key":"2.3","seq":"Q3","display":"Q3","label":"Selection log","task":2,"header":{"page":2,"x":0.07,"y":0.1,"w":0.86,"h":0.05},"areas":[]},
+    {"key":"2.11","seq":"Q11","display":"Q11","label":"Cleaning","task":2,"header":{"page":3,"x":0.07,"y":0.1,"w":0.86,"h":0.05},"areas":[]}]'::jsonb,
+  'fields', '[
+   {"id":"a1","page":1,"x":0.4,"y":0.2,"w":0.2,"h":0.05,"role":"student","kind":"table_cell","questionKey":"1.3","label":"Buckets · Uses","table":{"row":1,"col":1,"rowLabel":"Buckets","column":"Uses","group":"1.3#1","rowKey":"a1","fixed":true}},
+   {"id":"a2","page":1,"x":0.4,"y":0.3,"w":0.2,"h":0.05,"role":"student","kind":"table_cell","questionKey":"1.3","label":"Hammers · Uses","table":{"row":2,"col":1,"rowLabel":"Hammers","column":"Uses","group":"1.3#1","rowKey":"a2","fixed":true}},
+   {"id":"t23","page":2,"x":0.1,"y":0.2,"w":0.8,"h":0.3,"role":"student","kind":"text","questionKey":"2.3","label":"Answer","required":true},
+   {"id":"b1","page":3,"x":0.1,"y":0.2,"w":0.3,"h":0.05,"role":"student","kind":"table_cell","questionKey":"2.11","label":"Tool","table":{"row":1,"col":0,"column":"Tool","group":"2.11#1","rowKey":"b1"}},
+   {"id":"b2","page":3,"x":0.5,"y":0.2,"w":0.3,"h":0.05,"role":"student","kind":"table_cell","questionKey":"2.11","label":"Cleaned","table":{"row":1,"col":1,"column":"Cleaned","group":"2.11#1","rowKey":"b1"}},
+   {"id":"c1","page":3,"x":0.1,"y":0.5,"w":0.3,"h":0.05,"role":"student","kind":"table_cell","questionKey":"2.11","label":"Waste","table":{"row":3,"col":0,"column":"Waste","group":"2.11#2","rowKey":"c1"}},
+   {"id":"c2","page":3,"x":0.5,"y":0.5,"w":0.3,"h":0.05,"role":"student","kind":"table_cell","questionKey":"2.11","label":"Method","table":{"row":3,"col":1,"column":"Method","group":"2.11#2","rowKey":"c1"}},
+   {"id":"c3","page":3,"x":0.1,"y":0.6,"w":0.3,"h":0.05,"role":"student","kind":"table_cell","questionKey":"2.11","label":"Waste","table":{"row":4,"col":0,"column":"Waste","group":"2.11#2","rowKey":"c3"}},
+   {"id":"c4","page":3,"x":0.5,"y":0.6,"w":0.3,"h":0.05,"role":"student","kind":"table_cell","questionKey":"2.11","label":"Method","table":{"row":4,"col":1,"column":"Method","group":"2.11#2","rowKey":"c3"}},
+   {"id":"e1y","page":4,"x":0.75,"y":0.2,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":null,"label":"Submitted written answers","option":"yes","group":"p4.ev1","checklist":"evidence"},
+   {"id":"e1n","page":4,"x":0.85,"y":0.2,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":null,"label":"Submitted written answers","option":"no","group":"p4.ev1","checklist":"evidence"},
+   {"id":"p1y","page":4,"x":0.75,"y":0.4,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":null,"label":"Plan work","option":"yes","group":"p4.pf1","checklist":"performance"},
+   {"id":"p1n","page":4,"x":0.85,"y":0.4,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":null,"label":"Plan work","option":"no","group":"p4.pf1","checklist":"performance"},
+   {"id":"p2y","page":4,"x":0.75,"y":0.5,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":"2.3","label":"Selection log","option":"yes","group":"p4.pf2","checklist":"performance"},
+   {"id":"p2n","page":4,"x":0.85,"y":0.5,"w":0.02,"h":0.015,"role":"trainer","kind":"yes_no","questionKey":"2.3","label":"Selection log","option":"no","group":"p4.pf2","checklist":"performance"}]'::jsonb);
+$$;
+grant execute on function pg_temp.tpl2(text) to authenticated;
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
+select pg_temp.put('cpc', (public.asm_admin('assessment_create', jsonb_build_object('courseId', 'course-asm-test', 'unitId', 'unit-asm-1', 'code', 'ASMU1-PDF', 'title', 'Workbook-shaped')))->>'id');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-templates', '%s/%s.pdf')$$, pg_temp.v('cpc'), repeat('b', 64)), 'REAL the workbook PDF is uploaded');
+select is((public.asm_template_save(pg_temp.v('cpc')::uuid, pg_temp.tpl2(pg_temp.s('cpc') || '/' || repeat('b', 64) || '.pdf')))->>'ok', 'true', 'REAL its template is saved');
+select is((public.asm_admin('version_publish', jsonb_build_object('assessmentId', pg_temp.v('cpc'))))->>'ok', 'true', 'REAL a workbook version publishes on its template');
+select is(((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('cpc'), 'batchIds', '["f5000000-0000-0000-0000-000000000012"]'::jsonb, 'dueAt', (now() + interval '10 days')::text)))->>'created')::int, 1, 'REAL assigned to G2');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select pg_temp.put('r1', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', (select id from public.asm_assignments where assessment_id = pg_temp.v('cpc')::uuid))))->'attempt'->>'id');
+select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('r1'), 'responses', '{"pdf":{"a1":"Holds paint","t23":"Rollers for walls","b1":"Roller","b2":"Yes","c1":"Rags","c2":"Bin","c3":"","c4":""}}'::jsonb)))->>'ok', 'true', 'REAL the answers are saved');
+select is((select string_agg(e->>'message', ' | ') from jsonb_array_elements((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('r1'), 'declaration', '{"signature":"Sue Student","agreed":true}'::jsonb)))->'errors') e),
+  'Task 1 · Q3: 1 empty cell in the table.', 'REAL submit refuses a table of printed rows with one empty cell, in the browser''s words');
+select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('r1'), 'responses', '{"pdf":{"a1":"Holds paint","a2":"Sets nails","t23":"Rollers for walls","b1":"Roller","b2":"Yes","c1":"Rags","c2":"","c3":"","c4":""}}'::jsonb)))->>'ok', 'true', 'REAL the answers change');
+select is((select string_agg(e->>'message', ' | ') from jsonb_array_elements((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('r1'), 'declaration', '{"signature":"Sue Student","agreed":true}'::jsonb)))->'errors') e),
+  'Q11: fill in at least one complete row of the table (table 2 of 2).', 'REAL submit refuses a blank-row table whose only row is part-filled, in the browser''s words');
+select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('r1'), 'responses', '{"pdf":{"a1":"Holds paint","a2":"Sets nails","t23":"Rollers for walls","b1":"Roller","b2":"Yes","c1":"Rags","c2":"Bin","c3":"","c4":""}}'::jsonb)))->>'ok', 'true', 'REAL one complete row');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('r1'), 'declaration', '{"signature":"Sue Student","agreed":true}'::jsonb)))->>'ok', 'true', 'REAL complete: submitted');
+select pg_temp.as_postgres();
+select pg_temp.put('h1', (select hash from public.asm_attempt_snapshots where attempt_id = pg_temp.v('r1')::uuid));
+select pg_temp.put('h1rec', (select s.answers::text || s.signatures::text || s.record::text from public.asm_attempt_snapshots s where s.attempt_id = pg_temp.v('r1')::uuid));
+-- the trainer marks attempt 1 Not Yet Satisfactory, signs off and returns it
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('r1'), 'results', '[{"questionId":"1.3","outcome":"S"},{"questionId":"2.3","outcome":"NYS","feedback":"Name the rollers."},{"questionId":"2.11","outcome":"S"}]'::jsonb,
+  'taskResults', '[{"taskId":"1","feedback":"Good."},{"taskId":"2","feedback":"Q3 again."}]'::jsonb, 'assessorResponses', '{"pdf":{"office":"x"},"pdfChoice":{}}'::jsonb, 'overallFeedback', 'Nearly there.')))->>'state', 'marking', 'REAL attempt 1 marked');
+select is((select string_agg(task_id || ':' || outcome, ',' order by task_id) from public.asm_task_results where attempt_id = pg_temp.v('r1')::uuid), '1:S,2:NYS', 'REAL task results follow the marks');
+select is((public.asm_sign(pg_temp.v('r1')::uuid, 'assessor_signoff', 'typed'))->>'kind', 'assessor_signoff', 'REAL the assessor signs off attempt 1');
+select is((select string_agg(e->>'message', ' | ') from jsonb_array_elements((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('r1'), 'outcome', 'NYS', 'overallFeedback', 'Nearly there.')))->'errors') e),
+  'Marking checklist, page 4: "Submitted written answers" has no Yes / No. | Marking checklist, page 4: "Plan work" has no Yes / No.', 'RELEASE waits for the Evidence row and the activity Performance row, listed (the Performance row of a question follows its mark)');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('r1'), 'assessorResponses', '{"pdf":{"office":"x"},"pdfChoice":{"p4.ev1":"yes","p4.pf1":"no"}}'::jsonb)))->>'state', 'marking', 'RELEASE the trainer ticks the checklist rows');
+select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('r1'), 'outcome', 'NYS', 'overallFeedback', 'Nearly there.')))->>'ok', 'true', 'REAL attempt 1 returned for resubmission');
+-- once released the trainer's side of attempt 1 never changes
+select throws_ok(format($$select public.asm_trainer('mark_save', jsonb_build_object('id', '%s', 'results', '[{"questionId":"2.3","outcome":"S"}]'::jsonb))$$, pg_temp.v('r1')), '42501', null, 'LOCK a returned attempt is no longer open for marking');
+select pg_temp.as_postgres();
+select throws_ok(format($$update public.asm_results set outcome = 'S' where attempt_id = '%s' and question_id = '2.3'$$, pg_temp.v('r1')), '42501', null, 'LOCK a released question mark cannot change');
+select throws_ok(format($$update public.asm_task_results set feedback = 'changed' where attempt_id = '%s'$$, pg_temp.v('r1')), '42501', null, 'LOCK a released task result and its feedback cannot change');
+select throws_ok(format($$update public.asm_attempts set overall_feedback = 'changed' where id = '%s'$$, pg_temp.v('r1')), '42501', null, 'LOCK the released overall feedback cannot change');
+select throws_ok(format($$update public.asm_attempts set outcome = 'S' where id = '%s'$$, pg_temp.v('r1')), '42501', null, 'LOCK the released outcome cannot change');
+select throws_ok(format($$update public.asm_attempts set assessor_responses = '{}' where id = '%s'$$, pg_temp.v('r1')), '42501', null, 'LOCK the trainer''s released fields cannot change');
+select throws_ok(format($$update public.asm_attempt_signatures set signer_name = 'Someone else' where attempt_id = '%s' and kind = 'assessor_signoff'$$, pg_temp.v('r1')), '42501', null, 'LOCK the assessor''s sign-off cannot change');
+-- attempt 2 starts from attempt 1's answers; its own snapshot; attempt 1's never changes
+select pg_temp.put('r2', (select id::text from public.asm_attempts where assignment_id = (select assignment_id from public.asm_attempts where id = pg_temp.v('r1')::uuid) and attempt_no = 2));
+select is((select responses->'pdf'->>'t23' from public.asm_attempts where id = pg_temp.v('r2')::uuid), 'Rollers for walls', 'SNAP attempt 2 starts from attempt 1''s answers');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('r2'), 'responses', '{"pdf":{"a1":"Holds paint","a2":"Sets nails","t23":"Lambswool rollers for walls, mohair for gloss","b1":"Roller","b2":"Yes","c1":"Rags","c2":"Bin"}}'::jsonb)))->>'ok', 'true', 'SNAP attempt 2 is changed');
+select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('r2'), 'declaration', '{"signature":"Sue Student","agreed":true}'::jsonb)))->>'ok', 'true', 'SNAP attempt 2 submitted');
+select pg_temp.as_postgres();
+select is((select count(*)::int from public.asm_attempt_snapshots where attempt_id in (pg_temp.v('r1')::uuid, pg_temp.v('r2')::uuid)), 2, 'SNAP each attempt has its own snapshot');
+select is((select hash from public.asm_attempt_snapshots where attempt_id = pg_temp.v('r1')::uuid), pg_temp.s('h1'), 'SNAP attempt 1''s snapshot hash is unchanged after the return and the resubmission');
+select is((select s.answers::text || s.signatures::text || s.record::text from public.asm_attempt_snapshots s where s.attempt_id = pg_temp.v('r1')::uuid), pg_temp.s('h1rec'), 'SNAP attempt 1''s snapshot content is unchanged');
+select isnt((select hash from public.asm_attempt_snapshots where attempt_id = pg_temp.v('r2')::uuid), pg_temp.s('h1'), 'SNAP attempt 2 has its own hash');
+select is((select answers->'pdf'->>'t23' || ' / ' || (record->>'attemptNo') from public.asm_attempt_snapshots where attempt_id = pg_temp.v('r2')::uuid), 'Lambswool rollers for walls, mohair for gloss / 2', 'SNAP attempt 2''s snapshot holds its own answers');
+-- attempt 2: Competent, final; the final PDF records the snapshot and the marks; then nothing of attempt 2 changes
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000004');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('r2'), 'results', '[{"questionId":"1.3","outcome":"S"},{"questionId":"2.3","outcome":"S","feedback":"Good."}]'::jsonb,
+  'taskResults', '[{"taskId":"1","feedback":"Good."},{"taskId":"2","feedback":"Done."}]'::jsonb, 'overallFeedback', 'Competent.')))->>'state', 'marking', 'REAL attempt 2 partly marked');
+select is((public.asm_sign(pg_temp.v('r2')::uuid, 'assessor_signoff', 'typed'))->>'kind', 'assessor_signoff', 'REAL attempt 2 signed off');
+select is((select string_agg(e->>'message', ' | ') from jsonb_array_elements((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('r2'), 'outcome', 'S', 'overallFeedback', 'Competent.')))->'errors') e),
+  'Q11 is not marked yet. | Marking checklist, page 4: "Submitted written answers" has no Yes / No. | Marking checklist, page 4: "Plan work" has no Yes / No.', 'RELEASE each attempt answers its own checklist: attempt 2 starts with none, and an unmarked question is listed');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('r2'), 'results', '[{"questionId":"2.11","outcome":"S"}]'::jsonb, 'assessorResponses', '{"pdf":{},"pdfChoice":{"p4.ev1":"no","p4.pf1":"yes"}}'::jsonb)))->>'state', 'marking', 'REAL attempt 2 fully marked, its checklist answered');
+select is((select outcome from public.asm_task_results where attempt_id = pg_temp.v('r2')::uuid and task_id = '2'), 'S', 'RELEASE a question marked in a later save updates its task result (the save names no task)');
+select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('r2'), 'outcome', 'S', 'overallFeedback', 'Competent.')))->>'ok', 'true', 'REAL attempt 2 released Competent (final)');
+select is((public.asm_pdf_attempt(pg_temp.v('r1')::uuid))->'attempts'->0->'assessorResponses'->'pdfChoice'->>'p4.ev1', 'yes', 'HISTORY attempt 1 keeps its own checklist answers after attempt 2 is marked (its PDF is drawn from them)');
+select is(jsonb_array_length((public.asm_pdf_attempt(pg_temp.v('r1')::uuid))->'attempts'), 1, 'HISTORY attempt 1''s PDF holds attempt 1 only (its own snapshot and marks)');
+select is((public.asm_pdf_attempt(pg_temp.v('r2')::uuid))->'attempts'->1->'assessorResponses'->'pdfChoice'->>'p4.ev1', 'no', 'HISTORY attempt 2 has its own checklist answers');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/final-%s.pdf')$$, pg_temp.v('r2'), repeat('f', 64)), 'REAL the final PDF is uploaded');
+select pg_temp.put('out2', public.asm_pdf_output_record(pg_temp.v('r2')::uuid, pg_temp.s('r2') || '/final-' || repeat('f', 64) || '.pdf', repeat('f', 64))::text);
+select pg_temp.as_postgres();
+select is((pg_temp.s('out2')::jsonb->>'snapshot_hash') = (select hash from public.asm_attempt_snapshots where attempt_id = pg_temp.v('r2')::uuid), true, 'REAL the final PDF records attempt 2''s snapshot hash');
+select is((select (o.marking->>'outcome') || ':' || jsonb_array_length(o.marking->'results') || ':' || (o.marking->'taskResults'->1->>'feedback') || ':' || (o.marking->'signoff'->>'signerName' is not null)::text
+  || ':' || (o.marking_hash = encode(sha256(convert_to(o.marking::text, 'UTF8')), 'hex'))::text from public.asm_attempt_outputs o where o.attempt_id = pg_temp.v('r2')::uuid), 'S:3:Done.:true:true', 'REAL the final PDF records the marks, task results, feedback and sign-off, with their hash');
+select throws_ok(format($$update public.asm_attempts set overall_feedback = 'changed' where id = '%s'$$, pg_temp.v('r2')), '42501', null, 'LOCK a final result cannot change');
+select throws_ok(format($$update public.asm_results set feedback = 'changed' where attempt_id = '%s'$$, pg_temp.v('r2')), '42501', null, 'LOCK a final question comment cannot change');
+select throws_ok(format($$update public.asm_attempt_outputs set marking = '{}' where attempt_id = '%s'$$, pg_temp.v('r2')), '42501', null, 'LOCK the stored final PDF record cannot change');
+-- the acknowledged copy (owner 2026-11-26): stored once the student has acknowledged, beside the sign-off copy, the official record from then on
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
+select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/acknowledged-%s.pdf')$$, pg_temp.v('r2'), repeat('a', 64)), '42501', null, 'ACK the student cannot store the acknowledged copy before acknowledging');
+select throws_ok(format($$select public.asm_pdf_output_record('%s', '%s/acknowledged-%s.pdf', '%s', 'acknowledged')$$, pg_temp.v('r2'), pg_temp.v('r2'), repeat('a', 64), repeat('a', 64)), '22023', 'The student has not acknowledged the result yet', 'ACK no acknowledged copy before the acknowledgement');
+select is((public.asm_sign(pg_temp.v('r2')::uuid, 'student_acknowledgement', 'typed', null, 'I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.'))->>'kind', 'student_acknowledgement', 'ACK the student acknowledges the result');
+select throws_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/final-%s.pdf')$$, pg_temp.v('r2'), repeat('b', 64)), '42501', null, 'ACK the student still cannot store a sign-off copy');
+select throws_ok(format($$select public.asm_pdf_output_record('%s', '%s/final-%s.pdf', '%s', 'final')$$, pg_temp.v('r2'), pg_temp.v('r2'), repeat('b', 64), repeat('b', 64)), '42501', null, 'ACK the student cannot record a sign-off copy');
+select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-output', '%s/acknowledged-%s.pdf')$$, pg_temp.v('r2'), repeat('a', 64)), 'ACK the student''s browser uploads the acknowledged copy');
+select is((public.asm_pdf_output_record(pg_temp.v('r2')::uuid, pg_temp.s('r2') || '/acknowledged-' || repeat('a', 64) || '.pdf', repeat('a', 64), 'acknowledged'))->>'kind', 'acknowledged', 'ACK the acknowledged copy is recorded');
+select is((public.asm_pdf_output_record(pg_temp.v('r2')::uuid, pg_temp.s('r2') || '/acknowledged-' || repeat('a', 64) || '.pdf', repeat('a', 64), 'acknowledged'))->>'pdf_sha256', repeat('a', 64), 'ACK recording it again returns the first copy (it stands)');
+select is((public.asm_pdf_attempt(pg_temp.v('r2')::uuid))->'attempts'->1->'output'->>'kind', 'acknowledged', 'ACK the official record is the acknowledged copy');
+select is((select string_agg(o->>'kind', ',' order by o->>'kind') from jsonb_array_elements((public.asm_pdf_attempt(pg_temp.v('r2')::uuid))->'attempts'->1->'outputs') o), 'acknowledged,final', 'ACK both copies are kept and listed');
+select pg_temp.as_postgres();
+select is((select string_agg(o.kind || ':' || (o.snapshot_hash = s.hash)::text || ':' || (o.marking_hash = encode(sha256(convert_to(o.marking::text, 'UTF8')), 'hex'))::text
+  || ':' || (o.acknowledgement_hash <> '')::text || ':' || (o.acknowledgement_hash = '' or o.acknowledgement_hash = encode(sha256(convert_to(o.acknowledgement::text, 'UTF8')), 'hex'))::text, ',' order by o.kind)
+  from public.asm_attempt_outputs o join public.asm_attempt_snapshots s on s.attempt_id = o.attempt_id where o.attempt_id = pg_temp.v('r2')::uuid),
+  'acknowledged:true:true:true:true,final:true:true:false:true', 'ACK each copy keeps the snapshot, marking and acknowledgement hashes it was drawn from');
+select is((select (a.marking_hash = f.marking_hash)::text || ':' || (a.acknowledgement->>'signerName' is not null)::text || ':' || (a.acknowledgement->>'statement')
+  from public.asm_attempt_outputs a join public.asm_attempt_outputs f on f.attempt_id = a.attempt_id and f.kind = 'final' where a.attempt_id = pg_temp.v('r2')::uuid and a.kind = 'acknowledged'),
+  'true:true:I declare that I have been assessed in this unit, and I have been advised of my result. I also am aware of my appeal rights.', 'ACK the marking is the same in both copies; the acknowledged copy names who acknowledged and the statement');
+select throws_ok(format($$delete from public.asm_attempt_outputs where attempt_id = '%s' and kind = 'acknowledged'$$, pg_temp.v('r2')), '42501', null, 'ACK the acknowledged copy is never removed');
 select * from finish();
 rollback;

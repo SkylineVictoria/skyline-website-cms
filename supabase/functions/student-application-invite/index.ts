@@ -278,6 +278,38 @@ Deno.serve(async (request) => {
     if (link.error || !tokenHash) return json({ error: "Your application could not be opened. Try again." }, 502);
     return json({ tokenHash, email: found.email });
   }
+  // CONTACT-VERIFY: a 6-digit code to the signed-in person's channel still to confirm (email by Graph, mobile by ClickSend).
+  if (body?.action === "contact_code_send") {
+    const userClient = createClient(url, anon, { ...config, global: { headers: { Authorization: authorization } } });
+    const { data: who } = await userClient.auth.getUser(authorization.slice(7));
+    if (!who?.user) return json({ error: "Sign in first." }, 401);
+    const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, "0");
+    const { data: target, error: issueError } = await admin.rpc("contact_code_issue", { p_user: who.user.id, p_code: code });
+    if (issueError || !target?.to) {
+      const known = issueError && ["22023", "42501"].includes(issueError.code ?? "");
+      return json({ error: known ? issueError!.message : "A code could not be sent." }, 400);
+    }
+    try {
+      if (target.kind === "phone") {
+        const { data: settings } = await admin.rpc("invite_sms_settings");
+        const to = normalizePhoneNumber(String(target.to));
+        if (!settings?.username || !to) return json({ error: "A text cannot be sent at the moment. Ask SLIT to check the text message connection." }, 502);
+        const sent = await createClickSendProvider({ username: settings.username, apiKey: settings.apiKey, senderId: settings.from ?? undefined })
+          .send({ deliveryId: who.user.id, to, body: `SLIT: your code is ${code}. It works for 10 minutes.` });
+        return sent.kind === "accepted" ? json({ ok: true, kind: "phone" }) : json({ error: "The text could not be sent. Try again in a minute." }, 502);
+      }
+      const rules = await loadRules(admin, ["admissions.application_invite_sender", "admissions.application_invite_template"]);
+      const sender = String(rules["admissions.application_invite_sender"] ?? "");
+      const brand = brandOf((rules["admissions.application_invite_template"] ?? {}) as Record<string, unknown>);
+      const paragraphs = ["Hello,", `Your code to confirm this email address for your SLIT application is ${code}. It works for 10 minutes.`];
+      const html = simpleEmailHtml({ brand: brand.brand || "SLIT", heading: "Your one-time code", paragraphs, code, note: "If you did not ask for this code, you can ignore this email.",
+        footer: brand.contact, primary: brand.primaryOk ? brand.field("primary") : "#ea6619" });
+      const sent = await sendMail(ports, sender, String(target.to), `Your ${brand.brand || "SLIT"} code: ${code}`, paragraphs.join("\r\n\r\n"), html);
+      return sent.accepted ? json({ ok: true, kind: "email" }) : json({ error: sent.message }, 502);
+    } catch {
+      return json({ error: "The code could not be sent. Try again in a minute." }, 502);
+    }
+  }
   if (typeof body?.action === "string" && body.action.startsWith("guardian_")) {
     const caller = createClient(url, anon, { ...config, global: { headers: { Authorization: authorization } } });
     return guardian(body.action, body, request, admin, caller, ports);
@@ -312,6 +344,10 @@ Deno.serve(async (request) => {
     return json({ error: known ? beginError.message : "The invitation could not be prepared." }, beginError?.code === "42501" ? 403 : 400);
   }
 
+  // CONTACT-VERIFY: the text carries its own link (the database knows which one was opened).
+  const wantsText = !Array.isArray(body?.channels) || body.channels.includes("sms");
+  const smsToken = wantsText && !retry ? newToken() : "";
+  if (smsToken) await admin.rpc("invite_set_sms_token", { p_invitation: invitation.id, p_hash: await sha256Hex(smsToken) });
   let accepted = false;
   let sentLink = "";
   let message = "Office 365 could not accept the invitation. Try sending it again.";
@@ -349,9 +385,9 @@ Deno.serve(async (request) => {
   });
   if (trackingError || recorded !== true) return json({ error: "The invitation status could not be confirmed. Check its status before resending." }, 503);
   if (!accepted) return json({ error: message }, 502);
-  // Also by text, unless the sender asked for email only (channels: ["email"]).
-  const wantsText = !Array.isArray(body?.channels) || body.channels.includes("sms");
-  const sms = wantsText && sentLink ? await textLink(admin, "student", invitation.id, sentLink,
+  // Also by text (its own link), unless the sender asked for email only (channels: ["email"]).
+  const smsLink = smsToken && sentLink ? (() => { const u = new URL(sentLink); u.hash = new URLSearchParams({ t: smsToken }).toString(); return u.href; })() : "";
+  const sms = smsLink ? await textLink(admin, "student", invitation.id, smsLink,
     (name) => `SLIT: ${name ? `Hi ${name}, y` : "Y"}our application is ready to check and sign. Open it here:`) : "not_requested";
   return json({ ok: true, sms });
 });

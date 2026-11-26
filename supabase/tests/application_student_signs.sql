@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(72);
+select plan(81);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -120,7 +120,7 @@ select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select is(public.portal_wizard_invite_accept(pg_temp.tok(1)), 'e5100000-0000-0000-0000-000000000002'::uuid, 'student accepts with a password');
 select throws_ok($$select public.portal_wizard_invite_accept(pg_temp.tok(99))$$, '42501', null, 'unknown link refused');
 reset role;
-select ok(pg_temp.events('e5100000-0000-0000-0000-000000000002') = 'sent,accepted', 'timeline: sent, accepted');
+select ok(pg_temp.events('e5100000-0000-0000-0000-000000000002') = 'sent,email_confirmed,accepted', 'timeline: sent, email confirmed by the link, accepted');
 select ok(pg_temp.mails('e5100000-0000-0000-0000-000000000002') like '%handoff_accepted%', 'agent told the student accepted');
 
 -- 5. Student edits allowed fields; view-only fields refused.
@@ -250,6 +250,36 @@ select ok((select detail->>'endsWith' = '555' and detail::text not like '%61400%
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
 select throws_ok($$select public.invite_sms_settings()$$, '42501', null, 'agents cannot read the ClickSend account');
 reset role;
+
+-- 12. Two links (20261126150517): the text link proves the mobile; the email is confirmed with a code before signing.
+reset role;
+insert into auth.users(id, email, email_confirmed_at, encrypted_password) values ('b5100000-0000-0000-0000-000000000007', 'textlink.signs@example.test', now(), 'x');
+insert into public.enrollment_students(id, agency_id, full_name, email, status) values
+ ('d5100000-0000-0000-0000-000000000007', 'a5100000-0000-0000-0000-000000000001', 'Text Link', 'textlink.signs@example.test', 'Active');
+insert into public.enrollment_applications(id, agency_id, assigned_agent_id, created_by, student_id, status, student_email, data) values
+ ('e5100000-0000-0000-0000-000000000007', 'a5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001',
+  'd5100000-0000-0000-0000-000000000007', 'draft', 'textlink.signs@example.test', '{"values":{"dob":"1995-01-01","mobile":"0412345678"}}');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select public.portal_wizard_invite_begin('e5100000-0000-0000-0000-000000000007', pg_temp.hash(pg_temp.tok(11)));
+reset role;
+select ok(public.invite_set_sms_token(pg_temp.inv('e5100000-0000-0000-0000-000000000007'), pg_temp.hash(pg_temp.tok(12))), 'the text gets its own link');
+select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-0000-000000000007'), true);
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(12)))->>'via', 'sms', 'lookup knows the text link');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select is(public.portal_wizard_invite_accept(pg_temp.tok(12)), 'e5100000-0000-0000-0000-000000000007'::uuid, 'opened from the text link');
+select is(public.contact_pending_mine()->>'kind', 'email', 'the email still has to be confirmed');
+select public.portal_my_password_created();
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  '42501', 'Confirm your email with the code we send you before signing', 'no signature before the email code');
+reset role;
+select public.contact_code_issue('b5100000-0000-0000-0000-000000000007', '654321');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
+select is(public.contact_code_verify('111111', 'e5100000-0000-0000-0000-000000000007')->>'ok', 'false', 'wrong email code refused');
+select is(public.contact_code_verify('654321', 'e5100000-0000-0000-0000-000000000007')->>'ok', 'true', 'email confirmed with the code');
+select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  'then the student signs and submits');
+reset role;
+select ok(pg_temp.events('e5100000-0000-0000-0000-000000000007') like '%mobile_confirmed%email_confirmed%', 'both confirmations on the timeline');
 
 select * from finish();
 rollback;

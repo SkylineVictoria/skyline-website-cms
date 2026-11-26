@@ -24,6 +24,45 @@ Deno.serve(async (request) => {
   if (!user?.user) return reply({ ok: false, error: "Authentication required." }, 401);
   const admin = createClient(url, serviceKey, { auth: { persistSession: false } });
 
+  // STUDENT-DELETE-FILES (2026-11-26): after admin_student_delete_all, remove the deleted student's application files: the
+  // storage_cleanup_queue rows that call queued, plus anything left in each deleted application's folder. Admins only; only
+  // applications that no longer exist; nothing else in the queue is touched.
+  if (body.action === "student_files") {
+    const { error: notAdmin } = await caller.rpc("admin_business_require");
+    if (notAdmin) return reply({ ok: false, error: "Administrator access required." }, 403);
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const appIds: string[] = Array.isArray(body.applicationIds) ? body.applicationIds.filter((v: unknown) => typeof v === "string" && uuid.test(v)).slice(0, 200) : [];
+    const queueIds: number[] = Array.isArray(body.cleanupIds) ? body.cleanupIds.filter((v: unknown) => Number.isSafeInteger(v)).slice(0, 2000) : [];
+    if (appIds.length) {
+      const { data: alive, error } = await admin.from("enrollment_applications").select("id").in("id", appIds);
+      if (error) return reply({ ok: false, error: "Files could not be checked." }, 500);
+      if (alive?.length) return reply({ ok: false, error: "These applications still exist; their files are kept." }, 409);
+    }
+    const byBucket = new Map<string, Set<string>>();
+    const add = (bucket: string, path: string) => { if (!byBucket.has(bucket)) byBucket.set(bucket, new Set()); byBucket.get(bucket)!.add(path); };
+    if (queueIds.length) {
+      const { data: rows, error } = await admin.from("storage_cleanup_queue").select("id,bucket_name,storage_path").in("id", queueIds).is("done_at", null);
+      if (error) return reply({ ok: false, error: "Files could not be read." }, 500);
+      for (const row of rows ?? []) add(row.bucket_name, row.storage_path);
+    }
+    for (const id of appIds) {
+      const { data: objects } = await admin.storage.from("enrollment-documents").list(id, { limit: 1000 });
+      for (const object of objects ?? []) if (object.name && object.id) add("enrollment-documents", `${id}/${object.name}`);
+    }
+    let removed = 0; const failed: string[] = [];
+    for (const [bucket, paths] of byBucket) {
+      const list = [...paths];
+      for (let i = 0; i < list.length; i += 100) {
+        const chunk = list.slice(i, i + 100);
+        const { data, error } = await admin.storage.from(bucket).remove(chunk);
+        if (error) failed.push(...chunk); else removed += data?.length ?? 0;
+      }
+    }
+    if (queueIds.length && !failed.length) await admin.from("storage_cleanup_queue").update({ done_at: new Date().toISOString() }).in("id", queueIds);
+    if (failed.length) console.error(JSON.stringify({ event: "student_files_remove_failed", count: failed.length }));
+    return reply({ ok: failed.length === 0, removed, failed: failed.length });
+  }
+
   // A rule message from the database (errcode 55000) is safe to show; anything else becomes a generic message.
   const step = (error: { code?: string; message?: string }) => new DeleteStepError(error.code === "55000" || error.code === "PT409" ? String(error.message) : "This draft can't be deleted.");
   const port: DeletePort = {

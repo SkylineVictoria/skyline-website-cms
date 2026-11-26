@@ -403,6 +403,27 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await expect(page.getByTestId("signoff-done")).toBeVisible({ timeout: 10_000 });
   await page.getByTestId("decide").click();
   await expect(page.getByTestId("stored-final")).toContainText("Sign-off copy", { timeout: 60_000 });
+  // the summary sheet's final result for this unit, attempt 2's column, shows Competent (the release decision)
+  const finalYes = sql(`select f->>'id' from public.asm_attempts a join public.asm_versions v on v.id = a.version_id cross join lateral jsonb_array_elements(v.template->'fields') f
+    where a.id = '${attempt2}' and f->>'kind' = 'yes_no' and f->>'label' ilike '%final%' and f->>'option' = 'yes' and (f->>'attempt')::int = 2`);
+  const finalNo = sql(`select f->>'id' from public.asm_attempts a join public.asm_versions v on v.id = a.version_id cross join lateral jsonb_array_elements(v.template->'fields') f
+    where a.id = '${attempt2}' and f->>'kind' = 'yes_no' and f->>'label' ilike '%final%' and f->>'option' = 'no' and (f->>'attempt')::int = 2`);
+  expect(finalYes).toMatch(/\S/);
+  await expect(page.locator(`[data-testid=trainer-field][data-field="${finalYes}"]`)).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(`[data-testid=trainer-field][data-field="${finalNo}"]`)).toHaveAttribute("aria-pressed", "false");
+  // the unit outcome: recorded and signed by the assessor (Not Yet Competent, then Competent supersedes it), never automatic
+  const unitPanel = page.getByTestId("unit-outcome");
+  const studentOf2 = sql(`select student_id from public.asm_attempts where id = '${attempt2}'`);
+  for (const [label, code] of [["Not Yet Competent", "NYC"], ["Competent", "C"]] as const) {
+    await unitPanel.getByTestId("unit-outcome-open").click();
+    await unitPanel.getByRole("button", { name: label, exact: true }).click();
+    await expect(unitPanel.getByTestId("unit-outcome-record")).toBeDisabled();
+    await unitPanel.getByRole("checkbox").check();
+    await unitPanel.getByTestId("unit-outcome-record").click();
+    await expect(unitPanel.getByTestId("unit-outcome-msg")).toHaveText(`Unit outcome recorded: ${label}.`, { timeout: 15_000 });
+    expect(sql(`select outcome || '/' || signed_role from public.asm_unit_outcomes where student_id = '${studentOf2}' order by signed_at desc, id desc limit 1`)).toBe(`${code}/trainer`);
+  }
+  expect(sql(`select count(*) from public.asm_unit_outcomes where student_id = '${studentOf2}'`)).toBe("2");
   // attempt 1 keeps its own answers, marks and checklists: opened from attempt 2's history, read-only
   await page.getByTestId("earlier-attempts").getByRole("link", { name: "Attempt 1" }).click();
   await expect(page.getByTestId("decided")).toContainText("Returned for resubmission", { timeout: 30_000 });
@@ -588,6 +609,91 @@ test("PDF-WORKBOOK a trainer of another intake is refused the marking view", asy
   await expect(page.getByRole("alert")).toContainText(/Not your attempt/, { timeout: 15_000 });
   await expect(page.getByTestId("pdf-marking")).toHaveCount(0);
   expect(sql(`select count(*) from public.asm_audit_log where actor = (select id from auth.users where email = '${otherTrainer.email}')`)).toBe("0");
+});
+
+test("PDF-WORKBOOK unit mapping: AI suggestions (lab stand-in) are ticks to confirm, keyed by the printed question numbers; version 2 publishes", async ({ page }) => {
+  test.skip(!cpcAssignment, "needs the CPCCPD2012 assessment above");
+  test.setTimeout(240_000);
+  const assessment = sql(`select assessment_id from public.asm_assignments where id = '${cpcAssignment}'`);
+  const q11 = sql(`select q->>'label' from public.asm_assessments a join public.asm_versions v on v.id = a.current_version_id cross join lateral jsonb_array_elements(v.template->'questions') q where a.id = '${assessment}' and q->>'key' = '1.1'`);
+  // the unit's requirements (as training.gov.au would give them): one says what Q1 of task 1 asks, one is unrelated
+  sql(`insert into public.asm_unit_elements(unit_id, kind, code, text) values ('${unitId}', 'performance_criterion', 'P4.1', $q$${q11}$q$), ('${unitId}', 'knowledge_evidence', 'P4.KE', 'Orbital mechanics of distant moons')`);
+  await signInAsAdmin(page, admin.email);
+  await page.goto(`/admin/assessments/${assessment}?tab=mapping`);
+  await expect(page.getByTestId("mapping-panel")).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId("ai-suggest").click();
+  const row = page.getByTestId("suggestion-row").first();
+  await expect(row).toBeVisible({ timeout: 60_000 });
+  await expect(row).toContainText("Task 1 · Q1");
+  expect(sql(`select string_agg(question_id || ':' || state, ',') from public.asm_mapping_suggestions where assessment_id = '${assessment}'`)).toMatch(/1\.1:suggested/);
+  expect(sql(`select count(*) from public.asm_unit_mappings m join public.asm_versions v on v.id = m.version_id where v.assessment_id = '${assessment}'`)).toBe("0"); // a suggestion is never a mapping
+  await row.getByRole("button", { name: /^Confirm:/ }).click();
+  await expect.poll(() => sql(`select count(*) from public.asm_unit_mappings m join public.asm_versions v on v.id = m.version_id where v.assessment_id = '${assessment}' and v.status = 'draft' and m.question_id = '1.1'`), { timeout: 20_000 }).toBe("1");
+  await expect.poll(() => sql(`select state from public.asm_mapping_suggestions where assessment_id = '${assessment}' and question_id = '1.1' limit 1`)).toBe("confirmed");
+  // the mapping change started version 2 (the workbook carried over); it publishes
+  await page.reload();
+  await expect(page.getByTestId("version-line")).toContainText("Editing v2 draft", { timeout: 30_000 });
+  await page.getByTestId("publish-version").click();
+  await page.getByRole("button", { name: "Publish", exact: true }).last().click();
+  await expect(page.getByTestId("status-badge")).toHaveText("Published", { timeout: 15_000 });
+  expect(sql(`select v.version_no || ':' || (v.template is not null)::text from public.asm_assessments a join public.asm_versions v on v.id = a.current_version_id where a.id = '${assessment}'`)).toBe("2:true");
+});
+
+test("PDF-WORKBOOK copy assessment: the copy has its own workbook file, the fields and the mapping", async ({ page }) => {
+  test.skip(!cpcAssignment, "needs the CPCCPD2012 assessment above");
+  test.setTimeout(180_000);
+  const assessment = sql(`select assessment_id from public.asm_assignments where id = '${cpcAssignment}'`);
+  await signInAsAdmin(page, admin.email);
+  await page.goto(`/admin/assessments/${assessment}`);
+  await expect(page.getByTestId("status-badge")).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Copy assessment" }).click();
+  await page.waitForURL((u) => /\/admin\/assessments\/[0-9a-f-]{36}/.test(u.pathname) && !u.pathname.includes(assessment), { timeout: 30_000 });
+  const copy = page.url().replace(/[?#].*$/, "").split("/").pop()!;
+  await expect(page.getByTestId("pdf-template-summary")).toContainText("54 pages · 14 questions", { timeout: 60_000 }); // drawn from the copied file
+  expect(sql(`select title from public.asm_assessments where id = '${copy}'`)).toMatch(/^Copy of /);
+  expect(sql(`select (v.template->'pdf'->>'path' like '${copy}/%')::text || ':' || jsonb_array_length(v.template->'fields') || ':' || (select count(*) from public.asm_unit_mappings m where m.version_id = v.id)
+    from public.asm_versions v where v.assessment_id = '${copy}'`)).toBe(`true:${sql(`select jsonb_array_length(v.template->'fields') from public.asm_assessments a join public.asm_versions v on v.id = a.current_version_id where a.id = '${assessment}'`)}:1`);
+  expect(sql(`select count(*) from storage.objects where bucket_id = 'assessment-templates' and name like '${copy}/%.pdf'`)).toBe("1");
+  await expect(page.getByTestId("status-badge")).toHaveText("Draft");
+});
+
+test("PDF-WORKBOOK preview as learner: the admin walks the student wizard of the version; nothing is saved", async ({ page }) => {
+  test.skip(!riiAssignment, "needs the RIICWD525E assessment above");
+  test.setTimeout(180_000);
+  const assessment = sql(`select assessment_id from public.asm_assignments where id = '${riiAssignment}'`);
+  const counts = () => sql(`select (select count(*) from public.asm_attempts) || ':' || (select count(*) from public.asm_pdf_signatures) || ':' || (select count(*) from public.asm_audit_log) || ':' || (select count(*) from public.asm_attempt_snapshots)`);
+  await signInAsAdmin(page, admin.email);
+  await page.goto(`/admin/assessments/${assessment}`);
+  const before = counts();
+  await page.getByTestId("preview-learner").click();
+  const dlg = page.getByTestId("learner-preview");
+  await expect(dlg).toBeVisible();
+  await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 1 of 36", { timeout: 60_000 });
+  await expect(dlg.getByTestId("autosave")).toHaveText("Preview: nothing is saved");
+  await dlg.getByTestId("wizard-next").click();
+  await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 2 of 36");
+  await dlg.getByTestId("wizard-next").click();
+  await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 3 of 36");
+  await expect(dlg.getByTestId("step-question")).toBeVisible({ timeout: 30_000 });
+  await dlg.getByTestId("answer-text").first().fill("Preview answer, never saved");
+  await dlg.getByTestId("wizard-back").click();
+  await dlg.getByTestId("wizard-next").click();
+  await expect(dlg.getByTestId("answer-text").first()).toHaveValue("Preview answer, never saved"); // kept while the preview is open
+  await dlg.getByTestId("wizard-steps").getByRole("button").last().click();
+  await expect(dlg.getByTestId("review-missing")).toContainText("Sign the student declaration (page 7).");
+  await expect(dlg.getByTestId("submit")).toBeDisabled();
+  await shot(page, "pdf-preview-as-learner");
+  await dlg.getByTestId("preview-close").click();
+  await expect(dlg).toHaveCount(0);
+  await expect(page).not.toHaveURL(/step=/);
+  expect(counts()).toBe(before); // no attempt, signature, snapshot or audit row
+  await page.getByTestId("preview-learner").click();
+  await dlg.getByTestId("wizard-next").click();
+  await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 2 of 36");
+  await dlg.getByTestId("wizard-next").click();
+  await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 3 of 36");
+  await expect(dlg.getByTestId("answer-text").first()).toHaveValue(""); // closing forgot the answers
 });
 
 // The shared dropdown in the assessment area, and two simultaneous starts of the same assessment (moved here from the old

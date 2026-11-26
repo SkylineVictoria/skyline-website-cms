@@ -219,7 +219,7 @@ function UnitOutcome({ studentId, unitId, attemptId, suggested }: { studentId: s
   const [msg, setMsg] = useState("");
   const record = async () => {
     setBusy(true); setMsg("");
-    try { await asmTrainer("unit_outcome_record", { studentId, unitId, outcome, signOff: tick, notes, attemptIds: [attemptId] }); setOpen(false); setMsg(`Unit outcome recorded: ${outcome === "C" ? "Competent" : "Not Yet Competent"}.`); }
+    try { await asmTrainer("unit_outcome_record", { studentId, unitId, outcome, signOff: tick, notes, attemptIds: [attemptId] }); setOpen(false); setTick(false); setNotes(""); setMsg(`Unit outcome recorded: ${outcome === "C" ? "Competent" : "Not Yet Competent"}.`); }
     catch (e) { setMsg(e instanceof Error ? e.message : "Not recorded."); } finally { setBusy(false); }
   };
   return <section className="space-y-2 rounded-xl border border-background-200 bg-white p-3 text-sm" data-testid="unit-outcome">

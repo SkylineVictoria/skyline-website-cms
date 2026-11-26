@@ -15,6 +15,7 @@ import AssignmentsPanel from "./panels/AssignmentsPanel";
 import AttemptDrawer from "./panels/AttemptDrawer";
 import MappingPanel, { type MapQuestion } from "./panels/MappingPanel";
 import PdfTemplatePanel from "./panels/PdfTemplatePanel";
+import LearnerPreview from "./panels/LearnerPreview";
 
 const TABS = [
   { id: "pdf", label: "PDF template", icon: "ri-file-pdf-2-line" }, { id: "mapping", label: "Unit mapping", icon: "ri-links-line" },
@@ -40,6 +41,7 @@ export default function AssessmentDetailPage() {
   const [confirmPublish, setConfirmPublish] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [units, setUnits] = useState<{ id: string; code: string; name: string }[]>([]);
   const [course, setCourse] = useState<{ code: string; name: string } | null>(null);
   const timer = useRef<number | null>(null);
@@ -124,6 +126,7 @@ export default function AssessmentDetailPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {saving ? <span className="text-xs text-foreground-500" role="status">{saving}</span> : null}
+            <Button variant="outline" disabled={!detail.editing?.hasTemplate} title={detail.editing?.hasTemplate ? undefined : "Upload the workbook PDF first"} onClick={() => setPreviewing(true)} data-testid="preview-learner">Preview as learner</Button>
             {editingDraft && current ? <Button variant="outline" onClick={() => setConfirmDiscard(true)} data-testid="discard-draft">Discard draft</Button> : null}
             <Button onClick={() => setConfirmPublish(true)} disabled={!editable || !editingDraft || !ready} title={publishTitle} data-testid="publish-version">{editingDraft && current ? `Publish v${n}` : "Publish"}</Button>
             <MoreMenu label="More actions" items={[{ label: copying ? "Copying…" : "Copy assessment", icon: "ri-file-copy-line", onClick: () => void copy() }, { label: "All assessments", icon: "ri-arrow-left-line", onClick: () => navigate("/admin/assessments") }]} />
@@ -139,6 +142,7 @@ export default function AssessmentDetailPage() {
       {tab === "assignments" ? <AssignmentsPanel assessmentId={detail.id} courseId={detail.courseId} assignments={detail.assignments} canAssign={canAssign} onChanged={() => void load()} onOpenAttempt={setAttempt} /> : null}
       {tab === "versions" ? <VersionsPanel detail={detail} onChanged={() => void load()} /> : null}
       {tab === "settings" ? <SettingsPanel detail={detail} units={units} onChanged={() => void load()} /> : null}
+      {previewing ? <LearnerPreview assessmentId={detail.id} title={detail.title} unit={unit} onClose={() => setPreviewing(false)} /> : null}
       {attempt ? <AttemptDrawer attemptId={attempt} onClose={() => setAttempt(null)} onChanged={() => void load()} /> : null}
       <ConfirmDialog open={confirmDiscard} title={`Discard the version ${n} draft?`} confirmLabel="Discard draft" message={`Its changes are lost. Version ${current?.versionNo ?? ""} stays live.`} onCancel={() => setConfirmDiscard(false)} onConfirm={() => void discardDraft()} />
       <ConfirmDialog open={confirmPublish} title={`Publish version ${n}?`} confirmLabel="Publish" message="A published version is frozen: its workbook and fields never change. Changes after publishing create the next version; students on this version keep it." onCancel={() => setConfirmPublish(false)} onConfirm={() => void publish()} />

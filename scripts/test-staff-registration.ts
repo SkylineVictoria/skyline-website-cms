@@ -4997,7 +4997,7 @@ test("Students (2026-11-24): the finish-application link asks for a password; ag
   assert.ok(fn.includes('ctx?.role === "agent" && ((action === "invite" && parsed.role === "student") || action === "resend")'));
   // Since 2026-11-26 the password is created at the signature (SignPasswordFields, portal_my_password_set via hasPortalLogin).
   const signPw = read("src/pages/agency/components/ApplicationHandoff.tsx") + read("src/pages/agency/lib/handoff.ts");
-  assert.ok(signPw.includes('supabase.rpc("portal_my_password_created")') && signPw.includes("supabase.auth.updateUser({ password: value.password })") && signPw.includes("passwordProblem(next, again)"));
+  assert.ok(signPw.includes('supabase.rpc("portal_my_password_created")') && signPw.includes("supabase.auth.updateUser({ password: value.password })") && signPw.includes("passwordProblem(pw, again)"));
   const detail = read("src/pages/agency/applications/detail/page.tsx");
   assert.equal((detail.match(/<StudentPortalInvite /g) ?? []).length, 2, "both the incomplete and the full application views");
   const ui = read("src/pages/agency/components/StudentPortalInvite.tsx");
@@ -5196,7 +5196,7 @@ test("Agent fills, student signs (2026-11-25, 20261125190517): only the student 
   assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked)"));
   assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
   // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(72);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(81);"));
 });
 
 test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Forgot password); a first-time email starts as a guest and creates the password at the signature", () => {
@@ -5209,7 +5209,7 @@ test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Fo
   const page = read("src/pages/agency/application-invite/page.tsx");
   assert.ok(page.includes('check.account === "login"') && page.includes("Forgot password?") && page.includes("Start my application"));
   assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("await saveSignPassword(signPasswordRef.current);"));
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(72);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(81);"));
 });
 
 test("Student confirms every screen (2026-11-26): an application sent by the agent opens at the passport and moves one screen at a time to the signature", () => {
@@ -5228,4 +5228,13 @@ test("Invite by text (2026-11-26, 20261126130517): the application and guardian 
   assert.ok(sql.includes("'endsWith', nullif(right(regexp_replace(coalesce(p_last_digits, ''), '[^0-9]', '', 'g'), 3), '')"));
   assert.ok(sql.includes("grant execute on function public.invite_sms_settings() to service_role;") && sql.includes("revoke all on function public.invite_sms_settings() from public, anon, authenticated;"));
   assert.ok(read("src/pages/agency/components/FinishApplicationPanel.tsx").includes("Also send the link by text message to the student's mobile"));
+});
+
+test("Contact verify (2026-11-26, 20261126150517): the email and the text carry different links; the other channel is confirmed with a code before signing", () => {
+  const sql = read("supabase/migrations/20261126150517_contact_verify_students.sql");
+  assert.ok(sql.includes("where fingerprint in (token_hash, sms_token_hash) for update;") && sql.includes("raise exception 'Confirm your email with the code we send you before signing'"));
+  assert.ok(sql.includes("encode(sha256(convert_to(p_user::text || ':' || p_code, 'UTF8')), 'hex'), clock_timestamp() + interval '10 minutes'"), "codes stored hashed, 10 minutes");
+  const fn = read("supabase/functions/student-application-invite/index.ts");
+  assert.ok(fn.includes('await admin.rpc("invite_set_sms_token"') && fn.includes('body?.action === "contact_code_send"'));
+  assert.ok(read("src/pages/agency/components/ApplicationHandoff.tsx").includes('data-testid="sign-contact-code"'));
 });

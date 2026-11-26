@@ -74,6 +74,7 @@ export const HANDOFF_EVENT_LABEL: Record<string, string> = {
   taken_back: "Taken back by the agent", signed: "Signed by the student", guardian_sent: "Sent to the parent / guardian",
   guardian_verified: "Parent / guardian verified their email", guardian_signed: "Signed by the parent / guardian", submitted: "Submitted",
   sms_sent: "Text message sent", sms_failed: "Text message not sent", sms_skipped: "No text message",
+  email_confirmed: "Email confirmed", mobile_confirmed: "Mobile confirmed",
 };
 
 export const HANDOFF_STATE_LABEL: Record<HandoffState, string> = {
@@ -113,3 +114,12 @@ export async function saveSignPassword(value: { needed: boolean; password: strin
   const { error: recordError } = await supabase.rpc("portal_my_password_created");
   if (recordError) throw new Error("Your password was saved, but it could not be recorded. Try signing again.");
 }
+
+/** CONTACT-VERIFY: the signed-in person's email / mobile still to confirm with a code (the link came by the other channel). */
+export async function pendingContact(): Promise<{ kind: string; value: string } | null> {
+  const { data, error } = await supabase.rpc("contact_pending_mine");
+  return error || !data ? null : data as { kind: string; value: string };
+}
+export const sendContactCode = () => invokeInvite<{ ok: true; kind: string }>({ action: "contact_code_send" }, "A code could not be sent. Try again in a minute.");
+export const verifyContactCode = (code: string, applicationId: string) =>
+  rpc<{ ok: boolean; error?: string }>("contact_code_verify", { p_code: code, p_application: applicationId });

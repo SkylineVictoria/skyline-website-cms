@@ -5,7 +5,7 @@ import {
   HANDOFF_EVENT_LABEL, HANDOFF_STATE_LABEL, type Declaration, type Handoff, type HandoffDiff,
 } from "@/pages/agency/lib/handoff";
 import { INVITE_SMS_LABEL, sendApplicationInvitation } from "@/pages/agency/lib/portalApplications";
-import { signingPasswordNeeded } from "@/pages/agency/lib/handoff";
+import { pendingContact, sendContactCode, signingPasswordNeeded, verifyContactCode } from "@/pages/agency/lib/handoff";
 import { passwordProblem } from "@/lib/passwords";
 
 const when = (value: string | null | undefined) => (value ? new Date(value).toLocaleString() : "—");
@@ -241,28 +241,75 @@ export function SignPasswordFields({ applicationId, onChange }: { applicationId:
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
+  // CONTACT-VERIFY: a channel still to confirm (the email when the link came by text) needs its 6-digit code before signing.
+  const [pending, setPending] = useState<{ kind: string; value: string } | null>(null);
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [codeError, setCodeError] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const report = (pw: string, again: string, need: boolean, contactOk: boolean) =>
+    onChange({ needed: need, password: pw, valid: (!need || !passwordProblem(pw, again)) && contactOk });
   useEffect(() => {
     let live = true;
-    void signingPasswordNeeded(applicationId).then((need) => { if (live) { setNeeded(need); onChange({ needed: need, password: "", valid: !need }); } });
+    void Promise.all([signingPasswordNeeded(applicationId), pendingContact()]).then(([need, p]) => {
+      if (!live) return;
+      setNeeded(need); setPending(p);
+      report("", "", need, !p);
+    });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- checked once
   }, []);
-  if (!needed) return null;
+  if (!needed && !pending) return null;
   const update = (next: string, again: string) => {
     setPassword(next); setConfirm(again);
-    onChange({ needed: true, password: next, valid: !passwordProblem(next, again) });
+    report(next, again, Boolean(needed), !pending || confirmed);
+  };
+  const sendCode = async () => {
+    setBusy(true); setCodeError("");
+    try { await sendContactCode(); setCodeSent(true); } catch (e) { setCodeError(e instanceof Error ? e.message : "A code could not be sent."); } finally { setBusy(false); }
+  };
+  const checkCode = async () => {
+    setBusy(true); setCodeError("");
+    try {
+      const r = await verifyContactCode(code.trim(), applicationId);
+      if (!r.ok) throw new Error(r.error ?? "That code is not right.");
+      setConfirmed(true); report(password, confirm, Boolean(needed), true);
+    } catch (e) { setCodeError(e instanceof Error ? e.message : "The code could not be checked."); } finally { setBusy(false); }
   };
   const input = "mt-1 w-full rounded-md border border-background-300 px-3 py-2 text-sm";
   return (
-    <div className="space-y-2 rounded-lg border border-primary-200 bg-primary-50/40 p-4" data-testid="sign-password">
-      <p className="text-sm font-semibold text-foreground-900">Create your password</p>
-      <p className="text-xs text-foreground-600">You will use it to sign in to your SLIT account to follow your application.</p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="text-sm">Password<input type={show ? "text" : "password"} autoComplete="new-password" value={password} onChange={(e) => update(e.target.value, confirm)} className={input} data-testid="sign-password-new" /></label>
-        <label className="text-sm">Confirm password<input type={show ? "text" : "password"} autoComplete="new-password" value={confirm} onChange={(e) => update(password, e.target.value)} className={input} data-testid="sign-password-confirm" /></label>
-      </div>
-      {password ? <p className="text-xs text-foreground-600">{passwordProblem(password, confirm || undefined) ?? "Looks good."}</p> : null}
-      <label className="flex items-center gap-2 text-xs text-foreground-600"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="h-4 w-4" />Show password</label>
+    <div className="space-y-4 rounded-lg border border-primary-200 bg-primary-50/40 p-4" data-testid="sign-password">
+      {pending ? (
+        <div className="space-y-2" data-testid="sign-contact-code">
+          <p className="text-sm font-semibold text-foreground-900">Confirm your {pending.kind === "email" ? "email" : "mobile"}</p>
+          {confirmed ? <p role="status" className="text-sm text-emerald-800"><i className="ri-checkbox-circle-line" aria-hidden="true" /> Confirmed.</p> : (
+            <>
+              <p className="text-xs text-foreground-600">We send a 6-digit code to {pending.value}. SLIT sends your offer and updates there.</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <button type="button" disabled={busy} onClick={() => void sendCode()} className="rounded-md border border-background-300 px-3 py-2 text-sm font-semibold hover:bg-background-100">{codeSent ? "Send another code" : pending.kind === "email" ? "Email me a code" : "Text me a code"}</button>
+                {codeSent ? <>
+                  <label className="text-sm">Code<input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} className={`${input} w-32 font-mono tracking-widest`} data-testid="sign-contact-code-input" /></label>
+                  <button type="button" disabled={busy || code.length !== 6} onClick={() => void checkCode()} className="rounded-md bg-primary-500 px-3 py-2 text-sm font-semibold text-background-50 disabled:opacity-50">Confirm</button>
+                </> : null}
+              </div>
+              {codeError ? <p role="alert" className="text-xs text-red-800">{codeError}</p> : null}
+            </>
+          )}
+        </div>
+      ) : null}
+      {needed ? (
+        <div className="space-y-2">
+          <p className="text-sm font-semibold text-foreground-900">Create your password</p>
+          <p className="text-xs text-foreground-600">You will use it to sign in to your SLIT account to follow your application.</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-sm">Password<input type={show ? "text" : "password"} autoComplete="new-password" value={password} onChange={(e) => update(e.target.value, confirm)} className={input} data-testid="sign-password-new" /></label>
+            <label className="text-sm">Confirm password<input type={show ? "text" : "password"} autoComplete="new-password" value={confirm} onChange={(e) => update(password, e.target.value)} className={input} data-testid="sign-password-confirm" /></label>
+          </div>
+          {password ? <p className="text-xs text-foreground-600">{passwordProblem(password, confirm || undefined) ?? "Looks good."}</p> : null}
+          <label className="flex items-center gap-2 text-xs text-foreground-600"><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} className="h-4 w-4" />Show password</label>
+        </div>
+      ) : null}
     </div>
   );
 }

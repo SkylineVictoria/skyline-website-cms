@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(67);
+select plan(72);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -239,6 +239,16 @@ update public.enrollment_applications set status = 'action_required' where id = 
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
 select throws_ok($$select public.portal_application_resubmit('e5100000-0000-0000-0000-000000000002', 'fixed', jsonb_build_object('declarations', pg_temp.decl()))$$,
   '42501', null, 'agent resubmit refused');
+reset role;
+
+-- 11. Invite by text (20261126130517): settings only when ClickSend is connected, the student's mobile, outcome on the timeline.
+reset role;
+select is(public.invite_sms_settings(), null, 'no ClickSend connection: no text settings');
+select ok((public.invite_sms_target('student', pg_temp.inv('e5100000-0000-0000-0000-000000000002'))->>'mobile') <> '', 'the student mobile is found');
+select lives_ok($$select public.invite_sms_record('e5100000-0000-0000-0000-000000000002', 'student', 'sent', '', '+61400000555')$$, 'text outcome recorded');
+select ok((select detail->>'endsWith' = '555' and detail::text not like '%61400%' from skyline_private.application_handoff_events where application_id = 'e5100000-0000-0000-0000-000000000002' and event = 'sms_sent' limit 1), 'only the last three digits are kept');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.invite_sms_settings()$$, '42501', null, 'agents cannot read the ClickSend account');
 reset role;
 
 select * from finish();

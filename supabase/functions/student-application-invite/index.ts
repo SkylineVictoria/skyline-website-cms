@@ -4,6 +4,7 @@ import { loadRules } from "../_shared/business-rules.ts";
 import { tokenRoles } from "../_shared/microsoft365.ts";
 import { isServiceCaller } from "../_shared/service-role.ts";
 import { simpleEmailHtml } from "../_shared/email-html.ts";
+import { createClickSendProvider, normalizePhoneNumber } from "../_shared/notification/sms.ts";
 
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -140,12 +141,14 @@ async function guardian(action: string, body: any, request: Request, admin: any,
     });
     if (error || !req) return dbError(error, "The request could not be prepared.");
     let accepted = false;
+    let guardianLink = "";
     let message = "The email to your parent or guardian could not be sent. Try again.";
     try {
       const brand = brandOf(req.template);
       const site = httpsUrl(brand.field("siteUrl"));
       const link = new URL("/guardian-sign", site);
       link.hash = new URLSearchParams({ t: token }).toString();
+      guardianLink = link.href;
       const subject = `Please sign ${req.studentName}'s application to ${brand.brand}`;
       const paragraphs = [`Hello ${req.guardianName},`,
         `${req.studentName} is under 18 and has applied to study with ${brand.brand}. As their parent or guardian, please read the declarations and sign the application too. It is submitted only once you have signed.`,
@@ -160,7 +163,10 @@ async function guardian(action: string, body: any, request: Request, admin: any,
     } catch { /* recorded below */ }
     const { data: recorded, error: trackError } = await admin.rpc("portal_guardian_request_delivered", { p_request: req.id, p_accepted: accepted });
     if (trackError || recorded !== true) return json({ error: "The email status could not be confirmed. Check before sending again." }, 503);
-    return accepted ? json({ ok: true }) : json({ error: message }, 502);
+    if (!accepted) return json({ error: message }, 502);
+    const sms = guardianLink ? await textLink(admin, "guardian", req.id, guardianLink,
+      (name, studentName) => `SLIT: ${name ? `Hi ${name}, ` : ""}please sign ${studentName}'s application (they are under 18). Open it here:`) : "not_requested";
+    return json({ ok: true, sms });
   }
   if (typeof body.token !== "string" || !tokenShape.test(body.token)) return json({ error: "This link is invalid, expired, or no longer available." }, 403);
   const hash = await sha256Hex(body.token);
@@ -196,6 +202,30 @@ async function guardian(action: string, body: any, request: Request, admin: any,
     return error ? dbError(error, "The signature could not be saved.") : json(data);
   }
   return json({ error: "Unknown action." }, 400);
+}
+
+/**
+ * INVITE-SMS (owner, 2026-11-26): the same link by text message through the ClickSend connection (Integrations › Connections).
+ * Never blocks the email: no connection or no mobile is recorded as skipped; the outcome goes on the application's timeline.
+ */
+// deno-lint-ignore no-explicit-any
+async function textLink(admin: any, kind: "student" | "guardian", id: string, link: string, wording: (name: string, studentName: string) => string): Promise<string> {
+  try {
+    const [{ data: settings }, { data: target }] = await Promise.all([admin.rpc("invite_sms_settings"), admin.rpc("invite_sms_target", { p_kind: kind, p_id: id })]);
+    if (!target?.applicationId) return "skipped";
+    const record = (outcome: string, code: string, to = "") => admin.rpc("invite_sms_record", { p_application: target.applicationId, p_who: kind,
+      p_outcome: outcome, p_code: code, p_last_digits: to.slice(-3) }).then(() => undefined, () => undefined);
+    if (!settings?.username || !settings?.apiKey) { await record("skipped", "not_connected"); return "not_connected"; }
+    const to = normalizePhoneNumber(String(target.mobile ?? ""));
+    if (!to) { await record("skipped", "no_mobile"); return "no_mobile"; }
+    const provider = createClickSendProvider({ username: settings.username, apiKey: settings.apiKey, senderId: settings.from ?? undefined });
+    const outcome = await provider.send({ deliveryId: id, to, body: `${wording(String(target.name ?? "").trim(), String(target.studentName ?? ""))}\n${link}` });
+    if (outcome.kind === "accepted") { await record("sent", "", to); return "sent"; }
+    await record("failed", outcome.code, to);
+    return "failed";
+  } catch {
+    return "failed";
+  }
 }
 
 Deno.serve(async (request) => {
@@ -283,6 +313,7 @@ Deno.serve(async (request) => {
   }
 
   let accepted = false;
+  let sentLink = "";
   let message = "Office 365 could not accept the invitation. Try sending it again.";
   try {
     const template = invitation.template as Record<string, unknown>;
@@ -301,6 +332,7 @@ Deno.serve(async (request) => {
       throw new Error("Invalid invitation template");
     }
     link.hash = new URLSearchParams({ t: token }).toString();
+    sentLink = link.href;
     const text = [field("greeting"), field("body"), `${button}: ${link}`, field("note"), field("signature"), brand.contact].join("\r\n\r\n");
     const html = simpleEmailHtml({
       brand: brand.brand, heading: subject, paragraphs: [field("greeting"), field("body")],
@@ -317,5 +349,9 @@ Deno.serve(async (request) => {
   });
   if (trackingError || recorded !== true) return json({ error: "The invitation status could not be confirmed. Check its status before resending." }, 503);
   if (!accepted) return json({ error: message }, 502);
-  return json({ ok: true });
+  // Also by text, unless the sender asked for email only (channels: ["email"]).
+  const wantsText = !Array.isArray(body?.channels) || body.channels.includes("sms");
+  const sms = wantsText && sentLink ? await textLink(admin, "student", invitation.id, sentLink,
+    (name) => `SLIT: ${name ? `Hi ${name}, y` : "Y"}our application is ready to check and sign. Open it here:`) : "not_requested";
+  return json({ ok: true, sms });
 });

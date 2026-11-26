@@ -19,6 +19,7 @@ import { emailConflictBody } from "../_shared/identity-email.ts";
 import { activationSite, sendAccountEmail, sendActivationEmail } from "../_shared/activation-mail.ts";
 import { loadEmailBranding } from "../_shared/email-html.ts";
 import { loadInstitutionTimeZone } from "../_shared/time-zone.ts";
+import { contactCodeEmail, newCode, sendText } from "../_shared/contact-links.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -107,12 +108,83 @@ async function deliverInvite(admin: any, anon: any, email: string, name: string,
   return { emailSent: false, existingIdentity: false, inviteLink: (link?.properties?.action_link as string | undefined) ?? null };
 }
 
+const TEXT_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * CONTACT-VERIFY portal (owner, 2026-11-26: "allow both"): a portal invitation (agent, agency admin, student) also goes by text with
+ * its own link (/agency/text-invite#t=), which proves the mobile. The person confirms their email with a 6-digit code, then gets a
+ * fresh /agency/accept-invite link, the same as the emailed one (migration 20261126190517). Link holders only: the token is the credential.
+ */
+// deno-lint-ignore no-explicit-any
+async function textInvite(admin: any, parsed: Record<string, unknown>) {
+  const action = String(parsed.action);
+  const token = String(parsed.token ?? "");
+  const invalid = () => json({ error: "This link is invalid or has expired. Use the invitation we emailed you, or ask for a new one." }, 403);
+  if (!TEXT_TOKEN.test(token)) return invalid();
+  const hash = await sha256Hex(token);
+  const { data: opened } = await admin.rpc("link_opened", { p_hash: hash });
+  if (opened?.scope !== "portal" || !opened?.subject || opened.via !== "sms") return invalid();
+  const { data: person } = await admin.rpc("link_person", { p_scope: "portal", p_subject: opened.subject });
+  if (!person?.email) return invalid();
+  const env = Deno.env.toObject();
+  if (action === "text_open") return json({ ok: true, name: person.name ?? "", emailTo: opened.emailTo ?? null, emailPending: opened.emailPending === true });
+  if (action === "text_code_send") {
+    if (!opened.emailPending) return json({ ok: true, confirmed: true });
+    const code = newCode();
+    const { data: issued, error } = await admin.rpc("link_code_issue", { p_scope: "portal", p_subject: opened.subject, p_code: code });
+    if (error) return json({ error: error.message }, 429);
+    const message = contactCodeEmail({ name: person.name, code, purpose: "create your password" });
+    const sent = await sendAccountEmail(env, { to: String(issued?.to ?? person.email), subject: message.subject, heading: "Confirm your email",
+      paragraphs: [`Hello ${String(person.name ?? "").trim() || "there"},`, "You opened your invitation from our text message. Enter this code to confirm your email before you create your password.", code],
+      note: "The code works for 10 minutes. If you did not ask for it, you can ignore this email." });
+    return "ok" in sent ? json({ ok: true, emailTo: opened.emailTo }) : json({ error: "The code could not be emailed. Try again in a minute." }, 502);
+  }
+  if (opened.emailPending) {
+    const { data: checked, error } = await admin.rpc("link_code_verify", { p_scope: "portal", p_subject: opened.subject, p_code: String(parsed.code ?? "").replace(/\D/g, "").slice(0, 6) });
+    if (error) return json({ error: "The code could not be checked." }, 400);
+    if (checked?.ok !== true) return json({ ok: false, reason: checked?.reason ?? "wrong", error: checked?.error ?? "That code is not right." });
+  }
+  const { data: used } = await admin.rpc("link_alias_use", { p_hash: hash });
+  if (used !== true) return json({ error: "This link was already used. Use the invitation we emailed you, or ask for a new one." }, 410);
+  const origin = activationSite(env);
+  const fresh = newLinkToken();
+  const { error: issueErr } = await admin.rpc("portal_invitation_link_issue", { p_invitation: opened.subject, p_token_hash: await sha256Hex(fresh) });
+  if (issueErr || !origin) return json({ error: "The invitation link could not be made. Ask for the invitation to be sent again." }, 502);
+  return json({ ok: true, link: `${origin}/agency/accept-invite#t=${fresh}` });
+}
+
+/** The invitation also by text, with its own link, when SLIT holds a mobile for the email (never blocks the email). */
+// deno-lint-ignore no-explicit-any
+async function textInvitation(admin: any, invitationId: string, origin: string, agencyName: string | null): Promise<string> {
+  try {
+    const { data: person } = await admin.rpc("link_person", { p_scope: "portal", p_subject: invitationId });
+    if (!person?.email) return "skipped";
+    if (!person.mobile) return "no_mobile";
+    const textToken = newLinkToken();
+    const { data: added } = await admin.rpc("link_alias_add", { p_scope: "portal", p_subject: invitationId, p_base_hash: null,
+      p_alias_hash: await sha256Hex(textToken), p_email: person.email, p_mobile: person.mobile, p_expires: person.expiresAt ?? null });
+    if (added !== true) return "not_ready";
+    const hello = person.name ? `Hi ${person.name}, y` : "Y";
+    const sent = await sendText(admin, { mobile: person.mobile, deliveryId: `portal-invite-${invitationId}-${Date.now()}`,
+      body: `SLIT: ${hello}ou are invited to the Skyline portal${agencyName ? ` for ${agencyName}` : ""}. We also emailed you; you will confirm your email with a code.
+${origin}/agency/text-invite#t=${textToken}` });
+    return sent.state === "sent" ? "sent" : sent.code || sent.state;
+  } catch {
+    return "failed";
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   const configuration = backendConfiguration(SUPABASE_URL, SERVICE_KEY, ANON_KEY);
   if (configuration) return json(configuration, 503);
 
   try {
+    // CONTACT-VERIFY portal: the text invitation's own link (a link holder, not a signed-in admin).
+    const peek = await req.clone().json().catch(() => ({})) as Record<string, unknown>;
+    if (["text_open", "text_code_send", "text_code_verify"].includes(String(peek.action ?? ""))) {
+      return await textInvite(createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } }), peek);
+    }
     const authHeader = req.headers.get("Authorization") ?? "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
     if (!token) return json({ error: "Missing authorization token." }, 401);
@@ -164,8 +236,10 @@ Deno.serve(async (req) => {
       if (delivery.error) {
         return json({ ok: true, ...extra, invitationId: invitation.invitationId, emailSent: false, warning: "The invitation was saved but the email could not be sent. Use Resend to try again." });
       }
+      // CONTACT-VERIFY portal: also by text unless the sender asked for email only (text: false).
+      const text = parsed.text === false ? "not_requested" : await textInvitation(admin, invitation.invitationId, origin, activation.agencyName);
       return json({
-        ok: true, ...extra, invitationId: invitation.invitationId, emailSent: delivery.emailSent === true,
+        ok: true, ...extra, text, invitationId: invitation.invitationId, emailSent: delivery.emailSent === true,
         existingIdentity: delivery.existingIdentity === true,
         inviteLink: isSlit ? delivery.inviteLink : null,
       });

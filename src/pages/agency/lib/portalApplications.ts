@@ -529,14 +529,23 @@ export async function createStudentDraft(email: string, agentId: string, clientK
   return data;
 }
 
-export async function sendApplicationInvitation(applicationId: string, correctedEmail?: string): Promise<void> {
-  const { error } = await supabase.functions.invoke("student-application-invite", {
-    body: { applicationId, correctedEmail },
+/** INVITE-SMS: what happened to the text message sent with the invitation email. */
+export type InviteSmsResult = "sent" | "failed" | "no_mobile" | "not_connected" | "not_requested" | "skipped";
+export const INVITE_SMS_LABEL: Record<InviteSmsResult, string> = {
+  sent: "Also sent by text message.", failed: "The text message could not be sent (the email went).",
+  no_mobile: "No text sent: the application has no mobile number.", not_connected: "No text sent: ClickSend is not connected (Integrations › Connections).",
+  not_requested: "", skipped: "",
+};
+
+export async function sendApplicationInvitation(applicationId: string, correctedEmail?: string, text = true): Promise<InviteSmsResult> {
+  const { data, error } = await supabase.functions.invoke("student-application-invite", {
+    body: { applicationId, correctedEmail, channels: text ? ["email", "sms"] : ["email"] },
   });
   if (error) {
     const detail = error.context instanceof Response ? await error.context.json().catch(() => null) : null;
     throw new Error(detail?.error ?? "The invitation could not be sent. Try again from Finish Application.");
   }
+  return (data?.sms as InviteSmsResult) ?? "not_requested";
 }
 
 export interface WizardSummary {

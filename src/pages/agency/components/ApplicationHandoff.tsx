@@ -4,7 +4,7 @@ import {
   getDeclarations, getHandoffDiff, requestApplicationChange, sendGuardianRequest, takeBackApplication,
   HANDOFF_EVENT_LABEL, HANDOFF_STATE_LABEL, type Declaration, type Handoff, type HandoffDiff,
 } from "@/pages/agency/lib/handoff";
-import { sendApplicationInvitation } from "@/pages/agency/lib/portalApplications";
+import { INVITE_SMS_LABEL, sendApplicationInvitation } from "@/pages/agency/lib/portalApplications";
 import { signingPasswordNeeded } from "@/pages/agency/lib/handoff";
 import { passwordProblem } from "@/lib/passwords";
 
@@ -104,11 +104,12 @@ export function AgentHandoffPanel({ applicationId, handoff, onChanged }: { appli
   const [busy, setBusy] = useState<"" | "take" | "resend">("");
   const [error, setError] = useState("");
   const [confirmTake, setConfirmTake] = useState(false);
+  const [note, setNote] = useState("");
   const run = async (kind: "take" | "resend") => {
     setBusy(kind); setError("");
     try {
       if (kind === "take") await takeBackApplication(applicationId);
-      else await sendApplicationInvitation(applicationId);
+      else { const sms = await sendApplicationInvitation(applicationId); setNote(["Link sent again by email.", INVITE_SMS_LABEL[sms]].filter(Boolean).join(" ")); }
       setConfirmTake(false);
       onChanged();
     } catch (e) { setError(e instanceof Error ? e.message : "That could not be done."); }
@@ -130,6 +131,7 @@ export function AgentHandoffPanel({ applicationId, handoff, onChanged }: { appli
       <Timeline handoff={handoff} />
       {handoff.state === "submitted" || withStudent ? <HandoffDiffView applicationId={applicationId} /> : null}
       {error ? <p role="alert" className="text-sm text-red-800">{error}</p> : null}
+      {note ? <p role="status" className="text-sm text-emerald-800">{note}</p> : null}
       {withStudent ? (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" disabled={Boolean(busy)} onClick={() => setConfirmTake(true)} data-testid="handoff-take-back">Take back</Button>
@@ -180,11 +182,12 @@ export function GuardianRequestForm({ applicationId, handoff, onSent }: { applic
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [sent, setSent] = useState(false);
+  const [texted, setTexted] = useState(false);
   const guardian = handoff?.guardian;
   const set = (key: keyof typeof form) => (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: e.target.value });
   const send = async () => {
     setBusy(true); setError("");
-    try { await sendGuardianRequest(applicationId, form); setSent(true); onSent(); }
+    try { const r = await sendGuardianRequest(applicationId, form); setSent(true); setTexted(r.sms === "sent"); onSent(); }
     catch (e) { setError(e instanceof Error ? e.message : "The email could not be sent."); }
     finally { setBusy(false); }
   };
@@ -197,7 +200,7 @@ export function GuardianRequestForm({ applicationId, handoff, onSent }: { applic
         <p className="text-sm text-foreground-800">We emailed {guardian.name} ({guardian.relationship}) at {guardian.email}{guardian.sentAt ? ` on ${when(guardian.sentAt)}` : ""}.
           {guardian.state === "expired" ? " The link has expired: send it again below." : " You can send it again below, for example to another address."}</p>
       ) : null}
-      {sent ? <p role="status" className="text-sm font-medium text-emerald-800">Sent. Ask them to check their email.</p> : null}
+      {sent ? <p role="status" className="text-sm font-medium text-emerald-800">Sent{texted ? " by email and text message" : ""}. Ask them to check their {texted ? "email or phone" : "email"}.</p> : null}
       <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); void send(); }}>
         <label className="text-sm">Parent or guardian's full name<input required value={form.name} onChange={set("name")} className={input} maxLength={120} /></label>
         <label className="text-sm">Relationship to you<input required value={form.relationship} onChange={set("relationship")} placeholder="Mother, father, legal guardian…" className={input} maxLength={60} /></label>

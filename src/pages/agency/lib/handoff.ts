@@ -55,7 +55,7 @@ async function invokeInvite<T>(body: Record<string, unknown>, fallback: string):
 
 /** The student (under 18) asks a parent / guardian to sign: they get an email link. */
 export const sendGuardianRequest = (applicationId: string, guardian: { name: string; relationship: string; email: string; mobile: string }) =>
-  invokeInvite<{ ok: true }>({ action: "guardian_send", applicationId, ...guardian }, "The email to your parent or guardian could not be sent. Try again.");
+  invokeInvite<{ ok: true; sms?: string }>({ action: "guardian_send", applicationId, ...guardian }, "The email to your parent or guardian could not be sent. Try again.");
 
 export interface GuardianView {
   studentName: string; reference: string | null; guardianName: string; relationship: string; email: string;
@@ -73,6 +73,7 @@ export const HANDOFF_EVENT_LABEL: Record<string, string> = {
   sent: "Sent to the student", resent: "Link sent again", accepted: "Opened by the student", change_requested: "Change requested",
   taken_back: "Taken back by the agent", signed: "Signed by the student", guardian_sent: "Sent to the parent / guardian",
   guardian_verified: "Parent / guardian verified their email", guardian_signed: "Signed by the parent / guardian", submitted: "Submitted",
+  sms_sent: "Text message sent", sms_failed: "Text message not sent", sms_skipped: "No text message",
 };
 
 export const HANDOFF_STATE_LABEL: Record<HandoffState, string> = {

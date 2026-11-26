@@ -5196,7 +5196,7 @@ test("Agent fills, student signs (2026-11-25, 20261125190517): only the student 
   assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked)"));
   assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
   // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(67);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(72);"));
 });
 
 test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Forgot password); a first-time email starts as a guest and creates the password at the signature", () => {
@@ -5209,7 +5209,7 @@ test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Fo
   const page = read("src/pages/agency/application-invite/page.tsx");
   assert.ok(page.includes('check.account === "login"') && page.includes("Forgot password?") && page.includes("Start my application"));
   assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("await saveSignPassword(signPasswordRef.current);"));
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(67);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(72);"));
 });
 
 test("Student confirms every screen (2026-11-26): an application sent by the agent opens at the passport and moves one screen at a time to the signature", () => {
@@ -5217,4 +5217,15 @@ test("Student confirms every screen (2026-11-26): an application sent by the age
   assert.ok(wizard.includes('const confirmMode = signsHere && handoff?.state === "with_student";'));
   assert.ok(wizard.includes("Math.min(index, LAST_STEP, confirmMode ? Math.max(confirmedUpTo.current, step + 1) : LAST_STEP)"), "no jump past the furthest confirmed screen");
   assert.ok(!wizard.includes("setStep(LAST_STEP)"), "never opens on the signature screen");
+});
+
+test("Invite by text (2026-11-26, 20261126130517): the application and guardian links also go by ClickSend text; email never blocked; only the last 3 digits recorded", () => {
+  const fn = read("supabase/functions/student-application-invite/index.ts");
+  assert.ok(fn.includes('admin.rpc("invite_sms_settings")') && fn.includes('createClickSendProvider({ username: settings.username, apiKey: settings.apiKey'));
+  assert.ok(fn.includes('const wantsText = !Array.isArray(body?.channels) || body.channels.includes("sms");'), "text by default, email-only on request");
+  assert.ok(fn.includes('await textLink(admin, "guardian", req.id, guardianLink'), "guardian link texted too");
+  const sql = read("supabase/migrations/20261126130517_invite_sms.sql");
+  assert.ok(sql.includes("'endsWith', nullif(right(regexp_replace(coalesce(p_last_digits, ''), '[^0-9]', '', 'g'), 3), '')"));
+  assert.ok(sql.includes("grant execute on function public.invite_sms_settings() to service_role;") && sql.includes("revoke all on function public.invite_sms_settings() from public, anon, authenticated;"));
+  assert.ok(read("src/pages/agency/components/FinishApplicationPanel.tsx").includes("Also send the link by text message to the student's mobile"));
 });

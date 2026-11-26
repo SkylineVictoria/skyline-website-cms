@@ -46,3 +46,5 @@ Status: DONE = enforced in the database and tested; PARTIAL = enforced but not a
 - 2026-11-26 AVETMISS-SUBMIT-FIX (20261127100517): English proficiency, year highest school level completed, prior education and
   disability types answered in the application are copied to the student record by the database (trigger avetmiss_answers_to_student),
   so the submit check (avetmiss_student_missing) sees them for every writer; the wizard asks the year completed. Status: DONE locally.
+- 2026-11-26 AVETMISS-PAGE-CHECK (20261127110517): avetmiss_answers_missing applies the Submit rules to the answers so every wizard
+  page's Next stops while that page's AVETMISS answers are incomplete. Status: DONE locally.

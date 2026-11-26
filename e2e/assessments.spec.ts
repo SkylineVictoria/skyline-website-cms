@@ -188,9 +188,9 @@ test("the admin builds, publishes and assigns an assessment in the browser", asy
   await addQuestion(page, "single_choice", "Which comes first?");
   await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
 
-  await page.getByRole("button", { name: /^Publish v1/ }).click();
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(page.getByText(/published v1/)).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("publish-version").click();
+  await page.getByRole("button", { name: "Publish", exact: true }).last().click(); // the confirm box (rendered last)
+  await expect(page.getByTestId("status-badge")).toHaveText("Published", { timeout: 10_000 });
 
   await page.getByRole("button", { name: "Assignments" }).click();
   await page.getByRole("button", { name: "Assign to intakes" }).click();
@@ -251,14 +251,14 @@ test("the student sees the result and the admin sees the outcome", async ({ page
 
 test("the admin publishes version 2 while the student's attempt stays on version 1", async ({ page }) => {
   await signInAsAdmin(page, admin.email);
-  await page.goto(assessmentUrl);
+  await page.goto(`${assessmentUrl}?tab=builder`); // ASM-OVERVIEW: the page opens on the Overview; questions are added in the Builder
   await expect(page.getByText(/Version 1 is published/)).toBeVisible();
   // the first change to a published version starts draft v2 (D-06)
   await addQuestion(page, "short_answer", "Version 2 only: describe one hazard you removed.");
   await expect(page.getByText(/^Saved /)).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: /^Publish v2/ }).click();
   await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(page.getByText(/published v2/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Version 2 published.")).toBeVisible({ timeout: 10_000 });
   const versions = sql(`select string_agg(version_no || ':' || status, ',' order by version_no) from public.asm_versions v join public.asm_assessments s on s.id = v.assessment_id where s.course_id = '${courseId}'`);
   expect(versions).toBe("1:published,2:published");
   expect(sql(`select v.version_no from public.asm_attempts t join public.asm_versions v on v.id = t.version_id where t.student_id = '${student.student}' order by t.attempt_no desc limit 1`)).toBe("1");
@@ -581,6 +581,17 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await reviewShot(page, "ai-1a-upload-empty");
     await wizard.getByTestId("drop-workbook").locator("input[type=file]").setInputFiles(workbook);
     await wizard.getByTestId("drop-guide").locator("input[type=file]").setInputFiles(guide);
+    // ASM-OVERVIEW C: the waiting screen while the job runs, then straight to the Check step (once the header is chosen)
+    await expect(wizard.getByTestId("import-waiting")).toBeVisible();
+    await expect(wizard.getByTestId("import-waiting")).toContainText("This usually takes 2–5 minutes");
+    const atCheck = wizard.locator('[aria-current="step"]').filter({ hasText: "Check" });
+    const askFirst = wizard.getByTestId("workbook-header-picker");
+    await expect(atCheck.or(askFirst)).toBeVisible({ timeout: 240_000 });
+    if (await askFirst.count()) await askFirst.getByRole("button", { name: "Use current Skyline logo" }).click();
+    await expect(atCheck).toBeVisible({ timeout: 60_000 });
+    await expect(wizard.getByTestId("check-list")).toBeVisible();
+    // back on Upload: what was found
+    await wizard.getByRole("button", { name: "← Back" }).click();
     await expect(wizard.getByTestId("file-workbook")).toContainText("Read", { timeout: 180_000 });
     await expect(wizard.getByTestId("file-guide")).toContainText("Matched", { timeout: 180_000 });
     const found = wizard.getByTestId("found-card");
@@ -618,8 +629,10 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     if (await blocking.count()) {
       await expect(wizard.getByTestId("blocking-note")).toBeVisible();
       for (let guard = 0; guard < 10 && await blocking.count(); guard++) {
-        await blocking.first().getByRole("button").first().click();
-        await editor.getByRole("button", { name: "Looks good" }).click();
+        // the editor may already be open on it (Save & next / Leave without answer move to the next open row): a click would close it
+        const looksGood = editor.getByRole("button", { name: "Looks good" });
+        if (!(await looksGood.isVisible())) await blocking.first().getByRole("button").first().click();
+        await looksGood.click();
       }
       await expect(wizard.getByTestId("blocking-note")).toHaveCount(0);
     }
@@ -627,10 +640,12 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     await wizard.getByRole("button", { name: /Browse all \d+ questions/ }).click();
     const browse = wizard.getByTestId("browse-list");
     await browse.locator("li").first().getByRole("button").first().click();
-    const box = editor.getByLabel("Question text");
+    // the Needs a look editor may still be open on its last row: the browse list has its own row editor
+    const bEditor = browse.getByTestId("row-editor");
+    const box = bEditor.getByLabel("Question text");
     const before = await box.inputValue();
     await box.fill(`${before} (edited in the lab)`);
-    await editor.getByRole("button", { name: "Done" }).click();
+    await bEditor.getByRole("button", { name: "Done" }).click();
     await expect(browse.getByText("Edited").first()).toBeVisible();
     await browse.getByRole("button", { name: "Show original" }).first().click();
     await expect(browse.locator("li").first()).toContainText(before.slice(0, 30));
@@ -683,7 +698,7 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
 
     await signInAsAdmin(page, admin.email);
     await page.setViewportSize({ width: 1440, height: 1100 });
-    await page.goto(`/admin/assessments/${aiAssessment}`);
+    await page.goto(`/admin/assessments/${aiAssessment}?tab=builder`); // ASM-OVERVIEW: the page opens on the Overview; the Builder is "Edit"
     const builder = page.getByTestId("builder");
     await expect(builder).toBeVisible();
     await expect(page.getByTestId("published-note")).toContainText("Version 1 is published");
@@ -772,11 +787,12 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     // publish v2: students already in an attempt stay on v1
     await page.getByRole("button", { name: /^Publish v2/ }).click();
     await page.getByRole("button", { name: "Publish", exact: true }).click();
-    await expect(page.getByText(/published v2/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Version 2 published.")).toBeVisible({ timeout: 15_000 });
     expect(sql(`select string_agg(version_no || ':' || status || ':' || coalesce(definition->'source'->>'version', ''), ',' order by version_no) from public.asm_versions where assessment_id = '${aiAssessment}'`)).toBe("1:published:1.1,2:published:1.2");
 
-    // Preview PDF in the page header, downloaded: the footer prints version 1.2 and the edited text
-    await page.getByTestId("preview-pdf").click();
+    // Preview PDF (the page header's "More actions"), downloaded: the footer prints version 1.2 and the edited text
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Preview PDF" }).click();
     const dialog = page.getByRole("dialog", { name: "Preview PDF" });
     await expect(dialog.getByTestId("download-pdf")).toBeVisible({ timeout: 60_000 });
     await shot("bd-9-preview-pdf");
@@ -795,7 +811,7 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     test.skip(!aiAssessment, "needs the AI-imported assessment of the test before");
     await signInAsAdmin(page, admin.email);
     await page.setViewportSize({ width: 1440, height: 1100 });
-    await page.goto(`/admin/assessments/${aiAssessment}`);
+    await page.goto(`/admin/assessments/${aiAssessment}?tab=builder`); // ASM-OVERVIEW: the page opens on the Overview; the Builder is "Edit"
     const builder = page.getByTestId("builder");
     await expect(builder.getByTestId("builder-task").first()).toBeVisible({ timeout: 30_000 });
     // the task header: title, question count; the instructions behind ⓘ, collapsed until clicked
@@ -885,6 +901,239 @@ test.describe("ASM-WORKBOOK walkthrough", () => {
     expect(sql(`select detail->>'decision' || '|' || (detail->>'foundCode') || '|' || (detail->>'selectedCode') || '|' || (actor is not null)::text from public.asm_audit_log where target_id = '${id}' and action = 'import_unit_mismatch'`))
       .toBe("kept|RIICWD525E|CPCCPD2012|true");
     expect(sql(`select detail->>'reason' from public.asm_audit_log where target_id = '${id}' and action = 'import_unit_mismatch'`)).toContain("painting course");
+  });
+
+  test("ASM-OVERVIEW: the RIICWD525E Overview (strip, task cards, rows, grids, template), keyboard, phone width, drawer edit audited, older-import fallback", async ({ page }) => {
+    test.setTimeout(240_000);
+    test.skip(!aiAssessment, "needs the AI-imported assessment of the tests before");
+    // the owner's reader-4 read of RIICWD525E (asm_import_jobs 5f8ac5a6), kept next to the workbook like the other recorded answers
+    const fx = [process.env.ASM_AI_ANSWERS_4, workbook ? workbook.replace(/\.pdf$/i, ".ai-answers-4.json") : "", path.resolve("DNT_RII50520_RIICWD525E_Select Pavement surfacing.ai-answers-4.json")].find((p) => p && existsSync(p));
+    test.skip(!fx, "the reader-4 result (.ai-answers-4.json) is not here");
+    const { createJiti } = await import("jiti");
+    const jiti = createJiti(path.resolve("e2e") + path.sep);
+    const { definitionFromAi } = await jiti.import(path.resolve("src/lib/assessment/aiDraft.ts")) as typeof import("../src/lib/assessment/aiDraft");
+    const def = definitionFromAi((JSON.parse(readFileSync(fx as string, "utf8")) as { result: Parameters<typeof definitionFromAi>[0] }).result, [44, 75].map((page) => ({ page, x: 0, top: 0, bottom: 0, width: 10, height: 10, src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=" })));
+    // the Overview reads the editing version: the next draft of the AI-imported assessment carries the RIICWD525E definition
+    sql(`delete from public.asm_versions where assessment_id = '${aiAssessment}' and status = 'draft'`);
+    sql(`insert into public.asm_versions(tenant_id, assessment_id, version_no, definition) select tenant_id, id, (select max(version_no) + 1 from public.asm_versions where assessment_id = '${aiAssessment}'), '${JSON.stringify(def).replace(/'/g, "''")}'::jsonb from public.asm_assessments where id = '${aiAssessment}'`);
+    await signInAsAdmin(page, admin.email);
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.goto(`/admin/assessments/${aiAssessment}`);
+    const ov = page.getByTestId("assessment-overview");
+    await expect(ov).toBeVisible({ timeout: 30_000 });
+    // header: breadcrumb, Draft badge, "unit code · Workbook v… · imported …", Preview as learner / Edit / Publish
+    await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("RIICWD525E");
+    await expect(page.getByTestId("status-badge")).toHaveText("Draft");
+    await expect(page.getByTestId("header-line")).toContainText(/RIICWD525E · Workbook v1\.0 · imported/);
+    const liveV = Number(sql(`select max(version_no) from public.asm_versions where assessment_id = '${aiAssessment}' and status = 'published'`));
+    await expect(page.getByTestId("version-line")).toHaveText(`Editing v${liveV + 1} draft · v${liveV} is live`);
+    // the plan's empty parts 6. / 7. are real issues: Publish waits only for blocking ones; the Check cell links to them
+    await expect(page.getByTestId("check-cell")).toContainText(/\d+ issues? to fix/);
+    // summary strip from the item roles
+    await expect(ov.getByTestId("count-tasks")).toHaveText("2");
+    await expect(ov.getByTestId("count-questions")).toHaveText("7");
+    await expect(ov.getByTestId("count-activities")).toHaveText("19");
+    // two task cards, the first open
+    const cards = ov.getByTestId("task-card");
+    await expect(cards).toHaveCount(2);
+    const [t1, t2] = [cards.nth(0), cards.nth(1)];
+    await expect(t1.getByTestId("task-toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect(t2.getByTestId("task-toggle")).toHaveAttribute("aria-expanded", "false");
+    await expect(t1.getByTestId("task-count")).toHaveText("5 questions · 3 hrs");
+    await expect(t2.getByTestId("task-attached")).toContainText("Case study, 2 drawings and role-play brief attached");
+    // Task 1: 1.1-1.5 only, upload / calc on 1.1, no "required", no page numbers, the reference list and declaration as requirements
+    const rows1 = t1.getByTestId("overview-row");
+    await expect(rows1).toHaveCount(5);
+    for (const [i, n] of ["1.1", "1.2", "1.3", "1.4", "1.5"].entries()) await expect(rows1.nth(i)).toContainText(n);
+    await expect(rows1.nth(0).locator("[data-chip]")).toHaveText(["upload", "calc"]);
+    await expect(ov.locator("[data-chip]").filter({ hasText: /^required$/ })).toHaveCount(0);
+    await expect(t1.getByTestId("overview-rows")).not.toContainText(/\bp\. ?\d/);
+    await expect(t1.getByTestId("also-required")).toContainText("Reference list");
+    // keyboard: Q1.2 opens with Enter to its 16 rows a-p and closes with Space; every expandable row is a button with aria-expanded
+    const q12 = rows1.nth(1).getByRole("button", { name: /Outline the policies/ });
+    await expect(q12).toHaveAttribute("aria-expanded", "false");
+    await q12.focus(); await page.keyboard.press("Enter");
+    await expect(q12).toHaveAttribute("aria-expanded", "true");
+    await expect(rows1.nth(1).getByTestId("row-grid").locator("li")).toHaveCount(16);
+    await expect(rows1.nth(1).getByTestId("row-grid")).toContainText("Selection approval");
+    await page.keyboard.press("Space");
+    await expect(q12).toHaveAttribute("aria-expanded", "false");
+    expect(await ov.locator("button[aria-expanded]").evaluateAll((els) => els.every((e) => (e as HTMLElement).getBoundingClientRect().height >= 44 || (e as HTMLElement).getAttribute("aria-haspopup")))).toBe(true);
+    // learner instructions: one row, opening to readable paragraphs
+    const ins = t1.locator('[data-block^="ins-"]');
+    await expect(ins).toContainText("7 sections · method, how, when");
+    await ins.getByRole("button", { name: /Learner instructions/ }).click();
+    await expect(t1.getByTestId("instructions-text").locator("h4").first()).toBeVisible();
+    // Task 2 opened from the keyboard: steps, materials with pages, activities with deliverables, the plan template as one row
+    await t2.getByTestId("task-toggle").focus(); await page.keyboard.press("Space");
+    await expect(t2.getByTestId("task-toggle")).toHaveAttribute("aria-expanded", "true");
+    await expect(t2.locator('[data-block^="steps-"]')).toContainText("General task steps · 10");
+    await expect(t2.getByTestId("material-card")).toHaveCount(4);
+    await t2.getByTestId("material-card").filter({ hasText: "Role-play brief" }).getByRole("button").first().click();
+    await expect(t2.getByTestId("material-body").locator("h4")).toContainText(["Candidate Role", "Stakeholder Role", "Scenario", "Timing"]);
+    await expect(t2.getByTestId("material-card").filter({ hasText: "Role-play brief" })).toContainText("pp. 51–52");
+    const acts = t2.getByTestId("overview-row").filter({ has: page.locator('[data-chip="deliverable"]') });
+    // activities grouped by occasion: Occasion 1 open (2.1-2.9 and its two response templates, no numbers), Occasion 2 collapsed
+    const groups = t2.getByTestId("occasion-group");
+    await expect(groups.getByTestId("rows-label")).toHaveText(["Activities · Occasion 1", "Activities · Occasion 2"]);
+    const occ2 = groups.nth(1).getByTestId("occasion-toggle");
+    await expect(occ2).toHaveAttribute("aria-expanded", "false");
+    await expect(groups.nth(1).getByTestId("occasion-note")).toHaveText("Second observation of the same project");
+    await expect(acts).toHaveCount(9);
+    const loose = t2.getByTestId("overview-row").filter({ hasText: /Record Log and Clarification Response Summary|Validation Summary Report/ });
+    await expect(loose).toHaveCount(2);
+    await expect(loose.first()).not.toContainText("2.1.10");
+    await expect(t2.getByTestId("rows-label").filter({ hasText: "Response templates" })).toHaveCount(1);
+    expect((await occ2.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+    await occ2.focus(); await page.keyboard.press("Enter");
+    await expect(occ2).toHaveAttribute("aria-expanded", "true");
+    await expect(groups.nth(1).getByTestId("occasion-differences")).toContainText("10 activities (the first occasion has 9)");
+    await expect(acts).toHaveCount(19);
+    await expect(acts.nth(18)).toContainText("2.10");
+    await expect(acts.nth(18)).toContainText("Provide Implementation Clarification");
+    await expect(acts.nth(2)).toContainText("2.3");
+    await expect(acts.nth(2)).toContainText("Identify and Assess Risks");
+    await expect(acts.nth(2).locator('[data-chip="deliverable"]')).toHaveText("Completed Risk Assessment Worksheet");
+    const plan = t2.getByTestId("overview-row").filter({ hasText: "Prepare Surfacing Selection Plan" });
+    await expect(plan).toHaveCount(1);
+    await expect(plan.locator('[data-chip="template"]')).toHaveText("template · 12 fields");
+    await plan.getByRole("button").first().click();
+    await expect(plan.locator('[data-template-item="field"]')).toHaveCount(12);
+    await expect(t2.getByTestId("uploads-accepted")).toContainText("graphs · calculations · additional work");
+    await reviewShot(page, "ov-1-task2-open");
+    // drawer: the pencil shows on keyboard focus; Escape closes without saving; Save writes the block and the audit row
+    const pencil = ins.getByTestId("block-edit");
+    await page.mouse.move(0, 0);
+    await pencil.focus();
+    await expect.poll(() => pencil.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+    await page.keyboard.press("Enter");
+    const drawer = page.getByRole("dialog", { name: /Learner instructions · Task 1/ });
+    await expect(drawer).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(drawer).toHaveCount(0);
+    const audits = () => sql(`select count(*) from public.asm_audit_log where action = 'overview_edit' and detail->>'assessmentId' = '${aiAssessment}'`);
+    expect(audits()).toBe("0");
+    const scroll = await page.evaluate(() => window.scrollY);
+    await pencil.click();
+    const editable = drawer.locator("[contenteditable=true]").first();
+    await editable.click(); await page.keyboard.press("Control+End");
+    await page.keyboard.type(" Bring a calculator to the assessment (lab).");
+    await drawer.getByTestId("drawer-save").click();
+    await expect(drawer).toHaveCount(0, { timeout: 15_000 });
+    await expect(t1.getByTestId("instructions-text")).toContainText("Bring a calculator to the assessment (lab).");
+    await expect(plan.locator('[data-template-item="field"]')).toHaveCount(12); // open rows stay open
+    expect(Math.abs((await page.evaluate(() => window.scrollY)) - scroll)).toBeLessThan(200);
+    await expect.poll(audits, { timeout: 15_000 }).toBe("1");
+    expect(sql(`select detail->>'block' || '|' || (detail->>'after' ~ 'Bring a calculator') || '|' || (detail->>'before' !~ 'Bring a calculator') || '|' || (actor is not null) from public.asm_audit_log where action = 'overview_edit' and detail->>'assessmentId' = '${aiAssessment}'`)).toBe("instructions|true|true|true");
+    expect(sql(`select (definition->'tasks'->0->>'instructions') ~ 'Bring a calculator' from public.asm_versions where assessment_id = '${aiAssessment}' and status = 'draft'`)).toBe("t");
+    // collapsed: only the header, the strip and the task cards
+    await t1.getByTestId("task-toggle").click(); await t2.getByTestId("task-toggle").click();
+    await expect(ov.getByTestId("overview-row")).toHaveCount(0);
+    await reviewShot(page, "ov-2-collapsed");
+    // phone width: the header and chips wrap, no sideways scrolling
+    await page.setViewportSize({ width: 390, height: 844 });
+    await t1.getByTestId("task-toggle").click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await reviewShot(page, "ov-3-phone");
+    // an older import (no layout 2) still renders: the plain list inside the task cards, and the hint to re-import
+    sql(`update public.asm_versions set definition = definition #- '{source,layout}' where assessment_id = '${aiAssessment}' and status = 'draft'`);
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.reload();
+    await expect(page.getByTestId("reimport-hint")).toContainText("Re-import to get the compact view");
+    await expect(ov.getByTestId("task-card")).toHaveCount(2);
+    await expect(ov.getByTestId("overview-row").first()).toBeVisible();
+    sql(`delete from public.asm_versions where assessment_id = '${aiAssessment}' and status = 'draft'`);
+  });
+
+  test("ASM-OVERVIEW: editing a published assessment from the Overview starts a new draft; the live version and the student's attempt keep the old text; audited", async ({ page }) => {
+    test.setTimeout(120_000);
+    const id = assessmentUrl.match(/assessments\/([0-9a-f-]{36})/)?.[1] ?? "";
+    test.skip(!id, "needs the assessment of the first walkthrough");
+    sql(`delete from public.asm_versions where assessment_id = '${id}' and status = 'draft'`);
+    const live = sql(`select max(version_no) from public.asm_versions where assessment_id = '${id}' and status = 'published'`);
+    await signInAsAdmin(page, admin.email);
+    await page.goto(assessmentUrl);
+    const ov = page.getByTestId("assessment-overview");
+    await expect(ov).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("status-badge")).toHaveText("Published");
+    await expect(page.getByTestId("publish-version")).toBeDisabled();
+    const row = ov.getByTestId("overview-row").filter({ hasText: "Name two items of PPE" });
+    await row.hover();
+    await row.getByTestId("block-edit").click();
+    const drawer = page.getByRole("dialog", { name: /^Question/ });
+    await drawer.getByTestId("question-text").fill("Name two items of PPE and say what each protects (overview edit).");
+    await drawer.getByTestId("model-answer").fill("Gloves protect the hands; glasses protect the eyes.");
+    await drawer.getByTestId("drawer-save").click();
+    await expect(drawer).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByTestId("version-line")).toHaveText(`Editing v${Number(live) + 1} draft · v${live} is live`, { timeout: 15_000 });
+    await expect(page.getByTestId("publish-version")).toHaveText(`Publish v${Number(live) + 1}`);
+    await expect(page.getByTestId("discard-draft")).toBeVisible();
+    await expect(row).toContainText("(overview edit)");
+    // the new draft has the text; the live version and every attempt's version do not
+    expect(sql(`select string_agg(version_no || ':' || status || ':' || (definition::text ~ 'overview edit'), ',' order by version_no) from public.asm_versions where assessment_id = '${id}' and version_no >= ${live}`)).toBe(`${live}:published:false,${Number(live) + 1}:draft:true`);
+    expect(sql(`select count(*) from public.asm_attempts t join public.asm_versions v on v.id = t.version_id where v.assessment_id = '${id}' and v.definition::text ~ 'overview edit'`)).toBe("0");
+    expect(Number(sql(`select count(*) from public.asm_attempts t join public.asm_versions v on v.id = t.version_id where v.assessment_id = '${id}'`))).toBeGreaterThan(0);
+    expect(sql(`select k.model_answer from public.asm_question_keys k join public.asm_versions v on v.id = k.version_id where v.assessment_id = '${id}' and v.status = 'draft' and k.model_answer ~ 'Gloves'`)).toContain("Gloves");
+    expect(sql(`select detail->>'block' || '|' || (detail->>'versionNo') || '|' || (detail->>'before' ~ 'what each protects\\.') || '|' || (detail->>'after' ~ 'overview edit') from public.asm_audit_log where action = 'overview_edit' and detail->>'assessmentId' = '${id}'`)).toBe(`question|${Number(live) + 1}|true|true`);
+    // discard the draft: the live version stays
+    await page.getByTestId("discard-draft").click();
+    await page.getByRole("button", { name: "Discard draft", exact: true }).last().click();
+    await expect(page.getByTestId("status-badge")).toHaveText("Published", { timeout: 15_000 });
+    expect(sql(`select count(*) from public.asm_versions where assessment_id = '${id}' and status = 'draft'`)).toBe("0");
+  });
+
+  test("ASM-OVERVIEW: the Add assessment waiting screen follows the job's progress; a failure says so with Retry; Retry lands on Check; Resume from the Library", async ({ page }) => {
+    test.setTimeout(300_000);
+    test.skip(!aiAssessment, "needs the AI import of the tests before (the workbook's finished job)");
+    await signInAsAdmin(page, admin.email);
+    await page.goto("/admin/lms/assessments");
+    await page.getByRole("button", { name: /RII50520/ }).first().click();
+    await page.getByRole("button", { name: /RIICWD525E/ }).first().click();
+    await page.getByRole("button", { name: "+ Add assessment" }).click();
+    const wizard = page.getByRole("dialog", { name: "Add assessment" });
+    // a job that reads for a while and then fails (the lab's reader never fails by itself: the two RPCs answer for it here)
+    const job = { id: "00000000-0000-4000-8000-0000000000aa", kind: "workbook", fileName: path.basename(workbook), pages: 89, summary: {}, usage: {}, provider: "mock", model: null, cached: false, result: null, error: null };
+    const steps = [
+      { state: "running", progress: { label: "Reading task 1 of 4", done: 1, total: 6 } }, { state: "running", progress: { label: "Reading task 1 of 4", done: 1, total: 6 } },
+      { state: "running", progress: { label: "Reading task 4 of 4", done: 4, total: 6 } }, { state: "running", progress: { label: "Reading task 4 of 4", done: 4, total: 6 } },
+      { state: "running", progress: { label: "Finishing", done: 5, total: 6 } }, { state: "running", progress: { label: "Finishing", done: 5, total: 6 } },
+      { state: "failed", progress: { label: "Failed", done: 5, total: 6 }, error: "The AI reader answered 503." },
+    ];
+    let polls = 0;
+    await page.route("**/rest/v1/rpc/asm_import_start", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...job, state: "queued", progress: { label: "Starting", done: 0, total: 1 } }) }));
+    await page.route("**/rest/v1/rpc/asm_import_status", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...job, ...steps[Math.min(polls++, steps.length - 1)] }) }));
+    await page.evaluate(() => {
+      const w = window as unknown as { __stages: string[] }; w.__stages = [];
+      window.setInterval(() => { const s = document.querySelector('[data-testid="import-waiting"]')?.getAttribute("data-stage"); if (s != null && w.__stages[w.__stages.length - 1] !== s) w.__stages.push(s); }, 100);
+    });
+    await wizard.getByTestId("drop-workbook").locator("input[type=file]").setInputFiles(workbook);
+    await expect(wizard.getByTestId("import-waiting")).toContainText("Reading the document");
+    await expect(wizard.getByTestId("import-waiting")).toContainText("You can close this window");
+    await expect(wizard.getByTestId("import-waiting")).toHaveAttribute("data-stage", "2", { timeout: 60_000 });
+    await reviewShot(page, "ov-4-waiting", wizard);
+    const failed = wizard.getByTestId("import-failed");
+    await expect(failed).toContainText("The AI reader answered 503.", { timeout: 60_000 });
+    expect(await page.evaluate(() => (window as unknown as { __stages: string[] }).__stages)).toEqual(["0", "1", "2", "3"]);
+    // Retry: the real job of this file (read by the test before) -> straight to the Check step
+    await page.unroute("**/rest/v1/rpc/asm_import_start"); await page.unroute("**/rest/v1/rpc/asm_import_status");
+    await failed.getByTestId("import-retry").click();
+    await expect(wizard.locator('[aria-current="step"]').filter({ hasText: "Check" })).toBeVisible({ timeout: 120_000 });
+    await wizard.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Discard", exact: true }).click();
+    // Resume from Assessments › Library: the finished job of this file, picked up again without reading it twice. The lab's read of
+    // this file is cached from an earlier run's admin (Retry reused it), so it becomes this admin's own import, as a fresh read would be
+    sql(`update public.asm_import_jobs set created_by = (select id from auth.users where email = '${admin.email}'), created_at = now() where id = (select id from public.asm_import_jobs where kind = 'workbook' and file_name = '${path.basename(workbook).replace(/'/g, "''")}' and state = 'done' order by finished_at desc limit 1)`);
+    await page.goto("/admin/assessments");
+    const recent = page.getByTestId("recent-imports");
+    await expect(recent).toContainText(path.basename(workbook), { timeout: 30_000 });
+    await expect(recent).toContainText("Read · ready to check");
+    await recent.getByTestId("import-resume").first().click();
+    const resumed = page.getByRole("dialog", { name: "Add assessment" });
+    await expect(resumed.getByTestId("resume-note")).toContainText(`Choose ${path.basename(workbook)} below to check it`, { timeout: 30_000 });
+    const jobs = sql(`select count(*) from public.asm_import_jobs where file_name = '${path.basename(workbook).replace(/'/g, "''")}' and kind = 'workbook'`);
+    await resumed.getByTestId("drop-workbook").locator("input[type=file]").setInputFiles(workbook);
+    await expect(resumed.locator('[aria-current="step"]').filter({ hasText: /Unit|Check/ })).toBeVisible({ timeout: 120_000 }); // from the Library: the unit step first
+    expect(sql(`select count(*) from public.asm_import_jobs where file_name = '${path.basename(workbook).replace(/'/g, "''")}' and kind = 'workbook'`)).toBe(jobs);
   });
 
   test("ASM-AI-IMPORT: forced fallback (Read without AI) uses the standard reader, says so, and is published and assigned", async ({ page }) => {

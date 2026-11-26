@@ -39,6 +39,9 @@ export interface QuestionNumber {
   markable: boolean;
 }
 
+/** A section that is one occasion of a workbook's project ("Occasion 2"): its activities are numbered within it. */
+export const OCCASION_TITLE = /^Occasion \d+$/i;
+
 /** The question bar of every top-level question, in reading order (content blocks are not numbered). */
 export function workbookNumbering(definition: Definition): Map<string, QuestionNumber> {
   const map = new Map<string, QuestionNumber>();
@@ -54,6 +57,10 @@ export function workbookNumbering(definition: Definition): Map<string, QuestionN
     const unique = (n: string) => { const c = repeats.get(n) ?? 0; repeats.set(n, c + 1); return c ? `${n}${String.fromCharCode(97 + c)}` : n; };
     for (const s of task.sections) {
       let n = 0;
+      // ASM-OVERVIEW: a workbook's occasions (the same project observed again) number their activities within the occasion
+      // (Occasion 2: 2.1-2.10 again, labelled by the section); a response template no activity names is named, not numbered
+      const occasion = OCCASION_TITLE.test(s.title);
+      let occN = 0;
       const prefix = s.title.match(/^(\d+\.\d+)\b/)?.[1] ?? String(ti + 1);
       const next = () => {
         if (!aiTask) return `${prefix}.${++n}`;
@@ -64,6 +71,11 @@ export function workbookNumbering(definition: Definition): Map<string, QuestionN
       for (const q of s.questions) {
         if (CONTENT_TYPES.has(q.type)) continue;
         const markable = isMarkable(q);
+        // ASM-OVERVIEW: an activity takes the task's next number (2.1, 2.2…); a requirement is named, never numbered
+        if (q.role === "activity" && occasion) { occN += 1; taskN = Math.max(taskN, occN); map.set(q.id, { seq: markable ? ++seq : null, number: `${ti + 1}.${occN}`, markable }); continue; }
+        if (q.role === "template" && occasion) { map.set(q.id, { seq: markable ? ++seq : null, number: q.title || "Response template", markable }); continue; }
+        if (q.role === "activity") { map.set(q.id, { seq: markable ? ++seq : null, number: next(), markable }); continue; }
+        if (q.role === "requirement") { map.set(q.id, { seq: markable ? ++seq : null, number: q.type === "declaration" ? "Student declaration" : (q.title || "Reference list"), markable }); continue; }
         // ASM-AI-IMPORT: a question read by the AI keeps the number printed in the workbook
         const hasPrinted = q.importMeta?.via === "ai" && q.importMeta.number && !["declaration", "adjustment_record"].includes(q.type);
         const computed = q.type === "declaration" ? "Student declaration" : q.type === "adjustment_record" ? "Trainer / assessor record" : hasPrinted ? "" : next();

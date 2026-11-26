@@ -15,7 +15,7 @@ import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
 import RichBlockEditor from "@/components/assessment/RichBlockEditor";
 import { AutoResolvedList, BTN_PRIMARY, BTN_SECONDARY, FIELD, HOVER_ACTIONS, NeedsALook, QuestionLine, QuestionTextEditor } from "@/components/assessment/CheckList";
 import { asHtml, autoResolvedRows, checkRows, isOptional, markReviewed, numberOf, partsSummary, reopenAutoResolved, rowChips, rowQuestionId, stableRows, withHtmlEdit, withLabelEdit, type CheckRow } from "@/lib/assessment/checkList";
-import { cloneQuestion, cloneSection, cloneTask, earlierQuestionIds, flattenQuestions, moveItem, newSection, newTask, removeQuestion, updateQuestion } from "@/lib/assessment/definition";
+import { cloneQuestion, cloneSection, cloneTask, earlierQuestionIds, flattenQuestions, moveItem, newSection, newTask, removeQuestion, taskReadingHtml, updateQuestion } from "@/lib/assessment/definition";
 import { GROUP_LABEL, isAnswerable, newQuestion, QUESTION_TYPES, questionType, setQuestionDefaults, withSchema, type TypeGroup } from "@/lib/assessment/registry";
 import { workbookNumbering } from "@/lib/assessment/workbookLayout";
 import { onRules, ruleNumber, ruleObject } from "@/lib/businessRules";
@@ -298,7 +298,9 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
       {definition.tasks.map((t, ti) => {
         const taskOpen = open === `task:${t.id}`;
         const count = t.sections.flatMap((s) => s.questions).filter((q) => isAnswerable(q) && q.importMeta?.itemType !== "section_heading").length;
-        const hasInfo = Boolean(t.instructions && t.instructions.replace(/<[^>]*>/g, "").trim());
+        // ASM-OVERVIEW: the ⓘ shows everything the learner reads for the task (instructions, general steps, supporting material)
+        const reading = taskReadingHtml(t);
+        const hasInfo = Boolean(reading.replace(/<(?!img)[^>]*>/g, "").trim());
         const infoOpen = Boolean(info[t.id]);
         const lastSection = t.sections[t.sections.length - 1];
         return (
@@ -323,7 +325,7 @@ export default function Builder({ definition, keys, onChange, readOnly, declarat
               <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground-800">{t.title || "Untitled"}</span>
               <span className="shrink-0 text-xs text-foreground-500" data-testid="task-count">{count} question{count === 1 ? "" : "s"}</span>
             </HeadLine>
-            {infoOpen && hasInfo ? <div className="asm-content border-b border-background-200 bg-white px-4 py-2 text-sm text-foreground-700" data-testid="task-info-text" dangerouslySetInnerHTML={{ __html: asHtml(t.instructions ?? "") }} /> : null}
+            {infoOpen && hasInfo ? <div className="asm-content border-b border-background-200 bg-white px-4 py-2 text-sm text-foreground-700" data-testid="task-info-text" dangerouslySetInnerHTML={{ __html: reading }} /> : null}
             {taskOpen ? (
               <div className="space-y-3 border-b border-primary-100 bg-primary-50/40 px-3 pb-3 pt-2 sm:px-4">
                 <label className="block"><span className="text-2xs font-bold uppercase tracking-wide text-foreground-600">Task title</span>

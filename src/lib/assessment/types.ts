@@ -62,7 +62,30 @@ export interface Question {
   children?: Question[];
   /** Set by the workbook import (Word / PDF): where the question came from and whether the admin should check it. Never shown to students. */
   importMeta?: ImportMeta;
+  /**
+   * ASM-OVERVIEW: what the item is on the Overview. activity = a project activity (title = the activity, deliverable = its evidence,
+   * children = the fields of its response template when it has one), numbered N.1, N.2… in its task; template = a report / form
+   * template answered field by field (children = fields, section headings among them); requirement = asked of every task but not a
+   * numbered question (reference list, student declaration), listed under "Also required".
+   */
+  role?: "activity" | "template" | "requirement";
+  /** The short title of an activity / template ("Identify and Assess Risks"); the label keeps the full printed text. */
+  title?: string;
+  /** What an activity hands in ("Completed Risk Assessment Worksheet"). */
+  deliverable?: string;
 }
+
+/** ASM-OVERVIEW: supporting material of a task (case study, drawing, role-play brief), read by the learner, with its pages. */
+export interface Material {
+  id: string;
+  kind: "case_study" | "drawing" | "role_play" | "document";
+  title: string;
+  /** Readable HTML (a role-play brief: one <h4> per part, Candidate role, Scenario…; a drawing: its picture). */
+  html: string;
+  pages: number[];
+}
+/** ASM-OVERVIEW: one of a task's general steps (a numbered list). */
+export interface TaskStep { text: string; page: number | null }
 
 export interface ImportMeta {
   page?: number | null;
@@ -87,7 +110,7 @@ export interface ImportMeta {
   /** ASM-IMPORT-CLASSIFY: what the import found the item to be (question | section_heading | instruction | response_label | table_row). */
   itemType?: "question" | "section_heading" | "instruction" | "response_label" | "table_row";
   /** ASM-BUILDER-COMPACT: answer areas printed for this question (upload / calc boxes): its response types, shown as chips. */
-  responseAreas?: { kind: "upload" | "calc"; text: string; page: number | null }[];
+  responseAreas?: { kind: "upload" | "calc"; text: string; page: number | null; note?: string }[];
   /** How that was decided (rules / the AI's second check), its confidence and reason. */
   classification?: { type: string; by: "rules" | "ai" | "default"; confidence: number; reason: string } | null;
   /** Differences resolved by a rule (rule, the ignored text, a sentence); listed under "Auto-resolved" and written to the audit log. */
@@ -99,7 +122,22 @@ export interface ImportMeta {
 }
 
 export interface Section { id: string; title: string; description?: string; showIf?: Condition; questions: Question[] }
-export interface Task { id: string; title: string; instructions?: string; sections: Section[] }
+export interface Task {
+  id: string; title: string;
+  /** One rich-text block (paragraphs, headings, bold, lists): the learner instructions. */
+  instructions?: string;
+  sections: Section[];
+  /** ASM-OVERVIEW: the workbook pages the instructions came from. */
+  instructionPages?: number[];
+  /** General task steps (a numbered list), shown to the learner after the instructions. */
+  steps?: TaskStep[];
+  /** Case study, drawings, role-play brief: read by the learner, each with its pages. */
+  materials?: Material[];
+  /** What the learner may upload for the whole task besides the answers ("graphs", "calculations", "additional work"). */
+  uploadsAccepted?: string[];
+  /** Time allowed when the workbook prints one ("3 hrs"). */
+  duration?: string;
+}
 /**
  * Where an imported definition came from (ASM-WORKBOOK, 2026-11-23): the workbook's qualification, unit, version and file name,
  * printed on the cover and in the footer of "Export as workbook PDF". Never assessor data; ignored by the validators.
@@ -110,6 +148,10 @@ export interface DefinitionSource {
   /** "Version Number: 1.0" in the workbook's footer. */
   version?: string | null;
   fileName?: string | null;
+  /** ASM-OVERVIEW: 2 = built with activities, templates, requirements and materials (older imports lack them: Overview falls back). */
+  layout?: number;
+  /** When the workbook was imported (ISO date). */
+  importedAt?: string | null;
 }
 export interface Definition { instructions?: string; tasks: Task[]; source?: DefinitionSource }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Badge, Button, ConfirmDialog, Field, PageHeader, SectionTabs, Select, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
+import { Badge, Button, ConfirmDialog, Field, SectionTabs, Select, TextArea, TextInput, Toggle } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { Empty, SkeletonLines } from "@/pages/admin/components/rto/overlay";
 import { ErrorNote } from "@/pages/admin/components/rto/shared";
@@ -18,10 +18,18 @@ import { useAuth } from "@/pages/admin/lib/authContext";
 import { bumpVersion } from "../../../../supabase/functions/_shared/asm-import/match.ts";
 import AssignmentsPanel from "./panels/AssignmentsPanel";
 import AttemptDrawer from "./panels/AttemptDrawer";
+import AssessmentOverview from "./overview/AssessmentOverview";
+import type { BlockSave } from "./overview/OverviewDrawers";
+import AssessmentRenderer from "@/components/assessment/AssessmentRenderer";
+import { MoreMenu } from "@/pages/admin/components/rto/overlay";
+import { workbookNumbering } from "@/lib/assessment/workbookLayout";
+import { issuesOf } from "@/lib/assessment/overview";
+import { supabase } from "@/pages/admin/lib/supabase";
+import type { Responses } from "@/lib/assessment/types";
 import MappingPanel from "./panels/MappingPanel";
 
 const TABS = [
-  { id: "builder", label: "Builder", icon: "ri-layout-masonry-line" }, { id: "mapping", label: "Unit mapping", icon: "ri-links-line" },
+  { id: "overview", label: "Overview", icon: "ri-file-list-3-line" }, { id: "builder", label: "Builder", icon: "ri-layout-masonry-line" }, { id: "mapping", label: "Unit mapping", icon: "ri-links-line" },
   { id: "assignments", label: "Assignments", icon: "ri-group-line" }, { id: "versions", label: "Versions & export", icon: "ri-git-branch-line" }, { id: "settings", label: "Settings", icon: "ri-settings-3-line" },
 ];
 
@@ -31,7 +39,7 @@ export default function AssessmentDetailPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const { push } = useToast();
-  const tab = params.get("tab") ?? "builder";
+  const tabParam = params.get("tab");
   const [detail, setDetail] = useState<AssessmentDetail | null>(null);
   const [error, setError] = useState("");
   const [definition, setDefinition] = useState<Definition | null>(null);
@@ -43,11 +51,17 @@ export default function AssessmentDetailPage() {
   const [attempt, setAttempt] = useState<string | null>(null);
   const [confirmPublish, setConfirmPublish] = useState(false);
   const [units, setUnits] = useState<{ id: string; code: string; name: string }[]>([]);
+  const [course, setCourse] = useState<{ code: string; name: string } | null>(null);
+  const [learnerPreview, setLearnerPreview] = useState(false);
+  const [previewResponses, setPreviewResponses] = useState<Responses>({});
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const timer = useRef<number | null>(null);
   const [preview, setPreview] = useState<{ bytes: Uint8Array | null; error: string } | null>(null);
   const { user } = useAuth();
   /** A published version opened for editing moves its printed version on once, with the first change (see publishedBase). */
   const pendingBump = useRef(false);
+  /** The view the page opens on, decided once when it loads: an empty assessment (just created) opens in the Builder. */
+  const firstTab = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -55,10 +69,11 @@ export default function AssessmentDetailPage() {
       setDetail(d); setError("");
       const fromPublished = d.editing?.status === "published";
       pendingBump.current = fromPublished;
+      if (firstTab.current === null) firstTab.current = d.editing && countQuestions(d.editing.definition) > 0 ? "overview" : "builder";
       if (d.editing) { setDefinition(fromPublished ? publishedBase(d.editing.definition) : d.editing.definition); setKeys(d.editing.keys); setMappings(d.editing.mappings); setSavedAt(d.editing.updatedAt); }
       else { setDefinition({ tasks: [] }); setKeys([]); setMappings([]); }
       setDirty(false);
-      rto<CourseDetail>("course_get", { courseId: d.courseId }).then((c) => setUnits(c.units.filter((u) => u.isActive).map((u) => ({ id: u.id ?? "", code: u.code, name: u.name })))).catch(() => undefined);
+      rto<CourseDetail>("course_get", { courseId: d.courseId }).then((c) => { setUnits(c.units.filter((u) => u.isActive).map((u) => ({ id: u.id ?? "", code: u.code, name: u.name }))); setCourse(c.course ? { code: c.course.code, name: c.course.name } : null); }).catch(() => undefined);
     } catch (e) { setError(e instanceof Error ? e.message : "The assessment did not load."); }
   }, [id]);
   useEffect(() => { void load(); }, [load]);
@@ -89,6 +104,30 @@ export default function AssessmentDetailPage() {
   useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
 
   const problems = useMemo(() => (definition ? validateDefinition(definition) : []), [definition]);
+  const numbers = useMemo(() => (definition ? workbookNumbering(definition) : new Map<string, { number: string }>()), [definition]);
+  const issues = useMemo(() => (definition ? issuesOf(definition, numbers) : { total: 0, blocking: 0 }), [definition, numbers]);
+  // an empty assessment (just created) opens in the Builder; everything else opens on the Overview
+  const tab = tabParam ?? firstTab.current ?? "overview";
+
+  /** ASM-OVERVIEW A2: a block saved from the Overview's drawer, with its audit entry (asm_overview_save: draft_save + asm_audit_log). */
+  const saveBlock: BlockSave = useCallback(async (def, k, block) => {
+    if (!detail) return "The assessment is not loaded.";
+    if (timer.current) { window.clearTimeout(timer.current); timer.current = null; }
+    const next = pendingBump.current ? withNextVersion(def, bumpVersion) : def;
+    const { data, error: e } = await supabase.rpc("asm_overview_save", { p_assessment: detail.id, p_payload: { definition: next, keys: k, ...(draftIsPublished || !savedAt ? {} : { expectedUpdatedAt: savedAt }), block } });
+    if (e) return e.message;
+    const out = data as { ok: boolean; errors?: { message: string }[]; updatedAt?: string; versionNo?: number };
+    if (!out.ok) return out.errors?.map((x) => x.message).join(" ") || "Not saved.";
+    pendingBump.current = false;
+    setDefinition(next); setKeys(k); setSavedAt(out.updatedAt ?? null); setDirty(false); setError("");
+    if (draftIsPublished) { push(`Saved as version ${out.versionNo ?? ""} (draft). The published version is unchanged.`); await load(); } else push("Saved.");
+    return null;
+  }, [detail, draftIsPublished, savedAt, load, push]);
+  const discardDraft = async () => {
+    if (!detail) return;
+    try { await asmAdmin("draft_discard", { assessmentId: detail.id }); push("Draft discarded."); await load(); } catch (e) { setError(e instanceof Error ? e.message : "Not discarded."); }
+    setConfirmDiscard(false);
+  };
   const publish = async () => {
     if (!detail || !definition) return;
     if (timer.current) { window.clearTimeout(timer.current); await save(definition, keys, mappings); }
@@ -113,20 +152,23 @@ export default function AssessmentDetailPage() {
   if (!detail || !definition) return <SkeletonLines lines={8} />;
   const current = detail.versions.find((v) => v.id === detail.currentVersionId);
   const canAssign = Boolean(detail.versions.some((v) => v.status === "published")) && !detail.archivedAt;
+  const unit = units.find((u) => u.id === detail.unitId) ?? null;
+  const published = current ?? null;
+  const editingDraft = detail.editing?.status === "draft";
   return (
     <div>
-      <PageHeader breadcrumb="Master Data › Assessments" title={detail.title} titleSuffix={detail.code ? <span className="ml-2 text-base font-normal text-foreground-500">{detail.code}</span> : null}
-        description={`${units.find((u) => u.id === detail.unitId)?.code ?? ""} ${units.find((u) => u.id === detail.unitId)?.name ?? "No unit chosen"} · ${countQuestions(definition)} questions · ${detail.editing ? `v${detail.editing.versionNo} ${detail.editing.status}` : "no version"}${current ? ` · published v${current.versionNo}` : ""}`}
-        actions={<>
-          <span className="text-xs text-foreground-500" role="status">{saving ? "Saving…" : dirty ? "Unsaved changes" : savedAt ? `Saved ${fmtDateTime(savedAt)}` : ""}</span>
-          <Button variant="outline" icon="ri-arrow-left-line" onClick={() => navigate("/admin/assessments")}>All assessments</Button>
-          <Button variant="outline" icon="ri-file-pdf-2-line" onClick={() => void previewPdf()} data-testid="preview-pdf">Preview PDF</Button>
-          {editable ? <Button icon="ri-upload-2-line" disabled={!detail.editing || detail.editing.status !== "draft" || problems.length > 0} title={problems[0]?.message} onClick={() => setConfirmPublish(true)}>Publish v{detail.editing?.versionNo ?? 1}</Button> : null}
-        </>} />
+      <AssessmentHeader detail={detail} definition={definition} unit={unit} course={course} published={published} editingDraft={editingDraft}
+        saving={saving ? "Saving…" : dirty ? "Unsaved changes" : savedAt ? `Saved ${fmtDateTime(savedAt)}` : ""}
+        publishDisabled={!editable || !editingDraft || problems.length > 0 || issues.blocking > 0}
+        publishTitle={problems[0]?.message ?? (issues.blocking ? `${issues.blocking} numbering clash${issues.blocking === 1 ? "" : "es"} to fix first` : !editingDraft ? "Nothing to publish: edit the assessment to start the next version" : undefined)}
+        onPreview={() => { setPreviewResponses({}); setLearnerPreview(true); }} onEdit={() => setParams({ tab: "builder" })} onPublish={() => setConfirmPublish(true)}
+        onDiscard={editingDraft && published ? () => setConfirmDiscard(true) : null}
+        more={[{ label: "Preview PDF", icon: "ri-file-pdf-2-line", onClick: () => void previewPdf() }, { label: "All assessments", icon: "ri-arrow-left-line", onClick: () => navigate("/admin/assessments") }]} />
       {error ? <div className="mb-3"><ErrorNote text={error} /></div> : null}
       {problems.length ? <p className="mb-3 text-sm text-primary-700">{problems[0].message}</p> : null}
       <SectionTabs tabs={TABS} active={tab} onChange={(t) => setParams({ tab: t })} />
       {tab === "builder" && draftIsPublished && editable ? <p className="mb-3 flex items-start gap-2 rounded-xl border border-background-200 bg-white px-4 py-2.5 text-sm text-foreground-700" data-testid="published-note"><i className="ri-lock-line mt-0.5 text-foreground-500" aria-hidden="true" /><span>Version {detail.editing?.versionNo} is published. Your first change starts version {(detail.editing?.versionNo ?? 0) + 1} as a draft; students already in an attempt stay on version {detail.editing?.versionNo}.</span></p> : null}
+      {tab === "overview" ? <AssessmentOverview definition={definition} keys={keys} readOnly={!editable} issues={issues} onShowIssues={() => setParams({ tab: "builder" })} onSave={saveBlock} /> : null}
       {tab === "builder" ? <Builder definition={definition} keys={keys} onChange={onBuilderChange} readOnly={!editable} declarationText={String(detail.effectiveSettings.declaration_text ?? "")} editor={{ id: user?.id ?? null, name: user?.name ?? null }} /> : null}
       {tab === "mapping" ? <MappingPanel assessmentId={detail.id} definition={definition} unitId={detail.unitId} unitCode={units.find((u) => u.id === detail.unitId)?.code ?? null} elements={detail.elements} mappings={mappings} onChange={onMappingsChange} onElementsChanged={() => void load()} readOnly={!editable} /> : null}
       {tab === "assignments" ? <AssignmentsPanel assessmentId={detail.id} courseId={detail.courseId} assignments={detail.assignments} canAssign={canAssign} onChanged={() => void load()} onOpenAttempt={setAttempt} /> : null}
@@ -134,6 +176,8 @@ export default function AssessmentDetailPage() {
       {tab === "settings" ? <SettingsPanel detail={detail} units={units} onChanged={() => void load()} /> : null}
       {preview ? <PdfPreviewDialog preview={preview} title={`Preview PDF · ${detail.title}`} fileName={`${(detail.code || detail.title).replace(/[^A-Za-z0-9-]+/g, "_")}.pdf`} onClose={() => setPreview(null)} /> : null}
       {attempt ? <AttemptDrawer attemptId={attempt} onClose={() => setAttempt(null)} onChanged={() => void load()} /> : null}
+      {learnerPreview ? <LearnerPreview definition={definition} title={detail.title} responses={previewResponses} onChange={setPreviewResponses} declarationText={String(detail.effectiveSettings.declaration_text ?? "")} onClose={() => setLearnerPreview(false)} /> : null}
+      <ConfirmDialog open={confirmDiscard} title={`Discard the version ${detail.editing?.versionNo ?? ""} draft?`} confirmLabel="Discard draft" message={`Its changes are lost. Version ${published?.versionNo ?? ""} stays live.`} onCancel={() => setConfirmDiscard(false)} onConfirm={() => void discardDraft()} />
       <ConfirmDialog open={confirmPublish} title={`Publish version ${detail.editing?.versionNo ?? 1}?`} confirmLabel="Publish" message="A published version is frozen: its questions never change. Edits after publishing create the next version; students on this version keep it." onCancel={() => setConfirmPublish(false)} onConfirm={() => void publish()} />
     </div>
   );
@@ -215,3 +259,68 @@ function SettingsPanel({ detail, units, onChanged }: { detail: AssessmentDetail;
   );
 }
 export { Empty };
+
+/**
+ * ASM-OVERVIEW header (design page 1): breadcrumb (Assessments / qualification / unit), the unit title with the Draft / Published
+ * badge, "unit code · Workbook v1.0 · imported <date>", and Preview as learner / Edit / Publish (Publish waits while blocking issues
+ * exist). Editing a published assessment: "Editing v2 draft · v1 is live" with Publish v2 and Discard draft.
+ */
+function AssessmentHeader({ detail, definition, unit, course, published, editingDraft, saving, publishDisabled, publishTitle, onPreview, onEdit, onPublish, onDiscard, more }: {
+  detail: AssessmentDetail; definition: Definition; unit: { code: string; name: string } | null; course: { code: string; name: string } | null;
+  published: { versionNo: number } | null; editingDraft: boolean; saving: string; publishDisabled: boolean; publishTitle?: string;
+  onPreview: () => void; onEdit: () => void; onPublish: () => void; onDiscard: (() => void) | null; more: { label: string; icon: string; onClick: () => void }[];
+}) {
+  const n = detail.editing?.versionNo ?? 1;
+  const importedAt = definition.source?.importedAt ?? [...detail.versions].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0]?.createdAt ?? null;
+  const date = importedAt ? new Date(importedAt).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : null;
+  const unitCode = unit?.code ?? definition.source?.unit?.code ?? detail.code ?? null;
+  const title = unit?.name ?? definition.source?.unit?.name ?? detail.title;
+  const status = detail.archivedAt ? { text: "Archived", cls: "bg-background-200 text-foreground-700" } : editingDraft ? { text: "Draft", cls: "bg-primary-50 text-primary-800" } : { text: "Published", cls: "bg-green-100 text-green-900" };
+  const line = [unitCode, definition.source?.version ? `Workbook v${definition.source.version}` : null, date ? `imported ${date}` : null].filter(Boolean).join(" · ");
+  return (
+    <header className="mb-4 space-y-2" data-testid="assessment-header">
+      <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-x-1.5 text-sm text-foreground-600">
+        <Link className="hover:text-primary-700 hover:underline" to="/admin/assessments">Assessments</Link><span aria-hidden="true">/</span>
+        <span>{course ? `${course.code} ${course.name}` : "Qualification"}</span><span aria-hidden="true">/</span>
+        <span className="font-medium text-foreground-900" aria-current="page">{unitCode ?? detail.title}</span>
+      </nav>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="flex flex-wrap items-center gap-2 font-heading text-2xl font-bold text-foreground-950">{title}<span className={`rounded-md px-2 py-0.5 text-xs font-semibold ${status.cls}`} data-testid="status-badge">{status.text}</span></h1>
+          {title !== detail.title && !detail.title.toLowerCase().includes(title.toLowerCase()) ? <p className="text-sm text-foreground-700">{detail.title}</p> : null}
+          {line ? <p className="text-sm text-foreground-600" data-testid="header-line">{line}</p> : null}
+          {editingDraft && published ? <p className="mt-1 text-sm font-medium text-amber-900" data-testid="version-line">Editing v{n} draft · v{published.versionNo} is live</p> : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {saving ? <span className="text-xs text-foreground-500" role="status">{saving}</span> : null}
+          <Button variant="outline" onClick={onPreview} data-testid="preview-learner">Preview as learner</Button>
+          <Button variant="outline" onClick={onEdit} data-testid="edit-builder">Edit</Button>
+          {onDiscard ? <Button variant="outline" onClick={onDiscard} data-testid="discard-draft">Discard draft</Button> : null}
+          <Button onClick={onPublish} disabled={publishDisabled} title={publishTitle} data-testid="publish-version">{editingDraft && published ? `Publish v${n}` : "Publish"}</Button>
+          <MoreMenu label="More actions" items={more} />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/** "Preview as learner": the assessment as a student fills it in (nothing is saved). */
+function LearnerPreview({ definition, title, responses, onChange, declarationText, onClose }: { definition: Definition; title: string; responses: Responses; onChange: (r: Responses) => void; declarationText: string; onClose: () => void }) {
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[60] flex justify-end" role="dialog" aria-modal="true" aria-label={`Preview as learner · ${title}`} data-testid="learner-preview">
+      <button type="button" aria-label="Close" className="absolute inset-0 cursor-default bg-foreground-950/30" onClick={onClose} />
+      <div className="relative flex h-full w-full max-w-4xl flex-col bg-background-100 shadow-xl">
+        <div className="flex items-center justify-between border-b border-background-200 bg-white px-5 py-3">
+          <div><p className="font-heading text-lg font-semibold text-foreground-950">Preview as learner</p><p className="text-xs text-foreground-600">What a student sees. Nothing you type here is saved.</p></div>
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-foreground-500 hover:bg-background-200" aria-label="Close preview"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6"><AssessmentRenderer definition={definition} responses={responses} onChange={onChange} mode="preview" declarationText={declarationText} /></div>
+      </div>
+    </div>
+  );
+}

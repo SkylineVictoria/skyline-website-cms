@@ -5,6 +5,7 @@
  *  - the unit outcome: every task Satisfactory -> Competent, otherwise Not Yet Competent (and nothing while a task is undecided).
  */
 import { isAnswerable, isAssessorOnly } from "./registry";
+import { taskStepsHtml } from "./definition";
 import type { EvidenceFile, Outcome, Question, Responses, Task, UnitOutcome } from "./types";
 
 const NOT_STUDENT = new Set(["declaration", "adjustment_record"]);
@@ -23,6 +24,9 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 export function referenceItems(task: Task, taskNo: number): ReferenceItem[] {
   const out: ReferenceItem[] = [];
   if (task.instructions?.trim()) out.push({ id: `${task.id}:instructions`, title: `Task ${taskNo} instructions`, html: /^\s*</.test(task.instructions) ? task.instructions : `<p>${esc(task.instructions).replace(/\n+/g, "</p><p>")}</p>`, page: null, hasPicture: false, hasTable: false });
+  // ASM-OVERVIEW: the task's general steps and supporting material (case study, drawings, role-play brief) are reference items too
+  if (task.steps?.length) out.push({ id: `${task.id}:steps`, title: "General task steps", html: taskStepsHtml(task), page: task.steps[0].page, hasPicture: false, hasTable: false });
+  for (const m of task.materials ?? []) out.push({ id: m.id, title: m.title, html: m.html, page: m.pages[0] ?? null, hasPicture: /<img\b/i.test(m.html), hasTable: /<table\b/i.test(m.html) });
   for (const q of task.sections.flatMap((s) => s.questions)) {
     if (isAnswerable(q)) continue;
     const html = String(q.config?.html ?? "");

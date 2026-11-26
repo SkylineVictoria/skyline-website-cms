@@ -38,6 +38,21 @@ export interface ImportStatus {
   result: CheckedDocument | null;
 }
 
+/** ASM-OVERVIEW C: the stages of the Add assessment waiting screen, driven by the job's real progress (done / total / label). */
+export const IMPORT_STAGES = ["Reading the document", "Finding tasks and questions", "Checking numbering and answers", "Almost done"] as const;
+export function importStage(s: Pick<ImportStatus, "state" | "progress"> | null): { stage: number; percent: number } {
+  if (!s || s.state === "uploading") return { stage: 0, percent: 4 };
+  if (s.state === "queued") return { stage: 0, percent: 8 };
+  if (s.state === "done") return { stage: IMPORT_STAGES.length, percent: 100 };
+  const total = Math.max(1, s.progress?.total ?? 1);
+  const done = Math.max(0, Math.min(total, s.progress?.done ?? 0));
+  const f = done / total;
+  // the worker: outline (done 0 -> 1), one step per task chunk ("Reading task 2 of 3"), then "Finishing" (assembling, checks)
+  if (done === 0) return { stage: 0, percent: 10 };
+  if (/finish/i.test(s.progress?.label ?? "") || done >= total - 1) return { stage: 3, percent: Math.max(90, Math.min(99, Math.round(100 * f))) };
+  return { stage: f >= 0.6 ? 2 : 1, percent: Math.round(10 + 80 * f) };
+}
+
 /* ------------------------------------------------------------------ the draft from the AI's checked document */
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -131,34 +146,287 @@ function baseQuestionFromItem(it: CheckedItem, pictures: WbImage[], used: Set<Wb
   return withSchema(q);
 }
 
+/* ------------------------------------------------------------------ ASM-OVERVIEW: the task's structure (layout 2) */
+
+/** The Definition layout the Overview reads: activities, templates, requirements, materials, steps (older drafts fall back). */
+export const COMPACT_LAYOUT = 2;
+
+interface Entry { it: CheckedItem; section: string; si: number; idx: number }
+const words = (s: string) => s.trim().split(/\s+/).filter(Boolean);
+const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "with", "&", "-", "/", "+"]);
+const isCap = (w: string) => /^[("'‘“]?[A-Z0-9]/.test(w);
+
+/**
+ * The title an activity's text starts with ("Identify and Assess Risks Conduct a risk assessment…" -> "Identify and Assess Risks"):
+ * the title-case words before the capitalised word that starts the description (the last capital before the first lowercase word).
+ * Null when the text does not start that way.
+ */
+export function leadingTitle(text: string): string | null {
+  const w = words(text.replace(/\s+/g, " "));
+  const firstLower = w.findIndex((x) => !isCap(x) && !SMALL_WORDS.has(x.toLowerCase()));
+  if (firstLower < 2) return null;
+  let start = firstLower - 1;
+  while (start > 0 && !isCap(w[start])) start -= 1;
+  const title = w.slice(0, start);
+  while (title.length && SMALL_WORDS.has(title[title.length - 1].toLowerCase())) title.pop();
+  if (title.length < 2 || title.length > 9) return null;
+  return title.join(" ").replace(/[:.,]$/, "");
+}
+
+/** A heading a reading paragraph starts with ("Assessment Instructions (How?)", "Candidate Role:", "Timing:"), and the rest. */
+export function paragraphHeading(text: string): { heading: string; rest: string } | null {
+  const t = text.replace(/\s+/g, " ").trim();
+  const q = t.match(/^(.{3,90}?\([^)]{1,60}\?\))\.?\s+(.+)$/); // "Assessment date/s and timing/s (When?) This assessment…"
+  if (q && words(q[1]).length <= 12) return { heading: q[1], rest: q[2] };
+  const c = t.match(/^([A-Z][^:.?!]{1,60}?):\s+(.+)$/); // "Candidate Role: Pavement Design Technician…"
+  if (!c) return null;
+  // a heading, not the start of a sentence ("Candidates must interpret this brief to: …"): short, or mostly capitalised words
+  // ("Assessment method-based instructions and guidelines:" is a heading; a sentence has a verb such as must / will / are / to)
+  const w = words(c[1]);
+  const VERBISH = new Set(["must", "should", "will", "shall", "are", "is", "be", "can", "may", "to", "need", "needs", "have", "has"]);
+  if (w.length <= 8 && !w.some((x) => VERBISH.has(x.toLowerCase()))) return { heading: c[1], rest: c[2] };
+  return null;
+}
+
+const para = (text: string) => text.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => `<p>${esc(l)}</p>`).join("");
+/** A reading paragraph as HTML: its own heading (when it starts with one) as <h4>, the text as paragraphs. */
+const readingHtml = (text: string) => { const h = paragraphHeading(text); return h ? `<h4>${esc(h.heading)}</h4>${para(h.rest)}` : para(text); };
+
+const FIELD_LABEL = /^(project|prepared by|approved by|date|subject|to|from|summary|notes?|remarks|recommendations|validated by|validation outcome|justification|conclusion|overview|selected option|reason|details|purpose of validation)\s*:?$/i;
+/** A form field / part of a report template: a short label, a table, a numbered section with its parts, or "Label:". */
+function fieldLike(it: CheckedItem): boolean {
+  if (it.kind === "table" || it.itemType === "section_heading" || it.itemType === "table_row") return true;
+  if (it.kind === "multipart") return it.parts.every((p) => /^\d+\.?$|^[a-z]$/i.test(p.part || p.label));
+  if (it.kind !== "question" && it.kind !== "evidence") return false;
+  const t = it.text.trim();
+  return FIELD_LABEL.test(t) || /:\s*(short answer)?$/i.test(t) || (words(t).length <= 3 && !t.includes("?"))
+    || (/^[A-Z][\w &/-]{1,30}:\s+\S/.test(t) && words(t).length <= 8); // "Selected Option: AC10 Asphalt"
+}
+const isHardCopyNote = (it: CheckedItem) => it.kind === "evidence" && !it.canonical && /hard copy|securely attached/i.test(it.text);
+const isReferenceList = (it: CheckedItem) => it.kind === "question" && /reference list|references? (to|used)|list (all )?(the )?references/i.test(it.text);
+const isCaseStudy = (e: Entry) => /^case study\b/i.test(e.it.text) || /^(appendix|case study)\b/i.test(e.section) || /\bproject plan\b/i.test(e.section) && /^task \d/i.test(e.section);
+const isRolePlay = (e: Entry) => /role-?\s?play brief/i.test(e.section);
+/** Words that say what a block / deliverable is, for matching an activity's deliverable with its response template. */
+const keyWords = (s: string) => new Set(s.toLowerCase().replace(/occasion \d+/g, " ").replace(/[^a-z0-9 ]+/g, " ").split(" ").filter((w) => w.length > 2 && !["and", "the", "with", "for", "completed", "record", "sheet", "document", "report"].includes(w)));
+function sameDeliverable(deliverable: string, title: string): boolean {
+  const a = keyWords(deliverable); const b = keyWords(title);
+  if (!a.size || !b.size) return false;
+  const shared = [...a].filter((w) => b.has(w)).length;
+  return shared / Math.min(a.size, b.size) >= 0.6;
+}
+/** The short title of a template / response block: up to "Title:", the form fields printed after it, or "- Occasion 2". */
+function blockTitle(head: CheckedItem, section: string): string {
+  const text = head.text.replace(/\s+/g, " ").trim();
+  if (!text || FIELD_LABEL.test(text)) return section;
+  const cut = text.split(/:\s|:$| Project Prepared by\b| To: | Date: /)[0].replace(/\s*-\s*Occasion \d+.*$/i, (m) => m.match(/-\s*Occasion \d+/i)?.[0] ?? "").trim();
+  return cut || section;
+}
+const UPLOAD_LABELS: [RegExp, string][] = [[/graph/i, "graphs"], [/calculation|mathematic/i, "calculations"], [/additional work/i, "additional work"], [/screenshot/i, "screenshots"]];
+const uploadLabel = (a: { kind: string; text: string }) => (a.kind === "calc" ? "calculations" : UPLOAD_LABELS.find(([re]) => re.test(a.text))?.[1] ?? "files");
+
+function fieldsFromItem(it: CheckedItem, pictures: WbImage[], used: Set<WbImage>): Question[] {
+  if (it.kind === "multipart" && it.parts.length && it.parts.every((p) => /^\d+\.?$/.test(p.part || p.label))) {
+    // the numbered sections of a report template ("1. Introduction", "6. Approval Process"): one field each
+    return it.parts.map((p) => {
+      const q = newQuestion("long_answer");
+      const marker = (p.part || p.label).replace(/\.?$/, ".");
+      const empty = !p.text.trim();
+      q.label = empty ? `Part ${marker}` : `${marker} ${p.text}`.trim();
+      const flags = empty ? [`No text was read for part ${marker} on page ${it.pages.join(", ")}: add its heading from the PDF`] : [];
+      q.importMeta = { page: it.pages[0] ?? null, confidence: flags.length ? "low" : "high", ...(flags.length ? { flags, note: flags[0] } : {}), number: null, via: "ai", original: q.label };
+      return withSchema(q);
+    });
+  }
+  const q = questionFromItem(it, pictures, used);
+  // a form field ("Project", "Prepared by", "Date") is a short answer; the numbered printed number belongs to the template, not the field
+  if (q.type === "long_answer" && (FIELD_LABEL.test(q.label.trim()) || words(q.label).length <= 3)) { q.type = "short_answer"; }
+  if (q.importMeta) q.importMeta = { ...q.importMeta, number: null };
+  return [withSchema(q)];
+}
+
+/** One task of the AI's document in the Overview layout (see COMPACT_LAYOUT). Text is never reworded. */
+function taskFromAi(t: CheckedDocument["tasks"][0], pictures: WbImage[], used: Set<WbImage>): Task {
+  const stream: Entry[] = t.sections.flatMap((s, si) => s.items.map((it) => ({ it, section: s.title, si }))).map((e, idx) => ({ ...e, idx }));
+  const taken = new Set<number>();
+  const task: Task = { id: newId("t"), title: t.number && !t.title.includes(t.number) ? `Task ${t.number}: ${t.title}` : t.title, instructions: "", sections: [] };
+  const materials: NonNullable<Task["materials"]> = [];
+  const pages = new Set<number>();
+
+  // general task steps: reading items numbered 1., 2., 3. … in a row (at least three)
+  for (let i = 0; i < stream.length; i++) {
+    if (!(isReading(stream[i].it) && /^1\.?$/.test(stream[i].it.number ?? ""))) continue;
+    let j = i;
+    while (j + 1 < stream.length && isReading(stream[j + 1].it) && new RegExp(`^${j + 2 - i}\\.?$`).test(stream[j + 1].it.number ?? "")) j++;
+    if (j - i + 1 >= 3) { task.steps = stream.slice(i, j + 1).map((e) => { taken.add(e.idx); return { text: e.it.text.trim(), page: e.it.pages[0] ?? null }; }); break; }
+  }
+  // supporting material: drawings (with their picture), the case study, the role-play brief (one card per brief)
+  const rolePlay = new Map<string, Entry[]>();
+  for (const e of stream) {
+    if (taken.has(e.idx)) continue;
+    if (e.it.kind === "drawing") {
+      const imgs = pictures.filter((p) => !used.has(p) && e.it.pages.includes(p.page)).slice(0, 3);
+      if (!imgs.length) continue; // no picture here: stays a flagged block among the questions (see baseQuestionFromItem)
+      imgs.forEach((p) => used.add(p));
+      materials.push({ id: newId("m"), kind: "drawing", title: e.it.text || "Drawing", pages: e.it.pages, html: imgs.map((p) => `<figure><img src="${p.src}" alt="${esc(e.it.text || "Drawing")}" /></figure>`).join("") });
+      taken.add(e.idx);
+    } else if (isReading(e.it) && isRolePlay(e)) {
+      rolePlay.set(e.section, [...(rolePlay.get(e.section) ?? []), e]); taken.add(e.idx);
+    } else if (isReading(e.it) && isCaseStudy(e)) {
+      const own = e.it.text.match(/^case study(\s*\([^)]*\))?/i)?.[0];
+      materials.push({ id: newId("m"), kind: "case_study", title: own ? own.replace(/^case study/i, "Case Study") : e.section, pages: e.it.pages, html: readingHtml(e.it.text) });
+      taken.add(e.idx);
+    }
+  }
+  for (const [title, list] of rolePlay) {
+    materials.push({ id: newId("m"), kind: "role_play", title, pages: [...new Set(list.flatMap((e) => e.it.pages))].sort((a, b) => a - b), html: list.map((e) => readingHtml(e.it.text)).join("") });
+  }
+  // a hard-copy note printed above the upload / calculation boxes belongs to those boxes: the boxes go to the next question
+  let carryAreas: NonNullable<ImportMeta["responseAreas"]> = [];
+  const areasOf = new Map<number, NonNullable<ImportMeta["responseAreas"]>>();
+  for (const e of stream) {
+    if (taken.has(e.idx)) continue;
+    if (isHardCopyNote(e.it)) {
+      carryAreas = [...carryAreas, ...(e.it.responseAreas ?? []).map((a, k) => ({ ...a, ...(k === 0 ? { note: e.it.text } : {}) }))];
+      taken.add(e.idx); continue;
+    }
+    if (carryAreas.length && !isReading(e.it) && e.it.kind !== "drawing") { areasOf.set(e.idx, [...carryAreas, ...(e.it.responseAreas ?? [])]); carryAreas = []; }
+  }
+  const withAreas = (e: Entry): CheckedItem => (areasOf.has(e.idx) ? { ...e.it, responseAreas: areasOf.get(e.idx) } : e.it);
+
+  // activities: a reading item followed by its (unnumbered, short) evidence = one activity with that deliverable
+  interface Activity { e: Entry; evidence: Entry; title: string }
+  const activities: Activity[] = [];
+  for (let i = 0; i + 1 < stream.length; i++) {
+    const a = stream[i]; const b = stream[i + 1];
+    if (taken.has(a.idx) || taken.has(b.idx) || !isReading(a.it) || b.it.kind !== "evidence" || b.it.canonical || words(b.it.text).length > 16) continue;
+    // a section of its own ("Identify and Assess Risks": the activity and its evidence) is the activity's printed name
+    const ownSection = !sameHeading(a.section, t.title) && stream.filter((x) => x.si === a.si && !taken.has(x.idx)).length <= 2;
+    const title = ownSection ? a.section : (leadingTitle(a.it.text) ?? words(a.it.text).slice(0, 6).join(" "));
+    activities.push({ e: a, evidence: b, title });
+    taken.add(a.idx); taken.add(b.idx);
+  }
+
+  // response blocks: a numbered item and the form fields printed after it (a template when it has two fields or more)
+  interface Block { head: Entry; items: Entry[]; title: string }
+  const blocks: Block[] = [];
+  let cur: Block | null = null;
+  for (const e of stream) {
+    if (taken.has(e.idx) || isReading(e.it) || e.it.kind === "drawing" || e.it.kind === "declaration") { if (!isReading(e.it)) cur = null; continue; }
+    // a template's numbered sections read in two pieces ("1."-"5." then "6.", "7." under another printed number) are one template
+    const lastParts = cur ? [...cur.items].reverse().find((x) => x.it.kind === "multipart")?.it.parts ?? null : null;
+    const continuesParts = Boolean(cur && e.it.kind === "multipart" && lastParts?.length && Number.parseInt(e.it.parts[0]?.part ?? "", 10) === Number.parseInt(lastParts.at(-1)?.part ?? "", 10) + 1);
+    // the same printed number on more boxes of one question (the same or the next page); far apart it is a real clash, not a box
+    const near = (a: CheckedItem, b: CheckedItem) => a.pages.some((p) => b.pages.some((q) => Math.abs(p - q) <= 1));
+    const sameNumber = Boolean(cur && e.it.canonical && e.it.canonical === cur.head.it.canonical && near(cur.items[cur.items.length - 1].it, e.it));
+    // a numbered section heading of a template ("3. Evaluation of Surfacing Options") is a field, not a new question
+    const unnumbered = !e.it.canonical || e.it.itemType === "section_heading";
+    if (cur && (continuesParts || sameNumber || (unnumbered && fieldLike(e.it) && !isReferenceList(e.it)))) { cur.items.push(e); continue; }
+    cur = { head: e, items: [e], title: blockTitle(e.it, e.section) };
+    blocks.push(cur);
+    if (isReferenceList(e.it)) cur = null;
+  }
+  // a template: the numbered item and at least one answer field after it (a heading alone after a question is not a template)
+  const isTemplate = (b: Block) => b.items.slice(1).some((x) => x.it.itemType !== "section_heading") && b.items.slice(1).every((x) => fieldLike(x.it) || x.it.canonical === b.head.it.canonical || x.it.kind === "multipart");
+  // each activity takes the first unused response block after it whose title names its deliverable
+  const blockOf = new Map<Activity, Block>();
+  const usedBlocks = new Set<Block>();
+  for (const a of activities) {
+    const b = blocks.find((x) => !usedBlocks.has(x) && x.head.idx > a.evidence.idx && !isReferenceList(x.head.it) && sameDeliverable(a.evidence.it.text, x.title));
+    if (b) { blockOf.set(a, b); usedBlocks.add(b); }
+  }
+
+  // the questions, in reading order: activities, the remaining blocks / questions, the reference list (a requirement)
+  const uploads = new Set<string>();
+  interface Placed { at: number; section: string; q: Question; activity: boolean }
+  const placed: Placed[] = [];
+  const blockFields = (b: Block) => b.items.flatMap((x) => fieldsFromItem(withAreas(x), pictures, used));
+  for (const a of activities) {
+    const b = blockOf.get(a);
+    const page = a.e.it.pages[0] ?? null;
+    let q: Question;
+    if (b) {
+      q = newQuestion("case_study");
+      q.children = blockFields(b);
+      q.config = { scenario: "" };
+      for (const x of b.items) for (const area of withAreas(x).responseAreas ?? []) uploads.add(uploadLabel(area));
+    } else {
+      q = newQuestion("file_upload");
+    }
+    q.label = a.e.it.text.trim(); q.role = "activity"; q.title = a.title; q.deliverable = a.evidence.it.text.trim().replace(/[.:]$/, "");
+    q.importMeta = { ...meta({ ...a.e.it, flags: [...a.e.it.flags, ...a.evidence.it.flags] }, null), page, itemType: "question" };
+    placed.push({ at: a.e.idx, section: a.e.section, q: withSchema(q), activity: true });
+  }
+  for (const b of blocks) {
+    if (usedBlocks.has(b)) continue;
+    if (isReferenceList(b.head.it)) {
+      const q = questionFromItem(withAreas(b.head), pictures, used);
+      q.role = "requirement"; q.title = "Reference list";
+      const help = stream.filter((x) => x.section === b.head.section && isReading(x.it) && /reference list/i.test(x.it.text));
+      if (help.length) { q.helpText = help.map((x) => x.it.text.trim()).join("\n"); help.forEach((x) => taken.add(x.idx)); }
+      placed.push({ at: b.head.idx, section: b.head.section, q, activity: false });
+    } else if (isTemplate(b)) {
+      const q = newQuestion("case_study");
+      q.label = b.title; q.title = b.title; q.role = "template"; q.config = { scenario: "" };
+      q.children = blockFields(b);
+      q.importMeta = meta(b.head.it, b.head.it.canonical);
+      placed.push({ at: b.head.idx, section: b.head.section, q: withSchema(q), activity: false });
+    } else {
+      for (const x of b.items) placed.push({ at: x.idx, section: x.section, q: questionFromItem(withAreas(x), pictures, used), activity: false });
+    }
+  }
+  // what is left: drawings without a picture (flagged blocks), declarations and anything else not read as text
+  for (const e of stream) if (!taken.has(e.idx) && !isReading(e.it) && !placed.some((p) => p.at === e.idx) && !blocks.some((b) => b.items.includes(e))) placed.push({ at: e.idx, section: e.section, q: questionFromItem(withAreas(e), pictures, used), activity: false });
+  placed.sort((x, y) => x.at - y.at);
+
+  // sections: activities in a row form one group (two groups = the workbook's occasions); other items keep their printed section
+  const occasions = /occasion/i.test(t.sections.map((s) => s.title).join(" ") + blocks.map((b) => b.title).join(" "));
+  const activityGroups = placed.reduce((n, p, i) => n + (p.activity && !(placed[i - 1]?.activity) ? 1 : 0), 0);
+  let group = 0;
+  // a response template printed after an occasion's activities that no activity names (2.1.10, 2.1.11) stays in that occasion
+  let occasionOpen = false;
+  for (let i = 0; i < placed.length; i++) {
+    const p = placed[i];
+    const prev = placed[i - 1];
+    if (p.activity) {
+      if (!prev?.activity) { group += 1; occasionOpen = occasions && activityGroups > 1; task.sections.push({ id: newId("s"), title: occasionOpen ? `Occasion ${group}` : p.section, questions: [] }); }
+    } else if (occasionOpen && p.q.role === "template") {
+      // kept in the occasion's section: listed there as a response template, named, not numbered
+    } else if (!prev || prev.activity || occasionOpen || !sameHeading(prev.section, p.section)) {
+      occasionOpen = false;
+      task.sections.push({ id: newId("s"), title: p.section, questions: [] });
+    }
+    task.sections[task.sections.length - 1].questions.push(p.q);
+  }
+
+  // the learner instructions: one rich-text block (paragraph headings kept), with the pages they came from
+  const html: string[] = t.instructions ? [t.instructions] : [];
+  let lastSection = "";
+  for (const e of stream) {
+    if (taken.has(e.idx) || !isReading(e.it)) continue;
+    if (e.section !== lastSection && !sameHeading(e.section, t.title) && !paragraphHeading(e.it.text)) html.push(`<h3>${esc(e.section)}</h3>`);
+    lastSection = e.section;
+    html.push(readingHtml(e.it.text));
+    e.it.pages.forEach((p) => pages.add(p));
+  }
+  task.instructions = html.join("");
+  task.instructionPages = [...pages].sort((a, b) => a - b);
+  if (materials.length) task.materials = materials.sort((a, b) => (a.pages[0] ?? 0) - (b.pages[0] ?? 0));
+  if (uploads.size) task.uploadsAccepted = [...uploads];
+  const time = stream.map((e) => e.it.text.match(/time allowed[^.]*?\b(\d+(?:\.\d+)?)\s*hours?\b/i)).find(Boolean);
+  if (time) task.duration = `${time[1]} hrs`;
+  return task;
+}
+
 /** The draft definition built from the AI's checked document (text exactly as checked; nothing reworded here). */
 export function definitionFromAi(doc: CheckedDocument, pictures: WbImage[] = []): Definition {
   const used = new Set<WbImage>();
-  const tasks: Task[] = doc.tasks.map((t) => {
-    // ASM-BUILDER-COMPACT: text to read ("Provide your response to each question in the box below", the role-play brief…) belongs to
-    // its task as instructions (behind the task's ⓘ), not as rows among the questions; the part it came from is kept as a heading
-    const instructions: string[] = t.instructions ? [t.instructions] : [];
-    const sections: Section[] = [];
-    for (const s of t.sections) {
-      const reading = s.items.filter(isReading);
-      if (reading.length) {
-        if (!sameHeading(s.title, t.title)) instructions.push(`<h4>${esc(s.title)}</h4>`);
-        instructions.push(...reading.map((it) => it.text.split(/\n+/).map((l) => `<p>${esc(l)}</p>`).join("")));
-      }
-      const rest = s.items.filter((it) => !isReading(it));
-      if (rest.length) sections.push({ id: newId("s"), title: s.title, questions: rest.map((it) => questionFromItem(it, pictures, used)) });
-    }
-    return {
-      id: newId("t"),
-      title: t.number && !t.title.includes(t.number) ? `Task ${t.number}: ${t.title}` : t.title,
-      instructions: instructions.join(""),
-      sections,
-    };
-  });
+  // ASM-OVERVIEW (layout 2): text to read goes to its task's instructions (one rich-text block), steps / materials to the task,
+  // activities carry their deliverable and response template, templates are one item, the reference list is a requirement
+  const tasks: Task[] = doc.tasks.map((t) => taskFromAi(t, pictures, used));
   return {
     instructions: "",
     tasks,
-    source: { qualification: doc.qualification, unit: doc.unit, version: doc.version, fileName: null },
+    source: { qualification: doc.qualification, unit: doc.unit, version: doc.version, fileName: null, layout: COMPACT_LAYOUT },
   };
 }
 

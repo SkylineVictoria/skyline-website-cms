@@ -16,6 +16,7 @@
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 import { buildResultsSheet, type AttemptHistory, type SheetCell } from "./resultsSheet";
 import type { Definition, EvidenceFile, Outcome, Question, Responses, ResultRow } from "./types";
+import { taskStepsHtml } from "./definition";
 import { adjustmentLayout, CONTENT_TYPES, coverLayout, titleSubline, type CoverLayout, detailRows, footerParts, INFO_HEADING, workbookDetails, helpRepeatsLabel, htmlToBlocks, qualificationRows, sectionShowsTitle, TASK_TABLE_HEAD, taskHeading, taskRows, workbookNumbering } from "./workbookLayout";
 
 export interface WorkbookInstitution {
@@ -457,6 +458,9 @@ export async function buildWorkbookPdf(input: WorkbookPdfInput): Promise<Uint8Ar
     L.newPage();
     L.heading(taskHeading(task, ti), 14);
     if (task.instructions) { if (/^\s*</.test(task.instructions)) await L.content(task.instructions); else L.text(task.instructions, { size: 8.5, color: GREY }); }
+    // ASM-OVERVIEW: the general steps and the supporting material (case study, drawings, role-play brief) the task carries
+    if (task.steps?.length) { L.heading("General task steps", 11); await L.content(taskStepsHtml(task)); }
+    if (input.blank) for (const m of task.materials ?? []) { L.heading(m.title, 11); await L.content(m.html); }
     for (const s of task.sections) {
       // the blank workbook keeps the briefs; a marked export prints only what was answered
       const qs = s.questions.filter((q) => input.blank || !CONTENT_TYPES.has(q.type));

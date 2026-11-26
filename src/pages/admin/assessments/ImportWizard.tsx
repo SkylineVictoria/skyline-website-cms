@@ -30,9 +30,10 @@ import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetter
 import WorkbookHeaderPicker from "@/components/assessment/WorkbookHeaderPicker";
 import { autoTitle, checkUnit, decideFiling, filingCourseId, needsUnitStep, unitDecisionError, type FilingDecision, type UnitDecision } from "@/lib/assessment/workbookFiling";
 import {
-  applyGuide, chooseImportPath, definitionFromAi, guideAnswersFromAi, guideAnswersFromParser, mergeParserExtras, prepare, startAiImport, watchImport,
+  applyGuide, chooseImportPath, definitionFromAi, guideAnswersFromAi, guideAnswersFromParser, importStage, IMPORT_STAGES, mergeParserExtras, prepare, startAiImport, watchImport,
   type GuideApplied, type ImportStatus, type Prepared,
 } from "@/lib/assessment/aiImport";
+import DocumentReadingState from "@/components/shared/application-form/DocumentReadingState";
 import { bumpVersion } from "../../../../supabase/functions/_shared/asm-import/match.ts";
 import type { GuideAnswer } from "../../../../supabase/functions/_shared/asm-import/match.ts";
 import { asmAdmin } from "@/pages/admin/lib/assessments";
@@ -122,15 +123,40 @@ function Stat({ n, of, label }: { n: number | string; of?: number; label: string
   );
 }
 
-export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUnits, onClose, onSaved }: {
+const WAIT_MESSAGES = ["Reading every page, word for word", "Good things take a few minutes ✨", "Matching each question to its number", "Checking the tables, drawings and answer boxes"] as const;
+
+/**
+ * ASM-OVERVIEW C: the waiting screen while the import job runs: the passport-scanning panel (DocumentReadingState) with the import's
+ * own stages, driven by the job's real progress, a rough time and a line that the reading carries on if the screen is closed.
+ */
+function ImportWaiting({ fileName, file, status, note }: { fileName: string; file: File | null; status: ImportStatus | null; note?: ReactNode }) {
+  const { stage, percent } = importStage(status);
+  return (
+    <section className="space-y-2" data-testid="import-waiting" data-stage={stage} aria-live="polite">
+      <h3 className="font-heading text-base font-semibold text-foreground-950">Reading your workbook</h3>
+      <DocumentReadingState filename={fileName} file={file} phase="processing" stages={IMPORT_STAGES} stage={stage} percent={percent} messages={WAIT_MESSAGES}
+        footer={<>
+          <p><i className="ri-time-line mr-1" aria-hidden="true" />This usually takes 2–5 minutes.</p>
+          <p><i className="ri-door-open-line mr-1" aria-hidden="true" />You can close this window: the reading carries on, and you can pick it up again from Assessments › Library (Resume).</p>
+          {note ?? null}
+        </>} />
+    </section>
+  );
+}
+
+export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUnits, onClose, onSaved, resume }: {
   courses: RtoCourse[];
   pageCourseId: string;
   pageUnitId: string;
   pageUnits: RtoUnit[];
   onClose: () => void;
   onSaved: (assessmentId: string) => void;
+  /** Resume: an import job started earlier (Assessments › Library): its progress is shown until the same file is chosen again. */
+  resume?: { id: string; fileName: string } | null;
 }) {
   const { user } = useAuth();
+  const [resumeStatus, setResumeStatus] = useState<ImportStatus | null>(null);
+  const [advance, setAdvance] = useState(false);
   // ASM-HEADER: the header picture of the workbook PDF, asked once while none is set (Assessments > Settings)
   const { head: letterhead, setting: headerSetting } = useWorkbookLetterhead();
   const headerMissing = Boolean(headerSetting?.available && !headerSetting.url);
@@ -166,6 +192,13 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   const [preview, setPreview] = useState<{ bytes: Uint8Array | null; busy: boolean; error: string } | null>(null);
   const aborts = useRef<AbortController[]>([]);
   useEffect(() => () => { aborts.current.forEach((a) => a.abort()); }, []);
+  // a resumed job: its progress is watched until it ends (choosing the same file then reuses it, nothing is read twice)
+  useEffect(() => {
+    if (!resume) return undefined;
+    const ctrl = new AbortController(); aborts.current.push(ctrl);
+    void watchImport(resume.id, setResumeStatus, ctrl.signal, { timeoutMs: 30 * 60_000, stallMs: 30 * 60_000 });
+    return () => ctrl.abort();
+  }, [resume]);
 
   const pageUnit = pageUnits.find((u) => u.id === pageUnitId) ?? null;
   const chosenCourse = courses.find((c) => c.id === courseId) ?? null;
@@ -239,7 +272,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   };
 
   const pickWorkbook = async (file: File, force = false) => {
-    setDefinition(null); setApplied(null);
+    setDefinition(null); setApplied(null); setAdvance(true);
     const d = await readDoc("workbook", file, setWb, force);
     if (d.phase === "ready") await adoptWorkbook(d);
   };
@@ -379,7 +412,7 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
     const unit = definition.source?.unit ?? (chosenUnit ? { code: chosenUnit.code, name: chosenUnit.name } : null);
     const qualification = definition.source?.qualification ?? (chosenCourse ? { code: chosenCourse.code, name: chosenCourse.name } : null);
     const version = edits ? bumpVersion(definition.source?.version ?? "1.0") : (definition.source?.version ?? null);
-    return { ...definition, source: { ...(definition.source ?? {}), unit, qualification, version } };
+    return { ...definition, source: { ...(definition.source ?? {}), unit, qualification, version, importedAt: definition.source?.importedAt ?? new Date().toISOString().slice(0, 10) } };
   }, [definition, chosenUnit, chosenCourse, edits]);
   const openPreview = async () => {
     if (!docDefinition) return;
@@ -433,6 +466,12 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
   const busy = wb?.phase === "reading" || wb?.phase === "ai" || guide?.phase === "reading" || guide?.phase === "ai";
   const guideBlocked = Boolean(applied?.check.block);
   const canCheck = Boolean(definition && wb?.phase === "ready" && !busy && !headerMissing);
+  // ASM-OVERVIEW C: a workbook the AI read goes straight to the Check step (once both documents are ready)
+  useEffect(() => {
+    if (!advance || step !== "upload" || !canCheck || wb?.path !== "ai") return;
+    setAdvance(false); goCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [advance, step, canCheck, wb?.path]);
   const goCheck = () => { setStep(unitStep && !(courseId && unitId) ? "unit" : unitStep && step === "upload" ? "unit" : "check"); setOpen(rows.find((r) => !done[r.id])?.id ?? null); };
 
   /* ---------------- views ---------------- */
@@ -445,10 +484,25 @@ export default function ImportWizard({ courses, pageCourseId, pageUnitId, pageUn
       : <li className="flex items-start gap-2" data-testid={`path-${what}`}><i className="ri-file-search-line mt-0.5 text-foreground-500" aria-hidden="true" /><span>{what} read with the standard reader{d.reason ? `: ${d.reason}` : ""}</span></li>;
   };
 
+  const waiting = Boolean(wb && (wb.phase === "reading" || wb.phase === "ai"));
+  /** The AI reader failed or timed out (not skipped on purpose): say so plainly and offer Retry. */
+  const aiFailed = Boolean(wb && !skipAi && wb.prepared && ((wb.phase === "ready" && wb.path === "parser") || wb.phase === "error") && (wb.status?.state === "failed" || /took too long|could not start|did not finish|failed|answered/i.test(wb.reason ?? "")));
   const uploadView = (
     <div className="space-y-4">
+      {waiting && wb ? <ImportWaiting fileName={wb.file.name} file={wb.file} status={wb.phase === "ai" ? wb.status : null} /> : null}
+      {!wb && resume && resumeStatus && resumeStatus.state !== "failed" ? (
+        <ImportWaiting fileName={resume.fileName} file={null} status={resumeStatus}
+          note={<p className="font-semibold text-foreground-800" data-testid="resume-note">{resumeStatus.state === "done" ? "Read. " : ""}Choose {resume.fileName} below to {resumeStatus.state === "done" ? "check it" : "carry on"}: it is not read again.</p>} />
+      ) : null}
+      {!wb && resume && resumeStatus?.state === "failed" ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">The reading of {resume.fileName} failed{resumeStatus.error ? `: ${resumeStatus.error}` : ""}. Choose the file again to retry.</p> : null}
+      {aiFailed && wb ? (
+        <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="import-failed">
+          <span className="min-w-0 flex-1"><i className="ri-error-warning-line mr-1" aria-hidden="true" />The AI reader could not finish{wb.reason ? `: ${wb.reason}` : "."} {wb.phase === "ready" ? "The standard reader's result is shown instead." : ""}</span>
+          <button type="button" className={BTN_SECONDARY} onClick={() => void pickWorkbook(wb.file)} data-testid="import-retry">Retry</button>
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2">
-        <FileCard kind="workbook" doc={wb} onPick={(f) => void pickWorkbook(f)} onRemove={() => { setWb(null); setDefinition(null); setKeys([]); setApplied(null); setDecision(null); }} />
+        {!waiting ? <FileCard kind="workbook" doc={wb} onPick={(f) => void pickWorkbook(f)} onRemove={() => { setWb(null); setDefinition(null); setKeys([]); setApplied(null); setDecision(null); }} /> : null}
         <FileCard kind="guide" doc={guide} onPick={(f) => void pickGuide(f)} onRemove={() => { setGuide(null); setApplied(null); setKeys((k) => k.filter((x) => x.source === "manual" || x.source === "parser")); }} />
       </div>
       {wb?.error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{wb.error}</p> : null}

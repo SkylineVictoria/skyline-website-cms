@@ -10,7 +10,7 @@ import { WizardLock } from "@/components/shared/wizard/WizardShell";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
 import ImportWizard from "./ImportWizard";
 
-export default function NewAssessmentDialog({ courseId = "", unitId = "", courses: givenCourses, units: givenUnits, onClose, onSaved }: {
+export default function NewAssessmentDialog({ courseId = "", unitId = "", courses: givenCourses, units: givenUnits, onClose, onSaved, resume = null }: {
   courseId?: string;
   unitId?: string;
   /** Already loaded by the page (LMS > Assessments); else loaded here. */
@@ -18,6 +18,8 @@ export default function NewAssessmentDialog({ courseId = "", unitId = "", course
   units?: RtoUnit[];
   onClose: () => void;
   onSaved: (assessmentId: string) => void;
+  /** An import started earlier, resumed from Assessments › Library. */
+  resume?: { id: string; fileName: string } | null;
 }) {
   // The page's list when it has one; while the page's list is still empty (opened before it arrived), the dialog loads its own,
   // so the Qualification list is never left empty.
@@ -48,5 +50,5 @@ export default function NewAssessmentDialog({ courseId = "", unitId = "", course
     </div>
   );
   if (!courses || !units) return <div className="fixed inset-0 z-[80] bg-foreground-950/30"><WizardLock>Loading courses…</WizardLock></div>;
-  return <ImportWizard courses={courses} pageCourseId={courseId} pageUnitId={unitId} pageUnits={units} onClose={onClose} onSaved={onSaved} />;
+  return <ImportWizard courses={courses} pageCourseId={courseId} pageUnitId={unitId} pageUnits={units} onClose={onClose} onSaved={onSaved} resume={resume} />;
 }

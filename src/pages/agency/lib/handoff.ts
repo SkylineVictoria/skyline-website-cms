@@ -97,12 +97,10 @@ export interface InviteCheck { valid: boolean; email?: string; account?: "login"
 export const inviteCheck = (token: string) => invokeInvite<InviteCheck>({ action: "invite_check", token }, "The invitation could not be checked. Try again.");
 /** First time: a one-time sign-in for the invited email (the link proves it); the password is created when the student signs. */
 export const inviteSession = (token: string) => invokeInvite<{ tokenHash: string; email: string }>({ action: "invite_session", token }, "Your application could not be opened. Try again.");
-/** The signed-in student's account has a password or Google (needed before signing). */
-export async function hasPortalLogin(): Promise<boolean> {
-  const { data } = await supabase.auth.getUser();
-  if (data.user?.identities?.some((identity) => identity.provider === "google")) return true;
-  const { data: set, error } = await supabase.rpc("portal_my_password_set");
-  return error ? true : set === true;
+/** INVITE-RETURNING-STUDENT: the signed-in student still has to create their own password before signing this application. */
+export async function signingPasswordNeeded(applicationId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc("portal_my_signing_password_needed", { p_application: applicationId });
+  return error ? false : data === true;
 }
 
 /** Saves the guest student's new password (before the signature, which needs it). */
@@ -110,4 +108,7 @@ export async function saveSignPassword(value: { needed: boolean; password: strin
   if (!value.needed) return;
   const { error } = await supabase.auth.updateUser({ password: value.password });
   if (error) throw new Error(error.message || "Your password could not be saved. Try another one.");
+  // Recorded, so the student's next invitation link asks them to sign in with it.
+  const { error: recordError } = await supabase.rpc("portal_my_password_created");
+  if (recordError) throw new Error("Your password was saved, but it could not be recorded. Try signing again.");
 }

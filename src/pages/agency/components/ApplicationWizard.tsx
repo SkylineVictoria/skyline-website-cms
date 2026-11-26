@@ -1208,7 +1208,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <WizardFinishSteps question={question} answers={answers} errors={answerErrors} onChange={setAnswer} onAddress={pickAddress} summary={summary} version={hydrated} passportCountry={passportCountry}
                 studentRole={role === "student"} onEdit={(id) => { const at = WIZARD_QUESTIONS.findIndex((item) => item.id === id); if (at >= 0) void goTo(DOC_STEPS + at); }}
                 onDeclarations={(ticked, complete) => { declarationsRef.current = { ticked, complete }; if (complete) setAnswerErrors((prev) => ({ ...prev, declaration_read: "" })); }}
-                signExtras={signsHere ? <SignPasswordFields onChange={(value) => { signPasswordRef.current = value; }} /> : null}
+                signExtras={signsHere ? <SignPasswordFields applicationId={applicationId} onChange={(value) => { signPasswordRef.current = value; }} /> : null}
                 extraActions={studentLocked ? <RequestChangeButton applicationId={applicationId} onDone={() => void reloadHandoff()} label="Something your agent set is wrong? Request a change" /> : null} />
             ) : (
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}

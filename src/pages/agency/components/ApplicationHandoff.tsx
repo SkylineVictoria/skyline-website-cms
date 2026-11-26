@@ -5,7 +5,7 @@ import {
   HANDOFF_EVENT_LABEL, HANDOFF_STATE_LABEL, type Declaration, type Handoff, type HandoffDiff,
 } from "@/pages/agency/lib/handoff";
 import { sendApplicationInvitation } from "@/pages/agency/lib/portalApplications";
-import { hasPortalLogin } from "@/pages/agency/lib/handoff";
+import { signingPasswordNeeded } from "@/pages/agency/lib/handoff";
 import { passwordProblem } from "@/lib/passwords";
 
 const when = (value: string | null | undefined) => (value ? new Date(value).toLocaleString() : "—");
@@ -231,16 +231,16 @@ export interface SignPassword { needed: boolean; password: string; valid: boolea
 
 /**
  * APPLICATION-INVITE-GUEST-START (owner, 2026-11-26): a student who opened the application from the link alone creates their
- * password at the signature, so they can sign in to their SLIT account later. Shows nothing when the account already has one.
+ * password at the signature, so they can sign in to their SLIT account later. Shows nothing once the student has made their own password (or uses Google, or has submitted before).
  */
-export function SignPasswordFields({ onChange }: { onChange: (value: SignPassword) => void }) {
+export function SignPasswordFields({ applicationId, onChange }: { applicationId: string; onChange: (value: SignPassword) => void }) {
   const [needed, setNeeded] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
   useEffect(() => {
     let live = true;
-    void hasPortalLogin().then((has) => { if (live) { setNeeded(!has); onChange({ needed: !has, password: "", valid: has }); } });
+    void signingPasswordNeeded(applicationId).then((need) => { if (live) { setNeeded(need); onChange({ needed: need, password: "", valid: !need }); } });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- checked once
   }, []);

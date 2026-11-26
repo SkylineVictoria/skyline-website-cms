@@ -144,7 +144,7 @@ export default function ApplicationReview({
         <fieldset className="mt-4 space-y-2">
           <legend className="text-sm font-semibold text-foreground-900">Read and sign</legend>
           <DeclarationTicks who="student" onChange={(declarations, complete) => onConsentChange({ declarations, complete })} />
-          <SignPasswordFields onChange={(password) => onConsentChange({ password })} />
+          <SignPasswordFields applicationId={application.id} onChange={(password) => onConsentChange({ password })} />
           <p className="text-xs text-foreground-500">Your signature is recorded with the exact text above, the date and time, and this device. If you are under 18, a parent or guardian signs next.</p>
         </fieldset>
       ) : canSubmit ? (

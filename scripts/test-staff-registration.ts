@@ -4997,7 +4997,7 @@ test("Students (2026-11-24): the finish-application link asks for a password; ag
   assert.ok(fn.includes('ctx?.role === "agent" && ((action === "invite" && parsed.role === "student") || action === "resend")'));
   // Since 2026-11-26 the password is created at the signature (SignPasswordFields, portal_my_password_set via hasPortalLogin).
   const signPw = read("src/pages/agency/components/ApplicationHandoff.tsx") + read("src/pages/agency/lib/handoff.ts");
-  assert.ok(signPw.includes('supabase.rpc("portal_my_password_set")') && signPw.includes("supabase.auth.updateUser({ password: value.password })") && signPw.includes("passwordProblem(next, again)"));
+  assert.ok(signPw.includes('supabase.rpc("portal_my_password_created")') && signPw.includes("supabase.auth.updateUser({ password: value.password })") && signPw.includes("passwordProblem(next, again)"));
   const detail = read("src/pages/agency/applications/detail/page.tsx");
   assert.equal((detail.match(/<StudentPortalInvite /g) ?? []).length, 2, "both the incomplete and the full application views");
   const ui = read("src/pages/agency/components/StudentPortalInvite.tsx");
@@ -5196,12 +5196,12 @@ test("Agent fills, student signs (2026-11-25, 20261125190517): only the student 
   assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked)"));
   assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
   // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(62);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(67);"));
 });
 
 test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Forgot password); a first-time email starts as a guest and creates the password at the signature", () => {
   const sql = read("supabase/migrations/20261126090517_application_invite_guest_start.sql");
-  assert.ok(sql.includes("'account', case when u.id is not null and skyline_private.has_portal_login(u.id) then 'login' else 'new' end"));
+  assert.ok(read("supabase/migrations/20261126110517_invite_returning_student.sql").includes("'account', case when u.id is not null and skyline_private.student_account_established(u.id, s.id) then 'login' else 'new' end"), "sign-in only for a student who made their own password or submitted before");
   assert.ok(!sql.includes("raise exception 'Create your password (or sign in with Google) before opening the application'"), "accept no longer needs a password");
   assert.ok(sql.includes("raise exception 'Create your password before signing, so you can sign in to your SLIT account later'"));
   const fn = read("supabase/functions/student-application-invite/index.ts");
@@ -5209,5 +5209,5 @@ test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Fo
   const page = read("src/pages/agency/application-invite/page.tsx");
   assert.ok(page.includes('check.account === "login"') && page.includes("Forgot password?") && page.includes("Start my application"));
   assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("await saveSignPassword(signPasswordRef.current);"));
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(62);"));
+  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(67);"));
 });

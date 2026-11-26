@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(62);
+select plan(67);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -110,7 +110,7 @@ select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-000
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000005');
 reset role;
 select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(5)))->>'account', 'new', 'lookup: first-time email opens as a guest');
-select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(1)))->>'account', 'login', 'lookup: an email with a password signs in');
+select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(1)))->>'account', 'new', 'lookup: a password the student never created does not mean sign-in');
 select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(98)))->>'valid', 'false', 'lookup: unknown link invalid');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000005');
 select is(public.portal_wizard_invite_accept(pg_temp.tok(5)), 'e5100000-0000-0000-0000-000000000005'::uuid, 'first-time student opens the application without a password');
@@ -172,6 +172,11 @@ reset role;
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select public.portal_wizard_invite_accept(pg_temp.tok(3));
 select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0455555555"}}');
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult0', jsonb_build_object('declarations', pg_temp.decl()))$$,
+  '42501', 'Create your password before signing, so you can sign in to your SLIT account later', 'a hidden password does not count: create it at signing');
+select ok(public.portal_my_signing_password_needed('e5100000-0000-0000-0000-000000000002'), 'sign step asks for the password');
+select ok(public.portal_my_password_created(), 'password created at the sign step is recorded');
+select ok(not public.portal_my_signing_password_needed('e5100000-0000-0000-0000-000000000002'), 'then no longer asked');
 select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('declarations', pg_temp.decl() - 'usi_permission'))$$,
   '22023', null, 'every declaration must be ticked');
 select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('declarations', pg_temp.decl() || '{"esos_written_agreement":"00"}'))$$,
@@ -180,6 +185,7 @@ select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000
   'student signs and submits');
 reset role;
 select is(pg_temp.status('e5100000-0000-0000-0000-000000000002'), 'submitted', 'adult: submitted at once');
+select ok(skyline_private.student_account_established('b5100000-0000-0000-0000-000000000002', 'd5100000-0000-0000-0000-000000000002'), 'after a submission the next link asks to sign in');
 select is((select count(*)::int from public.enrollment_application_consents where application_id = 'e5100000-0000-0000-0000-000000000002'
   and signer_role = 'student' and signer_user_id = 'b5100000-0000-0000-0000-000000000002' and text_hash ~ '^[a-f0-9]{64}$'), 3, 'three consent rows with signer and text hash');
 select ok(pg_temp.mails('e5100000-0000-0000-0000-000000000002') like '%handoff_signed%handoff_submitted%', 'agent told signed and submitted');
@@ -196,6 +202,7 @@ reset role;
 select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-0000-000000000003'), true);
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000003');
 select public.portal_wizard_invite_accept(pg_temp.tok(6));
+select public.portal_my_password_created();
 select is(public.portal_submit_v2('e5100000-0000-0000-0000-000000000003', pg_temp.dv('e5100000-0000-0000-0000-000000000003'), 'k-minor', jsonb_build_object('declarations', pg_temp.decl()))->>'state',
   'waiting_guardian', 'under 18: waits for the guardian');
 select throws_ok($$select public.portal_guardian_request_begin('e5100000-0000-0000-0000-000000000003', 'Pat Parent', 'Mother', 'minor.signs@example.test', '+61400000000', pg_temp.hash(pg_temp.tok(7)))$$,

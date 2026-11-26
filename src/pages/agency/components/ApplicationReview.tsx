@@ -133,10 +133,10 @@ export default function ApplicationReview({
     return (
       <div>
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-          <p className="text-sm text-foreground-600">Check each part. Press Edit on a card to change it.</p>
+          <p className="text-sm text-foreground-600">{readOnly ? "Every part of the application." : "Check each part. Press Edit on a card to change it."}</p>
           <p className="text-sm text-foreground-600"><b className="font-semibold text-foreground-950">{done} of {steps.length}</b> complete</p>
         </div>
-        <div className="grid gap-3 md:grid-cols-2" data-testid="application-cards">
+        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3" data-testid="application-cards">
           {steps.map((step) => {
             const ok = step.issues.length === 0;
             return (

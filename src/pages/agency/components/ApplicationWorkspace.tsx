@@ -226,7 +226,8 @@ export default function ApplicationWorkspace({
   onePage = false,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
-  const one = onePage && !readOnly;
+  // The same cards for staff, agents and students; read-only (submitted, or the other side has it) = the cards without Edit.
+  const one = onePage;
   // The courses on offer, by their CMS id: rto_admin course_list for staff (every status), portal_course_options for agents and students
   // (Published, or with an open intake). null while loading. No static catalogue.
   const [courseChoices, setCourseChoices] = useState<{ label: string; row: ApplicationCourseRow }[] | null>(null);
@@ -1936,7 +1937,7 @@ export default function ApplicationWorkspace({
       noValidate
       onChange={handleChange}
       onKeyDown={onFormKeyDown}
-      className="form-compact mx-auto w-full max-w-[960px] scroll-mt-20"
+      className={`form-compact w-full scroll-mt-20 ${one ? "" : "mx-auto max-w-[960px]"}`}
     >
       <StepShell
         stages={navStages}
@@ -1960,7 +1961,7 @@ export default function ApplicationWorkspace({
         message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
           one && onePageView.kind === "edit" ? { label: "Done", icon: "ri-check-line", testId: "section-done", onClick: () => showOnePage("grid") }
-          : one && onePageView.kind === "grid" ? (canSubmitHere ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
+          : one && onePageView.kind === "grid" ? (canSubmitHere && !readOnly ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
           : isReview
             ? !readOnly && canSubmitHere
               ? {
@@ -2082,7 +2083,7 @@ export default function ApplicationWorkspace({
               documentProblems={documentProblems}
               fieldProblems={crossFieldProblems}
               submitError={submitError}
-              readOnly={false}
+              readOnly={readOnly}
               canSubmit={canSubmitHere}
               resubmit={resubmitHere}
               studentSigns={studentSigns}

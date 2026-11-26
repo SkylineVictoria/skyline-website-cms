@@ -1,0 +1,164 @@
+{
+  "providers": {
+    "openai": [
+      "host:api.openai.com",
+      "env:OPENAI_API_KEY",
+      "env:OPENAI_BASE_URL",
+      "sdk:openai"
+    ],
+    "postmark": [
+      "host:api.postmarkapp.com",
+      "env:EF_POSTMARK_SERVER_TOKEN",
+      "env:EF_POSTMARK_API_URL"
+    ],
+    "geoscape": [
+      "host:api.geoscape.com.au",
+      "env:EF_ADDRESS_SEARCH_GEOSCAPE_KEY"
+    ],
+    "training_gov_au": [
+      "host:training.gov.au",
+      "host:www.training.gov.au",
+      "host:ws.sandbox.training.gov.au",
+      "env:EF_TGA_SANDBOX_USERNAME",
+      "env:EF_TGA_SANDBOX_PASSWORD"
+    ],
+    "cloudflare_turnstile": [
+      "host:challenges.cloudflare.com",
+      "env:EF_CAPTCHA_SECRET_KEY",
+      "env:VITE_CAPTCHA_SITE_KEY"
+    ],
+    "abr": [
+      "host:abr.business.gov.au",
+      "env:EF_ABR_GUID",
+      "env:ABR_GUID"
+    ],
+    "data_gov_au": [
+      "host:data.gov.au"
+    ],
+    "nager_date": [
+      "host:date.nager.at"
+    ],
+    "stripe": [
+      "host:api.stripe.com",
+      "host:connect.stripe.com",
+      "env:EF_STRIPE_CLIENT_SECRET",
+      "sdk:stripe"
+    ],
+    "xero": [
+      "host:api.xero.com",
+      "host:identity.xero.com",
+      "host:login.xero.com",
+      "env:EF_XERO_CLIENT_SECRET"
+    ],
+    "docusign": [
+      "host:account.docusign.com",
+      "host:account-d.docusign.com",
+      "env:EF_DOCUSIGN_CLIENT_SECRET"
+    ],
+    "microsoft365": [
+      "host:login.microsoftonline.com",
+      "host:graph.microsoft.com",
+      "env:EF_MICROSOFT365_CLIENT_SECRET",
+      "host:www.office.com",
+      "host:myapps.microsoft.com"
+    ],
+    "calendly": [
+      "host:api.calendly.com",
+      "host:calendly.com",
+      "env:EF_CALENDLY_ACCESS_TOKEN",
+      "host:auth.calendly.com"
+    ],
+    "clicksend": [
+      "host:rest.clicksend.com",
+      "env:EF_CLICKSEND_API_KEY",
+      "env:EF_CLICKSEND_USERNAME"
+    ],
+    "whatsapp": [
+      "host:graph.facebook.com",
+      "host:wa.me",
+      "host:chat.whatsapp.com"
+    ],
+    "microsoft_teams": [
+      "host:outlook.office.com",
+      "host:outlook.office365.com"
+    ],
+    "google_maps": [
+      "host:places.googleapis.com",
+      "host:maps.googleapis.com"
+    ],
+    "brave_search": [
+      "host:api.search.brave.com",
+      "env:EF_BRAVE_API_KEY"
+    ],
+    "tavily": [
+      "host:api.tavily.com",
+      "env:EF_TAVILY_API_KEY"
+    ],
+    "datazoo": [],
+    "usi": [
+      "env:EF_USI_CREDENTIAL_PASSWORD",
+      "env:EF_USI_SERVICE_URL",
+      "host:usi.gov.au",
+      "host:vanguard.ebusiness.gov.au"
+    ],
+    "vevo": [],
+    "prisms": []
+  },
+  "exceptions": {
+    "host:esm.sh": "Package registry and Edge module bundling.",
+    "host:www.w3.org": "XML namespaces and standards documentation.",
+    "host:schemas.xmlsoap.org": "SOAP namespaces.",
+    "host:docs.oasis-open.org": "WS-Security namespace.",
+    "host:127.0.0.1": "Local development only.",
+    "host:0.0.0.0": "Local bind address.",
+    "host:host.docker.internal": "Container-local development only.",
+    "env:SUPABASE_SERVICE_ROLE_KEY": "Application database infrastructure.",
+    "sdk:@supabase/supabase-js": "Application database infrastructure.",
+    "env:EF_ADDRESS_SEARCH_API_URL": "Existing local-only address service test seam.",
+    "env:EF_OPENAI_API_URL": "Existing local-only OpenAI test seam.",
+    "host:api-dashboard.search.brave.com": "Existing navigation, reference or provider documentation link.",
+    "host:app.tavily.com": "Existing navigation, reference or provider documentation link.",
+    "host:cdn.jsdelivr.net": "Asset distribution for browser OCR.",
+    "host:cms.invalid": "Reserved hostname for URL normalization.",
+    "host:console.cloud.google.com": "Existing navigation, reference or provider documentation link.",
+    "host:dashboard.stripe.com": "Existing navigation, reference or provider documentation link.",
+    "host:developer.xero.com": "Existing navigation, reference or provider documentation link.",
+    "host:developers.docusign.com": "Existing navigation, reference or provider documentation link.",
+    "host:example.com": "Placeholder URL.",
+    "host:example.edu.au": "Example URL in an HR template.",
+    "host:example.invalid": "Reserved hostname for synthetic records.",
+    "host:fonts.google.com": "Existing navigation, reference or provider documentation link.",
+    "host:internationaleducation.gov.au": "Existing navigation, reference or provider documentation link.",
+    "host:learn.microsoft.com": "Existing navigation, reference or provider documentation link.",
+    "host:maps.google.com": "Existing navigation, reference or provider documentation link.",
+    "host:readdy.ai": "Existing website-design references.",
+    "host:same-origin.invalid": "Reserved hostname for validating relative redirects.",
+    "host:schema.org": "Structured markup vocabulary.",
+    "host:schemas.openxmlformats.org": "Office document XML namespace.",
+    "host:skyline-website-cms.vercel.app": "SLIT application hostname.",
+    "host:slit.edu.au": "SLIT website hostname.",
+    "host:slit.konpare.online": "Existing navigation, reference or provider documentation link.",
+    "host:static.readdy.ai": "Existing page assets.",
+    "host:submissions.slit.edu.au": "SLIT admissions surface.",
+    "host:tessdata.projectnaptha.com": "Browser OCR language data assets.",
+    "host:twitter.com": "Existing navigation, reference or provider documentation link.",
+    "host:wpdemo.zcubethemes.com": "Existing page images.",
+    "host:www.authorit.com": "Training.gov.au release XML namespace.",
+    "host:www.border.gov.au": "Existing navigation, reference or provider documentation link.",
+    "host:www.education.gov.au": "Existing navigation, reference or provider documentation link.",
+    "host:www.facebook.com": "Existing navigation, reference or provider documentation link.",
+    "host:www.homeaffairs.gov.au": "Existing navigation, reference or provider documentation link.",
+    "host:www.instagram.com": "Existing navigation, reference or provider documentation link.",
+    "host:www.linkedin.com": "Existing navigation, reference or provider documentation link.",
+    "host:www.pieronline.org": "Existing navigation, reference or provider documentation link.",
+    "host:www.tiktok.com": "Existing navigation, reference or provider documentation link.",
+    "host:www.tradesrecognitionaustralia.gov.au": "Existing navigation, reference or provider documentation link."
+  },
+  "legacy": {
+    "env:EF_AZURE_DOCUMENT_API_KEY": "Existing Azure Document Intelligence extraction route. Registry review outstanding.",
+    "host:discover.data.vic.gov.au": "Existing Victorian school terms dataset. Registry review outstanding.",
+    "host:portal.mara.gov.au": "Existing OMARA public register lookup. Registry review outstanding.",
+    "host:www.aussizz.com": "Existing agency enrichment source. Registry review outstanding.",
+    "host:www.ncver.edu.au": "Existing national reporting hours dataset used by qualification imports. Registry review outstanding."
+  }
+}

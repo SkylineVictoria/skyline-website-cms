@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { coreUnits, ImportError, qualificationDetails, rtoScope, searchQualifications, selectedUnits } from "./tga.ts";
 import { addUnits, lookupUnit, syncCourse } from "./sync.ts";
+import { resolveManagedCredential } from "../_shared/integrations/managed-runtime.ts";
 import { unitDetails } from "./units.ts";
 
 const corsHeaders = {
@@ -62,11 +63,24 @@ Deno.serve(async req => {
     if (!input || typeof input !== "object" || !("action" in input)) {
       return json({ error: "Invalid import request." }, 400);
     }
+    // Only authenticated qualification operations use the SOAP credentials. Public data actions
+    // keep their existing configuration and their ability to operate without a SOAP account.
+    const soapActions = ["search", "create_core", "sync", "add_units", "details", "save"];
+    const credentialStore = createClient(url, service, { auth });
+    const resolved = soapActions.includes(String(input.action))
+      ? await resolveManagedCredential((name, args) => credentialStore.rpc(name, args), scope.tenantId ?? null, "training_gov_au")
+      : { source: "legacy" as const };
+    if (resolved.source === "unavailable") {
+      return json({ error: "The Training.gov.au sandbox credentials are unavailable for this site." }, 503);
+    }
+    const credentials = resolved.source === "central"
+      ? { username: resolved.fields.username, password: resolved.fields.password }
+      : undefined;
     if (input.action === "search") {
       const query = "query" in input && typeof input.query === "string" ? input.query.trim() : "";
       if (query.length < 2 || query.length > 120) return json({ error: "Enter a qualification code or name between 2 and 120 characters." }, 400);
       stage = "search";
-      return json(await searchQualifications(query));
+      return json(await searchQualifications(query, credentials));
     }
     const db = createClient(url, service, { auth });
     // The tenant's CRICOS provider code (Settings), else the site-wide one, to look up its CRICOS registration.
@@ -91,7 +105,7 @@ Deno.serve(async req => {
         return json({ error: "Choose a qualification code." }, 400);
       }
       stage = "create_core";
-      const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode, hoursLookup);
+      const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode, hoursLookup, credentials);
       const units = coreUnits(review);
       const { data: courseId, error } = await db.rpc("rto_tga_import_save", {
         p_actor: user.id, p_tenant: scope.tenantId, p_course: {
@@ -112,7 +126,7 @@ Deno.serve(async req => {
     if (input.action === "sync") {
       if (!("courseId" in input) || typeof input.courseId !== "string" || !input.courseId) return json({ error: "Choose a course to sync." }, 400);
       stage = "sync";
-      return await syncCourse(db, scope.tenantId ?? null, input.courseId, providerCode, hoursLookup);
+      return await syncCourse(db, scope.tenantId ?? null, input.courseId, providerCode, hoursLookup, credentials);
     }
     if (input.action === "unit_lookup") {
       if (!("code" in input) || typeof input.code !== "string") return json({ error: "Enter a unit code." }, 400);
@@ -131,7 +145,7 @@ Deno.serve(async req => {
       }
       stage = "add_units";
       return await addUnits(db, scope.tenantId ?? null, input.courseId, input.codes as string[], hoursLookup,
-        { imported: imported as string[], remove: remove as string[], attested: "attested" in input && input.attested === true });
+        { imported: imported as string[], remove: remove as string[], attested: "attested" in input && input.attested === true }, credentials);
     }
     if ((input.action !== "details" && input.action !== "save") || !("code" in input) || typeof input.code !== "string") {
       return json({ error: "Invalid qualification request." }, 400);
@@ -142,7 +156,7 @@ Deno.serve(async req => {
       return json({ error: "The approved qualification review is required." }, 400);
     }
     stage = "review";
-    const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode, hoursLookup);
+    const review = await qualificationDetails(input.code.trim().toUpperCase(), providerCode, hoursLookup, credentials);
     if (input.action === "details") return json(review);
     if (!("revision" in input) || input.revision !== review.revision) {
       return json({ error: "The government release details changed. Reopen the qualification to review them again." }, 409);

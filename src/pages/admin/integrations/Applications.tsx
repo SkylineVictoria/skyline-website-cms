@@ -22,6 +22,7 @@ export type Application = {
   name: string;
   description: string;
   definition?: Definition;
+  managed?: { category: string; status: string };
   connections: Connection[];
 };
 
@@ -35,11 +36,13 @@ export function ProviderIcon({ application }: { application: Application }) {
   </span>;
 }
 
-export function Applications({ applications, selected, query, setQuery, auth, setAuth, choose, statusOf, isAdmin, busy }: {
+export function Applications({ applications, selected, query, setQuery, category, setCategory, auth, setAuth, choose, statusOf, isAdmin, busy }: {
   applications: Application[];
   selected: string;
   query: string;
   setQuery: (value: string) => void;
+  category: string;
+  setCategory: (value: string) => void;
   auth: string;
   setAuth: (value: string) => void;
   choose: (application: Application) => void;
@@ -48,8 +51,10 @@ export function Applications({ applications, selected, query, setQuery, auth, se
   busy: boolean;
 }) {
   const methods = [...new Set(applications.flatMap(app => app.definition?.auth_type ? [app.definition.auth_type] : []))];
+  const categories = [...new Set(applications.map(app => app.managed?.category ?? 'Other'))].sort();
   const phrase = query.trim().toLowerCase();
   const visible = applications.filter(app => (!auth || app.definition?.auth_type === auth) &&
+    (!category || (app.managed?.category ?? 'Other') === category) &&
     [app.name, app.id, app.description].some(value => value.toLowerCase().includes(phrase)));
   return (
     <>
@@ -59,6 +64,10 @@ export function Applications({ applications, selected, query, setQuery, auth, se
           <i className="ri-search-line pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-foreground-500" aria-hidden="true" />
           <TextInput type="search" aria-label="Search applications" placeholder="Search applications" className="pl-8" value={query} onChange={event => setQuery(event.target.value)} />
         </div>
+        {categories.length > 1 && <SearchableSelect aria-label="Filter by category" className={inputClass} value={category} onChange={event => setCategory(event.target.value)}>
+          <option value="">All categories</option>
+          {categories.map(name => <option key={name} value={name}>{name}</option>)}
+        </SearchableSelect>}
         {methods.length > 1 && <SearchableSelect aria-label="Filter by authentication" className={inputClass} value={auth} onChange={event => setAuth(event.target.value)}>
           <option value="">All authentication types</option>
           {methods.map(method => <option key={method} value={method}>{authLabel(method)}</option>)}
@@ -79,7 +88,7 @@ export function Applications({ applications, selected, query, setQuery, auth, se
                   {app.description && <span className="mb-1 block line-clamp-2 text-xs text-foreground-600">{app.description}</span>}
                   {/* // rule-policy: technical integration-status-view Renders the current snapshot status. */}
                   <span data-testid={item ? `connection-status-${app.id}` : undefined}>
-                    <ConnectionStatus status={item ? statusOf(item) : availabilityLabel(isAdmin, app.definition)} />
+                    <ConnectionStatus status={app.managed?.status ?? (item ? statusOf(item) : availabilityLabel(isAdmin, app.definition))} />
                   </span>
                 </span>
               </button>
@@ -104,7 +113,7 @@ export function ApplicationHeader({ application, connection, statusOf, isAdmin }
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h2 className="break-words font-heading text-xl font-bold text-foreground-950">{application.name}</h2>
-          <ConnectionStatus status={connection ? statusOf(connection) : availabilityLabel(isAdmin, application.definition)} />
+          <ConnectionStatus status={application.managed?.status ?? (connection ? statusOf(connection) : availabilityLabel(isAdmin, application.definition))} />
         </div>
         {application.description && <p className="mt-1 text-sm text-foreground-600">{application.description}</p>}
       </div>

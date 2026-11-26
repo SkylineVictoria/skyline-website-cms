@@ -728,5 +728,75 @@
       "c920df1f3b08836684b6346edc3a04fceffdc25b9c1118aff0ce5ec425f38609",
       "068d15eb12ee1658de928ac5255257650ff309110780c245e5163261826058dd"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "integration-dependency-audit",
+    "reason": "Repository dependency inventory and audit output support code review without affecting application workflows.",
+    "fingerprints": [
+      "7a3896ccfbb0674df12d46ae11649d20942eed2561d31a970dc8b5c5adf222c2",
+      "0cfb698a4f358fb7f8e2d75a853da756ef92e49126b762bf81460166f0862963"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "integration-provider-metadata",
+    "reason": "Provider protocol metadata and display states describe existing configuration and credentials without changing operational workflows.",
+    "fingerprints": [
+      "5b4174de8285aad8ddcd511a26c8bb166c7974eccf99044d3fd033a7ad5c81e0",
+      "e5b25587b8a55631a9cfb20409769ae7f2669bd0822d550ec523f4aeae92533f",
+      "5d30bd1723a752cdc0213f5d7104c074f8a7d04785e322b8bdbd1fc0c9e4fdeb",
+      "0c5930babf56e79e2bce911c5b2edaee8911ea8d0d841a98c4afb6059204be0f",
+      "ebec277f4682be80f9783291a1912fac62563308438f0387a1d7cc929a1b4af1",
+      "596a4acd33d0c5fa12eb3943ae4ea086afbb95d43aeffdd3fa995f4bf6adf4bb",
+      "47db18e73de2ff794f72990c0195e1687e6a1bc54484d8837e655cabaa767a3b",
+      "753827bd591b8f3901076395432c7b2c59ec315e808b86c336d4f121d1020be2",
+      "ac83045129988b675e786d961183c01dc0d01aed12ee98ca80af9691643a1c25",
+      "a970b0f7e969d67e8967dc7ec5c63084a94739042981514e8118330afbaa40ab",
+      "2e4698785be58e9f41e04dfd44d1241494d0e5f3795e3e42796aee3477e4a124",
+      "79919cf512db84947d84ee3b41548490fdc911fc76fdcd69839ced3b7d6a2ea3",
+      "0977acb287016325fa82059efad97427dd4a5969f14326af7d493c6ed23c6d26",
+      "41b29de5845876649973d7d38fa95c8b3df59894649f1a0f9c97da6c25414d67",
+      "9364f10556dd2aec2cdfb64b49a0ba6e4590007703281c02c0d96c248b4bb0c5",
+      "a89c3ae75dbd44ed9bdf962dae6565bc5f1b57b6081915296c5038c8c82f31e6",
+      "8ef9264549e140f1d06f6d73147098f279a6fcc74b997639a14eecddd095c76b",
+      "84b47f1a017a65e5aa26f54bc7d5faa49a522a913bddee0dc16675635f64934b",
+      "bff5a1768ac1295ba534065fb6156378321a8aa12ec2555912a5fa6562c6cdfd",
+      "29c1f1971bce22dc979469f9c4a28a0cefdafe1553b73ad408440662fc2cf0bb",
+      "9ab666df9869696612f11cedf8581d9ff99b9f0ed247b4715c594544260d0544",
+      "054bb4ebab46ff7f3383f368632cedfb09bd2720590f2e06a4b31468421209c4",
+      "9d71ef48d70d258a0acd9cab11251a64ae9c52fdbbe3abd41e397eb2fe0608d9",
+      "0eeb0dc432c27e1b00ca5ca71c9f4827e38b4f130c4475afe7cb39ccc8030264",
+      "3438054cc92328bbb63212b4481b75e9a68052025c4075b71b5c9e20b530827f",
+      "02d53dcd873bf9dbd9dabbfc04844853196e1d3481f6f184731f03a600455009",
+      "5e955c979ca8907cca0b76e6fcb9171366167ba1de9153e0cff9494d1eaff5cd",
+      "859b5c5470c8c78726e948f05b08abacfa9b78a2cc0cf5b8a937dfc535722f8b"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "integration-read-only-probe",
+    "reason": "Fixed provider operations validate credentials without using SLIT business records, sending mail, or forwarding secrets to redirects.",
+    "fingerprints": [
+      "62d309b614b389cda0d697c435904fbada201662a78d61d2a7baf80e699c35ba",
+      "5e9e88ace07205f95fd23b0a1e51551a97dba6228c66e6cb721c3d474d95132b",
+      "c2b7080ee9003136c3ca7dcce66cfac6a3bee87b170f777f9c5193fc3867ff15"
+    ]
+  },
+  {
+    "type": "security",
+    "id": "integration-managed-state",
+    "reason": "Credential validation, authorization, version fencing, and fail-closed activation constrain access to each organization’s Vault configuration.",
+    "fingerprints": [
+      "921131cc53d9e847ecba07a105c33d760f5e566339bb3ef080c4b0b2d559f79f",
+      "b29054d2753b97dba1f6a35dc1c644b7708afd36738c1565c97a6190bb3155b3",
+      "e144c9de5caebeaee3aa6d86e93f21d50fba5bd9122d32ce48253000e7bfa781",
+      "361cddc05d1c5408f3117e0c238699dd9c95a8ee286db0295567f9f83dd7d767",
+      "53c39c9fe0b545b911b024f3e16cea4e0b16e260f7bcd14b3596c7cf9d0b47c6",
+      "acb7f00fa91faea69f3a2c5b31c0cda22c7e0fd6060152a46ad7b85effd1a8f4",
+      "f63e807de04c1438082ff2d94c57b1278d0408259c1e24e2020420377ed1fb54",
+      "e16c1c8937f8a7ae7dc82e9e82d03c9f8a2cbed7d5ea3af972074c2e06100187",
+      "470a99dbb5161702612181a558bbdc8134f3cd6c6e76d29cc4d47c6cfbcbf361"
+    ]
   }
 ]

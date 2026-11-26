@@ -1,10 +1,12 @@
+import { managedAction, usesEnvironment } from './managed.ts';
+import { managedDefinition, type ManagedProvider } from '../_shared/integrations/managed-catalog.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 import { pkceChallenge, oauthCallback, oauthConfig, oauthProviders, readOAuthCredential, stateHash, authorizeUrl, exchange, revokeAtProvider } from '../_shared/integrations/oauth.ts';
 import { accessToken } from '../_shared/integrations/credentials.ts';
 import { testProvider } from '../_shared/integrations/provider.ts';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
-const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});
+const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json','Cache-Control':'no-store'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function check(error:unknown){if(error)throw new Error('database_operation_failed');}
 Deno.serve(async(req:Request)=>{
@@ -29,17 +31,27 @@ Deno.serve(async(req:Request)=>{
   const admin=createClient(url,service,{auth:{persistSession:false,autoRefreshToken:false}});
   const action=String(body.action??'');
   if(!isAdmin&&!['snapshot','test','retry','event_recheck'].includes(action))return json({error:'Administrator access required.'},403);
+  if(action.startsWith('managed_'))return await managedAction(caller,admin,tenant,action,body,json);
   if(action==='snapshot'){
    const tables=['integration_definitions','integration_connections','integration_sync_jobs','integration_logs','integration_webhook_events','integration_settings','integration_webhook_registrations','integration_permissions','integration_event_attempts'];
    const results=await Promise.all(tables.map(t=>caller.from(t).select('*').limit(100).order(t==='integration_definitions'?'name':t==='integration_settings'?'updated_at':'created_at',{ascending:t==='integration_definitions'})));
    results.forEach(r=>check(r.error));
    const eligible=isAdmin?await caller.rpc('integration_eligible_users',{p_tenant:tenant}):{data:[],error:null};check(eligible.error);
    const connections=await Promise.all((results[1].data??[]).map(async(c)=>({...c,can_operate:isAdmin||(await caller.rpc('integration_access',{p_connection:c.id,p_operate:true})).data===true})));
-   return json({isAdmin,eligibleUsers:eligible.data,permissions:results[7].data,eventAttempts:results[8].data,definitions:results[0].data,connections,jobs:results[2].data,logs:results[3].data,events:results[4].data,registrations:results[6].data,settings:results[5].data?.[0]??{timeout_seconds:10,max_retries:1,alerts_enabled:true}});
+   const managedCatalog = Object.fromEntries((results[0].data??[]).flatMap(({id})=>{
+    const config=managedDefinition(id); if(!config)return [];
+    const connection=connections.find(c=>c.connector_id===id && c.tenant_id===tenant);
+    const status=!isAdmin?'Administrator configuration':config.fields.length===0?'Public API':connection?.managed_state==='active'?(connection.status==='connected'&&connection.credential_configured?'Centrally managed':'Configuration unavailable'):
+     connection?.managed_state==='disabled'?'Configuration unavailable':
+     usesEnvironment(id as ManagedProvider)?'Existing environment configuration':'Not configured';
+    return [[id,{category:config.category,status}]];
+   }));
+   return json({managedCatalog,isAdmin,eligibleUsers:eligible.data,permissions:results[7].data,eventAttempts:results[8].data,definitions:results[0].data,connections,jobs:results[2].data,logs:results[3].data,events:results[4].data,registrations:results[6].data,settings:results[5].data?.[0]??{timeout_seconds:10,max_retries:1,alerts_enabled:true}});
   }
   if(action==='add'){
    const {data:def,error}=await caller.from('integration_definitions').select('id').eq('id',body.connectorId).maybeSingle();check(error);
    if(!def)return json({error:'Unknown connector.'},400);
+   if(managedDefinition(def.id))return json({error:'Save this provider from its configuration panel.'},400);
    const {error:insertError}=await admin.from('integration_connections').insert({tenant_id:tenant,connector_id:def.id});
    if(insertError?.code==='23505')return json({error:'This connection already exists.'},409);check(insertError);return json({ok:true});
   }
@@ -67,6 +79,7 @@ Deno.serve(async(req:Request)=>{
   const {data:c,error:ce}=await caller.from('integration_connections').select('*').eq('id',connectionId).maybeSingle();check(ce);
   if(!c||c.tenant_id!==tenant)return json({error:'Connection not found.'},404);
   if(!isAdmin){const a=await caller.rpc('integration_access',{p_connection:c.id,p_operate:true});if(a.error||a.data!==true)return json({error:'Operator permission required.'},403);}
+  if(managedDefinition(c.connector_id) && action!=='permission')return json({error:'Manage this provider from its configuration panel.'},400);
   const correlation=crypto.randomUUID();
   const log=async(code:string,severity='info')=>{const {error}=await admin.from('integration_logs').insert({connection_id:c.id,connector_id:c.connector_id,severity,code,correlation_id:correlation});check(error);};
   if(action==='permission'){

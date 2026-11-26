@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { integrationRequest, type Snapshot } from './api';
 import { Button } from '@/pages/admin/components/ui';
 import { useToast } from '@/pages/admin/components/toastContext';
@@ -13,6 +13,7 @@ import SyncHistoryPage from './SyncHistoryPage';
 import WebhooksPage from './WebhooksPage';
 import { useDraftRegistry } from '@/pages/admin/lib/draftContext';
 import { useIntegrations, date, inputClass, sections, type Section } from './state';
+import ManagedProviderPanel from './ManagedProviderPanel';
 import PendingCredentialsForm from './PendingCredentialsForm';
 import CommConnectionForm, { VAULT_FORM_CONNECTORS } from './CommConnectionForm';
 import Microsoft365Panel from '@/pages/admin/components/Microsoft365Panel';
@@ -97,6 +98,8 @@ function Workspace({ section }: { section: Section }) {
   const { load } = state;
   const [params] = useSearchParams();
   const [provider, setProvider] = useState('');
+  const navigate = useNavigate();
+  const [category, setCategory] = useState('');
   const [query, setQuery] = useState('');
   const [auth, setAuth] = useState('');
   const [tab, setTab] = useState('configuration');
@@ -108,6 +111,12 @@ function Workspace({ section }: { section: Section }) {
   }
   useEffect(() => () => draft?.clear(DRAFT), [draft]);
   const [selected, setSelected] = useState(params.get('connection') ?? '');
+  const catalog = section === 'overview' || section === 'applications' || section === 'add' || section === 'credentials';
+  const routedProvider = catalog ? params.get('provider') : null;
+  const managedCatalog = state.data?.managedCatalog;
+  const managed = routedProvider && managedCatalog?.[routedProvider]
+    ? state.data?.definitions.find(definition => definition.id === routedProvider)
+    : undefined;
   const [secret, setSecret] = useState('');
   const [kind, setKind] = useState('api_key');
   const [clientId, setClientId] = useState('');
@@ -123,19 +132,18 @@ function Workspace({ section }: { section: Section }) {
   const announce = (text: string) => { setNotice(text); push(text); };
 
   const connection = state.data?.connections.find(item => item.id === selected);
-  const providerId = connection?.connector_id ?? provider;
+  const providerId = managed?.id ?? connection?.connector_id ?? provider;
   const definition = state.data?.definitions.find(item => item.id === providerId);
   const app = definition && appSettings[definition.id];
   const isOAuth = definition?.auth_type === 'oauth2';
   const isAdmin = state.data?.isAdmin === true;
-  const catalog = section === 'overview' || section === 'applications' || section === 'add' || section === 'credentials';
   const m365 = useMicrosoft365(catalog && state.data?.connections.some(item => item.connector_id === M365) === true);
   const nameOf = (connectorId: string | undefined) => state.data?.definitions.find(provider => provider.id === connectorId)?.name ?? connectorId ?? 'The';
   /** The single status per entry: Microsoft 365 shows the same check as Email Management. */
   const statusOf = (item: { connector_id: string; status: string }) => item.connector_id === M365 && (m365.status || m365.loading) ? m365Label(m365.status, m365.loading) : item.status.replaceAll('_', ' ');
   const applications = new Map<string, Application>();
   for (const item of state.data?.definitions ?? []) {
-    applications.set(item.id, { id: item.id, name: item.name, description: PURPOSE[item.id] ?? item.description, definition: item, connections: [] });
+    applications.set(item.id, { id: item.id, name: item.name, description: PURPOSE[item.id] ?? item.description, definition: item, managed: managedCatalog?.[item.id], connections: [] });
   }
   for (const item of state.data?.connections ?? []) {
     const application = applications.get(item.connector_id);
@@ -254,6 +262,15 @@ function Workspace({ section }: { section: Section }) {
   }
   function choose(application: Application) {
     if (application.id === providerId || !confirmDiscard()) return;
+    if (catalog && application.managed) {
+      setDirty(false);
+      const query = new URLSearchParams({ provider: application.id, tab: 'configuration' });
+      const connection = application.connections[0];
+      if (connection) query.set('connection', connection.id);
+      navigate({ pathname: '/admin/integrations/applications', search: query.toString() });
+      return;
+    }
+    if (managed) navigate({ search: '' });
     setProvider(application.id);
     const next = application.connections[0];
     selectConnection(next?.id ?? '');
@@ -424,7 +441,7 @@ function Workspace({ section }: { section: Section }) {
     <Frame section={section} state={state} applications={
       // rule-policy: technical integration-settings-list The application picker stays read-only in global Settings.
       <Applications applications={visibleApps} selected={providerId} query={query} setQuery={setQuery}
-        auth={auth} setAuth={setAuth} choose={choose} statusOf={statusOf} isAdmin={isAdmin} busy={busy || state.busy || section === 'settings'} />
+        category={category} setCategory={setCategory} auth={auth} setAuth={setAuth} choose={choose} statusOf={statusOf} isAdmin={isAdmin} busy={busy || state.busy || section === 'settings'} />
     }>
       <div className="space-y-4">
         {error && <p className="rounded-md border border-primary-200 p-3" role="alert">{error}</p>}
@@ -444,6 +461,11 @@ function Workspace({ section }: { section: Section }) {
               <SettingsPage state={state} />
             </div>}
           </>
+        ) : managed ? (
+          isAdmin ? <ManagedProviderPanel key={`${managed.id}:${params.get('connection') ?? ''}:${params.get('tab') ?? 'configuration'}`}
+            provider={managed} connectionId={params.get('connection')}
+            tab={params.get('tab') ?? 'configuration'} logs={state.data?.logs ?? []} onChange={load} />
+            : <Empty>Administrator access is required to manage this connection.</Empty>
         ) : selectedApp ? (
           <>
             <div className="flex flex-wrap items-start justify-between gap-2">

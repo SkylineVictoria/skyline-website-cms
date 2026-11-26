@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "npm:@supabase/supabase-js@2.57.4";
-import { type HoursLookup, ImportError, qualificationDetails } from "./tga.ts";
+import { type HoursLookup, type TgaCredentials, ImportError, qualificationDetails } from "./tga.ts";
 import { unitDetails, unitSummary, type UnitSummary } from "./units.ts";
 import { checkElectives, type ElectiveUnit, groupSizes, parseElectiveRules, prerequisiteCodes } from "./packaging.ts";
 
@@ -31,7 +31,7 @@ const HOURS_SOURCE = "NCVER nationally agreed nominal hours (2026)";
  * added; active units get their training.gov.au content. Nothing is erased.
  */
 export async function syncCourse(db: SupabaseClient, tenantId: string | null, courseId: string,
-  providerCode: string | null, hoursLookup: HoursLookup) {
+  providerCode: string | null, hoursLookup: HoursLookup, credentials?: TgaCredentials) {
   let query = db.from("cms_courses")
     .select("id,code,career,full_description,entry_requirements,training_package,tga_url").eq("id", courseId);
   query = tenantId ? query.eq("tenant_id", tenantId) : query.is("tenant_id", null);
@@ -43,7 +43,7 @@ export async function syncCourse(db: SupabaseClient, tenantId: string | null, co
     throw new ImportError("This course has no qualification code that Training.gov.au can look up.", 422);
   }
 
-  const review = await qualificationDetails(code, providerCode, hoursLookup);
+  const review = await qualificationDetails(code, providerCode, hoursLookup, credentials);
   const g = review.government;
   const patch: Record<string, unknown> = {};
   const filled: string[] = [];
@@ -186,14 +186,14 @@ export async function fillUnitContent(db: SupabaseClient, active: { id: string; 
 /** Add Unit: the chosen units of the course's current release are put on the course (inactive ones switched on,
  *  missing ones added active) and get their training.gov.au content. */
 export async function addUnits(db: SupabaseClient, tenantId: string | null, courseId: string, codes: string[], hoursLookup: HoursLookup,
-  options: { imported?: string[]; attested?: boolean; remove?: string[] } = {}) {
+  options: { imported?: string[]; attested?: boolean; remove?: string[] } = {}, credentials?: TgaCredentials) {
   let query = db.from("cms_courses").select("id,code").eq("id", courseId);
   query = tenantId ? query.eq("tenant_id", tenantId) : query.is("tenant_id", null);
   const { data: course } = await query.maybeSingle();
   if (!course) return reply({ error: "Course not found." }, 404);
   const code = String(course.code ?? "").trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9]{4,19}$/.test(code)) throw new ImportError("This course has no qualification code that Training.gov.au can look up.", 422);
-  const review = await qualificationDetails(code, null, hoursLookup);
+  const review = await qualificationDetails(code, null, hoursLookup, credentials);
   const official = new Map([...review.core.map(unit => ({ unit, core: true })), ...review.electives.map(unit => ({ unit, core: false }))]
     .map(item => [item.unit.code.toUpperCase(), item]));
   const clean = (list: string[]) => [...new Set(list.map(item => item.trim().toUpperCase()).filter(Boolean))];

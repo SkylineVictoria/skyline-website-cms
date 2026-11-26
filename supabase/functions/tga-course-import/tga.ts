@@ -4,7 +4,7 @@ import { DOMParser, type Element } from "npm:@xmldom/xmldom@0.9.12";
 // binding and embedded V13 data-contract XSD). The SDK resolves ReleaseFile
 // paths relative to /TrainingComponentFiles/ on the register's web host.
 const namespace = "http://training.gov.au/services/13/";
-const endpoint = "https://ws.sandbox.training.gov.au/Deewr.Tga.WebServices/TrainingComponentServiceV13.svc/Training";
+export const TGA_SANDBOX_ENDPOINT = "https://ws.sandbox.training.gov.au/Deewr.Tga.WebServices/TrainingComponentServiceV13.svc/Training";
 const soapNamespace = "http://schemas.xmlsoap.org/soap/envelope/";
 const authorIt = "http://www.authorit.com/xml/authorit";
 const codePattern = /^[A-Z][A-Z0-9]{4,19}$/;
@@ -93,9 +93,11 @@ async function discardResponse(response: Response) {
   try { await response.body?.cancel(); } catch { /* Already closed. */ }
 }
 
-async function soap(op: "Search" | "GetDetails", request: string) {
-  const username = Deno.env.get("EF_TGA_SANDBOX_USERNAME");
-  const password = Deno.env.get("EF_TGA_SANDBOX_PASSWORD");
+export type TgaCredentials = { username: string; password: string };
+
+async function soap(op: "Search" | "GetDetails", request: string, credentials?: TgaCredentials, send = fetch) {
+  const username = credentials?.username ?? Deno.env.get("EF_TGA_SANDBOX_USERNAME");
+  const password = credentials?.password ?? Deno.env.get("EF_TGA_SANDBOX_PASSWORD");
   if (!username || !password) throw new ImportError("The Training.gov.au sandbox credentials have not been configured on the server.", 503);
   const now = Date.now();
   const envelope = `<s:Envelope xmlns:s="${soapNamespace}" xmlns:u="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">
@@ -103,7 +105,7 @@ async function soap(op: "Search" | "GetDetails", request: string) {
 <u:Timestamp u:Id="_0"><u:Created>${new Date(now).toISOString()}</u:Created><u:Expires>${new Date(now + 300_000).toISOString()}</u:Expires></u:Timestamp>
 <o:UsernameToken u:Id="token"><o:Username>${xmlEscape(username)}</o:Username><o:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">${xmlEscape(password)}</o:Password></o:UsernameToken>
 </o:Security></s:Header><s:Body><${op} xmlns="${namespace}"><request>${request}</request></${op}></s:Body></s:Envelope>`;
-  const response = await fetch(endpoint, {
+  const response = await send(TGA_SANDBOX_ENDPOINT, {
     method: "POST", body: envelope, redirect: "error", signal: AbortSignal.timeout(18_000),
     headers: { "Accept-Encoding": "identity", "Content-Type": "text/xml; charset=utf-8", SOAPAction: `"${namespace}ITrainingComponentService/${op}"` },
   }).catch(() => { throw new ImportError(`The Training.gov.au sandbox did not respond to ${op}.`); });
@@ -136,10 +138,10 @@ async function soap(op: "Search" | "GetDetails", request: string) {
   return result;
 }
 
-export async function searchQualifications(query: string) {
+export async function searchQualifications(query: string, credentials?: TgaCredentials, send = fetch) {
   const result = await soap("Search", `<PageNumber>1</PageNumber><PageSize>25</PageSize>
 <Filter>${xmlEscape(query)}</Filter><SearchCode>true</SearchCode><SearchTitle>true</SearchTitle>
-<TrainingComponentTypes><IncludeQualification>true</IncludeQualification></TrainingComponentTypes>`);
+<TrainingComponentTypes><IncludeQualification>true</IncludeQualification></TrainingComponentTypes>`, credentials, send);
   const rows = children(child(result, "Results"), "TrainingComponentSummary")
     .filter(row => field(row, "ComponentType") === "Qualification")
     .map(row => ({ code: field(row, "Code"), name: field(row, "Title"), status: field(row, "CurrencyStatus") }));
@@ -433,10 +435,10 @@ function parseRelease(root: Element | undefined, code: string, releaseNumber: st
   };
 }
 
-export async function qualificationDetails(code: string, providerCode: string | null = null, hoursLookup: HoursLookup | null = null) {
+export async function qualificationDetails(code: string, providerCode: string | null = null, hoursLookup: HoursLookup | null = null, credentials?: TgaCredentials) {
   if (!codePattern.test(code)) throw new ImportError("Enter a valid qualification code.", 400);
   const result = await soap("GetDetails", `<Code>${code}</Code><InformationRequest>
-<ShowFiles>true</ShowFiles><ShowReleases>true</ShowReleases><ShowUnitGrid>true</ShowUnitGrid></InformationRequest>`);
+<ShowFiles>true</ShowFiles><ShowReleases>true</ShowReleases><ShowUnitGrid>true</ShowUnitGrid></InformationRequest>`, credentials);
   const name = field(result, "Title");
   if (field(result, "Code") !== code || field(result, "ComponentType") !== "Qualification" || !name) {
     throw new ImportError("Training.gov.au did not return this qualification.", 404);

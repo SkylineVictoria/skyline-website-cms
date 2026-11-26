@@ -252,6 +252,8 @@ begin
  if v.template is null then return null; end if;
  return jsonb_build_object(
   'attemptId', t.id, 'attemptNo', t.attempt_no, 'role', v_role, 'canAssess', v_role = 'trainer' and (public.asm_is_admin() or public.asm_can_assess_attempt(p_attempt)),
+  -- the student and the unit, for the unit outcome the assessor records after the result (phase 4)
+  'studentId', t.student_id, 'unitId', (select x.unit_id from public.asm_assessments x where x.id = v.assessment_id),
   'template', v.template,
   'attempts', coalesce((select jsonb_agg(public.asm_attempt_json(a.id, v_role) || jsonb_build_object(
      'snapshot', (select jsonb_build_object('answers', s.answers, 'signatures', s.signatures, 'record', s.record, 'hash', s.hash, 'createdAt', s.created_at) from public.asm_attempt_snapshots s where s.attempt_id = a.id),

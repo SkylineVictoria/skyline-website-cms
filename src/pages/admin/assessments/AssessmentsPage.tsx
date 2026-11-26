@@ -7,25 +7,20 @@ import { ErrorNote } from "@/pages/admin/components/rto/shared";
 import CalendarView from "@/components/assessment/CalendarView";
 import ProgressList, { type Progress } from "@/components/assessment/ProgressList";
 import { fmtDateTime, OUTCOME_LABEL, STATE_LABEL } from "@/lib/assessment/api";
-import { questionType } from "@/lib/assessment/registry";
 import { asmAdmin, downloadCsv, type AssessmentRow, type AuditRow, type BankRow, type BatchOption, type OutcomeRow, type Overview, type Settings, attemptsRange } from "@/pages/admin/lib/assessments";
 import { rto, type CourseDetail, type RtoCourse } from "@/pages/admin/lib/rto";
 import AttemptDrawer from "./panels/AttemptDrawer";
 import NewAssessmentDialog from "./NewAssessmentDialog";
-import { recentImports, type RecentImport } from "@/lib/assessment/aiImport";
-import WorkbookHeaderPicker from "@/components/assessment/WorkbookHeaderPicker";
-import { useWorkbookLetterhead } from "@/components/assessment/useWorkbookLetterhead";
-import { WORKBOOK_HEADER_HINT } from "@/lib/assessment/workbookExport";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
 const TABS = [
   { id: "library", label: "Library", icon: "ri-book-2-line" }, { id: "submissions", label: "Submissions", icon: "ri-inbox-line" }, { id: "outcomes", label: "Outcomes", icon: "ri-award-line" },
-  { id: "bank", label: "Question bank", icon: "ri-archive-line" }, { id: "calendar", label: "Calendar", icon: "ri-calendar-2-line" }, { id: "reports", label: "Reports", icon: "ri-bar-chart-2-line" },
+  { id: "calendar", label: "Calendar", icon: "ri-calendar-2-line" }, { id: "reports", label: "Reports", icon: "ri-bar-chart-2-line" },
   { id: "settings", label: "Settings", icon: "ri-settings-3-line" }, { id: "audit", label: "Audit", icon: "ri-history-line" },
 ];
 const fail = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong.");
 
-/** Master Data › Assessments: the library, the submissions overview, outcomes, the question bank, the calendar, reports, settings and the audit log. */
+/** Master Data › Assessments: the library, the submissions overview, outcomes, the calendar, reports, settings and the audit log. */
 export default function AssessmentsPage() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") ?? "library";
@@ -33,13 +28,12 @@ export default function AssessmentsPage() {
   useEffect(() => { void asmAdmin<{ assessmentAdmin: boolean }>("me").then(setMe).catch(() => setMe({ assessmentAdmin: false })); }, []);
   return (
     <div>
-      <PageHeader breadcrumb="Master Data" title="Assessments" description="Form-built assessments mapped to course and unit, assigned to intakes, marked by trainers, with reassessment and competency outcomes." />
+      <PageHeader breadcrumb="Master Data" title="Assessments" description="Each assessment is its unit's workbook PDF: students answer on it, trainers mark on it, and the stamped workbook is the record." />
       {me && !me.assessmentAdmin ? <ErrorNote text="Only an Admin or an RTO Manager can manage assessments." /> : null}
       <SectionTabs tabs={TABS} active={tab} onChange={(t) => setParams({ tab: t })} />
       {tab === "library" ? <Library /> : null}
       {tab === "submissions" ? <Submissions /> : null}
       {tab === "outcomes" ? <Outcomes /> : null}
-      {tab === "bank" ? <Bank /> : null}
       {tab === "calendar" ? <AdminCalendar /> : null}
       {tab === "reports" ? <Reports /> : null}
       {tab === "settings" ? <SettingsTab /> : null}
@@ -54,7 +48,6 @@ function Library() {
   const [q, setQ] = useState(""); const [courseId, setCourseId] = useState(""); const [archived, setArchived] = useState(false);
   const [courses, setCourses] = useState<RtoCourse[]>([]);
   const [creating, setCreating] = useState(false);
-  const [resume, setResume] = useState<{ id: string; fileName: string } | null>(null);
   const [error, setError] = useState("");
   const load = useCallback(() => asmAdmin<AssessmentRow[]>("assessment_list", { q: q || undefined, courseId: courseId || undefined, includeArchived: archived }).then(setRows).catch((e) => setError(fail(e))), [q, courseId, archived]);
   useEffect(() => { void load(); }, [load]);
@@ -68,7 +61,6 @@ function Library() {
         <span className="flex-1" /><Button icon="ri-add-line" onClick={() => setCreating(true)}>New assessment</Button>
       </div>
       {error ? <ErrorNote text={error} /> : null}
-      <RecentImports onResume={(r) => { setResume({ id: r.id, fileName: r.fileName }); setCreating(true); }} />
       {rows === null ? <SkeletonLines lines={6} /> : rows.length === 0 ? <Empty icon="ri-file-list-3-line" title="No assessments yet" text="Create the first one: choose the course and unit, then build the tasks and questions." action={<Button icon="ri-add-line" onClick={() => setCreating(true)}>New assessment</Button>} /> : (
         <ul className="divide-y divide-background-100 rounded-md border border-background-200">{rows.map((r) => (
           <li key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
@@ -80,47 +72,8 @@ function Library() {
             {r.archivedAt ? <Badge tone="muted">archived</Badge> : null}
           </li>))}</ul>
       )}
-      {creating ? <NewAssessmentDialog courses={courses} resume={resume} onClose={() => { setCreating(false); setResume(null); }} onSaved={(id) => { setCreating(false); setResume(null); navigate(`/admin/assessments/${id}`); }} /> : null}
+      {creating ? <NewAssessmentDialog courses={courses} onClose={() => setCreating(false)} onSaved={(id) => { setCreating(false); navigate(`/admin/assessments/${id}?tab=pdf`); }} /> : null}
     </div>
-  );
-}
-
-const DISMISSED = "asm-import-dismissed";
-const readDismissed = (): string[] => { try { return JSON.parse(window.localStorage.getItem(DISMISSED) ?? "[]") as string[]; } catch { return []; } };
-/**
- * ASM-OVERVIEW C: the admin's workbook imports of the last day, so a reading that carried on after the Add assessment screen was
- * closed can be picked up again (Resume opens the wizard on that job; choosing the same file again reuses it).
- */
-function RecentImports({ onResume }: { onResume: (r: RecentImport) => void }) {
-  const [list, setList] = useState<RecentImport[]>([]);
-  const [dismissed, setDismissed] = useState<string[]>(readDismissed);
-  useEffect(() => {
-    // polled every 5 s only while one of them is still being read
-    let live = true; let t = 0;
-    const tick = () => recentImports().then((l) => {
-      if (!live) return;
-      const mine = l.filter((x) => x.kind === "workbook");
-      setList(mine);
-      if (mine.some((x) => x.state === "queued" || x.state === "running")) t = window.setTimeout(() => void tick(), 5000);
-    }).catch(() => undefined);
-    void tick();
-    return () => { live = false; window.clearTimeout(t); };
-  }, []);
-  const shown = list.filter((x) => !dismissed.includes(x.id));
-  if (!shown.length) return null;
-  const dismiss = (id: string) => { const n = [...dismissed, id]; setDismissed(n); try { window.localStorage.setItem(DISMISSED, JSON.stringify(n.slice(-50))); } catch { /* private window */ } };
-  const status = (r: RecentImport) => (r.state === "done" ? "Read · ready to check" : r.state === "failed" ? `Failed${r.error ? `: ${r.error}` : ""}` : `Reading · ${r.progress?.label ?? "starting"}`);
-  return (
-    <section className="rounded-xl border border-background-200 bg-white" data-testid="recent-imports" aria-label="Workbook imports">
-      <p className="border-b border-background-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-foreground-500">Workbook imports (last 24 hours)</p>
-      <ul className="divide-y divide-background-100">{shown.map((r) => (
-        <li key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
-          <i className={`${r.state === "failed" ? "ri-error-warning-line text-red-600" : r.state === "done" ? "ri-checkbox-circle-line text-green-600" : "ri-loader-4-line animate-spin text-primary-600"}`} aria-hidden="true" />
-          <span className="min-w-0 flex-1"><span className="block truncate font-medium text-foreground-900">{r.fileName}</span><span className="block truncate text-xs text-foreground-600">{status(r)} · started {fmtDateTime(r.createdAt)}</span></span>
-          <Button variant="outline" onClick={() => onResume(r)} data-testid="import-resume">{r.state === "failed" ? "Retry" : "Resume"}</Button>
-          <button type="button" className="min-h-[36px] cursor-pointer rounded-md px-2 text-foreground-500 hover:bg-background-100" onClick={() => dismiss(r.id)} aria-label={`Hide ${r.fileName}`}><i className="ri-close-line" aria-hidden="true" /></button>
-        </li>))}</ul>
-    </section>
   );
 }
 
@@ -228,22 +181,6 @@ function Outcomes() {
   );
 }
 
-function Bank() {
-  const { push } = useToast();
-  const [rows, setRows] = useState<BankRow[] | null>(null); const [q, setQ] = useState(""); const [error, setError] = useState("");
-  const load = useCallback(() => asmAdmin<BankRow[]>("bank_list", { q: q || undefined }).then(setRows).catch((e) => setError(fail(e))), [q]);
-  useEffect(() => { void load(); }, [load]);
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2"><TextInput className="max-w-xs" placeholder="Search title or tag" value={q} onChange={(e) => setQ(e.target.value)} /><span className="text-xs text-foreground-600">Questions are saved here from the builder ("Save to question bank") and inserted with "From bank". Every save is a new version.</span></div>
-      {error ? <ErrorNote text={error} /> : null}
-      {rows === null ? <SkeletonLines lines={4} /> : rows.length === 0 ? <Empty icon="ri-archive-line" title="The bank is empty" text="Select a question in any assessment's builder and choose Save to question bank." /> : (
-        <ul className="divide-y divide-background-100 rounded-md border border-background-200">{rows.map((r) => <li key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm"><span className="min-w-0 flex-1"><span className="block truncate font-medium text-foreground-900">{r.title}</span><span className="block text-xs text-foreground-600">{questionType(r.type)?.label ?? r.type} · v{r.versionNo} · {r.tags.join(", ")} · {fmtDateTime(r.updatedAt)}</span></span><Button size="sm" variant="ghost" icon="ri-archive-line" onClick={() => window.confirm("Archive this bank question?") && asmAdmin("bank_archive", { id: r.id }).then(() => { push("Archived."); void load(); }).catch((e) => setError(fail(e)))}>Archive</Button></li>)}</ul>
-      )}
-    </div>
-  );
-}
-
 function AdminCalendar() {
   const [batches, setBatches] = useState<BatchOption[]>([]); const [batchId, setBatchId] = useState("");
   useEffect(() => { void asmAdmin<BatchOption[]>("batch_list").then(setBatches).catch(() => setBatches([])); }, []);
@@ -275,7 +212,6 @@ function Reports() {
 
 function SettingsTab() {
   const { push } = useToast();
-  const { head, setting } = useWorkbookLetterhead();
   const [s, setS] = useState<Settings | null>(null); const [error, setError] = useState("");
   useEffect(() => { void asmAdmin<Settings>("settings_get").then(setS).catch((e) => setError(fail(e))); }, []);
   if (error) return <ErrorNote text={error} />;
@@ -298,10 +234,6 @@ function SettingsTab() {
       <Field label="Instructions shown on every assessment"><TextArea rows={3} value={s.instructions} onChange={(e) => setS({ ...s, instructions: e.target.value })} /></Field>
       <Field label="Allowed evidence types (MIME, one per line)"><TextArea rows={4} readOnly disabled value={s.evidence_allowed_types.join("\n")} /></Field>
       <Button icon="ri-save-line" onClick={() => void save()}>Save instructions</Button>
-      {/* ASM-HEADER: the workbook header picture (saved on its own, at once) */}
-      {setting?.available === false
-        ? <p className="rounded-md border border-background-200 bg-background-100 px-3 py-2 text-sm text-foreground-700" role="note"><strong>Workbook header</strong>: available once migration 20261123235917 is applied. Until then workbooks use the Skyline logo. Recommended picture: {WORKBOOK_HEADER_HINT}.</p>
-        : <WorkbookHeaderPicker head={head} current={setting?.url ?? null} onSaved={() => push("Workbook header saved.")} />}
     </div>
   );
 }

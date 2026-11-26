@@ -26,7 +26,7 @@ export interface BundleAttempt {
   output: StoredPdf | null; outputs?: StoredPdf[];
 }
 export interface StoredPdf { kind?: "final" | "acknowledged"; path: string; pdfSha256: string; snapshotHash: string; markingHash?: string; acknowledgementHash?: string; createdAt: string }
-export interface PdfBundle { attemptId: string; attemptNo: number; role: "trainer" | "student"; canAssess: boolean; template: PdfTemplate; attempts: BundleAttempt[] }
+export interface PdfBundle { attemptId: string; attemptNo: number; studentId?: string; unitId?: string | null; role: "trainer" | "student"; canAssess: boolean; template: PdfTemplate; attempts: BundleAttempt[] }
 
 export type StampValue = { kind: "text"; text: string; by: "student" | "trainer" | "record" } | { kind: "tick"; by: "student" | "trainer" | "record" } | { kind: "png"; png: string; name: string; by: "student" | "trainer" };
 

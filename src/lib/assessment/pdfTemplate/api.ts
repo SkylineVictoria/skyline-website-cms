@@ -135,6 +135,30 @@ async function pdfjs() {
 }
 
 /** Reads every page of the PDF and finds its fields (about 2 s for a 100-page workbook). */
+/**
+ * ASM-UNIT-CHECK on the workbook: the unit code (and title) the workbook names on its first pages, for the comparison with the
+ * assessment's unit. A code next to "Unit Code" wins, else the code printed most often (training.gov.au unit codes: 3 letters,
+ * 2-4 letters, 3-4 digits, maybe a letter; qualification codes such as CPC30620 do not match).
+ */
+export async function unitInWorkbook(bytes: Uint8Array, pages = 6): Promise<{ code: string | null; name: string | null }> {
+  const pdf = await pdfjs();
+  const doc = await pdf.getDocument({ data: bytes.slice() }).promise;
+  try {
+    // the code only: a title read from the page text picks up the headers around it (checkUnit compares codes when there is one)
+    const counts = new Map<string, number>(); let labelled: string | null = null;
+    for (let n = 1; n <= Math.min(pages, doc.numPages); n++) {
+      const text = ((await (await doc.getPage(n)).getTextContent()).items as { str?: string }[]).map((x) => x.str ?? "").join(" ").replace(/\s+/g, " ");
+      const near = /unit\s+code\s*(?:&\s*name)?\s*[:-]?\s*([A-Z]{3}[A-Z]{2,4}\d{3,4}[A-Z]?)\b/i.exec(text);
+      if (near && !labelled) labelled = near[1].toUpperCase();
+      for (const m of text.matchAll(/\b([A-Z]{3}[A-Z]{2,4}\d{3,4}[A-Z]?)\b/g)) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
+    }
+    const common = [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
+    return { code: labelled ?? common, name: null };
+  } finally {
+    void (doc as unknown as { destroy?: () => Promise<void> }).destroy?.();
+  }
+}
+
 export async function detectWorkbook(bytes: Uint8Array, pdfInfo: { path: string; sha256: string; fileName?: string | null }, onProgress?: (page: number, pages: number) => void): Promise<PdfTemplate> {
   const pdf = await pdfjs();
   const doc = await pdf.getDocument({ data: bytes.slice() }).promise;

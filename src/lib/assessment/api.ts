@@ -4,7 +4,6 @@
  */
 import { supabase } from "@/pages/admin/lib/supabase";
 import { institutionTimeZone } from "@/lib/timeZone";
-import type { AttemptHistory } from "./resultsSheet";
 
 async function call<T>(fn: "asm_admin" | "asm_trainer" | "asm_student", action: string, data: Record<string, unknown>): Promise<T> {
   const { data: out, error, status } = await supabase.rpc(fn, { p_action: action, p_data: data });
@@ -25,6 +24,15 @@ export async function asmCalendar(from: string, to: string, batchId?: string | n
   const { data, error } = await supabase.rpc("asm_calendar", { p_from: from, p_to: to, p_batch: batchId ?? null });
   if (error) throw new Error(error.message);
   return (data as CalendarEvent[] | null) ?? [];
+}
+
+/** Who and what the workbook's record fields print: the student (ref = the Student ID), the trainers, the assessment and qualification. */
+export interface AttemptHistory {
+  student: { id: string; ref: string; number?: string | null; name: string; email?: string | null } | null;
+  trainers: string[];
+  assessment: { title: string; code?: string | null; versionNo?: number | null; unit?: { code: string; name: string } | null; qualification?: { code: string; name: string } | null } | null;
+  attempts: unknown[];
+  complete: boolean;
 }
 
 /**

@@ -177,6 +177,7 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
             <p className="text-2xs text-foreground-500">{overall === "NYS" ? "The student gets the next attempt with their answers filled in; the next column of the results and summary sheets is used." : "The result is released to the student, who signs to acknowledge it on the summary sheet."}</p>
           </> : <p className="rounded-lg bg-background-100 px-3 py-2 text-sm text-foreground-700" data-testid="decided">{cur.state === "returned" ? "Returned for resubmission." : "Result released."}{(cur.outputs ?? []).map((o) => <span key={o.kind} className="block" data-testid={`stored-${o.kind}`}>{o.kind === "acknowledged" ? "Acknowledged copy (official record)" : "Sign-off copy"} · SHA-256 <span className="font-mono text-2xs">{o.pdfSha256.slice(0, 16)}…</span> · snapshot <span className="font-mono text-2xs">{o.snapshotHash.slice(0, 16)}…</span></span>)}</p>}
         </section>
+        {cur.state === "final" && bundle.canAssess && bundle.unitId && bundle.studentId ? <UnitOutcome studentId={bundle.studentId} unitId={bundle.unitId} attemptId={cur.id} suggested={cur.outcome === "S" ? "C" : "NYC"} /> : null}
       </aside>
     </div>
   </div>;
@@ -206,6 +207,32 @@ function PageOverlay({ page, fields, values, editable, derived: isDerived, onTog
         className={`absolute overflow-hidden whitespace-pre-wrap rounded-sm px-0.5 text-left text-[9px] leading-tight text-red-800 ${auto ? "cursor-default" : "cursor-text outline outline-1 outline-red-300 hover:bg-red-50/70"}`} style={style}>{v?.kind === "text" ? v.text : ""}</button>;
     })}
   </div>;
+}
+
+/** After the final result: the assessor records the unit outcome (never automatic: it covers every assessment of the unit), signed. */
+function UnitOutcome({ studentId, unitId, attemptId, suggested }: { studentId: string; unitId: string; attemptId: string; suggested: "C" | "NYC" }) {
+  const [open, setOpen] = useState(false);
+  const [outcome, setOutcome] = useState<"C" | "NYC">(suggested);
+  const [notes, setNotes] = useState("");
+  const [tick, setTick] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const record = async () => {
+    setBusy(true); setMsg("");
+    try { await asmTrainer("unit_outcome_record", { studentId, unitId, outcome, signOff: tick, notes, attemptIds: [attemptId] }); setOpen(false); setMsg(`Unit outcome recorded: ${outcome === "C" ? "Competent" : "Not Yet Competent"}.`); }
+    catch (e) { setMsg(e instanceof Error ? e.message : "Not recorded."); } finally { setBusy(false); }
+  };
+  return <section className="space-y-2 rounded-xl border border-background-200 bg-white p-3 text-sm" data-testid="unit-outcome">
+    <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-foreground-800">Record the unit outcome for this student (never automatic: it covers every assessment of the unit).</p>
+      <button type="button" className={SECONDARY} onClick={() => setOpen((o) => !o)} data-testid="unit-outcome-open">Record unit outcome</button></div>
+    {open ? <div className="space-y-2">
+      <div className="flex gap-2">{(["C", "NYC"] as const).map((o) => <button key={o} type="button" aria-pressed={outcome === o} className={`min-h-[44px] cursor-pointer rounded-lg border px-3 font-semibold ${outcome === o ? "border-primary-600 bg-primary-50 text-primary-800" : "border-background-300"}`} onClick={() => setOutcome(o)}>{o === "C" ? "Competent" : "Not Yet Competent"}</button>)}</div>
+      <textarea rows={2} className="w-full rounded-lg border border-background-300 px-3 py-2" placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={tick} onChange={(e) => setTick(e.target.checked)} />I declare that I have conducted a fair, valid, reliable and flexible assessment and that this outcome is based on the evidence recorded.</label>
+      <button type="button" className={SECONDARY} disabled={busy || !tick} onClick={() => void record()} data-testid="unit-outcome-record">Record and sign</button>
+    </div> : null}
+    {msg ? <p role="status" className="text-foreground-700" data-testid="unit-outcome-msg">{msg}</p> : null}
+  </section>;
 }
 
 function SignOff({ attemptId, signed, onSigned, disabled }: { attemptId: string; signed: BundleAttempt["signoff"]; onSigned: () => Promise<void>; disabled: boolean }) {

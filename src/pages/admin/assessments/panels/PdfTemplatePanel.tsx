@@ -5,7 +5,10 @@ import { SkeletonLines } from "@/pages/admin/components/rto/overlay";
 import { ErrorNote } from "@/pages/admin/components/rto/shared";
 import FieldEditor, { type EditorField, type EditorOwner, type FieldKindSpec } from "@/components/signing/FieldEditor";
 import { AUTO_KEYS, SUBMISSION_OPTIONS, templateProblems, type AutoKey, type FieldKind, type FieldRole, type PdfTemplate, type TemplateField } from "@/lib/assessment/pdfTemplate/model";
-import { detectWorkbook, downloadWorkbook, loadTemplate, saveTemplate, uploadWorkbook, type TemplateState } from "@/lib/assessment/pdfTemplate/api";
+import { detectWorkbook, downloadWorkbook, loadTemplate, saveTemplate, unitInWorkbook, uploadWorkbook, type TemplateState } from "@/lib/assessment/pdfTemplate/api";
+import { checkUnit, unitDecisionError, type UnitCheck } from "@/lib/assessment/workbookFiling";
+import { asmAdmin } from "@/pages/admin/lib/assessments";
+import { supabase } from "@/pages/admin/lib/supabase";
 
 /** ASM-PDF-TEMPLATE: who fills a field, in the editor's colours (blue student, amber trainer, green record). */
 const OWNERS: EditorOwner[] = [{ id: "student", label: "Student" }, { id: "trainer", label: "Trainer / assessor" }, { id: "auto", label: "Filled from the record" }];
@@ -49,7 +52,8 @@ const ranges = (pages: number[]) => pages.reduce<string[]>((out, p, i) => { if (
  * The assessment as its workbook PDF (owner 2026-11-26): upload the PDF, its answer boxes, marks, signatures and record values are
  * found on the pages, then checked and corrected here like an e-sign template (drag, resize, add, remove). Saved on the draft.
  */
-export default function PdfTemplatePanel({ assessmentId, editable, onChanged }: { assessmentId: string; editable: boolean; onChanged: () => void }) {
+type UnitRow = { id: string; code: string; name: string };
+export default function PdfTemplatePanel({ assessmentId, editable, onChanged, unit = null, units = [] }: { assessmentId: string; editable: boolean; onChanged: () => void; unit?: UnitRow | null; units?: UnitRow[] }) {
   const toast = useToast();
   const [state, setState] = useState<TemplateState | null>(null);
   const [template, setTemplate] = useState<PdfTemplate | null>(null);
@@ -60,6 +64,10 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged }: 
   const [error, setError] = useState<string | null>(null);
   const [confirmReplace, setConfirmReplace] = useState<File | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // ASM-UNIT-CHECK: the unit the uploaded workbook names, against the assessment's unit; a mismatch waits for Switch or Keep (with a
+  // reason) before the template can be saved, and the decision is audited (asm_import_unit_check)
+  const [unitCheck, setUnitCheck] = useState<UnitCheck | null>(null);
+  const [keepReason, setKeepReason] = useState("");
 
   const load = useCallback(async () => {
     setError(null);
@@ -83,7 +91,11 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged }: 
       const bytes = new Uint8Array(await file.arrayBuffer());
       const where = await uploadWorkbook(assessmentId, bytes);
       const found = await detectWorkbook(bytes, { ...where, fileName: file.name }, (n, of) => setBusy(`Reading page ${n} of ${of}…`));
+      // the unit the workbook names, read from its own copy before the page viewer takes the bytes
+      const named = await unitInWorkbook(bytes.slice()).catch(() => ({ code: null, name: null }));
       setPdf(bytes); setTemplate(found); setFields(found.fields.map(toEditor)); setDirty(true);
+      const check = checkUnit(named, { code: unit?.code ?? null, name: unit?.name ?? null });
+      setUnitCheck(check.status === "mismatch" ? check : null); setKeepReason("");
       toast.push(`${found.questions.length} questions and ${found.fields.length} fields found. Check them, then save.`, "success");
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
@@ -95,8 +107,25 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged }: 
       setTemplate(found); setFields(found.fields.map(toEditor)); setDirty(true);
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
+  const decideUnit = async (kind: "switched" | "kept") => {
+    if (!unitCheck) return;
+    const why = unitDecisionError({ kind, reason: keepReason });
+    if (why) { setError(why); return; }
+    const target = units.find((u) => u.code.toUpperCase() === (unitCheck.found.code ?? "").toUpperCase()) ?? null;
+    try {
+      if (kind === "switched") {
+        if (!target) { setError(`${unitCheck.found.code} is not a unit of this qualification in Skyline. Keep ${unit?.code ?? "the selected unit"} with a reason, or add the unit to the course first.`); return; }
+        await asmAdmin("assessment_update", { id: assessmentId, unitId: target.id });
+      }
+      const { error: e } = await supabase.rpc("asm_import_unit_check", { p_assessment: assessmentId, p_decision: { kind, reason: keepReason, foundCode: unitCheck.found.code, foundTitle: unitCheck.found.name, selectedCode: unitCheck.selected.code, selectedTitle: unitCheck.selected.name } });
+      if (e) throw new Error(e.message);
+      setUnitCheck(null); setError(null);
+      toast.push(kind === "switched" ? `The assessment is now filed under ${target?.code}.` : `Kept under ${unit?.code}; the reason is recorded.`, "success");
+      if (kind === "switched") onChanged();
+    } catch (e) { setError((e as Error).message); }
+  };
   const save = async () => {
-    if (!current || problems.length) return;
+    if (!current || problems.length || unitCheck) return;
     setBusy("Saving…");
     try {
       const out = await saveTemplate(assessmentId, current, state?.status === "draft" ? state.updatedAt : null);
@@ -128,10 +157,18 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged }: 
       {editable ? <div className="flex flex-wrap gap-2">
         <Button variant={template ? "outline" : "primary"} size="sm" icon="ri-upload-2-line" disabled={!!busy} onClick={() => fileInput.current?.click()} data-testid="pdf-template-upload">{template ? "Replace PDF" : "Upload workbook PDF"}</Button>
         {template ? <Button variant="outline" size="sm" icon="ri-refresh-line" disabled={!!busy || !pdf} onClick={() => void detectAgain()}>Find fields again</Button> : null}
-        {template ? <Button size="sm" icon="ri-save-3-line" disabled={!!busy || !dirty || problems.length > 0} onClick={() => void save()} data-testid="pdf-template-save">Save draft</Button> : null}
+        {template ? <Button size="sm" icon="ri-save-3-line" disabled={!!busy || !dirty || problems.length > 0 || !!unitCheck} onClick={() => void save()} data-testid="pdf-template-save">Save draft</Button> : null}
       </div> : null}
     </div>
     {busy ? <p role="status" className="rounded-lg bg-background-100 px-3 py-2 text-sm text-foreground-700">{busy}</p> : null}
+    {unitCheck ? <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" role="alert" data-testid="unit-mismatch">
+      <p className="font-medium">{unitCheck.message}. Saving waits until you choose.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" onClick={() => void decideUnit("switched")} data-testid="unit-switch">Switch to {unitCheck.found.code ?? unitCheck.found.name}</Button>
+        <input className="min-w-[14rem] flex-1 rounded-md border border-amber-300 bg-white px-2 py-1.5" placeholder={`Why it belongs to ${unitCheck.selected.code ?? "the selected unit"} (at least 5 characters)`} value={keepReason} onChange={(e) => setKeepReason(e.target.value)} aria-label="Reason to keep the selected unit" data-testid="unit-keep-reason" />
+        <Button size="sm" variant="outline" disabled={keepReason.trim().length < 5} onClick={() => void decideUnit("kept")} data-testid="unit-keep">Keep {unitCheck.selected.code}</Button>
+      </div>
+    </div> : null}
     {error ? <ErrorNote text={error} /> : null}
     {problems.length ? <div className="rounded-lg border border-accent-300 bg-accent-50 px-3 py-2 text-sm text-foreground-800" data-testid="pdf-template-problems">
       <p className="font-medium">Fix before saving ({problems.length}):</p>

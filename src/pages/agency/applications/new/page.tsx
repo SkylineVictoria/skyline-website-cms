@@ -320,8 +320,8 @@ export default function NewApplicationPage() {
       }
       const { id } = await createApplicationForStudent(clientKeyRef.current, studentId);
       clientKeyRef.current = newClientKey();
-      // A returning student's details are already on record: straight to Course and intake on the one-page form, then sign.
-      // A first application goes through the document wizard (passport and documents are read there).
+      // The chosen course and start date are saved first. The application page then opens the document wizard for a student's
+      // first application (the whole application is finished there), or the one page for a returning student (course and intake).
       const course = courseRows?.find((row) => row.courseId === chosenCourseId) ?? null;
       if (course && chosenIntake) {
         await saveWizardDraft(id, {

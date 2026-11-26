@@ -23,6 +23,7 @@ import {
   assignApplicationAgent,
   deleteApplicationDocument,
   getApplication,
+  listApplications,
   needsInitialWizard,
   getDocumentSignedUrl,
   listApplicationDocuments,
@@ -200,6 +201,20 @@ export default function ApplicationDetailPage() {
     await load();
   };
 
+  // STUDENT-FIRST-WIZARD (owner 2026-11-26): a student's FIRST application is finished in the document wizard; once the student has
+  // an application past draft (submitted before), a new one opens as the one page where only course and intake need changing.
+  // An application the agent prepared and sent to the student (handoff) always opens as the one page to check and sign.
+  const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded && !handoff?.state;
+  const [studentReturning, setStudentReturning] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!studentBlank) return;
+    let live = true;
+    listApplications()
+      .then((rows) => { if (live) setStudentReturning(rows.some((row) => row.id !== id && (!!row.submittedAt || (row.status ?? "draft") !== "draft"))); })
+      .catch(() => { if (live) setStudentReturning(false); });
+    return () => { live = false; };
+  }, [studentBlank, id]);
+
   // Do not unmount an open wizard during a background detail refresh. Its
   // document and form state are independently persisted by the wizard/RPCs.
   // Administrators of the main site manage applications inside the CMS (this also covers links from emails).
@@ -227,7 +242,15 @@ export default function ApplicationDetailPage() {
   // ONE-PAGE (owner 2026-11-26): once the agent has prepared the application and sent it to the student, it opens as one page with
   // every answer (the student checks, edits and signs there); the document wizard is only for a blank application.
   if (needsInitialWizard(application) && !handoffLoaded) return <PortalLoading label="Loading application…" />;
-  // A student always gets the one page (course and intake were chosen when starting); the document wizard stays a button.
+  // A returning student gets the one page (course and intake were chosen when starting); a first application goes through the wizard.
+  if (studentBlank && studentReturning === null) return <PortalLoading label="Loading application…" />;
+  if (studentBlank && studentReturning === false) {
+    return (
+      <ApplicationWizard key={application.id} applicationId={application.id}
+        agencyName={application.agencyName || agency?.name || ""}
+        onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); navigate(paths.list, { replace: true }); }} />
+    );
+  }
   const returningStudent = role === "student";
   if (needsInitialWizard(application) && !handoff?.state && !returningStudent) {
     return (

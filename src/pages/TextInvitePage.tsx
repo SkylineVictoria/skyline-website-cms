@@ -6,8 +6,11 @@ const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const STORE = "slit-text-invite";
 
 
-async function call<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke("cms-admin-users", { body });
+
+type InviteFunction = "cms-admin-users" | "portal-admin-users";
+
+async function call<T>(fn: InviteFunction, body: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.functions.invoke(fn, { body });
   if (error) {
     const detail = error.context instanceof Response ? await error.context.json().catch(() => null) : null;
     throw new Error(detail?.error ?? "That did not work. Try again.");
@@ -19,7 +22,10 @@ async function call<T>(body: Record<string, unknown>): Promise<T> {
  * CONTACT-VERIFY (owner, 2026-11-26): /admin/text-invite#t= — a CMS invitation opened from the text message. The text proved the
  * mobile; the person confirms their email with a 6-digit code, then goes on to create their password (a one-time link).
  */
-export default function TextInvitePage() {
+export default function TextInvitePage({ fn = "cms-admin-users" }: {
+  /** CONTACT-VERIFY portal (2026-11-26): /agency/text-invite uses the portal invitation (portal-admin-users). */
+  fn?: InviteFunction;
+}) {
   const [token, setToken] = useState("");
   const [step, setStep] = useState<"loading" | "invalid" | "code" | "going">("loading");
   const [name, setName] = useState("");
@@ -32,22 +38,22 @@ export default function TextInvitePage() {
   useEffect(() => {
     const fromLink = new URLSearchParams(window.location.hash.slice(1)).get("t");
     let value = fromLink && TOKEN.test(fromLink) ? fromLink : "";
-    try { if (value) sessionStorage.setItem(STORE, value); else value = sessionStorage.getItem(STORE) ?? ""; } catch { /* storage unavailable */ }
+    try { if (value) sessionStorage.setItem(`${STORE}-${fn}`, value); else value = sessionStorage.getItem(`${STORE}-${fn}`) ?? ""; } catch { /* storage unavailable */ }
     if (fromLink !== null) window.history.replaceState(window.history.state, "", window.location.pathname);
     if (!TOKEN.test(value)) { setStep("invalid"); return; }
     setToken(value);
-    call<{ name: string; emailTo: string | null; emailPending: boolean }>({ action: "text_open", token: value })
+    call<{ name: string; emailTo: string | null; emailPending: boolean }>(fn, { action: "text_open", token: value })
       .then((v) => { setName(v.name); setEmailTo(v.emailTo); setStep("code"); }, (e: Error) => { setError(e.message); setStep("invalid"); });
-  }, []);
+  }, [fn]);
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true); setError("");
     try { await work(); } catch (e) { setError(e instanceof Error ? e.message : "That did not work. Try again."); } finally { setBusy(false); }
   };
-  const send = () => run(async () => { await call({ action: "text_code_send", token }); setSent(true); });
+  const send = () => run(async () => { await call(fn, { action: "text_code_send", token }); setSent(true); });
   const verify = () => run(async () => {
-    const r = await call<{ ok: boolean; link?: string; reason?: string; error?: string }>({ action: "text_code_verify", token, code });
-    if (r.ok && r.link) { setStep("going"); try { sessionStorage.removeItem(STORE); } catch { /* ignore */ } window.location.assign(r.link); return; }
+    const r = await call<{ ok: boolean; link?: string; reason?: string; error?: string }>(fn, { action: "text_code_verify", token, code });
+    if (r.ok && r.link) { setStep("going"); try { sessionStorage.removeItem(`${STORE}-${fn}`); } catch { /* ignore */ } window.location.assign(r.link); return; }
     setCode("");
     setError(r.reason === "locked" ? "Too many wrong codes. Ask for a new code." : r.reason === "expired" ? "That code has expired. Ask for a new code." : r.error ?? "That code is not right.");
     if (r.reason !== "wrong") setSent(false);

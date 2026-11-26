@@ -1,4 +1,5 @@
 import ContactLinkFields from "@/components/shared/ContactLinkFields";
+import { textInviteNote } from "@/lib/textInvite";
 import { useEffect, useState } from "react";
 import { Button, Field, Modal, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -118,7 +119,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
       } else if (willInvite && !result.hasLogin) {
         try {
           const sent = await invokePortalUsers({ action: "invite", email: result.email, name: result.name, role: result.role, agencyId: result.agencyId, redirectTo: portalPasswordResetUrl() });
-          message += sent.warning ? ` ${String(sent.warning)}` : sent.emailSent ? ` A sign-in invitation was emailed to ${result.email}.` : " They can sign in with their existing account.";
+          message += sent.warning ? ` ${String(sent.warning)}` : sent.emailSent ? ` A sign-in invitation was emailed to ${result.email}.${textInviteNote(sent.text)}` : " They can sign in with their existing account.";
         } catch (e) {
           // A pending invitation for this email (portal_invitation_create's own sentence, kept in the 409 details) is harmless.
           const reason = `${e instanceof Error ? e.message : ""} ${emailTakenFrom(e)?.details ?? ""}`.trim();
@@ -195,7 +196,7 @@ export default function ActivateAgentDialog({ agent, open, onClose, onDone }: {
           <div className="sm:col-span-2">
             {/* CONTACT-LINKS: the same mobile block as the student, business and employee forms. */}
             <ContactLinkFields key={open ? agent?.agentId ?? "new" : "closed"} id="agent" mobile={phone} onMobile={setPhone} locked={busy}
-              note="Saved on their agent record. Their sign-in invitation goes by email; links they sign (agreements) also go by text to this mobile." />
+              note="Their sign-in invitation goes by email and, with a mobile, also by text message (either link opens their account; from the text they confirm the email with a 6-digit code)." />
           </div>
         </div>
 

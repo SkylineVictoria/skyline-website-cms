@@ -167,6 +167,7 @@ const routes: RouteObject[] = [
   { path: "/guardian-sign", element: <GuardianSignPage /> },
   // CONTACT-VERIFY: a CMS invitation opened from the text message (email confirmed with a code, then the password).
   { path: "/admin/text-invite", element: <TextInvitePage /> },
+  { path: "/agency/text-invite", element: <TextInvitePage fn="portal-admin-users" /> },
   // BOOK-01: the booking module. /book/... and /booking work signed out (the emailed token is in the URL fragment).
   { path: "/bookings", element: <BookingsPage /> },
   { path: "/book/:handle", element: <PublicBookingPage /> },

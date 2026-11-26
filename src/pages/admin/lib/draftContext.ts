@@ -2,7 +2,7 @@ import { createContext, useContext } from "react";
 
 /** Which mounted CMS editors currently hold unsaved changes. The provider (AdminLayout) uses it to warn before leaving. */
 export interface DraftRegistry {
-  setDirty(key: string, dirty: boolean): void;
+  setDirty(key: string, dirty: boolean, leaveMessage?: string): void;
   clear(key: string): void;
   anyDirty(): boolean;
 }

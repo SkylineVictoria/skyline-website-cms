@@ -2,10 +2,6 @@ import LmsPage, { OldBatchRedirect } from "@/pages/admin/lms/LmsPage";
 import CommunicationHubPage from "@/pages/admin/CommunicationHubPage";
 import EmailManagementPage from "@/pages/admin/EmailManagementPage";
 import IntegrationConnectionsPage from "@/pages/admin/integrations/ConnectionsPage";
-import IntegrationWebhooksPage from "@/pages/admin/integrations/WebhooksPage";
-import IntegrationSyncHistoryPage from "@/pages/admin/integrations/SyncHistoryPage";
-import IntegrationLogsPage from "@/pages/admin/integrations/LogsPage";
-import IntegrationSettingsPage from "@/pages/admin/integrations/SettingsPage";
 import ApplicationStatusesPage from "@/pages/admin/ApplicationStatusesPage";
 import { Navigate } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
@@ -331,10 +327,10 @@ const routes: RouteObject[] = [
           { path: "integrations/applications", element: <IntegrationConnectionsPage /> },
           { path: "integrations/add", element: <IntegrationConnectionsPage /> },
           { path: "integrations/credentials", element: <IntegrationConnectionsPage /> },
-          { path: "integrations/webhooks", element: <IntegrationWebhooksPage /> },
-          { path: "integrations/sync-history", element: <IntegrationSyncHistoryPage /> },
-          { path: "integrations/logs", element: <IntegrationLogsPage /> },
-          { path: "integrations/settings", element: <RequireAdmin><IntegrationSettingsPage /></RequireAdmin> },
+          { path: "integrations/webhooks", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/sync-history", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/logs", element: <IntegrationConnectionsPage /> },
+          { path: "integrations/settings", element: <RequireAdmin><IntegrationConnectionsPage /></RequireAdmin> },
           { path: "knowledge", element: <RequireAdmin><KnowledgePage /></RequireAdmin> },
           { path: "settings/application-statuses", element: <RequireAdmin><ApplicationStatusesPage /></RequireAdmin> },
           // The Document Extraction page was removed; old links land on the dashboard.

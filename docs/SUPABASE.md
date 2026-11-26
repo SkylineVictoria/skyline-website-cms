@@ -1161,7 +1161,9 @@ the Students › Delete confirmation; `admin_student_delete_all(student, 'DELETE
 `applicationIds` and the `storage_cleanup_queue` ids it queued. The browser then calls `portal-application-delete` with
 `action: "student_files"`: admin check (`admin_business_require`), refuses while any of the applications still exists, removes
 the queued files and every object under each deleted application's folder in `enrollment-documents`, then marks those queue rows
-done. Older queue rows (111 on hosted, from deletes before this change) are not touched. Release: migration, then the function
+done. Older queue rows (111 on hosted, from deletes before this change) are not touched. The student's portal login is deleted too
+(`admin_student_login_plan`: kept and only unlinked when it is also an agent, CMS user, staff, another business's member or another
+student's), with waiting student invitations for the email, the student profile and the Supabase Auth user. Release: migration, then the function
 from clean main, then the frontend (it falls back to the old purge while the migration is missing).
 
 ## SMS delivery reports (SMS-DELIVERY-REPORTS, 2026-11-26)

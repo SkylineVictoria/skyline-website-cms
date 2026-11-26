@@ -3,6 +3,7 @@ import { AgentHandoffPanel, StudentHandoffNotice } from "@/pages/agency/componen
 import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
+import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useState } from "react";
 
@@ -64,6 +65,13 @@ function wizardOpenKey(applicationId: string): string {
 function wasWizardOpen(applicationId: string): boolean {
   try { return window.localStorage.getItem(wizardOpenKey(applicationId)) === "1"; } catch { return false; }
 }
+
+/** The document reader's state in plain words (was the raw status, e.g. "unreviewed"). */
+const EXTRACTION_LABEL: Record<string, string> = {
+  queued: "Waiting to be read", processing: "Being read", unreviewed: "Read", confirmed: "Read and checked",
+  rejected: "Read, details not used", no_fields: "Nothing to read", failed: "Could not be read", cancelled: "Cancelled",
+};
+const extractionLabel = (status: string | undefined) => (status ? EXTRACTION_LABEL[status] ?? status : "Not read");
 
 export default function ApplicationDetailPage() {
   const { id = "" } = useParams();
@@ -156,23 +164,17 @@ export default function ApplicationDetailPage() {
     }
   };
 
+  // Preview on the page (owner 2026-11-26), not a new tab.
+  const [preview, setPreview] = useState<{ doc: DocumentRow; url: string } | null>(null);
   const handleDocumentAction = async (doc: DocumentRow, action: "preview" | "download" | "retry" | "delete") => {
     setDocumentBusy(`${action}:${doc.id}`);
     setActionError("");
     try {
       if (action === "preview" || action === "download") {
-        // Open the tab first, while the click still counts as a user action; popup blockers refuse a tab opened after the awaits.
-        const tab = action === "preview" ? window.open("", "_blank") : null;
-        try {
-          if (isSlit) await logAdminAccess(id, action === "download" ? "document_downloaded" : "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category });
-          const signedUrl = await getDocumentSignedUrl(doc.storagePath, 300, action === "download" ? doc.filename : undefined);
-          if (action === "download") window.location.assign(signedUrl);
-          else if (tab) { tab.opener = null; tab.location.href = signedUrl; }
-          else window.location.assign(signedUrl);
-        } catch (error) {
-          tab?.close();
-          throw error;
-        }
+        if (isSlit) await logAdminAccess(id, action === "download" ? "document_downloaded" : "document_viewed", { documentId: doc.id, filename: doc.filename, category: doc.category });
+        const signedUrl = await getDocumentSignedUrl(doc.storagePath, 300, action === "download" ? doc.filename : undefined);
+        if (action === "download") window.location.assign(signedUrl);
+        else setPreview({ doc, url: signedUrl });
       } else if (action === "retry") {
         await queueDocumentExtraction(doc.id, true);
         await load();
@@ -417,7 +419,7 @@ export default function ApplicationDetailPage() {
                       <td className="px-4 py-3 text-xs text-foreground-700">{doc.filename}</td>
                       <td className="px-4 py-3 text-xs text-foreground-700">{doc.reviewState}</td>
                       <td className="px-4 py-3 text-xs text-foreground-700">
-                        {String((doc.metadata.extraction as { status?: string } | undefined)?.status ?? "Not requested")}
+                        {extractionLabel((doc.metadata.extraction as { status?: string } | undefined)?.status)}
                       </td>
                       <td className="px-4 py-3 text-xs text-foreground-600">{formatDate(doc.createdAt)}</td>
                       <td className="px-4 py-3 text-xs">
@@ -433,6 +435,8 @@ export default function ApplicationDetailPage() {
                   ))}
                 </tbody>
               </ResponsiveTable>
+              {preview ? <DocumentPreviewModal url={preview.url} filename={preview.doc.filename} onClose={() => setPreview(null)}
+                onDownload={() => { const d = preview.doc; setPreview(null); void handleDocumentAction(d, "download"); }} /> : null}
             </div>
           )
         ) : null}

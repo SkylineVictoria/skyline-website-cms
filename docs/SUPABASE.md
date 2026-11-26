@@ -1163,3 +1163,15 @@ the Students › Delete confirmation; `admin_student_delete_all(student, 'DELETE
 the queued files and every object under each deleted application's folder in `enrollment-documents`, then marks those queue rows
 done. Older queue rows (111 on hosted, from deletes before this change) are not touched. Release: migration, then the function
 from clean main, then the frontend (it falls back to the old purge while the migration is missing).
+
+## SMS delivery reports (SMS-DELIVERY-REPORTS, 2026-11-26)
+Migration `20261127090517_sms_delivery_reports`: `public.sms_messages` (ClickSend message id, application, student / guardian, last
+three digits, status accepted / delivered / undelivered, ClickSend status code and text; no number or body), written by
+`student-application-invite` through `sms_message_sent` when ClickSend accepts a text. ClickSend delivery reports are posted to
+`integrations-webhook?connection=<ClickSend connection id>&key=<key>` (form-encoded or JSON); the key is made by an admin with
+`sms_receipt_key_rotate` (Integrations › ClickSend › Delivery reports, shown once; only its SHA-256 is stored in
+`skyline_private.sms_receipt_keys`) and checked by `sms_receipt_apply` (wrong key 401; unknown or already-final message ignored; a
+final status writes one timeline entry `handoff_sms_delivered` / `handoff_sms_undelivered`). `sms_receipt_status` (admins) gives the
+set-up date, the last report and the counts. The ClickSend API key and connection status are not touched. Release: migration, then
+integrations-webhook and student-application-invite from clean main, then the frontend; then paste the link in ClickSend › Messaging
+Settings › SMS › Delivery Reports (rule with action URL, POST).

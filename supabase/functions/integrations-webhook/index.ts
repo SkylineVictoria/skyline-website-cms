@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
-// Public provider endpoint; HMAC authentication replaces user JWT. Stores event metadata, and applies payment events to public.payments
+// Public provider endpoint; HMAC authentication (Stripe) or a link key (ClickSend delivery reports) replaces user JWT. Stores event metadata, and applies payment events to public.payments
 // (payment_apply_stripe: idempotent, so Stripe's retries leave a settled payment as it is). The signature check is inlined so the
 // function deploys as one file; it is the same check as ../_shared/integrations/signature.ts.
 const PAYMENT_EVENTS=['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired','payment_intent.succeeded','payment_intent.payment_failed','charge.succeeded','charge.updated','charge.refunded'];
@@ -24,6 +24,23 @@ Deno.serve(async(req:Request)=>{
   const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.length;}const raw=new TextDecoder().decode(bytes);
   const db=createClient(Deno.env.get('SUPABASE_URL')??'',Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')??'',{auth:{persistSession:false}});
   const {data:c,error}=await db.from('integration_connections').select('id,status,connector_id,webhook_configured').eq('id',id).maybeSingle();
+  // SMS-DELIVERY-REPORTS (2026-11-26): ClickSend delivery reports (form-encoded or JSON, one report or a list). ClickSend does not sign
+  // them: the link carries a key (sms_receipt_key_rotate) checked by sms_receipt_apply against its stored SHA-256.
+  if(!error&&c&&c.connector_id==='clicksend'){
+   const key=new URL(req.url).searchParams.get('key')??'';if(!/^[0-9a-f]{48}$/.test(key))return answer(401);
+   let reports:Record<string,unknown>[]=[];
+   try{const j=JSON.parse(raw);reports=Array.isArray(j)?j:Array.isArray(j?.data)?j.data:Array.isArray(j?.messages)?j.messages:[j];}
+   catch{reports=[Object.fromEntries(new URLSearchParams(raw))];}
+   const text=(v:unknown)=>typeof v==='string'||typeof v==='number'?String(v).slice(0,200):'';
+   for(const r of reports.slice(0,100)){
+    if(!r||typeof r!=='object')continue;
+    const mid=text(r.message_id??r.messageid);if(!/^[A-Za-z0-9-]{8,64}$/.test(mid))continue;
+    const applied=await db.rpc('sms_receipt_apply',{p_key:key,p_message_id:mid,p_status:text(r.status),p_code:text(r.status_code),p_text:text(r.status_text??r.error_text)});
+    if(applied.error)return answer(503);
+    if(applied.data==='refused')return answer(401);
+   }
+   return answer(200);
+  }
   if(error||!c||c.connector_id!=='stripe'||c.status==='disabled'||!c.webhook_configured)return answer(401);
   const secret=await db.rpc('integration_credential_read',{p_connection:id,p_kind:'webhook_secret'});
   if(secret.error||!secret.data||!await verifyStripeSignature(raw,req.headers.get('stripe-signature')??'',secret.data))return answer(401);

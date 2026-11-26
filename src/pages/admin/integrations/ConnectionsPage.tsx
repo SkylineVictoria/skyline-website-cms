@@ -471,7 +471,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
       </>
     } applications={
       <Applications applications={listed} selected={providerId} query={query} setQuery={setQuery}
-        filter={filter} setFilter={setFilter} choose={choose} statusOf={statusOf} isAdmin={isAdmin} busy={busy || state.busy} />
+        filter={filter} setFilter={setFilter} choose={choose} statusOf={statusOf} isAdmin={isAdmin} busy={busy || state.busy} serverSecrets={state.data?.serverSecrets} />
     }>
       <Button id="integration-mobile-back" className="integration-mobile-back mb-3" size="sm" variant="ghost" icon="ri-arrow-left-line"
         onClick={() => {
@@ -500,7 +500,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
         <div hidden={panel !== 'provider'} className="space-y-4">
           {selectedApp ? <>
             <div className="border-b border-background-200 pb-4">
-              <ApplicationHeader application={selectedApp} connection={connection} statusOf={statusOf} isAdmin={isAdmin} />
+              <ApplicationHeader application={selectedApp} connection={connection} statusOf={statusOf} isAdmin={isAdmin} serverSecrets={state.data?.serverSecrets} />
             </div>
             {selectedApp.connections.length > 1 && <label className="block text-sm">Connection
               <SearchableSelect className={inputClass} value={connectionId} disabled={busy} onChange={event => {
@@ -515,7 +515,7 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
             </nav>}
             <div hidden={activeTab !== 'configuration'} className="space-y-4">
               {serverManaged ? (
-                <ServerManagedPanel providerId={providerId} isAdmin={isAdmin} />
+                <ServerManagedPanel providerId={providerId} isAdmin={isAdmin} secrets={state.data?.serverSecrets?.[providerId]} />
               ) : connection ? (
                 <>
                   <dl className="grid grid-cols-2 gap-2 rounded-md border border-background-200 bg-background-100 p-3 text-sm">

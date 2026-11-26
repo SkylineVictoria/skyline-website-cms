@@ -5193,7 +5193,7 @@ test("Agent fills, student signs (2026-11-25, 20261125190517): only the student 
   const workspace = read("src/pages/agency/components/ApplicationWorkspace.tsx");
   assert.ok(!workspace.includes("uploadConsentDocument(") && workspace.includes("await sendApplicationInvitation(application.id);"));
   const wizard = read("src/pages/agency/components/ApplicationWizard.tsx");
-  assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked)"));
+  assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked, signatureRef.current)"));
   assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
   // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
   assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(91);"));

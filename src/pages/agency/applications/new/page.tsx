@@ -197,6 +197,11 @@ export default function NewApplicationPage() {
       }
       return;
     }
+    // The business admin agent filling the form looks after the student unless they pick another agent (owner 2026-11-26).
+    if (role === "agency_admin" && !agent && profile) {
+      const own = await findAgentByProfile(profile.id).catch(() => null);
+      if (own && agentPickable(own)) setAgent(own);
+    }
     setPhase("pick");
   };
 

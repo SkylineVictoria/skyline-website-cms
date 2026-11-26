@@ -19,7 +19,7 @@ export interface FooterPrimary {
  * an optional soft notice; the stage's cards; one sticky footer (Previous | Save draft | Next) below them. Stages and steps come
  * from the caller's config.
  */
-export default function StepShell({ stages, current, percent, status, notice, onSelectStage, onSelectSection, onPrevious, previousDisabled, onSaveDraft, message, primary, children }: {
+export default function StepShell({ stages, current, percent, status, notice, onSelectStage, onSelectSection, onPrevious, previousDisabled, onSaveDraft, message, primary, children, hideNav = false }: {
   stages: readonly NavStage[];
   /** Index into stages. */
   current: number;
@@ -37,6 +37,8 @@ export default function StepShell({ stages, current, percent, status, notice, on
   message?: ReactNode;
   primary?: FooterPrimary | null;
   children: ReactNode;
+  /** One-page form: no stages or All steps, only the progress bar and save status. */
+  hideNav?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const close = useCallback(() => setOpen(false), []);
@@ -48,7 +50,8 @@ export default function StepShell({ stages, current, percent, status, notice, on
       <div className="mb-2" data-testid="form-step-nav">
         <div className="flex items-center gap-2">
           {/* Phones: one compact line. */}
-          <p className="min-w-0 flex-1 truncate text-sm sm:hidden" data-testid="stage-compact">
+          {hideNav ? <p className="min-w-0 flex-1 text-sm font-semibold text-foreground-950">Application <span className="font-normal text-foreground-500">&middot; {percent}% complete</span></p> : null}
+          <p className={`min-w-0 flex-1 truncate text-sm sm:hidden ${hideNav ? "hidden" : ""}`} data-testid="stage-compact">
             {here?.final ? <span className="font-semibold text-foreground-950">{here.title}</span> : (
               <>
                 <span className="text-foreground-500">Stage {current + 1} of {numbered}</span>
@@ -58,7 +61,7 @@ export default function StepShell({ stages, current, percent, status, notice, on
             )}
           </p>
           {/* Wider screens: the stages as segments. */}
-          <nav aria-label="Stages" className="hidden min-w-0 flex-1 sm:block">
+          <nav aria-label="Stages" className={`hidden min-w-0 flex-1 ${hideNav ? "" : "sm:block"}`}>
             <ol className="flex items-center gap-1 rounded-lg border border-background-200 bg-background-100 p-0.5">
               {stages.map((stage, index) => {
                 const active = index === current;
@@ -81,9 +84,9 @@ export default function StepShell({ stages, current, percent, status, notice, on
               })}
             </ol>
           </nav>
-          <span className="hidden shrink-0 text-xs font-medium text-foreground-700 sm:inline" data-testid="overall-percent">{percent}%</span>
+          {hideNav ? null : <span className="hidden shrink-0 text-xs font-medium text-foreground-700 sm:inline" data-testid="overall-percent">{percent}%</span>}
           {status ? <span className="hidden shrink-0 text-xs text-foreground-500 lg:inline-flex" data-testid="save-status">{status}</span> : null}
-          <button
+          {hideNav ? null : <button
             type="button"
             aria-haspopup="dialog"
             aria-expanded={open}
@@ -92,7 +95,7 @@ export default function StepShell({ stages, current, percent, status, notice, on
           >
             <i className="ri-list-check text-base leading-none" aria-hidden="true" />
             All steps
-          </button>
+          </button>}
         </div>
         <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-background-200" role="progressbar" aria-label="Application progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
           <div className="h-full rounded-full bg-primary-500 transition-[width] duration-500" style={{ width: `${percent}%` }} />

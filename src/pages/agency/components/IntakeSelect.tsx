@@ -159,10 +159,10 @@ export default function IntakeSelect({ id, courseId, value, onChange, onLoaded, 
           <div className="grid grid-cols-2 gap-2">
             {(["coe", "voe"] as const).map((l) => (
               <button key={l} type="button" role="radio" aria-checked={load === l} disabled={disabled || !loadsOffered.includes(l) || (onlyLoad !== undefined && l !== onlyLoad)}
-                title={onlyLoad && l !== onlyLoad ? (onlyLoad === "coe" ? "International students study on a CoE" : "Domestic students study on a VoE") : loadsOffered.includes(l) ? undefined : `No ${LOAD_LABEL[l]} intake is open for this course`}
+                title={onlyLoad && l !== onlyLoad ? (onlyLoad === "coe" ? "International students study on a CoE" : "Australian / NZ citizens and permanent residents study on a VoE") : loadsOffered.includes(l) ? undefined : `No ${LOAD_LABEL[l]} intake is open for this course`}
                 onClick={() => { setPickedLoad(l); if (selected && selected.studyLoad !== l) onChange(null); }}
                 className={`rounded-lg border-2 px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${load === l ? "border-primary-600 bg-primary-50 font-semibold text-primary-900" : "border-background-300 hover:border-primary-400"}`}>
-                {LOAD_LABEL[l]}{onlyLoad && l !== onlyLoad ? (onlyLoad === "coe" ? " · domestic only" : " · international only") : loadsOffered.includes(l) ? "" : " · no intake open"}
+                {LOAD_LABEL[l]}{onlyLoad && l !== onlyLoad ? (onlyLoad === "coe" ? " · domestic only" : " · student visa holders only") : loadsOffered.includes(l) ? "" : " · no intake open"}
               </button>
             ))}
           </div>

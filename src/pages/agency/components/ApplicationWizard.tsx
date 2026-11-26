@@ -1066,9 +1066,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       const chosen = intakeKey(filled("intake_id"), filled("preferred_intake"), filled("intake_join_date"));
       if (filled("course") && intakeList?.length === 0) errors.preferred_intake = NO_INTAKES_MESSAGE;
       else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen))) errors.preferred_intake = "Choose the intake.";
-      // International students study on a CoE, domestic students on a VoE (owner, 2026-11-26).
-      else if (kind && intakeList?.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen && i.studyLoad && i.studyLoad !== (kind === "international" ? "coe" : "voe")))
-        errors.preferred_intake = kind === "international" ? "International students study on a CoE: choose a CoE start date." : "Domestic students study on a VoE: choose a VoE start date.";
+      // Australian / NZ citizens and permanent residents study on a VoE; everyone else may start on a CoE or a VoE, by their visa
+      // (owner, 2026-11-26).
+      else if (kind === "domestic" && intakeList?.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen && i.studyLoad && i.studyLoad !== "voe"))
+        errors.preferred_intake = "Australian and New Zealand citizens and permanent residents study on a VoE: choose a VoE start date.";
       if (filled("course")) {
         const staff = staffCourses ? staffCourseOf(answers.course) : null;
         const course: ApplicationCourseRow | null = staffCourses
@@ -1232,7 +1233,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
                 onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId}
                 defaultLoad={kind === "international" ? "coe" : undefined}
-                onlyLoad={kind === "international" ? "coe" : kind === "domestic" ? "voe" : undefined} />
+                onlyLoad={kind === "domestic" ? "voe" : undefined} />
             )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>

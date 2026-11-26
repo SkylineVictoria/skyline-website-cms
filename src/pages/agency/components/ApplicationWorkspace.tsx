@@ -203,6 +203,9 @@ interface WorkspaceProps {
   onSentToStudent?: () => void;
   /** Staff: the status, what is needed next and Take action, at the bottom of Review. */
   reviewBar?: ReactNode | ((reviewIssues: number) => ReactNode);
+  /** ONE-PAGE (owner 2026-11-26): every step on one page (open where something is missing, else a one-line summary), the check and
+   *  signature at the bottom; no stages to walk through. A read-only application keeps the one-page review. */
+  onePage?: boolean;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -220,8 +223,10 @@ export default function ApplicationWorkspace({
   onSubmitted,
   onSentToStudent,
   reviewBar,
+  onePage = false,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
+  const one = onePage && !readOnly;
   // The courses on offer, by their CMS id: rto_admin course_list for staff (every status), portal_course_options for agents and students
   // (Published, or with an open intake). null while loading. No static catalogue.
   const [courseChoices, setCourseChoices] = useState<{ label: string; row: ApplicationCourseRow }[] | null>(null);
@@ -1214,7 +1219,7 @@ export default function ApplicationWorkspace({
   /** Opens one step (and its stage) and puts the cursor in a field: the given one, else the step's first empty answer. */
   const openSection = (index: number, field?: string) => {
     const target = stageOf(index);
-    if (target !== stage) { pendingFocusRef.current = { section: index, field }; showStage(target); return; }
+    if (!one && target !== stage) { pendingFocusRef.current = { section: index, field }; showStage(target); return; }
     setExpanded((prev) => new Set(prev).add(index));
     window.setTimeout(() => focusSection(index, field), 240);
   };
@@ -1235,6 +1240,11 @@ export default function ApplicationWorkspace({
   // A stage has opened (or the page is ready): the first incomplete step opens, the rest are one line, and the cursor goes to the first
   // incomplete step (or the step asked for). Through a ref, so only the stage change runs it.
   const stageOpened = () => {
+    if (one) {
+      // One page: the steps that still need something are open, the rest are one line (opened on click); nothing scrolls.
+      setExpanded(new Set(sections.map((_, index) => index).filter((index) => sectionShown(index) && sectionIssues(index).length > 0)));
+      return;
+    }
     if (stage >= reviewStage) return;
     const pending = pendingFocusRef.current;
     pendingFocusRef.current = null;
@@ -1468,7 +1478,7 @@ export default function ApplicationWorkspace({
     );
   }
 
-  const isReview = stage === reviewStage;
+  const isReview = one || stage === reviewStage;
   /** Missing answers on a step are marked once its stage was left with Next, or after a submit attempt. */
   const marksShown = (index: number) => showErrors || touchedStages.has(stageOf(index));
 
@@ -1928,7 +1938,8 @@ export default function ApplicationWorkspace({
         ) : null}
         onSelectStage={(index) => (index === reviewStage ? openReview() : showStage(index))}
         onSelectSection={(index) => openSection(index)}
-        onPrevious={() => showStage(stage - 1)}
+        hideNav={one}
+        onPrevious={one ? undefined : () => showStage(stage - 1)}
         previousDisabled={stage === 0}
         onSaveDraft={readOnly ? undefined : () => void flushSave().catch(() => undefined)}
         message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
@@ -1969,7 +1980,7 @@ export default function ApplicationWorkspace({
           </div>
         ) : null}
 
-        {isReview ? (
+        {isReview && !one ? (
           <div className={direction === "back" ? "step-in-back" : "step-in-forward"}>
             <ApplicationReview
               values={reviewValues ?? storedValues}
@@ -2005,7 +2016,7 @@ export default function ApplicationWorkspace({
           {stages.flatMap((item) => item.sections).map((index) => {
             const section = sections[index];
             const { subtitle, tip } = stepHelp(section);
-            const shown = !isReview && stageOf(index) === stage && sectionShown(index);
+            const shown = one ? sectionShown(index) : !isReview && stageOf(index) === stage && sectionShown(index);
             const complete = issuesBySection[index].length === 0;
             const open = expanded.has(index) || !ready;
             return (
@@ -2034,6 +2045,33 @@ export default function ApplicationWorkspace({
             );
           })}
         </div>
+        {one ? (
+          <div className="mt-4" data-testid="one-page-check">
+            <ApplicationReview
+              values={storedValues}
+              courses={((storedValues[COURSE_FIELD] as string[] | undefined) ?? [])}
+              sections={sections}
+              application={application}
+              qualifications={qualifications}
+              agentName={agentName}
+              agencyName={agencyName}
+              consent={consent}
+              onConsentChange={(patch) => setConsent((prev) => ({ ...prev, ...patch }))}
+              onEditSection={(index) => openSection(index)}
+              onJumpToField={(index, field) => openSection(index, field)}
+              stages={stages}
+              missing={missingNow}
+              documentProblems={documentProblems}
+              fieldProblems={crossFieldProblems}
+              submitError={submitError}
+              readOnly={false}
+              canSubmit={canSubmitHere}
+              resubmit={resubmitHere}
+              studentSigns={studentSigns}
+              onePage
+            />
+          </div>
+        ) : null}
       </StepShell>
 
       <Toast message={toast.message} onDismiss={toast.dismiss} />

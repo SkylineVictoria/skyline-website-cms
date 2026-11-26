@@ -80,7 +80,7 @@ export default function ApplicationDetailPage() {
   const navigate = useNavigate();
   const { role, profile, agency } = usePortalAuth();
   // APPLICATION-STUDENT-SIGNS: who has the application (the database enforces it; this keeps the screens in step).
-  const { handoff, reload: reloadHandoff } = useHandoff(id);
+  const { handoff, loaded: handoffLoaded, reload: reloadHandoff } = useHandoff(id);
 
   const [application, setApplication] = useState<ApplicationDetail | null>(null);
   const [history, setHistory] = useState<StatusHistoryRow[]>([]);
@@ -122,7 +122,6 @@ export default function ApplicationDetailPage() {
         return;
       }
       setApplication(detail);
-      if (needsInitialWizard(detail)) return;
       const [hist, docs] = await Promise.all([listStatusHistory(id), listApplicationDocuments(id)]);
       setHistory(hist);
       setDocuments(docs);
@@ -223,7 +222,10 @@ export default function ApplicationDetailPage() {
     );
   }
 
-  if (needsInitialWizard(application)) {
+  // ONE-PAGE (owner 2026-11-26): once the agent has prepared the application and sent it to the student, it opens as one page with
+  // every answer (the student checks, edits and signs there); the document wizard is only for a blank application.
+  if (needsInitialWizard(application) && !handoffLoaded) return <PortalLoading label="Loading application…" />;
+  if (needsInitialWizard(application) && !handoff?.state) {
     return (
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -246,7 +248,10 @@ export default function ApplicationDetailPage() {
   const handoffBlocks = role === "student"
     ? ["with_agent", "change_requested", "waiting_guardian"].includes(handoff?.state ?? "")
     : ["with_student", "waiting_guardian"].includes(handoff?.state ?? "");
-  const readOnly = !isEditableStatus(workflow, application.status) || handoffBlocks;
+  // ADMIN-EDIT-SUBMITTED (owner 2026-11-26): SLIT admins correct a submitted application on the same page, until an offer is issued.
+  // The same two statuses portal_lock_draft lets SLIT admins save (migration 20261127010517).
+  const adminEdits = isSlit && (application.status === "submitted" || application.status === "under_review");
+  const readOnly = (!isEditableStatus(workflow, application.status) && !adminEdits) || handoffBlocks;
   const nextHint = statusInfo(workflow, application.status).hint;
   const agentName = application.agentName || profile?.fullName || "";
   const agencyName = application.agencyName || agency?.name || "";
@@ -288,7 +293,7 @@ export default function ApplicationDetailPage() {
                 PDF
               </button>
             ) : null}
-            {!readOnly ? (
+            {!readOnly && !(role === "student" && handoff?.state) ? (
               <button
                 type="button"
                 onClick={openWizard}
@@ -382,6 +387,7 @@ export default function ApplicationDetailPage() {
             agentPhone={application.agentPhone || (role === "agent" ? profile?.phone ?? "" : "")}
             agencyName={agencyName}
             readOnly={readOnly}
+            onePage
             auditAccess={isSlit}
             reviewBar={isSlit ? (issues: number) => <ReviewIssuesReporter count={issues} onCount={setReviewIssues} /> : undefined}
             onSaved={refreshAfterSave}
@@ -483,7 +489,7 @@ export default function ApplicationDetailPage() {
         ) : null}
       </div>
 
-      {wizardOpen ? (
+      {wizardOpen && !(role === "student" && handoff?.state) ? (
         <ApplicationWizard
           applicationId={application.id}
           agencyName={agencyName}

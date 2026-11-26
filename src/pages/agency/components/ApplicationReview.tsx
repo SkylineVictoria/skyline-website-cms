@@ -52,6 +52,7 @@ export default function ApplicationReview({
   canSubmit = true,
   resubmit = false,
   studentSigns = false,
+  onePage = false,
 }: {
   values: DraftValues;
   courses: string[];
@@ -80,6 +81,8 @@ export default function ApplicationReview({
   resubmit?: boolean;
   /** APPLICATION-STUDENT-SIGNS: the signed-in person is the student (only they sign; agents send it to them). */
   studentSigns?: boolean;
+  /** ONE-PAGE: the answers are edited on the page above; only what is missing and the signature are shown. */
+  onePage?: boolean;
 }) {
   const flat: Record<string, string> = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, Array.isArray(value) ? value.join(", ") : String(value ?? "")]));
   const val = (key: string): string => {
@@ -123,7 +126,8 @@ export default function ApplicationReview({
 
 
   return (
-    <ReviewSummary groups={groups} issues={issues} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}>
+    <ReviewSummary groups={groups} issues={issues} meta={[application.reference || "Draft", agencyName, agentName].filter(Boolean).join(" · ")} readOnly={readOnly} onEdit={onEditSection}
+      hideSteps={onePage} title={onePage ? (canSubmit ? (studentSigns ? "Check, sign and submit" : "Check and send to the student") : "Your changes save by themselves") : undefined}>
 
       {readOnly ? (
         <div className="mt-4 text-xs text-foreground-600">
@@ -162,7 +166,8 @@ export default function ApplicationReview({
         </p>
       ) : (
         <p className="mt-4 text-xs text-foreground-600">
-          Your corrections are saved on this application. SLIT administration reviews them and moves the application on.
+          {onePage ? "Your changes are saved on this application as you type; each change after submission is recorded with your name."
+            : "Your corrections are saved on this application. SLIT administration reviews them and moves the application on."}
         </p>
       )}
 

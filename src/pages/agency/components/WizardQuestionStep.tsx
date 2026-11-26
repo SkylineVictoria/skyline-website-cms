@@ -31,7 +31,7 @@ export default function WizardQuestionStep({ question, answers, errors, courseOp
   intakeReload?: number;
   /** CoE for an international student (picked to start with on the intake). */
   defaultLoad?: "coe" | "voe";
-  /** International = CoE only, domestic = VoE only (the other greyed out). */
+  /** Domestic (AU / NZ citizen, permanent resident) = VoE only, the other greyed out; student visa holders choose CoE or VoE. */
   onlyLoad?: "coe" | "voe";
   /** APPLICATION-STUDENT-SIGNS: the student sees the course and intake their agent set, view-only, with this (Request a change). */
   lockedNote?: ReactNode;

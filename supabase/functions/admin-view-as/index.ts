@@ -6,6 +6,11 @@
 //   never a CMS user, at most 25).
 // - { kind, userId } : that person; admin_view_as_person re-checks the workspace and that the person is not a CMS user, records
 //   the switch with the person, and returns the person's sign-in email.
+// - { kind: 'agent', action: 'agents', query } (VIEW-AS-ALL-AGENTS, 20261126210517): every agent grouped by business, with hasLogin.
+// - { kind: 'agent', agentId } : that agent; an agent without a login gets one on their own email with no password and nothing
+//   emailed (admin_view_as_agent_link), switched off again when the admin goes back (admin_view_as_end).
+// - { action: 'end' } : "Back to admin": the admin's open switch ends (audit ended_at).
+// A signed-in-as session is never an admin (a CMS user is never a target), so it cannot start another one (403).
 // It returns a one-time sign-in token hash; no email is sent.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4';
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info, x-tenant-domain', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
@@ -29,9 +34,19 @@ Deno.serve(async (req: Request) => {
 
     let body: Record<string, unknown>;
     try { body = JSON.parse((await req.text()).slice(0, 2000)); } catch { return json({ error: 'Invalid JSON.' }, 400); }
+    const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
+    if (body.action === 'end') {
+      const ended = await admin.rpc('admin_view_as_end', { p_admin: who.user.id });
+      return ended.error ? json({ error: 'The switch could not be closed.' }, ended.error.code === '42501' ? 403 : 500) : json({ ok: true, ended: ended.data ?? 0 });
+    }
     const kind = String(body.kind ?? '');
     if (!kinds.includes(kind)) return json({ error: 'Choose Student, Agent or Staff.' }, 400);
-    const admin = createClient(url, service, { auth: { persistSession: false, autoRefreshToken: false } });
+
+    if (kind === 'agent' && body.action === 'agents') {
+      const groups = await admin.rpc('admin_view_as_agents', { p_query: String(body.query ?? '').slice(0, 80), p_admin: who.user.id });
+      if (groups.error) return json({ error: groups.error.code === '42501' ? 'Administrator access required.' : 'The list could not be loaded.' }, groups.error.code === '42501' ? 403 : 503);
+      return json({ groups: groups.data ?? [] });
+    }
 
     if (body.action === 'people') {
       const query = String(body.query ?? '').slice(0, 80);
@@ -41,7 +56,30 @@ Deno.serve(async (req: Request) => {
     }
 
     let email: string;
-    if (body.userId !== undefined && body.userId !== null && body.userId !== '') {
+    if (kind === 'agent' && body.agentId !== undefined && body.agentId !== null && body.agentId !== '') {
+      const agentId = String(body.agentId);
+      if (!uuid.test(agentId)) return json({ error: 'Choose an agent.' }, 400);
+      const fail = (e: { code?: string; message?: string } | null, fallback: string) =>
+        json({ error: e?.code === '42501' ? 'You cannot sign in as this agent.' : e?.code === '22023' || e?.code === 'P0002' ? String(e.message) : fallback },
+          e?.code === '42501' ? 403 : e?.code === 'P0002' ? 404 : e?.code === '22023' ? 400 : 500);
+      const target = await admin.rpc('admin_view_as_agent_target', { p_agent: agentId, p_admin: who.user.id });
+      if (target.error || !target.data) return fail(target.error, 'The agent could not be checked.');
+      const t = target.data as { email: string; name: string; authUserId: string | null; existingAuthUserId: string | null };
+      if (!t.authUserId) {
+        // No login yet: an Auth account on their own email with no password (nothing is emailed), linked to the agent.
+        let authUserId = t.existingAuthUserId;
+        if (!authUserId) {
+          const created = await admin.auth.admin.createUser({ email: t.email, email_confirm: true, user_metadata: { full_name: t.name, view_as_created: true } });
+          if (created.error || !created.data.user) return json({ error: 'A login for this agent could not be made.' }, 500);
+          authUserId = created.data.user.id;
+        }
+        const linked = await admin.rpc('admin_view_as_agent_link', { p_agent: agentId, p_auth_user: authUserId, p_admin: who.user.id });
+        if (linked.error) return fail(linked.error, 'The login could not be linked to this agent.');
+      }
+      const started = await admin.rpc('admin_view_as_agent_start', { p_agent: agentId, p_admin: who.user.id });
+      if (started.error || !started.data) return fail(started.error, 'The switch could not be recorded.');
+      email = (started.data as { email: string }).email;
+    } else if (body.userId !== undefined && body.userId !== null && body.userId !== '') {
       const target = String(body.userId);
       if (!uuid.test(target)) return json({ error: 'Choose a person.' }, 400);
       const person = await admin.rpc('admin_view_as_person', { p_kind: kind, p_target: target, p_admin: who.user.id });

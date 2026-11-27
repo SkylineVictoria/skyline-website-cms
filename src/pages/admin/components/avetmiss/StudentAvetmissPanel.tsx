@@ -1,4 +1,5 @@
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import { qualificationLabel } from "@/lib/qualification";
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -230,11 +231,11 @@ export default function StudentAvetmissPanel({ studentId }: { studentId: string 
       ) : null}
 
       <section className="mt-5 border-t border-background-200 pt-4" data-testid="avetmiss-enrolments">
-        <h3 className="mb-2 text-sm font-semibold text-foreground-900">Enrolments</h3>
+        <h3 className="mb-2 text-sm font-semibold text-foreground-900">Qualifications</h3>
         {!enrolments.length ? <p className="text-sm text-foreground-500">No intake enrolments yet. The study reason and funding source are recorded once the student is placed in an intake{app?.values.study_reason ? ` (the application says: ${String(app.values.study_reason)})` : ""}.</p> : (
           <ul className="space-y-3">{enrolments.map((e) => (
             <li key={e.id} className="rounded-md border border-background-200 p-3 text-sm">
-              <p className="font-medium text-foreground-900">{e.course || "Course"} · {e.intakeName} <span className="text-xs font-normal text-foreground-500">({e.status})</span></p>
+              <p className="font-medium text-foreground-900">{e.course || "Course"} · {e.intakeName} <span className="text-xs font-normal text-foreground-500">(Qualification {qualificationLabel(e.status)})</span></p>
               <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <CodeSelect label="Study reason" set="study_reason" codes={codes} value={e.study_reason_code} busy={busy === `enr-${e.id}-study_reason_code`} onSave={(v) => void saveEnrolment(e.id, "study_reason_code", v)} />
                 <CodeSelect label="Funding source" set="funding_source" codes={codes} value={e.funding_source_code} busy={busy === `enr-${e.id}-funding_source_code`} onSave={(v) => void saveEnrolment(e.id, "funding_source_code", v)} optional />

@@ -36,6 +36,7 @@ const routes = new Set([
   '/agency/notifications', '/agency/audit-log','/admin/businesses', '/admin/agents', '/admin/students', '/admin/course-fees', '/admin/intakes', '/admin/classrooms', '/admin/tickets', '/admin/bookings', '/admin/assessments', '/admin/staff', STAFF_EMPLOYEES_PATH, STAFF_CANDIDATES_PATH, '/admin/jobs',
   STAFF_TIMESHEETS_PATH, STAFF_LEAVE_PATH, STAFF_PAY_SCHEDULES_PATH, STAFF_HOLIDAYS_PATH, STAFF_XERO_PATH, STAFF_TEMPLATES_PATH, STAFF_LOCATIONS_PATH,
   '/admin/signing', '/admin/signing/templates', '/admin/signing/sent', '/admin/signing/partial', '/admin/signing/signed', '/admin/signing/declined', '/admin/signing/expired', '/admin/signing/void', // Sign child routes
+  '/admin/qualifications', // QUALIFICATION (Admissions › Qualifications)
   '/admin/finance/payments', // Finance group (admin_menu_items 'finance' / 'finance_payments')
 ]);
 

@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- AVETMISS-NO-JUNK (20261127050517): application answers are checked on every write (changed answers only, blanks pass, old answers
 -- kept), and every AVETMISS column has a guard. The installed trigger function is exercised on a scratch copy of the table, so no real
 -- application is touched. Rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(18);
+select plan(20);
 
 -- Every AVETMISS code column has a foreign key, a check or a validating trigger: a new column added without one fails here.
 select is((select count(*)::int from public.avetmiss_guard_gaps()), 0, 'no AVETMISS column without a guard');
@@ -49,5 +49,9 @@ select is((select needs_review from public.avetmiss_split_street('PO Box 99')), 
 select ok(exists (select 1 from pg_constraint where conrelid = 'public.enrollment_students'::regclass and conname = 'enrollment_students_address_street_number_check'), 'the street number is length-checked (AVETMISS 15)');
 select ok(pg_get_constraintdef((select oid from pg_constraint where conrelid = 'public.enrollment_students'::regclass and conname = 'enrollment_students_residency_status_check')) like '%permanent_resident%', 'residency status accepts only the four kinds');
 select ok(exists (select 1 from pg_trigger where tgrelid = 'public.enrollment_students'::regclass and tgname in ('avetmiss_address_split', 'avetmiss_residency') having count(*) = 2), 'address split and residency triggers are on enrollment_students');
+-- QUALIFICATION (20261128003517): the withdrawal guard stays (a Cancelled Qualification needs its withdrawal date, units close as 40),
+-- and the new Qualification statuses keep the text columns guarded.
+select ok(exists (select 1 from pg_trigger where tgrelid = 'public.intake_enrolments'::regclass and tgname in ('intake_enrolments_withdrawal_before', 'intake_enrolments_withdrawal_after', 'a1_qualification_status') having count(*) = 3), 'the withdrawal guard and the Qualification status guard are on intake_enrolments');
+select ok(pg_get_constraintdef((select oid from pg_constraint where conname = 'intake_enrolments_status_text_check')) like '%status_reason%', 'the Qualification reason, note and CoE / VoE numbers are length-checked');
 select * from finish();
 rollback;

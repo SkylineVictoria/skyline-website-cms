@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { qualificationLabel } from "@/lib/qualification";
 import { Link } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { addDays, shortDate, todayIso } from "@/pages/admin/lib/rto";
@@ -68,7 +69,7 @@ export default function StudentStudyPanel({ studentId }: { studentId: string }) 
               <p className="font-medium text-foreground-900">{r.courseCode} {r.courseName}</p>
               <p className="text-sm text-foreground-700">
                 <Link className="font-semibold text-primary-700 hover:underline" to={`/admin/lms/intakes#${r.intakeId || r.batchId}`}>{r.intake} intake</Link>{r.room ? ` · ${r.room}` : ""} · {r.type} · joined {shortDate(r.enrolledOn)}
-                {r.status !== "active" ? ` · ${r.status}` : ""}
+                {` · Qualification ${qualificationLabel(r.status)}`}
               </p>
               {r.carryOver && r.path.from ? <p className="mt-1 text-xs text-foreground-600">Continues from the {r.path.from.intake} intake.</p> : null}
               {r.units.length ? (

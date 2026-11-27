@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { qualificationLabel } from "@/lib/qualification";
 import { Button, Card, ConfirmDialog, Field, Modal, Select, TextArea, TextInput } from "@/pages/admin/components/ui";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { formatMoney } from "@/lib/signingApi";
@@ -75,7 +76,7 @@ export default function BusinessCommissions({ agencyId }: { agencyId: string }) 
     void supabase.from("intake_enrolments").select("id, status, course_intakes(name, label, start_date, cms_courses(code))").eq("student_id", studentId).then(({ data }) => {
       if (!live) return;
       type Row = { id: string; status: string; course_intakes: { name: string | null; label: string | null; start_date: string | null; cms_courses: { code: string } | null } | null };
-      setEnrolments(((data ?? []) as unknown as Row[]).map((e) => ({ id: e.id, label: [e.course_intakes?.cms_courses?.code, e.course_intakes?.name || e.course_intakes?.label || e.course_intakes?.start_date, e.status].filter(Boolean).join(" · ") })));
+      setEnrolments(((data ?? []) as unknown as Row[]).map((e) => ({ id: e.id, label: [e.course_intakes?.cms_courses?.code, e.course_intakes?.name || e.course_intakes?.label || e.course_intakes?.start_date, `Qualification ${qualificationLabel(e.status)}`].filter(Boolean).join(" · ") })));
     });
     return () => { live = false; };
   }, [studentId]);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { copyApplicationDocumentsToQualifications } from "@/lib/qualification";
 import { createPortal } from "react-dom";
 import ActionDrawer from "./ActionDrawer";
 import SegmentedControl from "@/components/shared/application-form/SegmentedControl";
@@ -129,7 +130,12 @@ export function EnrolDialog({ application, action, onClose, onDone }: { applicat
   const confirm = async () => {
     if (!date || busy) return;
     setBusy(true); setError("");
-    try { onDone(await changeApplicationStatus(application.id, action.action, { enrolment_date: date, note: note.trim(), notify })); }
+    try {
+      const result = await changeApplicationStatus(application.id, action.action, { enrolment_date: date, note: note.trim(), notify });
+      // QUALIFICATION: Enrolled created the Qualification; copy the application's files onto it (a copy, never shared).
+      await copyApplicationDocumentsToQualifications(application.id).catch(() => undefined);
+      onDone(result);
+    }
     catch (e) { setError(e instanceof Error ? e.message : "The student could not be enrolled."); setBusy(false); }
   };
   return (
@@ -143,7 +149,7 @@ export function EnrolDialog({ application, action, onClose, onDone }: { applicat
       <div>
         <label htmlFor="enrol-date" className={`${FORM_LABEL} mb-1 block`}>Enrolment date</label>
         <input id="enrol-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} data-testid="enrol-date" className={INPUT} />
-        <p className="mt-1 text-xs text-foreground-500">The intake&rsquo;s start date unless you change it.</p>
+        <p className="mt-1 text-xs text-foreground-500">The intake&rsquo;s start date unless you change it. The student&rsquo;s Qualification is created in the application&rsquo;s intake as Tentative and moves to In Progress on the course start date.</p>
       </div>
       <div>
         <label htmlFor="enrol-note" className={`${FORM_LABEL} mb-1 block`}>Note (optional)</label>

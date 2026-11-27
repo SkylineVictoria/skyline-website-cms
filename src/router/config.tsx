@@ -76,6 +76,8 @@ import AdminAgentsPage from "@/pages/admin/AgentsPage";
 import AgentDetailPage from "@/pages/admin/AgentDetailPage";
 import StudentsPage from "@/pages/admin/StudentsPage";
 import StudentDetailPage from "@/pages/admin/StudentDetailPage";
+import QualificationsPage from "@/pages/admin/QualificationsPage";
+import QualificationDetailPage from "@/pages/admin/QualificationDetailPage";
 import TicketsPage, { TicketDetailPage } from "@/pages/admin/TicketsPage";
 import PortalTicketsPage, { PortalTicketDetailPage } from "@/pages/agency/tickets/page";
 import StaffPage from "@/pages/admin/StaffPage";
@@ -279,6 +281,8 @@ const routes: RouteObject[] = [
           { path: "agents/:id", element: <RequireAdmin><AgentDetailPage /></RequireAdmin> },
           { path: "students", element: <RequireAdmin><StudentsPage /></RequireAdmin> },
           { path: "students/:id", element: <RequireAdmin><StudentDetailPage /></RequireAdmin> },
+          { path: "qualifications", element: <RequireAdmin><QualificationsPage /></RequireAdmin> },
+          { path: "qualifications/:id", element: <RequireAdmin><QualificationDetailPage /></RequireAdmin> },
           { path: "bookings", element: <BookingsHub /> },
           { path: "tickets", element: <RequireAdmin><TicketsPage /></RequireAdmin> },
           { path: "tickets/:id", element: <RequireAdmin><TicketDetailPage /></RequireAdmin> },

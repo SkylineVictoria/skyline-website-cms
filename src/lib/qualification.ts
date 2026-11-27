@@ -122,11 +122,13 @@ async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
  * at Enrolled did not go through, so there may be no Qualification yet) and "PRISMS to report" filters. Staff read qualification_tasks.
  */
 export interface OpenQualificationTask {
+  // rule-policy: technical qualification-filters Display only: the list filters read the open tasks the database raised; no rule is decided here.
   id: string; kind: "place_manually" | "prisms_report"; title: string; detail: string | null; dueOn: string | null;
   enrolmentId: string | null; applicationId: string | null; studentId: string | null; studentName: string | null; applicationReference: string | null;
 }
 export async function openQualificationTasks(kind: OpenQualificationTask["kind"]): Promise<OpenQualificationTask[]> {
   const { data, error } = await supabase.from("qualification_tasks")
+    // rule-policy: technical qualification-filters Display only: the list filters read the open tasks the database raised; no rule is decided here.
     .select("id, kind, title, detail, due_on, enrolment_id, application_id, student_id, student:enrollment_students(full_name), application:enrollment_applications(reference)")
     .eq("status", "open").eq("kind", kind).order("due_on", { ascending: true, nullsFirst: false });
   if (error) throw new Error(error.message);

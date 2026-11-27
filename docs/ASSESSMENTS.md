@@ -1,0 +1,10 @@
+# Assessments (PDF workbook templates)
+
+Moved out of CLAUDE.md on 2026-11-27. Database / function details: docs/SUPABASE.md "Assessment workbook PDF as an e-sign style
+template" and "Phase 4". Release notes: docs/HISTORY.md (ASM-*).
+
+## Assessment workbook PDF (ASM-PDF-TEMPLATE, released 2026-11-26)
+- An assessment is its uploaded workbook PDF plus a template (`asm_versions.template`): fields placed as page fractions (role student / trainer / auto; text, table_cell, yes_no, checkbox, signature, date, rating, auto), questions keyed by their printed number. There is no AI import, Builder, Overview, question bank, model answers or JSON / blank-workbook export any more.
+- Add assessment = qualification + unit (+ title), then the PDF template tab: upload, detection in the browser (src/lib/assessment/pdfTemplate/detect.ts), the unit-mismatch check (unit code read from the first six pages; Switch or Keep with a reason of 5+ characters, audited by `asm_import_unit_check`; Save waits for it), Save (`asm_template_save`). Publish needs the template with questions; a published template is frozen. Copy assessment copies the PDF, the fields and the mapping. Preview as learner walks the student wizard of the draft or version and saves nothing.
+- Student: the PDF wizard (one question a step, tables as grids / cards on a phone, autosave with local drafts, each task declaration and the pack declaration signed; `asm_template_missing` gates Submit; a snapshot is taken on submit). Trainer: the PDF marking view (S / NYS per question, task results automatic, Evidence / Performance Outcome rows, sign-off; release refused while `asm_template_marking_missing` lists anything; unit outcome recorded there). The final and the acknowledged PDFs are stored in `assessment-output` with their hashes.
+- Unit mapping is keyed by printed question numbers; `asm-import` only answers `suggest_mapping` (OpenAI, EF_ASM_IMPORT_*). Details: SUPABASE.md "Assessment workbook PDF as an e-sign style template" and "Phase 4".

@@ -6,7 +6,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Enrolled application through the placement path (tentative, CoE copied), In Progress sets the application Active, no Active by hand,
 -- Admin undo, paused attendance, the portal view without notes, the daily start and no-show. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(51);
+select plan(61);
 
 create function pg_temp.as_user(p uuid) returns void language plpgsql as $$
 begin perform set_config('role', 'authenticated', true); perform set_config('request.jwt.claim.sub', p::text, true); end $$;
@@ -151,5 +151,36 @@ select pg_temp.as_postgres();
 update public.intake_enrolments set course_start_date = public.course_intake_today() - 8 where id = pg_temp.qid();
 select is((public.qualification_daily() ->> 'noShows')::int, 1, 'the daily check finds the no-show');
 select is((select count(*)::int from public.qualification_tasks where enrolment_id = pg_temp.qid() and kind = 'prisms_report' and event = 'no_show'), 1, 'a no-show raises Report in PRISMS within 14 days');
+-- ---------------------------------------------------------------- QUALIFICATION-GATES (20261128004517): no orphan statuses
+-- 1. a live Qualification keeps its application from moving back
+select ok(pg_temp.try($$update public.enrollment_applications set status = 'offer_issued' where id = 'a7000000-0000-0000-0000-000000000001'$$) like 'refused:%cancel the Qualification first%', 'gate 1: an application with a live Qualification cannot move back');
+select ok(pg_temp.try($$update public.enrollment_applications set status = 'coe_issued' where id = 'a7000000-0000-0000-0000-000000000001'$$) like 'refused:%live Qualification (In Progress)%', 'gate 1: not even to CoE issued');
+-- 3. withdrawing the application cancels its own Qualification
+update public.enrollment_applications set status = 'withdrawn' where id = 'a7000000-0000-0000-0000-000000000001';
+select is((select status || '/' || status_reason from public.intake_enrolments where id = pg_temp.qid()), 'withdrawn/Application Withdrawn', 'gate 3: the application withdrawn cancels its Qualification');
+select is((select withdrawn_on from public.intake_enrolments where id = pg_temp.qid()), public.course_intake_today(), 'gate 3: with the withdrawal date');
+-- 2. an undone Mark as enrolled cancels the Tentative Qualification quietly
+insert into public.enrollment_applications(id, agency_id, student_id, student_name, student_email, status, data, reference)
+values ('a7000000-0000-0000-0000-000000000003', 'c6000000-0000-0000-0000-000000000001', 'e6000000-0000-0000-0000-000000000012', 'Zz Quill', 'q.student2@example.test', 'draft', '{"values": {"study_reason": "12"}}', 'ZZ-Q-3');
+insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id)
+values ('a7000000-0000-0000-0000-000000000003', 'course-q-test', 'Q101', 'Q Test Course', 'f6000000-0000-0000-0000-000000000002');
+set local session_replication_role = replica;
+update public.enrollment_applications set status = 'coe_issued' where id = 'a7000000-0000-0000-0000-000000000003';
+set local session_replication_role = origin;
+update public.enrollment_applications set status = 'enrolled' where id = 'a7000000-0000-0000-0000-000000000003';
+select is((select status from public.intake_enrolments where application_id = 'a7000000-0000-0000-0000-000000000003'), 'tentative', 'gate 2: Enrolled made a Tentative Qualification');
+select set_config('portal.status_note', 'Undone: back to CoE / VoE issued', true);
+select is(pg_temp.try($$update public.enrollment_applications set status = 'coe_issued' where id = 'a7000000-0000-0000-0000-000000000003'$$), 'ok', 'gate 2: the enrolment can be undone while the Qualification is Tentative');
+select set_config('portal.status_note', '', true);
+select is((select status || '/' || status_reason from public.intake_enrolments where application_id = 'a7000000-0000-0000-0000-000000000003'), 'withdrawn/Enrolment undone', 'gate 2: its Tentative Qualification is cancelled');
+select is((select count(*)::int from public.qualification_tasks t join public.intake_enrolments e on e.id = t.enrolment_id where e.application_id = 'a7000000-0000-0000-0000-000000000003'), 0, 'gate 2: quietly (no PRISMS or refund task)');
+-- 4. Active needs this application's own Qualification, not any placement of the student in the course
+select set_config('rto.auto_place', 'on', true);
+insert into public.intake_enrolments(intake_id, student_id, enrolment_type, status, enrolled_on, study_reason_code) values ('f6000000-0000-0000-0000-000000000001', 'e6000000-0000-0000-0000-000000000012', 'CoE', 'active', current_date, '12');
+select set_config('rto.auto_place', 'off', true);
+select set_config('qualification.sync', 'on', true);
+select ok(pg_temp.try($$update public.enrollment_applications set status = 'active' where id = 'a7000000-0000-0000-0000-000000000002'$$) like 'refused:%no Qualification In Progress%', 'gate 4: a placement without this application does not make it Active');
+select set_config('qualification.sync', '', true);
+select is((select count(*)::int from public.intake_enrolment_status_history where enrolment_id = pg_temp.qid() and to_status = 'withdrawn' and reason = 'Application Withdrawn'), 1, 'gate 3: the cancellation is in the history');
 select * from finish();
 rollback;

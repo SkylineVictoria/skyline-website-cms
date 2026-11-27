@@ -22,7 +22,9 @@ export default function PortalDocumentsPage() {
     try {
       const applications = (await listApplications()).filter((application) => !needsInitialWizard(application));
       const perApplication = await Promise.all(applications.map(async (application) => (await listApplicationDocuments(application.id)).map((doc) => ({ ...doc, application }))));
-      setApps(applications); setDocs(perApplication.flat());
+      // STUDENT-DOCUMENTS: a student's personal document is shared by their applications; list it once (under the first application).
+      const seen = new Set<string>();
+      setApps(applications); setDocs(perApplication.flat().filter((doc) => (seen.has(doc.id) ? false : (seen.add(doc.id), true))));
     } catch (e) { setError(e instanceof Error ? e.message : "We could not load your documents."); }
     finally { setLoading(false); }
   }, []);

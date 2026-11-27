@@ -655,7 +655,7 @@ test("status workflow: the list opens an application from its name; Take action 
   expect(automatic.error?.message).toMatch(/automatically/);
 });
 
-test("status flow: Submitted → Issue offer letter → accepted → Issue CoE / VoE → Enrol → Enrolled; Withdraw needs a reason", async ({ page, browser }) => {
+test("status flow: Submitted → Issue offer letter → accepted → Issue CoE / VoE → Enrolled (one step); Withdraw needs a reason", async ({ page, browser }) => {
   const admin = await createAdmin("flow-main");
   const agency = wfAgency("main flow");
   const agent = await wfPortalUser("flow-agent", agency, "agent");
@@ -706,21 +706,15 @@ test("status flow: Submitted → Issue offer letter → accepted → Issue CoE /
   await coe.getByTestId("coe-number").fill(`COE${tag}`);
   await coe.locator("#coe-upload").setInputFiles({ name: "CoE.pdf", mimeType: "application/pdf", buffer: PDF });
   await expect(coe.getByTestId("coe-recipient")).toContainText(agent.email);
+  await expect(coe.getByTestId("coe-enrols")).toContainText("makes the application Enrolled");
   await coe.getByTestId("coe-confirm").click();
-  await expect.poll(statusOf).toBe("coe_issued");
-  await expect(row(name).getByTestId("status-badge")).toHaveText(wfStatusLabel("coe_issued"));
-  expect(sql(`select kind || '|' || document_number || '|' || (issued_at is not null)::text from public.enrollment_coe_documents where application_id = '${id}'`)).toBe(`coe|COE${tag}|true`);
-
-  // 4. CoE / VoE issued: Enrol (the date defaults to the intake's start or today) → Enrolled, then only Withdraw is left.
-  await expect(row(name).getByTestId("primary-action")).toHaveAttribute("aria-label", primaryOf("coe_issued"));
-  await row(name).getByTestId("primary-action").click();
-  const enrol = page.getByTestId("enrol-dialog");
-  await expect(enrol.getByTestId("enrol-date")).not.toHaveValue("");
-  await enrol.getByTestId("enrol-date").fill("2027-02-03");
-  await enrol.getByTestId("enrol-confirm").click();
+  // 4. QUALIFICATION-BRIEF (owner 2026-11-27): recording the CoE / VoE makes the application Enrolled in the same step (enrolment date =
+  // the issue date); there is no separate "Mark as enrolled"; then only Withdraw is left.
   await expect.poll(statusOf).toBe("enrolled");
   await expect(row(name).getByTestId("status-badge")).toHaveText(wfStatusLabel("enrolled"));
-  expect(sql(`select payload->>'enrolment_date' from public.enrollment_application_status_history where application_id = '${id}' and new_status = 'enrolled'`)).toBe("2027-02-03");
+  expect(sql(`select kind || '|' || document_number || '|' || (issued_at is not null)::text from public.enrollment_coe_documents where application_id = '${id}'`)).toBe(`coe|COE${tag}|true`);
+  expect(sql(`select (h.payload->>'enrolment_date') = d.issue_date::text from public.enrollment_application_status_history h join public.enrollment_coe_documents d on d.application_id = h.application_id
+    where h.application_id = '${id}' and h.new_status = 'enrolled'`)).toBe("t");
   await expect(row(name).getByTestId("primary-action")).toHaveCount(0);
   await row(name).getByTestId("take-action").click();
   expect((await page.getByTestId("take-action-menu").getByRole("menuitem").allInnerTexts()).map((t) => t.trim())).toEqual(wfMenu("enrolled").menu);

@@ -194,6 +194,10 @@ export function CoeVoeDrawer({ application, action, onClose, onDone }: { applica
       const result = await issueCoeVoe({ applicationId: application.id, kind, number: number.trim(), issueDate, fileName: file.name.replace(/[^A-Za-z0-9 ._()-]+/g, " ").trim() || "CoE.pdf",
         contentBase64: toBase64(new Uint8Array(await file.arrayBuffer())), note: note.trim(), notify });
       if (ccOn && notify) await sendCc(application.id, "coe_voe_issued", cc);
+      // QUALIFICATION-BRIEF (owner 2026-11-27): recording the CoE / VoE makes the application Enrolled and creates its Qualification:
+      // the application's files are copied onto it here, as "Mark as enrolled" did
+      // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value.
+      if (result.status === "enrolled") await copyApplicationDocumentsToQualifications(application.id).catch(() => undefined);
       onDone({ status: result.status ?? action.to ?? "", label: result.label ?? action.label });
     } catch (e) { setError(e instanceof Error ? e.message : "The CoE / VoE could not be issued."); setBusy(false); }
   };
@@ -206,6 +210,8 @@ export function CoeVoeDrawer({ application, action, onClose, onDone }: { applica
           {busy ? <i className="ri-loader-4-line animate-spin" aria-hidden="true" /> : <i className="ri-award-line" aria-hidden="true" />}Issue {kind === "coe" ? "CoE" : "VoE"}
         </button></>}>
       <div className="space-y-4">
+        {/* // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value. */}
+        <p className="rounded-lg bg-background-100 px-3 py-2 text-xs text-foreground-700" data-testid="coe-enrols">Recording the {kind === "coe" ? "CoE" : "VoE"} makes the application Enrolled and creates the student&apos;s Qualification, placed in its intake (when that is not possible, a &ldquo;Place student manually&rdquo; task is raised).</p>
         <SegmentedControl<"coe" | "voe"> label="Document" value={kind} onChange={setKind} testId="coe-kind"
           options={[{ value: "coe", label: "CoE", icon: "ri-award-line" }, { value: "voe", label: "VoE", icon: "ri-file-shield-2-line" }]} />
         <div className="grid grid-cols-2 gap-3">

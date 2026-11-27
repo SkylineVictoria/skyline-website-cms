@@ -247,7 +247,8 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
         <OfferLetterDrawer application={application} reviewIssues={reviewIssues} onClose={close}
           onSent={() => { const to = active.to; setActive(null); if (to) onStatus?.(to); onResult?.("Offer letter sent.", true); onDone?.(); }} />
       ) : null}
-      {active?.kind === "coe" ? <CoeVoeDrawer application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
+      {/* // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value. */}
+      {active?.kind === "coe" ? <CoeVoeDrawer application={dialogApp} action={active} onClose={close} onDone={(result) => { changed(result); if (result.status === "enrolled") setMailbox(true); }} /> : null}
       {active && active.kind === "status" && active.requiresReason ? <ReasonDialog application={dialogApp} action={active} onClose={close} onDone={changed} /> : null}
       {isEnrol(active) && active ? <EnrolDialog application={dialogApp} action={active} onClose={close} onDone={(result) => { changed(result); setMailbox(true); }} /> : null}
       {mailbox ? <EnrolMailboxDialog applicationId={application.id} studentId={application.studentId} studentName={application.studentName} reference={application.reference}

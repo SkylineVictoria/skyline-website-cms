@@ -83,6 +83,14 @@ test("an Enrolled application's Qualification: list, detail, defer with a PRISMS
   await page.goto("/admin/qualifications?task=place");
   await expect(page.getByTestId("waiting-placement-item").filter({ hasText: `ZZ placement check ${tag}` })).toContainText("Zz Quentin");
   await expect(page.getByTestId("qualifications-table").getByRole("row").filter({ hasText: `ZZQ${tag.slice(-4)}` })).toHaveCount(0);
+  // QUALIFICATION-BRIEF: an Admin edits commencement and expected completion; the change is in the history
+  await page.goto(`/admin/qualifications/${qid}`);
+  await page.getByTestId("qualification-edit-dates").click();
+  await page.getByTestId("qualification-dates-start").fill(inDays(45));
+  await page.getByTestId("qualification-dates-end").fill(inDays(320));
+  await page.getByTestId("qualification-dates-save").click();
+  await expect(page.getByTestId("qualification-history")).toContainText("Dates changed");
+  expect(sql(`select course_start_date::text || '/' || course_end_date::text from public.intake_enrolments where id = '${qid}'`)).toBe(`${inDays(45)}/${inDays(320)}`);
 
   // The student's Qualification tab and the application's card.
   await page.goto(`/admin/students/${student}`);

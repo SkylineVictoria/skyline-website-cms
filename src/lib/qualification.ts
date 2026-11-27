@@ -83,6 +83,9 @@ export interface QualificationTask {
 }
 
 export interface QualificationDetail extends QualificationRow {
+  /** QUALIFICATION-BRIEF (owner 2026-11-27) */
+  actualCompletionDate?: string | null; awardIssuedDate?: string | null; canEditDates?: boolean;
+  personalDocuments?: { id: string; category: string; fileName: string | null; mimeType: string | null; bucket: string | null; path: string; isCurrent: boolean; createdAt: string }[];
   reason: string | null;
   note: string | null;
   studyReason: string | null;
@@ -156,7 +159,12 @@ export const setQualificationStatus = (input: { id: string; status: string; reas
     p_effective_on: input.effectiveOn || null, p_resume_date: input.resumeDate || null, p_evidence: input.evidenceId || null,
   });
 
-export const undoQualification = (id: string, reason: string) => rpc<QualificationRow>("qualification_undo", { p_enrolment: id, p_reason: reason });
+// rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value.
+export const undoQualification = (id: string, reason: string, note = "") => rpc<QualificationRow>("qualification_undo", { p_enrolment: id, p_reason: reason, p_note: note });
+/** QUALIFICATION-BRIEF: an Admin changes commencement and expected completion (logged in the history). */
+export const setQualificationDates = (id: string, commencement: string, expected: string, note = "") =>
+  // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value.
+  rpc<QualificationDetail>("qualification_set_dates", { p_enrolment: id, p_commencement: commencement, p_expected: expected, p_note: note });
 
 export const closeQualificationTask = (id: string, reference: string, note: string) =>
   rpc<void>("qualification_task_close", { p_task: id, p_reference: reference || null, p_note: note || null });

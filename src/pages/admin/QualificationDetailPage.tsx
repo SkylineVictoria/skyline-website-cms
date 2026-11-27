@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { supabase } from "@/pages/admin/lib/supabase";
 import { Link, useParams } from "react-router-dom";
 import { Button, Card, Modal, PageHeader } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import {
   addQualificationDocument, closeQualificationTask, copyPendingDocuments, DOCUMENT_KIND_LABELS, formatQualificationDate, getQualification,
-  openQualificationDocument, qualificationTone, setQualificationStatus, TASK_KIND_LABELS, undoQualification, type QualificationDetail, type QualificationTask,
+  openQualificationDocument, qualificationTone, setQualificationDates, setQualificationStatus, TASK_KIND_LABELS, undoQualification, type QualificationDetail, type QualificationTask,
 } from "@/lib/qualification";
 
 const INPUT = "w-full rounded-md border border-background-300 bg-background-50 px-3 py-2 text-sm";
@@ -22,6 +23,7 @@ export default function QualificationDetailPage() {
   const [undoing, setUndoing] = useState(false);
   const [closing, setClosing] = useState<QualificationTask | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [editingDates, setEditingDates] = useState(false);
   const copied = useRef(false);
 
   const refresh = useCallback(() => setReload((n) => n + 1), []);
@@ -64,8 +66,10 @@ export default function QualificationDetailPage() {
           <dl className="grid grid-cols-2 gap-3 text-sm">
             <Row label="Status" value={q.label} />
             <Row label="Reason" value={q.reason ?? ""} />
-            <Row label="Course start" value={formatQualificationDate(q.startDate)} />
-            <Row label="Course end" value={formatQualificationDate(q.endDate)} />
+            <Row label="Commencement" value={formatQualificationDate(q.startDate)} />
+            <Row label="Expected completion" value={formatQualificationDate(q.endDate)} />
+            {q.actualCompletionDate ? <Row label="Actual completion" value={formatQualificationDate(q.actualCompletionDate)} /> : null}
+            {q.awardIssuedDate ? <Row label="Award issued" value={formatQualificationDate(q.awardIssuedDate)} /> : null}
             <Row label="Joined on" value={formatQualificationDate(q.enrolledOn)} />
             {q.resumeDate ? <Row label="Resumes" value={formatQualificationDate(q.resumeDate)} /> : null}
             {q.withdrawnOn ? <Row label="Cancelled on" value={formatQualificationDate(q.withdrawnOn)} /> : null}
@@ -75,6 +79,7 @@ export default function QualificationDetailPage() {
               ? <Link to={`/admin/applications/${q.applicationId}`} className="text-primary-700 hover:underline">{q.applicationReference || "Open application"}</Link>
               : <span className="text-foreground-500">Placed by hand</span>}</dd></div>
           </dl>
+          {q.canEditDates ? <div className="mt-3"><Button size="sm" variant="outline" icon="ri-calendar-line" onClick={() => setEditingDates(true)} data-testid="qualification-edit-dates">Edit dates</Button></div> : null}
         </Card>
         <Card className="min-w-0 flex-[2_1_480px]">
           <div className="flex items-center justify-between border-b border-background-200 px-4 py-3">
@@ -114,6 +119,17 @@ export default function QualificationDetailPage() {
         ) : <p className="px-4 py-3 text-sm text-foreground-500">No documents yet.</p>}
       </Card>
 
+      {/* QUALIFICATION-BRIEF: personal documents are the student record's (linked here, not copied); replaced ones stay as earlier versions */}
+      <Card className="mt-4">
+        <div className="border-b border-background-200 px-4 py-3"><h2 className="font-heading text-[15px] font-semibold text-foreground-900">Personal documents <span className="font-normal text-foreground-500">{q.personalDocuments?.length ?? 0}</span></h2>
+          <p className="text-xs text-foreground-600">From the <Link className="underline" to={`/admin/students/${q.studentId}`}>student's record</Link>: passport, visa, English test… (not copied onto the Qualification).</p></div>
+        {q.personalDocuments?.length ? <ul className="divide-y divide-background-100" data-testid="qualification-personal-documents">{q.personalDocuments.map((d) => (
+          <li key={d.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm" data-current={d.isCurrent}>
+            <span><b className="font-medium text-foreground-900">{d.category}</b> <span className="text-xs text-foreground-500">{d.fileName}{d.isCurrent ? "" : " · earlier version"} · {formatQualificationDate(d.createdAt)}</span></span>
+            <Button size="sm" variant="ghost" icon="ri-external-link-line" onClick={() => void openPersonal(d.bucket, d.path).catch((e) => push(e instanceof Error ? e.message : String(e), "error"))}>Open</Button>
+          </li>))}</ul> : <p className="px-4 py-3 text-sm text-foreground-500">None on the student record.</p>}
+      </Card>
+
       <Card className="mt-4">
         <h2 className="border-b border-background-200 px-4 py-3 font-heading text-[15px] font-semibold text-foreground-900">History</h2>
         <ol className="divide-y divide-background-100" data-testid="qualification-history">{q.history.map((h) => (
@@ -129,6 +145,7 @@ export default function QualificationDetailPage() {
 
       {changing ? <ChangeStatusDialog q={q} onClose={() => setChanging(false)} onDone={(msg) => { setChanging(false); push(msg); refresh(); }} /> : null}
       {undoing ? <UndoDialog q={q} onClose={() => setUndoing(false)} onDone={() => { setUndoing(false); push("Undone."); refresh(); }} /> : null}
+      {editingDates ? <DatesDialog q={q} onClose={() => setEditingDates(false)} onDone={() => { setEditingDates(false); push("Dates saved."); refresh(); }} /> : null}
       {closing ? <CloseTaskDialog task={closing} onClose={() => setClosing(null)} onDone={() => { setClosing(null); push("Task closed."); refresh(); }} /> : null}
       {uploading ? <UploadDialog id={q.id} onClose={() => setUploading(false)} onDone={() => { setUploading(false); push("Document added."); refresh(); }} /> : null}
     </div>
@@ -168,7 +185,10 @@ function ChangeStatusDialog({ q, onClose, onDone }: { q: QualificationDetail; on
   const [evidence, setEvidence] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const reasons = q.reasons.filter((r) => r.status === to);
+  // QUALIFICATION-BRIEF: a reason from the list to defer, suspend, cancel or start a Tentative one by hand; resume and complete take none
+  // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value.
+  const reasonList = to === "active" ? (q.status === "tentative" ? "active" : "") : ["deferred", "suspended", "withdrawn"].includes(to) ? to : "";
+  const reasons = reasonList ? q.reasons.filter((r) => r.status === reasonList) : [];
   const reason = reasons.find((r) => r.id === reasonId);
   const needsResume = to === "deferred" || to === "suspended";
   const ready = Boolean(to) && (!reasons.length || (reason && (!reason.isOther || note.trim()))) && (!needsResume || resumeDate);
@@ -177,7 +197,7 @@ function ChangeStatusDialog({ q, onClose, onDone }: { q: QualificationDetail; on
     setBusy(true); setError("");
     try {
       const evidenceId = evidence ? await addQualificationDocument({ id: q.id, kind: "evidence", title: `Evidence: ${q.moves.find((m) => m.status === to)?.label ?? to}`, file: evidence, studentVisible: false }) : undefined;
-      const row = await setQualificationStatus({ id: q.id, status: to, reason: reason ? (reason.isOther ? note.trim().slice(0, 200) : reason.label) : undefined,
+      const row = await setQualificationStatus({ id: q.id, status: to, reason: reason ? reason.label : undefined,
         note: note.trim(), effectiveOn, resumeDate: needsResume ? resumeDate : undefined, evidenceId });
       onDone(`Qualification is now ${row.label}.`);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setBusy(false); }
@@ -208,21 +228,64 @@ function ChangeStatusDialog({ q, onClose, onDone }: { q: QualificationDetail; on
 
 function UndoDialog({ q, onClose, onDone }: { q: QualificationDetail; onClose: () => void; onDone: () => void }) {
   const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value.
+  const undoReasons = q.reasons.filter((r) => r.status === "undo");
+  const other = undoReasons.find((r) => r.label === reason)?.isOther ?? false;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const save = async () => {
     setBusy(true); setError("");
-    try { await undoQualification(q.id, reason.trim()); onDone(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); setBusy(false); }
+    try { await undoQualification(q.id, reason, note.trim()); onDone(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); setBusy(false); }
   };
   return (
     <Modal open title={`Undo ${q.label}`} onClose={onClose}
-      footer={<><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={() => void save()} disabled={busy || reason.trim().length < 3}>Undo</Button></>}>
+      footer={<><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={() => void save()} disabled={busy || !reason || (other && !note.trim())} data-testid="qualification-undo-save">Undo</Button></>}>
       <p className="mb-3 text-sm text-foreground-700">{q.label} is final. An Admin can undo it with a reason; the Qualification goes back to In Progress (or Tentative) and the undo is kept in the history.</p>
       <label className={LABEL} htmlFor="q-undo">Reason</label>
-      <textarea id="q-undo" rows={3} maxLength={200} className={INPUT} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <select id="q-undo" className={INPUT} value={reason} onChange={(e) => setReason(e.target.value)} data-testid="qualification-undo-reason">
+        <option value="">Choose a reason</option>{undoReasons.map((r) => <option key={r.id} value={r.label}>{r.label}</option>)}</select>
+      {/* // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value. */}
+      <label className={LABEL + " mt-3"} htmlFor="q-undo-note">{other ? "Reason (required)" : "Note (optional)"}</label>
+      {/* // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value. */}
+      <textarea id="q-undo-note" rows={2} maxLength={2000} className={INPUT} value={note} onChange={(e) => setNote(e.target.value)} />
       {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
     </Modal>
   );
+}
+
+/** QUALIFICATION-BRIEF: an Admin changes commencement and expected completion; the change is kept in the history. */
+function DatesDialog({ q, onClose, onDone }: { q: QualificationDetail; onClose: () => void; onDone: () => void }) {
+  const [start, setStart] = useState(q.startDate ?? "");
+  const [end, setEnd] = useState(q.endDate ?? "");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const save = async () => {
+    setBusy(true); setError("");
+    try { await setQualificationDates(q.id, start, end, note.trim()); onDone(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); setBusy(false); }
+  };
+  return (
+    <Modal open title="Qualification dates" onClose={onClose}
+      footer={<><Button variant="outline" onClick={onClose} disabled={busy}>Cancel</Button><Button onClick={() => void save()} disabled={busy || !start || !end || end < start} data-testid="qualification-dates-save">Save</Button></>}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div><label className={LABEL} htmlFor="q-start">Commencement</label><input id="q-start" type="date" className={INPUT} value={start} onChange={(e) => setStart(e.target.value)} data-testid="qualification-dates-start" /></div>
+        <div><label className={LABEL} htmlFor="q-end">Expected completion</label><input id="q-end" type="date" min={start} className={INPUT} value={end} onChange={(e) => setEnd(e.target.value)} data-testid="qualification-dates-end" /></div>
+        {/* // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value. */}
+        <div className="sm:col-span-2"><label className={LABEL} htmlFor="q-dates-note">Note (optional, kept in the history)</label><textarea id="q-dates-note" rows={2} maxLength={500} className={INPUT} value={note} onChange={(e) => setNote(e.target.value)} /></div>
+      </div>
+      {error ? <p role="alert" className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </Modal>
+  );
+}
+
+/** A personal document on the student record (its own bucket), opened for a short time. */
+async function openPersonal(bucket: string | null, path: string) {
+  const tab = window.open("", "_blank");
+  // rule-policy: technical qualification-brief 2026-11-27 owner (QUALIFICATION-BRIEF): fixed Qualification decisions (reasons from the list, dates, links, documents, one-step CoE); no configurable value.
+  const { data, error } = await supabase.storage.from(bucket || "enrollment-documents").createSignedUrl(path, 300);
+  if (error || !data) { tab?.close(); throw new Error(error?.message ?? "The document could not be opened."); }
+  if (tab) tab.location.href = data.signedUrl; else window.location.href = data.signedUrl;
 }
 
 function CloseTaskDialog({ task, onClose, onDone }: { task: QualificationTask; onClose: () => void; onDone: () => void }) {

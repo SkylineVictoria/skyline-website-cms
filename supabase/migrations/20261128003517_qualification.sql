@@ -221,6 +221,7 @@ begin
     if new.status not in ('tentative', 'active') and not v_system then
       raise exception 'A Qualification starts as Tentative or In Progress, not %.', public.qualification_label(new.status) using errcode = '23514';
     end if;
+    new.status_reason := nullif(btrim(coalesce(nullif(current_setting('qualification.reason', true), ''), new.status_reason, '')), '');
     new.status_changed_at := now();
     return new;
   end if;

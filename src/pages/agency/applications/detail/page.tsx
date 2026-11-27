@@ -351,9 +351,12 @@ export default function ApplicationDetailPage() {
             <span className="rounded-full bg-accent-100 px-2.5 py-1 text-2xs font-semibold uppercase text-accent-900">Test data</span>
           ) : null}
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            {role === "student" && application.status === "draft" && !application.submittedAt
-              ? <DeleteDraftButton applicationId={application.id} onDeleted={(m) => { closeWizard(); toast.show(m); navigate(paths.list, { replace: true }); }} />
-              : role === "student" ? <StudentWithdraw applicationId={application.id} status={application.status} onDone={(m) => { toast.show(m); void load(); }} /> : null}
+            {role === "student" && !(application.status === "draft" && !application.submittedAt)
+              ? <StudentWithdraw applicationId={application.id} status={application.status} onDone={(m) => { toast.show(m); void load(); }} /> : null}
+            {/* APPLICATION-DELETE-ANY (owner 2026-11-27): every application except an Active one can be deleted by whoever can open it. */}
+            {application.status !== "active"
+              ? <DeleteDraftButton applicationId={application.id} submitted={!(application.status === "draft" && !application.submittedAt)}
+                  onDeleted={(m) => { closeWizard(); toast.show(m); navigate(paths.list, { replace: true }); }} /> : null}
             {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Student" size="sm" variant="ghost" /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Agent" size="sm" variant="ghost" /> : null}

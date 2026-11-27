@@ -372,7 +372,7 @@ export default function ApplicationsTable({
                         ) : (
                           <span className="px-2 text-sm text-foreground-400" title="No action available for your role" data-testid="no-action">—</span>
                         )}
-                        {canDeleteDrafts && row.status === "draft" && !row.submittedAt ? (confirmDeleteId === row.id ? (
+                        {canDeleteDrafts && row.status !== "active" ? (confirmDeleteId === row.id ? (
                           <span className="ml-2 inline-flex items-center gap-1.5 text-xs" data-testid="row-delete-confirm">
                             <span className="text-red-800">Delete?</span>
                             <button type="button" disabled={deletingId === row.id} onClick={() => void removeDraft(row)}
@@ -381,7 +381,7 @@ export default function ApplicationsTable({
                               className="h-8 rounded-lg border border-background-300 px-2.5 font-medium text-foreground-800 hover:bg-background-100">Keep</button>
                           </span>
                         ) : (
-                          <button type="button" onClick={() => setConfirmDeleteId(row.id)} title="Delete this draft application and its documents" data-testid="row-delete"
+                          <button type="button" onClick={() => setConfirmDeleteId(row.id)} title="Delete this application and its documents" data-testid="row-delete"
                             className="ml-2 inline-flex h-8 items-center gap-1 rounded-lg border border-red-200 px-2.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50">
                             <i className="ri-delete-bin-line" aria-hidden="true" /> Delete
                           </button>

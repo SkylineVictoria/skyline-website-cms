@@ -65,12 +65,12 @@ export interface Missing { code: "unanswered" | "required" | "table" | "declarat
  *  - every question answered; each text box and "Short answer" part filled (required fields);
  *  - a table with printed rows (Q3's tools): every cell; a table of blank rows: at least one complete row;
  *  - each task's declaration signed at the end of the task; the whole-pack declaration signed on the submit step;
- *  - Appendix B is optional.
+ *  - Appendix B is optional; ASM-DATES: a date field is never asked for (the PDF prints the submission date).
  * signed: the signature slots the student has signed ("decl:1", "pack").
  */
 export function missingItems(t: PdfTemplate, a: PdfAnswers, signed: readonly string[]): Missing[] {
   const out: Missing[] = [];
-  const mine = studentFields(t).filter((f) => f.role === "student" && !onEvaluation(t, f));
+  const mine = studentFields(t).filter((f) => f.role === "student" && f.kind !== "date" && !onEvaluation(t, f));
   for (const q of t.questions) {
     const own = mine.filter((f) => f.questionKey === q.key && f.kind !== "signature");
     if (!own.length) continue;

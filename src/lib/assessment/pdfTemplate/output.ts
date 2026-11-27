@@ -8,6 +8,9 @@
  *  - the results sheet and the summary sheet: each attempt column from that attempt (task results, date, feedback, the outcome,
  *    the assessor's sign-off and the student's acknowledgement);
  *  - every other trainer field (Evidence Outcome rows, Appendix A, office use…): what the trainer filled in.
+ * ASM-DATES (owner 2026-11-27): dates are never typed. Every student date (date fields, declaration and signature dates, date of
+ * submission) is the attempt's submission date; every trainer date (results sheet, summary sheet, checklists, the assessor's
+ * signature date) is that attempt's marking date (markedOn); the acknowledgement date is when the student acknowledged.
  */
 import type { PdfTemplate, TemplateField } from "./model";
 import { isFilled, reviewName } from "./student";
@@ -19,6 +22,8 @@ export interface BundleResult { questionId: string; criterionId?: string | null;
 export interface BundleTask { taskId: string; outcome: "S" | "NYS" | null; feedback?: string; signedAt?: string | null }
 export interface BundleAttempt {
   id: string; attemptNo: number; state: string; submittedAt?: string | null; returnedAt?: string | null; finalisedAt?: string | null;
+  /** ASM-DATES: the trainer's marking / result date (YYYY-MM-DD, institution time zone) */
+  markedOn?: string | null;
   outcome?: "S" | "NYS" | null; overallFeedback?: string; rowVersion?: number;
   results: BundleResult[]; taskResults: BundleTask[]; assessorResponses?: { pdf?: Record<string, string>; pdfChoice?: Record<string, string>; [k: string]: unknown };
   snapshot: Snapshot | null; signoff: PdfSig | null; acknowledgement: PdfSig | null;
@@ -35,6 +40,14 @@ export const fmtDate = (iso: string | null | undefined) => {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-AU", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Australia/Melbourne" });
 };
+
+/** A stored day (YYYY-MM-DD) as printed; a timestamp as its Melbourne day. */
+export const fmtDay = (v: string | null | undefined) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v ?? "");
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtDate(v);
+};
+/** The attempt's submission date (its locked snapshot's, else the attempt's). */
+const submitted = (a: BundleAttempt | undefined) => fmtDate(a?.snapshot?.record?.submittedAt ?? a?.submittedAt);
 
 const resultOf = (a: BundleAttempt | undefined, key: string | null | undefined) => key ? a?.results.find((r) => r.questionId === key && !r.criterionId)?.outcome ?? null : null;
 const taskOf = (a: BundleAttempt | undefined, task: number | null | undefined) => task == null ? undefined : a?.taskResults.find((t) => t.taskId === String(task));
@@ -95,12 +108,13 @@ export function stampValues(b: PdfBundle, opts: { attemptNo?: number; trainer?: 
       const s = sigOf(f.slot ?? (by === "student" ? "pack" : "signoff"), f.attempt);
       v = s ? (s.signaturePng ? { kind: "png", png: s.signaturePng, name: s.signerName, by } : text(s.signerName, by)) : null;
     } else if (f.role === "student") {
-      if (f.step === "acknowledge") v = null;
+      if (f.step === "acknowledge") v = f.kind === "date" ? text(fmtDate(byNo(f.attempt)?.acknowledgement?.signedAt), "student") : null;
+      else if (f.kind === "date") v = text(submitted(cur), "student");
       else if ((f.kind === "yes_no" || f.kind === "rating") && f.group) v = snap?.answers.pdfChoice?.[f.group] === f.option ? tick("student") : null;
       else if (f.kind === "checkbox") v = snap?.answers.pdf?.[f.id] === "true" ? tick("student") : null;
       else v = text(snap?.answers.pdf?.[f.id], "student");
     } else if (f.role === "auto") {
-      v = autoValue(f, rec, cur, sigOf);
+      v = autoValue(f, rec, cur, byNo, withTrainer);
     } else if (withTrainer) {
       v = trainerValue(t, f, cur, byNo, decided, snap, kindOf(f.page));
     }
@@ -109,7 +123,8 @@ export function stampValues(b: PdfBundle, opts: { attemptNo?: number; trainer?: 
   return out;
 }
 
-function autoValue(f: TemplateField, rec: SnapshotRecord, cur: BundleAttempt | undefined, sigOf: (slot: string | null | undefined, attempt: number | null | undefined) => PdfSig | null): StampValue | null {
+function autoValue(f: TemplateField, rec: SnapshotRecord, cur: BundleAttempt | undefined, byNo: (k: number | null | undefined) => BundleAttempt | undefined, withTrainer: boolean): StampValue | null {
+  const marked = (a: BundleAttempt | undefined) => (withTrainer ? fmtDay(a?.markedOn) : "");
   switch (f.dataKey) {
     case "student_name": return text(rec.studentName, "record");
     case "student_id": return text(rec.studentRef, "record");
@@ -121,11 +136,13 @@ function autoValue(f: TemplateField, rec: SnapshotRecord, cur: BundleAttempt | u
     case "qualification_code": return text(rec.qualificationCode, "record");
     case "qualification_name": return text(rec.qualificationName, "record");
     case "start_date": return text(fmtDate(rec.startedAt), "record");
-    case "end_date": case "submission_date": return text(fmtDate(rec.submittedAt), "record");
-    case "signoff_date": return text(fmtDate(cur?.signoff?.signedAt), "record");
+    case "end_date": case "submission_date": return text(submitted(cur), "record");
+    case "signoff_date": return text(marked(cur), "record");
     case "acknowledged_date": return text(fmtDate(cur?.acknowledgement?.signedAt), "record");
-    case "signed_date": return text(fmtDate(sigOf(f.slot, f.attempt)?.signedAt), "record");
-    case "today": return text(fmtDate(new Date().toISOString()), "record");
+    // the declarations are dated with the submission, the assessor's signature with the marking date, the acknowledgement when made
+    case "signed_date": return text(f.slot === "ack" ? fmtDate(byNo(f.attempt)?.acknowledgement?.signedAt) : f.slot === "signoff" ? marked(byNo(f.attempt)) : submitted(byNo(f.attempt)), "record");
+    // a stored date, never the day the PDF is drawn: the marking date once there is one, else the submission date
+    case "today": return text(marked(cur) || submitted(cur), "record");
     case "submission_method": return f.option === "lms" ? tick("record") : null;
     default: return null;
   }
@@ -138,6 +155,8 @@ function trainerValue(t: PdfTemplate, f: TemplateField, cur: BundleAttempt | und
   const pick = (yes: boolean | null) => (yes === null ? null : (f.option === "yes") === yes ? tick("trainer") : null);
   const sOf = (o: "S" | "NYS" | null | undefined) => (o == null ? null : o === "S");
   const page = t.pages[f.page - 1];
+  // ASM-DATES: every trainer date (results sheet, summary sheet, checklists, office use) is the attempt's marking date
+  if (f.kind === "date") return text(fmtDay(byNo(f.attempt)?.markedOn), "trainer");
   // the question's own Satisfactory Yes / No and its Performance Outcome row
   if (f.kind === "yes_no" && f.group?.startsWith("q.")) return pick(sOf(resultOf(cur, f.questionKey ?? f.group.slice(2))));
   if (f.checklist === "performance" && f.questionKey) return pick(sOf(resultOf(cur, f.questionKey)));
@@ -145,14 +164,12 @@ function trainerValue(t: PdfTemplate, f: TemplateField, cur: BundleAttempt | und
   if (pageKind === "results_sheet") {
     const r = taskOf(byNo(f.attempt), page?.task);
     if (f.kind === "yes_no") return pick(sOf(r?.outcome));
-    if (f.kind === "date") return text(fmtDate(r?.signedAt), "trainer");
     if (f.kind === "text") return text(r?.feedback, "trainer");
   }
   if (pageKind === "summary") {
     const a = byNo(f.attempt);
     const task = /Task\s*-?\s*(\d+)/i.exec(f.label)?.[1];
     if (f.kind === "yes_no") return task ? pick(sOf(taskOf(a, Number(task))?.outcome)) : /final|competent|result/i.test(f.label) ? pick(sOf(a && (a.state === "returned" || a.state === "final") ? a.outcome : null)) : null;
-    if (f.kind === "date" && task) return text(fmtDate(taskOf(a, Number(task))?.signedAt), "trainer");
     if (f.kind === "text" && f.attempt == null && /feedback/i.test(f.label)) return text(decided?.overallFeedback, "trainer");
   }
   if ((f.kind === "yes_no" || f.kind === "rating") && f.group) return choice[f.group] === f.option ? tick("trainer") : null;

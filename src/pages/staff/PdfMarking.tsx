@@ -13,7 +13,7 @@ import AnswerReadOnly from "@/components/assessment/pdf/AnswerReadOnly";
 import { usePdf, type PdfHandle } from "@/components/assessment/pdf/pdfDoc";
 import { CARD, EYEBROW, FOCUS, SOFT_CARD, STEP_IN, StickySlot, useHeight } from "@/components/assessment/pdf/ui";
 import TaskProgress, { type ProgressTask } from "@/components/assessment/pdf/TaskProgress";
-import { answered, markingMissing, stampValues, type BundleAttempt, type PdfBundle, type StampValue } from "@/lib/assessment/pdfTemplate/output";
+import { answered, fmtDay, markingMissing, stampValues, type BundleAttempt, type PdfBundle, type StampValue } from "@/lib/assessment/pdfTemplate/output";
 import { reviewName } from "@/lib/assessment/pdfTemplate/student";
 
 /**
@@ -37,6 +37,9 @@ const PRIMARY = `${BTN} bg-primary-600 text-white hover:bg-primary-700`;
 const SECONDARY = `${BTN} border border-background-300 bg-white text-foreground-800 hover:border-primary-300`;
 const INPUT = "w-full rounded-md border border-background-300 bg-white px-2 py-1.5 text-sm focus:border-primary-400 focus:outline-none";
 
+/** A timestamp's day in the institution's time zone (YYYY-MM-DD). */
+const melbourneDay = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+
 export default function PdfMarking({ attemptId, initial }: { attemptId: string; initial: PdfBundle }) {
   const [bundle, setBundle] = useState<PdfBundle>(initial);
   const cur = bundle.attempts.find((a) => a.attemptNo === bundle.attemptNo) as BundleAttempt;
@@ -57,6 +60,11 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
   useEffect(() => { let off = false; void downloadWorkbook(t.pdf.path).then((b) => { if (!off) setOrig(b); }).catch(() => undefined); return () => { off = true; }; }, [t.pdf.path]);
   const { pdf: origPdf, error: origError } = usePdf(orig);
   const rowVersion = useRef(cur.rowVersion ?? 1);
+  // ASM-DATES: the marking / result date, from the student's attempt date up to today (refused otherwise by the database), today by default
+  const today = melbourneDay(new Date().toISOString());
+  const attemptDay = melbourneDay(cur.snapshot?.record?.submittedAt ?? cur.submittedAt ?? new Date().toISOString());
+  const [markedOn, setMarkedOn] = useState(cur.markedOn ?? (today < attemptDay ? attemptDay : today));
+  const markedRef = useRef(markedOn);
   const open = cur.state === "submitted" || cur.state === "marking";
   const editable = open && bundle.canAssess;
 
@@ -69,8 +77,8 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
   const live = useMemo<PdfBundle>(() => ({ ...bundle, attempts: bundle.attempts.map((a) => a.attemptNo !== bundle.attemptNo ? a : {
     ...a, results: Object.entries(marks).map(([questionId, m]) => ({ questionId, outcome: m.outcome, feedback: m.feedback })),
     taskResults: t.tasks.map((tk) => ({ taskId: tk.number, outcome: taskOutcome(tk.number), feedback: taskFeedback[tk.number] ?? "", signedAt: a.taskResults.find((r) => r.taskId === tk.number)?.signedAt ?? new Date().toISOString() })),
-    assessorResponses: { ...(a.assessorResponses ?? {}), ...assessor }, outcome: overall, overallFeedback,
-  }) }), [bundle, marks, taskFeedback, assessor, overall, overallFeedback]); // eslint-disable-line react-hooks/exhaustive-deps
+    assessorResponses: { ...(a.assessorResponses ?? {}), ...assessor }, outcome: overall, overallFeedback, markedOn: open ? markedOn : a.markedOn,
+  }) }), [bundle, marks, taskFeedback, assessor, overall, overallFeedback, markedOn]); // eslint-disable-line react-hooks/exhaustive-deps
   const values = useMemo(() => stampValues(live, { trainer: true }), [live]);
   function taskOutcome(task: string): "S" | "NYS" | null {
     const qs = t.questions.filter((q) => String(q.task) === task);
@@ -83,7 +91,7 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
   const send = useCallback(async ({ m, tf, as, of }: { m: Record<string, Mark>; tf: Record<string, string>; as: typeof assessor; of: string }) => {
     const out = await asmTrainer<{ rowVersion: number }>("mark_save", { id: attemptId, rowVersion: rowVersion.current,
       results: Object.entries(m).filter(([, x]) => x.outcome).map(([questionId, x]) => ({ questionId, outcome: x.outcome, feedback: x.feedback })),
-      taskResults: t.tasks.map((tk) => ({ taskId: tk.number, feedback: tf[tk.number] ?? "" })), assessorResponses: as, overallFeedback: of });
+      taskResults: t.tasks.map((tk) => ({ taskId: tk.number, feedback: tf[tk.number] ?? "" })), assessorResponses: as, overallFeedback: of, markedOn: markedRef.current });
     rowVersion.current = out.rowVersion;
   }, [attemptId, t.tasks]);
   const autosave = useAutosave(send, { debounceMs: 700, resumeOn: (resume) => {
@@ -120,7 +128,7 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
     if (!(await autosave.flush())) { setError("The marks are not saved yet (" + saveLabel(autosave.current(), "").replace("…", "") + "). Release once they are saved."); return; }
     setBusy("Saving the decision…");
     try {
-      const out = await asmTrainer<{ ok: boolean; errors?: { message: string }[]; nextAttemptId?: string | null }>("mark_return", { id: attemptId, rowVersion: rowVersion.current, outcome: overall, overallFeedback });
+      const out = await asmTrainer<{ ok: boolean; errors?: { message: string }[]; nextAttemptId?: string | null }>("mark_return", { id: attemptId, rowVersion: rowVersion.current, outcome: overall, overallFeedback, markedOn: markedRef.current });
       if (!out.ok) { setError((out.errors ?? []).map((e) => e.message).join(" ") || "Not saved."); return; }
       const b = await loadPdfAttempt(attemptId);
       if (b) {
@@ -211,6 +219,10 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
           <div className="flex gap-2">{(["S", "NYS"] as const).map((o) => <button key={o} type="button" disabled={!editable} onClick={() => setOverall(o)} aria-pressed={overall === o} data-testid={`overall-${o}`}
             className={`flex-1 rounded-lg border px-3 py-2 text-sm font-semibold ${overall === o ? (o === "S" ? "border-green-600 bg-green-600 text-white" : "border-amber-600 bg-amber-500 text-white") : "border-background-300 bg-white"}`}>{o === "S" ? "Competent" : "Not Yet Competent"}</button>)}</div>
           <textarea className={INPUT} rows={3} placeholder="Feedback to the student" value={overallFeedback} disabled={!editable} onChange={(e) => { setOverallFeedback(e.target.value); queue(marks, taskFeedback, assessor, e.target.value); }} data-testid="overall-feedback" />
+          <label className="block text-xs font-medium text-foreground-600">Marking date
+            <input type="date" className={`${INPUT} mt-1`} value={markedOn} min={attemptDay} max={today} disabled={!editable}
+              onChange={(e) => { const v = e.target.value; if (!v || v < attemptDay || v > today) return; setMarkedOn(v); markedRef.current = v; queue(); }} data-testid="marking-date" /></label>
+          <p className="text-2xs text-foreground-500" data-testid="marking-date-hint">From the student's attempt date ({fmtDay(attemptDay)}) to today. Printed on every trainer date of the workbook.</p>
           <SignOff attemptId={attemptId} signed={signoff} onSigned={reload} disabled={!bundle.canAssess || cur.state === "draft"} />
           {open ? <>
             {missing.length ? <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" data-testid="marking-missing">
@@ -287,7 +299,8 @@ function MissingList({ items }: { items: string[] }) {
 
 /** Marks that fill themselves (from the question marks and the task results): shown, never clicked. */
 function derived(f: TemplateField, pageKind: string | undefined) {
-  return (f.kind === "yes_no" && !!f.group?.startsWith("q.")) || (f.checklist === "performance" && !!f.questionKey) || pageKind === "results_sheet" || pageKind === "summary" || f.kind === "signature";
+  // ASM-DATES: a trainer date is the marking date (chosen beside the result), never typed on the page
+  return f.kind === "date" || (f.kind === "yes_no" && !!f.group?.startsWith("q.")) || (f.checklist === "performance" && !!f.questionKey) || pageKind === "results_sheet" || pageKind === "summary" || f.kind === "signature";
 }
 
 function PageOverlay({ page, fields, values, editable, derived: isDerived, onToggle, editing, onText, onDone, assessor }: {

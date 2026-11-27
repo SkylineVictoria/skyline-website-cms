@@ -515,8 +515,14 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await expect(page.locator("[data-pdf-page='38'] canvas")).toBeVisible({ timeout: 30_000 });
   await page.waitForTimeout(1500);
   await shot(page, "pdf-marking");
+  // ASM-DATES: the marking date: today by default, only from the student's attempt date up to today, stored with the release
+  const melbToday = sql("select (now() at time zone public.institution_tz())::date");
+  await expect(page.getByTestId("marking-date")).toHaveValue(melbToday);
+  await expect(page.getByTestId("marking-date")).toHaveAttribute("min", sql(`select (submitted_at at time zone public.institution_tz())::date from public.asm_attempts where id = '${attempt1}'`));
+  await expect(page.getByTestId("marking-date")).toHaveAttribute("max", melbToday);
   await page.getByTestId("decide").click();
   await expect(page.getByTestId("decided")).toContainText("Returned for resubmission", { timeout: 20_000 });
+  expect(sql(`select marked_on from public.asm_attempts where id = '${attempt1}'`)).toBe(melbToday);
   expect(sql(`select string_agg(attempt_no || ':' || state || ':' || coalesce(outcome, '-'), ',' order by attempt_no) from public.asm_attempts where assignment_id = '${cpcAssignment}'`)).toBe("1:returned:NYS,2:draft:-");
   expect(sql(`select string_agg(r.task_id || ':' || r.outcome, ',' order by r.task_id) from public.asm_task_results r join public.asm_attempts a on a.id = r.attempt_id where a.assignment_id = '${cpcAssignment}' and a.attempt_no = 1`)).toBe("1:S,2:NYS");
 

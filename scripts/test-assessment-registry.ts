@@ -258,8 +258,8 @@ void writeFileSync;
       const answers: Record<string, string> = { ...cpdf, [ct.fields.find((x) => x.questionKey === "1.1" && x.role === "student")!.id]: long };
       const snap = { answers: { pdf: answers, pdfChoice: {} }, signatures: {}, record: { studentName: "Sue Student", studentRef: "S1234567", unitCode: "CPCCPD2012", unitName: "Use painting and decorating tools and equipment", submittedAt: "2026-11-25T00:00:00Z", startedAt: "2026-11-20T00:00:00Z", trainers: ["Tara Trainer"] }, hash: "c".repeat(64) };
       const marks = ct.questions.map((q) => ({ questionId: q.key, outcome: (q.key === "2.3" ? "NYS" : "S") as "S" | "NYS", feedback: "" }));
-      const a1 = { id: "a1", attemptNo: 1, state: "returned", outcome: "NYS" as const, overallFeedback: "Redo Q3.", results: marks, taskResults: [{ taskId: "1", outcome: "S" as const, feedback: "Good", signedAt: "2026-11-26T00:00:00Z" }, { taskId: "2", outcome: "NYS" as const, feedback: "Q3", signedAt: "2026-11-26T00:00:00Z" }], assessorResponses: {}, snapshot: snap, signoff: null, acknowledgement: null, output: null };
-      const a2 = { ...a1, id: "a2", attemptNo: 2, state: "final", outcome: "S" as const, results: marks.map((m) => ({ ...m, outcome: "S" as const })), taskResults: a1.taskResults.map((x) => ({ ...x, outcome: "S" as const, signedAt: "2026-11-28T00:00:00Z" })) };
+      const a1 = { id: "a1", attemptNo: 1, state: "returned", markedOn: "2026-11-26", outcome: "NYS" as const, overallFeedback: "Redo Q3.", results: marks, taskResults: [{ taskId: "1", outcome: "S" as const, feedback: "Good", signedAt: "2026-11-26T00:00:00Z" }, { taskId: "2", outcome: "NYS" as const, feedback: "Q3", signedAt: "2026-11-26T00:00:00Z" }], assessorResponses: {}, snapshot: snap, signoff: null, acknowledgement: null, output: null };
+      const a2 = { ...a1, id: "a2", attemptNo: 2, state: "final", markedOn: "2026-11-28", outcome: "S" as const, results: marks.map((m) => ({ ...m, outcome: "S" as const })), taskResults: a1.taskResults.map((x) => ({ ...x, outcome: "S" as const, signedAt: "2026-11-28T00:00:00Z" })) };
       const bundle = { attemptId: "a2", attemptNo: 2, role: "trainer" as const, canAssess: true, template: ct, attempts: [a1, a2] };
       const values = stampValues(bundle);
       const pick = (pred: (x: typeof ct.fields[number]) => boolean) => ct.fields.filter(pred).filter((x) => values.get(x.id)?.kind === "tick").map((x) => `${x.option}@${x.attempt ?? "-"}`).join(" ");
@@ -280,7 +280,7 @@ void writeFileSync;
           && !/Continued from page/.test(await eText(14)) && /ASSESSMENT SUMMARY SHEET/.test(await eText(47)), [edoc.numPages]);
       }
       check("TPL output: the summary sheet carries the record (student name, ID, unit) and the original page is otherwise unchanged", /Sue Student/.test(await textOf(48)) && /S1234567/.test(await textOf(48)) && /ASSESSMENT SUMMARY SHEET/.test(await textOf(48)));
-      // the three declarations: each its own signature and its own date, printed on its own page (7, 19, 46)
+      // the three declarations: each its own signature, printed on its own page (7, 19, 46); ASM-DATES: each dated with the submission (25/11)
       const { deflateSync, crc32 } = await import("node:zlib");
       const chunk = (type: string, data: Buffer) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const body = Buffer.concat([Buffer.from(type, "latin1"), data]); const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body) >>> 0); return Buffer.concat([len, body, crc]); };
       const w = 60, h = 20; const raw = Buffer.alloc((w * 4 + 1) * h);
@@ -297,12 +297,12 @@ void writeFileSync;
       const plain = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(cpcPath)) }).promise;
       const imagesBefore = async (n: number) => { const ops = await (await plain.getPage(n)).getOperatorList(); return ops.fnArray.filter((op: number) => op === pdfjs.OPS.paintImageXObject).length; };
       const seen = [] as string[];
-      for (const [page, date] of [[7, "24/11/2026"], [19, "20/11/2026"], [46, "22/11/2026"]] as const) {
+      for (const page of [7, 19, 46]) {
         const dates = await datesOn(page); const added = (await imagesOn(page)) - (await imagesBefore(page));
         seen.push(`p${page}:${dates.join("+")}:${added}`);
       }
-      check("TPL output: the three declarations print their own signature and their own date (p7 the pack 24/11, p19 Task 1 20/11, p46 Task 2 22/11), never another's", seen.join(" ") === "p7:24/11/2026:1 p19:20/11/2026:1 p46:22/11/2026:1", seen);
-      // the final PDF of attempt 2 shows both attempts' columns: each task-result date under its own attempt column of the summary sheet
+      check("TPL output: the three declarations print their own signature (p7 the pack, p19 Task 1, p46 Task 2), ASM-DATES: each dated with the submission date 25/11, not when it was signed", seen.join(" ") === "p7:25/11/2026:1 p19:25/11/2026:1 p46:25/11/2026:1", seen);
+      // the final PDF of attempt 2 shows both attempts' columns: each attempt's marking date (ASM-DATES) under its own attempt column of the summary sheet
       const colsDoc = await pdfjs.getDocument({ data: stamped.bytes.slice() }).promise;
       const summary = await colsDoc.getPage(48);
       const items = (await summary.getTextContent()).items as { str: string; transform: number[] }[];
@@ -310,7 +310,7 @@ void writeFileSync;
       const c1 = head(/^1st Attempt/), c2 = head(/^2nd Attempt/), c3 = head(/^3rd Attempt/);
       const colOf = (x: number) => (x < (c1 + c2) / 2 ? 1 : x < (c2 + c3) / 2 ? 2 : 3);
       const placed = items.filter((x) => /^2[68]\/11\/2026$/.test(x.str)).map((x) => `${x.str.slice(0, 2)}@${colOf(x.transform[4])}`).sort().join(" ");
-      check("TPL output: the summary sheet carries attempt 1's task dates in the 1st Attempt column and attempt 2's in the 2nd", placed === "26@1 26@1 28@2 28@2", placed);
+      check("TPL output: the summary sheet carries attempt 1's marking date in the 1st Attempt column (both task dates and the assessor's signature date) and attempt 2's in the 2nd", placed === "26@1 26@1 26@1 28@2 28@2 28@2", placed);
       // the release waits for every question's mark and every checklist row the trainer ticks, each attempt on its own
       const { markingMissing } = await import("../src/lib/assessment/pdfTemplate/output");
       const none = markingMissing(ct, [], {});
@@ -566,6 +566,61 @@ void writeFileSync;
   check("TEXT-ONLY: the words always (QuestionText), the padded crop only for a scan, pictures as crops, Open full page kept",
     /const printed = !content\.blocks\.length;/.test(qv) && /printed \? <PdfCrop pdf=\{pdf\} rect=\{scanned\}/.test(qv) && /: <QuestionText content=\{content\} \/>/.test(qv)
     && /testId="question-figure"/.test(qv) && /data-testid="see-on-page"/.test(qv) && /Open full page/.test(qv));
+}
+
+// ASM-DATES (owner 2026-11-27): students never enter dates. On each of the three workbooks, for attempts 1 and 2: every student date
+// field and every declaration / submission date prints the attempt's submission date (a date typed into the answers is ignored),
+// every trainer date (results sheet, summary sheet, checklists, the assessor's signature date) the attempt's marking date, the
+// student's acknowledgement date the day it was made
+{
+  const { detectAny } = await import("../src/lib/assessment/pdfTemplate/generic");
+  const { pageModel } = await import("../src/lib/assessment/pdfTemplate/pageModel");
+  const { stampValues } = await import("../src/lib/assessment/pdfTemplate/output");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  type T = import("../src/lib/assessment/pdfTemplate/model").PdfTemplate;
+  type B = import("../src/lib/assessment/pdfTemplate/output").PdfBundle;
+  const home = `${process.env.USERPROFILE ?? process.env.HOME}/Downloads/`;
+  const find = (env: string | undefined, f: string) => [env, f, home + f].find((x) => x && existsSync(x));
+  const books: [string, string | undefined][] = [
+    ["CPCCPD2012", find(process.env.ASM_WORKBOOK_2, "CPC30620_CPCCPD2012_Use painting and decorating tools and equipment.pdf")],
+    ["RIICWD525E", workbookPath],
+    ["CPCCPD3035", find(process.env.ASM_WORKBOOK_3, "CPCCPD3035_Student Assessment Pack.pdf")],
+  ];
+  const SUB: Record<number, string> = { 1: "2026-11-03T01:00:00Z", 2: "2026-11-10T01:00:00Z" };
+  const MARK: Record<number, string> = { 1: "2026-11-05", 2: "2026-11-12" };
+  const ACK: Record<number, string> = { 1: "2026-11-06T01:00:00Z", 2: "2026-11-13T01:00:00Z" };
+  const day = (v: string) => { const d = /^(\d{4})-(\d{2})-(\d{2})/.exec(v)!; return `${d[3]}/${d[2]}/${d[1]}`; };
+  for (const [name, file] of books) {
+    if (!file) { console.log(`SKIP - DATES ${name} (file not found)`); continue; }
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), verbosity: 0, fontExtraProperties: true }).promise;
+    const models = [];
+    for (let n = 1; n <= doc.numPages; n++) models.push(await pageModel(pdfjs as never, await doc.getPage(n) as never, n));
+    const t: T = detectAny(models, { path: "x/y.pdf", sha256: "d".repeat(64) }, "2026-11-27T00:00:00Z").template;
+    const typed = Object.fromEntries(t.fields.filter((f) => f.role === "student" && f.kind === "date").map((f) => [f.id, "01/01/1999"]));
+    const sig = (at: string) => ({ signerName: "X", signaturePng: null, signedAt: at });
+    const attempt = (n: number) => ({ id: `a${n}`, attemptNo: n, state: n === 1 ? "returned" : "final", submittedAt: SUB[n], markedOn: MARK[n], outcome: (n === 1 ? "NYS" : "S") as "S" | "NYS",
+      results: [], taskResults: [], snapshot: { answers: { pdf: typed, pdfChoice: {} }, signatures: { pack: sig("2026-11-01T01:00:00Z"), "decl:1": sig("2026-11-01T01:00:00Z"), "decl:2": sig("2026-11-01T01:00:00Z") }, record: { submittedAt: SUB[n] }, hash: "h" },
+      signoff: sig("2026-11-30T01:00:00Z"), acknowledgement: sig(ACK[n]), output: null });
+    const bundle: B = { attemptId: "a2", attemptNo: 2, role: "trainer", canAssess: true, template: t, attempts: [attempt(1), attempt(2)] };
+    for (const n of [1, 2]) {
+      const v = stampValues(bundle, { attemptNo: n, trainer: true });
+      const txt = (id: string) => { const x = v.get(id); return x?.kind === "text" ? x.text : ""; };
+      const bad: string[] = []; let student = 0; let trainer = 0;
+      for (const f of t.fields) {
+        const k = f.attempt ?? n;
+        let want: string | null = null;
+        if (f.role === "student" && f.kind === "date") { want = f.step === "acknowledge" ? (ACK[k] ? day(new Date(new Date(ACK[k]).getTime() + 11 * 3600e3).toISOString()) : null) : day(new Date(new Date(SUB[n]).getTime() + 11 * 3600e3).toISOString()); student++; }
+        else if (f.role === "auto" && (f.dataKey === "submission_date" || f.dataKey === "end_date" || (f.dataKey === "signed_date" && f.slot !== "ack" && f.slot !== "signoff"))) {
+          want = SUB[k] ? day(new Date(new Date(SUB[k]).getTime() + 11 * 3600e3).toISOString()) : null; student++;
+        } else if (f.role === "auto" && f.dataKey === "signed_date" && f.slot === "ack") want = ACK[k] ? day(new Date(new Date(ACK[k]).getTime() + 11 * 3600e3).toISOString()) : null;
+        else if ((f.role === "trainer" && f.kind === "date") || (f.role === "auto" && (f.dataKey === "signoff_date" || (f.dataKey === "signed_date" && f.slot === "signoff")))) { want = MARK[k] ? day(MARK[k]) : null; trainer++; }
+        else continue;
+        if (want !== null && txt(f.id) !== want) bad.push(`p${f.page} ${f.role}/${f.kind}/${f.dataKey ?? ""}/${f.slot ?? ""}#${f.attempt ?? ""} "${f.label}": ${txt(f.id) || "(empty)"} instead of ${want}`);
+      }
+      check(`DATES ${name} attempt ${n}: ${student} student / declaration dates = the submission date (typed dates ignored), ${trainer} trainer dates = the marking date, the acknowledgement its own day`,
+        bad.length === 0 && student > 0 && trainer > 0, bad.slice(0, 6));
+    }
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

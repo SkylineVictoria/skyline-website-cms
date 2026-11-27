@@ -313,8 +313,10 @@ function StepView({ step, template, pdf, a, record, recordValue, setValue, setCh
                 <input type="radio" className="h-4 w-4 accent-primary-600" name={f.group!} checked={on} onChange={() => setChoice(f.group!, o.option ?? "")} />{o.option}</label>; })}</div></fieldset>;
           }
           if (f.kind === "checkbox") return <label key={f.id} className="flex min-h-[44px] items-center gap-3 text-base"><input type="checkbox" className="h-5 w-5 accent-primary-600" checked={fieldValue(a, f) === "true"} onChange={(e) => setValue(f, e.target.checked ? "true" : "")} />{f.label}</label>;
+          // ASM-DATES: students never enter dates: a date field is printed with the submission date
+          if (f.kind === "date") return <AutoDate key={f.id} f={f} />;
           return <div key={f.id} data-field={f.id}><label className="block text-base font-semibold text-foreground-900" htmlFor={`f-${f.id}`}>{f.label}{f.required ? <span className="ml-1 text-red-700" aria-hidden="true">*</span> : null}</label>
-            <input id={`f-${f.id}`} type={f.kind === "date" ? "date" : "text"} className={`${INPUT} mt-1.5`} value={fieldValue(a, f)} onChange={(e) => setValue(f, e.target.value)} data-testid="answer-line" /></div>;
+            <input id={`f-${f.id}`} type="text" className={`${INPUT} mt-1.5`} value={fieldValue(a, f)} onChange={(e) => setValue(f, e.target.value)} data-testid="answer-line" /></div>;
         })}
         {!inputs.length ? <div className="flex items-start gap-3 rounded-xl bg-background-50 p-4" data-testid="nothing-to-answer">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white text-xl text-primary-600 ring-1 ring-foreground-950/[0.06]"><i className="ri-book-read-line" aria-hidden="true" /></span>
@@ -437,14 +439,21 @@ function DeclSign({ slot, signed, onSign, where }: { slot: string; signed: PdfSi
   </div>;
 }
 
+/** ASM-DATES: a student date field is filled in by the system with the submission date (never typed, no date picker). */
+function AutoDate({ f }: { f: TemplateField }) {
+  return <div data-field={f.id} data-testid="auto-date"><p className="block text-base font-semibold text-foreground-900">{f.label}</p>
+    <p className="mt-1.5 flex items-center gap-2 rounded-lg bg-background-100 px-3 py-2.5 text-sm text-foreground-700"><i className="ri-calendar-check-line text-base text-foreground-500" aria-hidden="true" />Filled in with your submission date</p></div>;
+}
+
 /** A table: a grid on wide screens; on a phone each row is a card with one labelled input per column (the row's printed name as its title). */
 function TableInput({ table, heading, a, setValue, boxesOf }: { table: Table; heading: string | null; a: PdfAnswers; setValue: (f: TemplateField, v: string) => void; boxesOf: (fs: TemplateField[]) => FitBox[] }) {
   const cell = (f: TemplateField | null, label: string, rowLabel: string) => {
     if (!f) return null;
+    if (f.kind === "date") return <span className="block px-1 py-2 text-sm text-foreground-600" data-testid="auto-date" data-field={f.id}>Your submission date</span>;
     const v = fieldValue(a, f);
     const tall = (boxesOf([f])[0]?.hPt ?? 0) > 26;
     const props = { value: v, onChange: (e: { target: { value: string } }) => setValue(f, e.target.value), className: `${INPUT} min-w-0 py-2 leading-6`, "aria-label": `${rowLabel} · ${label}`, "data-testid": "table-cell" };
-    return <>{tall ? <GrowArea rows={2} {...props} /> : <input type={f.kind === "date" ? "date" : "text"} {...props} />}<FitHint text={v} boxes={boxesOf([f])} /></>;
+    return <>{tall ? <GrowArea rows={2} {...props} /> : <input type="text" {...props} />}<FitHint text={v} boxes={boxesOf([f])} /></>;
   };
   return <div data-testid="answer-table" data-rows={table.rows.length}>
     {heading ? <p className="mb-2 text-base font-semibold text-foreground-900" data-testid="table-heading">{heading}</p> : null}

@@ -4,6 +4,7 @@ import { HANDOFF_STATE_LABEL } from "@/pages/agency/lib/handoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import StudentWithdraw from "@/pages/agency/components/StudentWithdraw";
+import DeleteDraftButton from "@/pages/agency/components/DeleteDraftButton";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
 import { Modal } from "@/pages/admin/components/ui";
@@ -350,7 +351,9 @@ export default function ApplicationDetailPage() {
             <span className="rounded-full bg-accent-100 px-2.5 py-1 text-2xs font-semibold uppercase text-accent-900">Test data</span>
           ) : null}
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            {role === "student" ? <StudentWithdraw applicationId={application.id} status={application.status} onDone={(m) => { toast.show(m); void load(); }} /> : null}
+            {role === "student" && application.status === "draft" && !application.submittedAt
+              ? <DeleteDraftButton applicationId={application.id} onDeleted={(m) => { closeWizard(); toast.show(m); navigate(paths.list, { replace: true }); }} />
+              : role === "student" ? <StudentWithdraw applicationId={application.id} status={application.status} onDone={(m) => { toast.show(m); void load(); }} /> : null}
             {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="student" refId={application.studentId} name={application.studentName || "the student"} label="Student" size="sm" variant="ghost" /> : null}
             {isSlit && paths.area !== "portal" ? <MessagePersonButton kind="agent" refId={application.agentId} name={application.agentName || "the agent"} label="Agent" size="sm" variant="ghost" /> : null}

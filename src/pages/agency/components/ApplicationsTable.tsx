@@ -143,9 +143,9 @@ export default function ApplicationsTable({
   const toast = useToast();
   // Statuses changed here, shown at once and undone if the database refuses the change.
   const [statusOverride, setStatusOverride] = useState<Record<string, string>>({});
-  // DRAFT-DELETE (owner 2026-11-27): agents, business admin agents and SLIT admins delete a draft from the list (drafts only;
-  // portal-application-delete checks the caller may edit it). A student withdraws instead.
-  const canDeleteDrafts = portal ? portal.role !== "student" : true;
+  // DRAFT-DELETE (owner 2026-11-27): students, agents, business admin agents and SLIT admins delete a draft from the list (drafts
+  // only; portal-application-delete checks the caller may edit it). A submitted application is withdrawn instead.
+  const canDeleteDrafts = true; // students delete their own drafts too (owner 2026-11-27)
   const [deleted, setDeleted] = useState<Set<string>>(() => new Set());
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);

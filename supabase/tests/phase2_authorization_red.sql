@@ -781,7 +781,8 @@ insert into public.enrollment_applications(id,agency_id,tenant_id,status,student
 -- fixture only: the statuses these applications need (submit / enrolment guards need full AVETMISS and offer records since 20261126124153; paused for these rows)
 set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '46000000-0000-0000-0000-000000000001' then 'enrolled' when '46000000-0000-0000-0000-000000000002' then 'coe_issued' when '46000000-0000-0000-0000-000000000003' then 'coe_issued' end where id in ('46000000-0000-0000-0000-000000000001','46000000-0000-0000-0000-000000000002','46000000-0000-0000-0000-000000000003'); set local session_replication_role = origin;
 update public.enrollment_applications set status='enrolled' where id='45000000-0000-0000-0000-0000000000a1';
-update public.enrollment_applications set student_name='Same Person', data='{"values":{"dob":"2000-01-02"}}' where id in ('45000000-0000-0000-0000-000000000001','45000000-0000-0000-0000-000000000004');
+-- fixture only: answers on an already signed application (SIGNED-APPLICATION refuses them since 20261128015517)
+set local session_replication_role = replica; update public.enrollment_applications set student_name='Same Person', data='{"values":{"dob":"2000-01-02"}}' where id in ('45000000-0000-0000-0000-000000000001','45000000-0000-0000-0000-000000000004'); set local session_replication_role = origin;
 update public.enrollment_registrations set lodged_at=now()-interval '20 days' where id=(select id from p0801 where n=2);
 set local request.jwt.claim.sub='a0000000-0000-0000-0000-000000000003';
 set local request.headers='{"x-tenant-domain":"b.p06.example.test"}';

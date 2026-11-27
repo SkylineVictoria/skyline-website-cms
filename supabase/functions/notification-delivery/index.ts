@@ -1,3 +1,4 @@
+import type { SignedParts } from "../_shared/notification/signed-page.ts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
@@ -69,7 +70,15 @@ async function worker() {
         host: typeof info.host === "string" ? info.host : null,
         recipientKind: info.recipientKind === "student" || info.recipientKind === "internal" ? info.recipientKind : "portal",
         branding: info.branding && typeof info.branding === "object" ? { logo: String((info.branding as Record<string, unknown>).logo ?? ""), primaryColor: typeof (info.branding as Record<string, unknown>).primaryColor === "string" ? String((info.branding as Record<string, unknown>).primaryColor) : null, timezone: typeof (info.branding as Record<string, unknown>).timezone === "string" ? String((info.branding as Record<string, unknown>).timezone) : null } : undefined,
-        documents: Array.isArray(info.documents) ? (info.documents as Record<string, unknown>[]).map((x) => ({ category: String(x.category ?? ""), filename: String(x.filename ?? ""), bucket: String(x.bucket ?? ""), path: String(x.path ?? "") })).filter((x) => x.filename) : [] };
+        documents: Array.isArray(info.documents) ? (info.documents as Record<string, unknown>[]).map((x) => ({ category: String(x.category ?? ""), filename: String(x.filename ?? ""), bucket: String(x.bucket ?? ""), path: String(x.path ?? "") })).filter((x) => x.filename) : [] ,
+        // SIGNED-APPLICATION: what was signed (no signing certificate details are returned) and whether the portal copy is still to be stored.
+        signed: info.signed && typeof info.signed === "object" ? info.signed as SignedParts : null,
+        studentName: typeof info.studentName === "string" ? info.studentName : "",
+        storeCopy: info.storeCopy === true };
+    },
+    storeSignedCopy: async (d, contentBase64) => {
+      const { error } = await admin.rpc("notification_store_signed_copy", { p_id: d.id, p_lease: d.leaseToken, p_content: contentBase64 });
+      if (error) throw new Error("signed copy not stored");
     },
     signDocument: async (bucket, path, seconds) => {
       if (bucket !== "enrollment-documents") return null; // only the private application-document bucket is ever linked

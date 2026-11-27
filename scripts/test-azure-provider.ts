@@ -879,6 +879,36 @@ test("pdf: attach mode adds one PDF and says so; link mode sends only the sign-i
   assert.deepEqual([other.attachments, other.textBody, asked], [undefined, "Application SK-2026-0001 has been submitted.", 0]);
 });
 
+// SIGNED-APPLICATION (owner 2026-11-27): the submission email carries the signed application (form + signature page); the first send stores
+// the portal copy once; no signing certificate detail (IP, user agent, hash) is printed.
+test("pdf: a signed submission attaches the signed application and stores the portal copy once, with no certificate details", async () => {
+  const signature = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  const signed = {
+    signatures: [{ role: "student" as const, name: "Ada Lovelace", png: signature, signedAt: "2026-11-27T15:06:48Z" }],
+    declarations: [{ key: "esos_written_agreement", title: "Written agreement (ESOS)", body: "I agree to the written agreement as shown.", role: "student", name: "Ada Lovelace", at: "2026-11-27T15:06:47Z" }],
+    guardian: null,
+  };
+  const stored: string[] = [];
+  const port = { ...fakePort([]).port, submission: async () => info({ signed, studentName: "Ada Lovelace", storeCopy: true }), storeSignedCopy: async (_d: ClaimedDelivery, b64: string) => { stored.push(b64); } };
+  const out = await composeBody(port, submitted());
+  assert.equal(out.attachments?.length, 1);
+  assert.equal(out.attachments?.[0].name, "signed-application-SK-2026-0001.pdf");
+  assert.match(out.textBody, /signed application is attached as a PDF/);
+  assert.equal(stored.length, 1, "the portal copy is stored by this send");
+  const plain = await composeBody({ ...fakePort([]).port, submission: async () => info() }, submitted());
+  const pages = async (b64: string) => (await PdfLib.PDFDocument.load(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))).getPageCount();
+  assert.equal(await pages(out.attachments![0].contentBase64), (await pages(plain.attachments![0].contentBase64)) + 1, "one signature page after the form");
+  assert.ok(atob(stored[0]).startsWith("%PDF-1."));
+  for (const secret of ["203.0.113", "user agent", "Mozilla", "sha256"]) assert.ok(!atob(out.attachments![0].contentBase64).includes(secret), secret);
+  // Already stored: later sends do not store it again; link mode still stores it when it is missing.
+  stored.length = 0;
+  await composeBody({ ...port, submission: async () => info({ signed, storeCopy: false }) }, submitted());
+  assert.equal(stored.length, 0);
+  const linkOnly = await composeBody({ ...port, submission: async () => info({ mode: "link", signed, storeCopy: true }) }, submitted());
+  assert.equal(linkOnly.attachments, undefined);
+  assert.equal(stored.length, 1, "link mode: the copy is still made for the portal");
+});
+
 test("pdf: a failing lookup or a PDF that cannot be built never blocks the email and falls back to the link or the plain body", async () => {
   const lookupFails = await composeBody({ ...fakePort([]).port, submission: async () => { throw new Error("rpc"); } }, submitted());
   assert.deepEqual([lookupFails.attachments, lookupFails.textBody], [undefined, "Application SK-2026-0001 has been submitted."]);

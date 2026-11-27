@@ -1186,5 +1186,21 @@
       "b5eae573b603d45c2f4886845521d3690774ec23c3443f369a554f541dd275f3",
       "db25ffa39649143a4c297819b738eabb6ca005bbc846cbcd011757b195d4a5f8"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "signed-application-db",
+    "reason": "2026-11-27 owner (SIGNED-APPLICATION): the database side of the signed application: answers locked once signed, the latest submission and its signed copy, what the email worker reads and stores. Fixed owner rules, not business settings.",
+    "fingerprints": [
+      "02f51f331176e4876348b29d2c8e1f63e6f6e4a8cc2d762c4572a31afcc570af",
+      "0e69014139b98e307cd67f70ecab3248bf0c1c8e8425a9d91fe6708d1ca0c943",
+      "308e2d222ba6f047d01055952080c2f4acf107e10de039599aca9bbb5c0ed47e",
+      "634f461b1378a4a4ab7870333517806640c0a725a63b97c924b918f7e324e4bc",
+      "7414c033f0f10b0d83e6ef92dce07de98f62b561af2b63feeedaa91d0de7dee0",
+      "7ac5b60a4134c0c3337ebe97ac18135b732da4494641fb40a0e49770ac5bc0e1",
+      "7f79ba543c79a5c2f280eda3ec7462a0e046cbed64ca37db605d703895b9bd9a",
+      "8ee1b9c4ea11c1600b19176925e0fb85d3a182cd9ad81404a196e2b2a41d22c0",
+      "af6ad94b6d3f6a6331ca04467d437531b2e8399a159970190aadd6a84476c6b3"
+    ]
   }
 ]

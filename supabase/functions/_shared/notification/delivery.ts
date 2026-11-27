@@ -4,6 +4,7 @@
 
 // The PDF builder (pdf-lib and the embedded fonts) is loaded only when an application_submitted email actually attaches a PDF, so the
 // workers that share this module (HR mail, staff functions) boot without it.
+import { hasSignedParts, type SignedParts } from "./signed-page.ts";
 import { MAX_ATTACHMENT_BYTES, attachmentFileName, toBase64 } from "./attachment.ts";
 import { loadLogo } from "./pdf-logo.ts";
 import type { PdfDocumentLink } from "./submission-pdf.ts";
@@ -211,6 +212,11 @@ export interface SubmissionInfo {
   recipientKind?: "portal" | "internal" | "student";
   branding?: { logo?: string; primaryColor?: string | null; timezone?: string | null };
   documents?: { category: string; filename: string; bucket: string; path: string }[];
+  /** SIGNED-APPLICATION: what the student (and a parent / guardian) signed; never any signing certificate detail. */
+  signed?: SignedParts | null;
+  studentName?: string;
+  /** True while the portal has no stored signed copy of this submission yet: this send makes and stores it. */
+  storeCopy?: boolean;
 }
 export const PDF_LINK_SECONDS = 7 * 24 * 60 * 60;
 /**
@@ -237,6 +243,8 @@ export interface DeliveryPort {
   coeDocument?(delivery: ClaimedDelivery): Promise<CoeDocumentInfo | null>;
   /** Optional: the offer letter PDF for offer_letter_issued deliveries. Throws when it cannot be read; null when there is none. */
   offerLetter?(delivery: ClaimedDelivery): Promise<{ fileName: string; sizeBytes: number; contentBase64: string } | null>;
+  /** Optional: stores the signed application PDF in the portal (once per submission, lease-checked in the database). */
+  storeSignedCopy?(delivery: ClaimedDelivery, contentBase64: string): Promise<void>;
   record(delivery: ClaimedDelivery, outcome: "accepted" | "failed" | "unknown", messageId: string | null, errorCode: string | null, retry: boolean, delaySeconds: number): Promise<boolean>;
 }
 export interface DispatchSummary { accepted: number; retried: number; failed: number; unknown: number; stale: number }
@@ -268,7 +276,8 @@ export async function composeBody(port: DeliveryPort, delivery: ClaimedDelivery)
   try { info = await port.submission(delivery); } catch { return { textBody: delivery.body }; }
   if (!info) return { textBody: delivery.body };
   const withLink = () => ({ textBody: info!.link ? `${delivery.body}\n\nOpen the application (sign-in required): ${info!.link}` : delivery.body });
-  if (info.mode !== "attach" || info.snapshot === null || info.snapshot === undefined) return withLink();
+  if (info.snapshot === null || info.snapshot === undefined) return withLink();
+  const signed = hasSignedParts(info.signed) ? info.signed : null;
   try {
     const { buildSubmissionPdf, formatDateTime } = await import("./submission-pdf.ts");
     const now = port.now?.() ?? new Date();
@@ -277,22 +286,37 @@ export async function composeBody(port: DeliveryPort, delivery: ClaimedDelivery)
     let logo: ImageData | null = null;
     if (!info.branding) console.warn("[pdf-logo] logo not embedded: the submission read returned no branding (migration 102 not applied?)");
     try { logo = info.branding?.logo ? await (port.fetchLogo ? port.fetchLogo(info.branding.logo, base) : loadLogo(info.branding.logo, base)) : null; } catch { logo = null; }
+    // The form, then (when signed) the signature page: the same document for the email and the portal copy.
+    const build = async (documents: PdfDocumentLink[], portalLink: string | undefined) => {
+      const form = await buildSubmissionPdf({
+        reference: info!.reference, institution: info!.institution, version: info!.version, submittedAt: info!.submittedAt, snapshot: info!.snapshot,
+        branding: { primary: info!.branding?.primaryColor, timezone, logo },
+        documents, portalLink,
+        linksExpireOn: documents.some((d) => d.url) ? formatDateTime(new Date(now.getTime() + linkSeconds * 1000), timezone).slice(0, 10) : undefined,
+        now,
+      });
+      if (!signed) return form;
+      const { appendSignedPage } = await import("./signed-page.ts");
+      return await appendSignedPage(form, signed, { reference: info!.reference, studentName: info!.studentName || "", timezone: timezone ?? null });
+    };
+    // SIGNED-APPLICATION: the portal keeps one signed copy of each submission (file names only, no links), stored by the first send.
+    if (signed && info.storeCopy && port.storeSignedCopy) {
+      try {
+        const copy = await build((info.documents ?? []).map((d) => ({ category: d.category, fileName: d.filename, url: null })), undefined);
+        await port.storeSignedCopy(delivery, toBase64(copy));
+      } catch (error) { console.warn("[signed-copy] not stored:", error instanceof Error ? error.message : "error"); }
+    }
+    if (info.mode !== "attach") return withLink();
     const documents: PdfDocumentLink[] = [];
     for (const d of info.documents ?? []) {
       let url: string | null = null;
       try { url = port.signDocument && info.recipientKind !== "student" && d.bucket && d.path ? await port.signDocument(d.bucket, d.path, linkSeconds) : null; } catch { url = null; }
       documents.push({ category: d.category, fileName: d.filename, url });
     }
-    const pdf = await buildSubmissionPdf({
-      reference: info.reference, institution: info.institution, version: info.version, submittedAt: info.submittedAt, snapshot: info.snapshot,
-      branding: { primary: info.branding?.primaryColor, timezone, logo },
-      documents,
-      portalLink: info.link || undefined,
-      linksExpireOn: documents.some((d) => d.url) ? formatDateTime(new Date(now.getTime() + linkSeconds * 1000), timezone).slice(0, 10) : undefined,
-      now,
-    });
+    const pdf = await build(documents, info.link || undefined);
     if (pdf.length > attachMaxBytes) return withLink();
-    return { textBody: `${delivery.body}\n\nThe submitted application is attached as a PDF.`, attachments: [{ name: attachmentFileName(info.reference), contentType: "application/pdf", contentBase64: toBase64(pdf) }] };
+    return { textBody: `${delivery.body}\n\nThe ${signed ? "signed application" : "submitted application"} is attached as a PDF.`,
+      attachments: [{ name: signed ? attachmentFileName(info.reference).replace(/^application-/, "signed-application-") : attachmentFileName(info.reference), contentType: "application/pdf", contentBase64: toBase64(pdf) }] };
   } catch {
     return withLink();
   }

@@ -61,7 +61,7 @@ set local request.jwt.claims='{"email":"positive-admin@example.test"}';
 select is(public.portal_is_slit_admin(),false,'matching email cannot grant another UID administrator access');
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select is((select count(*)::int from public.agencies where id in ('13000000-0000-0000-0000-000000000001','13000000-0000-0000-0000-000000000002')),2,'SLIT admin agency visibility preserved');
-select lives_ok($$select public.portal_review_draft_v2('43000000-0000-0000-0000-000000000001',pg_temp.dv('43000000-0000-0000-0000-000000000001'),'{"first_name":"Admin correction"}')$$,'SLIT admin review correction preserved');
+select throws_ok($$select public.portal_review_draft_v2('43000000-0000-0000-0000-000000000001',pg_temp.dv('43000000-0000-0000-0000-000000000001'),'{"first_name":"Admin correction"}')$$,'42501',null,'SIGNED-APPLICATION: a SLIT admin cannot change a signed (Submitted) application either');
 select lives_ok($$insert into public.enrollment_application_messages(application_id,author,body,visibility) values('43000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002','Private','internal')$$,'SLIT admin internal note preserved');
 select is((select count(*)::int from public.enrollment_application_messages where visibility='internal' and application_id='43000000-0000-0000-0000-000000000001'),1,'SLIT admin internal-note visibility preserved');
 -- Migration 86: agency invitations and scoped user administration (actor-parameterised, as the edge function calls them).
@@ -242,7 +242,8 @@ set local session_replication_role = replica; update public.enrollment_applicati
 -- command; the applicant resubmits and accepts; staff marking an offer accepted, rejecting or asking for action add a note.
 update public.enrollment_applications set created_by='23000000-0000-0000-0000-000000000030' where id='43000000-0000-0000-0000-000000000030';
 update public.enrollment_applications set student_email='direct.student@example.test', student_name='Direct Student' where id='43000000-0000-0000-0000-000000000036';
-update public.enrollment_applications set student_email='mismatch@example.test', data='{"values":{"declaration_name":"Asha Patel","digital_signature":"Someone Else"}}' where id='43000000-0000-0000-0000-000000000037';
+-- fixture only: answers on an already signed application (SIGNED-APPLICATION refuses them since 20261128015517)
+set local session_replication_role = replica; update public.enrollment_applications set student_email='mismatch@example.test', data='{"values":{"declaration_name":"Asha Patel","digital_signature":"Someone Else"}}' where id='43000000-0000-0000-0000-000000000037'; set local session_replication_role = origin;
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data) values
  ('43000000-0000-0000-0000-000000000038','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
  ('43000000-0000-0000-0000-000000000039','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}');

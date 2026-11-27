@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(112);
+select plan(125);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -350,23 +350,34 @@ reset role;
 insert into public.enrollment_applications(id, agency_id, status, data) values ('e5100000-0000-0000-0000-0000000000a9', 'a5100000-0000-0000-0000-000000000001', 'draft', '{}');
 select throws_ok($$update public.enrollment_applications set status = 'submitted' where id = 'e5100000-0000-0000-0000-0000000000a9'$$, '42501', null, 'no writer (not even the database owner) makes an unsigned draft Submitted');
 
--- ADMIN-EDIT-LOG (20261127190517): a SLIT admin corrects a Submitted application; every changed answer is logged (who, when, old, new)
+-- SIGNED-APPLICATION (20261128015517): once signed nobody changes the application (SLIT admins included); the student record still changes.
 reset role;
 set local session_replication_role = replica; update public.enrollment_applications set status = 'submitted' where id = 'e5100000-0000-0000-0000-000000000002'; set local session_replication_role = origin;
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
 select throws_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0411000000"}}')$$, '42501', null, 'the agent cannot change a Submitted application');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
-select lives_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0499999999"}}')$$, 'a SLIT admin corrects a Submitted application');
+select throws_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0499999999"}}')$$, '42501',
+  'This application is signed, so it cannot be changed. To correct it, send it back with Action required: the student corrects it and signs again.', 'a SLIT admin cannot change a signed application either');
 reset role;
-select is((select c.source || '|' || c.field || '|' || coalesce(c.old_value #>> '{}', '') || '|' || (c.new_value #>> '{}') || '|' || c.changed_by_name || '|' || c.changed_by::text
-  from public.application_admin_changes c where c.application_id = 'e5100000-0000-0000-0000-000000000002' and c.field = 'mobile'),
-  'student|mobile|0455555555|0499999999|Staff Signs|b5100000-0000-0000-0000-000000000004', 'the change is logged: the field, the old and new value, who');
-select ok((select bool_and(changed_at is not null) and count(*) >= 1 from public.application_admin_changes where application_id = 'e5100000-0000-0000-0000-000000000002'), 'with when');
-select throws_ok($$delete from public.application_admin_changes where application_id = 'e5100000-0000-0000-0000-000000000002'$$, '42501', null, 'the log cannot be changed or deleted');
+select throws_ok($$update public.enrollment_applications set data = jsonb_set(data, '{values,preferred_intake}', '"Jan 2030"') where id = 'e5100000-0000-0000-0000-000000000002'$$, '42501', null,
+  'no writer (not even the database owner) changes a signed application''s answers');
+-- Personal answers live on the student record (STUDENT-DETAILS-ON-STUDENT): a write of one goes there, the student's data, and is allowed.
+update public.enrollment_applications set data = jsonb_set(data, '{values,mobile}', '"0400000001"') where id = 'e5100000-0000-0000-0000-000000000002';
+select is((select s.details->>'mobile' || '|' || coalesce(a.data->'values'->>'mobile', '-') from public.enrollment_applications a join public.enrollment_students s on s.id = a.student_id
+  where a.id = 'e5100000-0000-0000-0000-000000000002'), '0400000001|-', 'a personal detail is the student''s data: it changes on the student record, not on the signed application');
+select lives_ok($$update public.enrollment_students set details = coalesce(details, '{}') || '{"mobile_note": "changed after signing"}' where id = (select student_id from public.enrollment_applications where id = 'e5100000-0000-0000-0000-000000000002')$$,
+  'the student record still changes');
+select lives_ok($$update public.enrollment_applications set status = 'under_review' where id = 'e5100000-0000-0000-0000-000000000002'$$, 'status moves still work');
+-- What the Review & signature card shows: the stored declaration wording, no signing certificate details.
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
-select is(jsonb_array_length(public.application_admin_changes_list('e5100000-0000-0000-0000-000000000002')) >= 1, true, 'SLIT admins read the log');
+select ok(jsonb_typeof(public.application_signed_copy('e5100000-0000-0000-0000-000000000002')->'declarations') = 'array', 'SLIT admins read the signed copy');
+select ok(not ((public.application_signed_copy('e5100000-0000-0000-0000-000000000002') - 'submission')::text ~ '"(ip|userAgent|user_agent|hash|textHash|text_hash)":')
+  and not coalesce(public.application_signed_copy('e5100000-0000-0000-0000-000000000002') -> 'submission' -> 'snapshot' -> 'submission' ?| array['actor', 'consentIds', 'ip', 'userAgent'], false),
+  'no IP, user agent or hash in the signed copy');
+select ok(coalesce((select bool_and(d->>'body' is not null and length(d->>'body') > 20) from jsonb_array_elements(public.application_signed_copy('e5100000-0000-0000-0000-000000000002')->'declarations') d), false),
+  'each declaration comes with the wording the student agreed to');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
-select throws_ok($$select public.application_admin_changes_list('e5100000-0000-0000-0000-000000000002')$$, '42501', null, 'an agent cannot read it');
+select ok(jsonb_typeof(public.application_signed_copy('e5100000-0000-0000-0000-000000000002')->'declarations') = 'array', 'the agent reads it too');
 reset role;
 -- STUDENT-AGENT-CHANGE (20261127190517): the student picks another active agent of their own agency
 insert into public.agents(id, business_id, full_name, email, status) values
@@ -381,5 +392,29 @@ select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select throws_ok($$select public.portal_student_change_agent(gen_random_uuid())$$, '22023', null, 'an agent outside the agency is refused');
 reset role;
 
+-- SIGNED-APPLICATION (20261128015517): the student gets the submission confirmation too; the email worker stores the signed copy once
+-- (lease-checked, PDFs only); the student, the agent and staff open it; the worker reads what was signed with no certificate details.
+reset role;
+select ok(exists (select 1 from public.notification_deliveries d join public.enrollment_applications a on a.id = d.application_id
+  where d.application_id = 'e5100000-0000-0000-0000-000000000002' and d.event = 'application_submitted' and lower(d.recipient_email) = lower(a.student_email)),
+  'the student gets the submission confirmation');
+update public.notification_deliveries set state = 'sending', lease_token = 'f5100000-0000-0000-0000-0000000000aa', lease_expires_at = now() + interval '5 minutes'
+ where id = (select d.id from public.notification_deliveries d join public.enrollment_applications a on a.id = d.application_id
+   where d.application_id = 'e5100000-0000-0000-0000-000000000002' and d.event = 'application_submitted' and lower(d.recipient_email) = lower(a.student_email) limit 1);
+select is((public.notification_delivery_submission((select id from public.notification_deliveries where lease_token = 'f5100000-0000-0000-0000-0000000000aa'), 'f5100000-0000-0000-0000-0000000000aa')->>'storeCopy'), 'true',
+  'the first send is told to store the portal copy');
+select ok(jsonb_array_length(public.notification_delivery_submission((select id from public.notification_deliveries where lease_token = 'f5100000-0000-0000-0000-0000000000aa'), 'f5100000-0000-0000-0000-0000000000aa')->'signed'->'declarations') >= 1
+  and not ((public.notification_delivery_submission((select id from public.notification_deliveries where lease_token = 'f5100000-0000-0000-0000-0000000000aa'), 'f5100000-0000-0000-0000-0000000000aa')->'signed')::text ~ '"(ip|userAgent|user_agent|hash|text_hash)":'),
+  'the worker gets what was signed, with no signing certificate details');
+select throws_ok($$select public.notification_store_signed_copy((select id from public.notification_deliveries where lease_token = 'f5100000-0000-0000-0000-0000000000aa'), 'f5100000-0000-0000-0000-0000000000aa', encode(convert_to(repeat('not a pdf ', 20), 'UTF8'), 'base64'))$$,
+  '22023', null, 'only a PDF is stored');
+select ok(public.notification_store_signed_copy((select id from public.notification_deliveries where lease_token = 'f5100000-0000-0000-0000-0000000000aa'), 'f5100000-0000-0000-0000-0000000000aa', encode(convert_to('%PDF-1.4' || repeat(' signed', 30), 'UTF8'), 'base64')), 'the worker stores the signed copy');
+select ok(not public.notification_store_signed_copy((select id from public.notification_deliveries where lease_token = 'f5100000-0000-0000-0000-0000000000aa'), gen_random_uuid(), encode(convert_to('%PDF-1.4' || repeat(' other', 30), 'UTF8'), 'base64')), 'not without the delivery''s lease');
+select is((select count(*)::int from public.application_signed_copies where application_id = 'e5100000-0000-0000-0000-000000000002'), 1, 'one copy per submission');
+select is((public.notification_delivery_submission((select id from public.notification_deliveries where lease_token = 'f5100000-0000-0000-0000-0000000000aa'), 'f5100000-0000-0000-0000-0000000000aa')->>'storeCopy'), 'false', 'later sends do not store it again');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select is(left(convert_from(decode(public.application_signed_copy_file('e5100000-0000-0000-0000-000000000002')->>'content', 'base64'), 'UTF8'), 5), '%PDF-', 'the agent opens the stored signed copy');
+select ok(public.application_signed_copy('e5100000-0000-0000-0000-000000000002')->'storedCopy' is not null, 'the card knows it is kept in the portal');
+reset role;
 select * from finish();
 rollback;

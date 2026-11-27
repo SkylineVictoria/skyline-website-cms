@@ -225,7 +225,11 @@ async function publishWorkbook(page: Page, file: string, questions: number): Pro
   await expect(page.getByTestId("status-badge")).toHaveText("Published", { timeout: 15_000 });
   await page.getByRole("button", { name: "Assignments" }).click();
   await page.getByRole("button", { name: "Assign to intakes" }).click();
-  await page.getByRole("dialog", { name: "Assign to intakes" }).locator("label").filter({ hasText: /^G1/ }).locator("input[type=checkbox]").check();
+  const assignDialog = page.getByRole("dialog", { name: "Assign to intakes" });
+  await assignDialog.locator("label").filter({ hasText: /^G1/ }).locator("input[type=checkbox]").check();
+  // ASM-DATES: late work is allowed (the default), so "Late until" is required before Assign
+  await expect(page.getByRole("button", { name: "Assign", exact: true })).toBeDisabled();
+  await assignDialog.getByTestId("assignment-late-until").fill("2027-01-31T17:00");
   await page.getByRole("button", { name: "Assign", exact: true }).click();
   await expect.poll(() => sql(`select count(*) from public.asm_assignments where assessment_id = '${id}'`), { timeout: 15_000 }).toBe("1");
   return sql(`select id from public.asm_assignments where assessment_id = '${id}'`);
@@ -1076,8 +1080,8 @@ test.describe("ASM-WORKBOOK", () => {
     const intake = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${course}', date '2026-01-05', date '2026-12-18', 'Race ${tag} ${RUN}') returning id`).split("\n")[0];
     sql(`insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('${intake}', '${unit}', date '2026-01-05', date '2026-12-18')`);
     enrol(intake, wbStudent.student);
-    return sql(`insert into public.asm_assignments(assessment_id, version_id, intake_id, due_at)
-      select a.id, v.id, '${intake}', now() + interval '30 days' from public.asm_assessments a join public.asm_versions v on v.assessment_id = a.id and v.status = 'published'
+    return sql(`insert into public.asm_assignments(assessment_id, version_id, intake_id, due_at, late_until)
+      select a.id, v.id, '${intake}', now() + interval '30 days', now() + interval '40 days' from public.asm_assessments a join public.asm_versions v on v.assessment_id = a.id and v.status = 'published'
       where a.id = '${wbAssessment}' returning id`).split("\n")[0];
   }
   /** One database session as the student (psql in the lab's database container), run in the background. */

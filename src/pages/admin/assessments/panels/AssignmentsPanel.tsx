@@ -15,6 +15,21 @@ async function masterWindow(assessmentId: string, intakeId: string): Promise<Mas
   if (error) return null;
   return ((data as MasterWindow[] | null) ?? [])[0] ?? null;
 }
+/**
+ * ASM-DATES (owner 2026-11-27): when late work is allowed for the assessment, an assignment needs "Late until" (the last moment late
+ * work is accepted); the database refuses an assignment without it (asm_assignments_late_until). null while asking.
+ */
+function useLateAllowed(assessmentId: string): boolean | null {
+  const [allowed, setAllowed] = useState<boolean | null>(null);
+  useEffect(() => {
+    let off = false;
+    void supabase.rpc("asm_late_allowed", { p_assessment: assessmentId }).then(({ data, error }) => { if (!off) setAllowed(error ? false : data === true); });
+    return () => { off = true; };
+  }, [assessmentId]);
+  return allowed;
+}
+const lateHint = (allowed: boolean | null) => (allowed ? "Late work is allowed for this assessment: the last moment it is accepted, after the due date." : "Optional: late work is accepted until then.");
+
 const windowText = (w: MasterWindow | null | undefined) => (w ? `${fmtDateTime(w.opens_at)} – ${fmtDateTime(w.closes_at)} (${(w.master_kind ?? "coe").toUpperCase()} Master${w.master_cycle ? `, cycle ${w.master_cycle}` : ""})` : "No Master dates for this unit in the intake");
 import { asmAdmin, type AssignmentRow, type AssignmentStudent, type BatchOption, type StaffOption } from "@/pages/admin/lib/assessments";
 
@@ -61,6 +76,8 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
   const [availableFrom, setAvailableFrom] = useState(toLocalInput(new Date().toISOString()));
   const [dueAt, setDueAt] = useState(toLocalInput(new Date(Date.now() + ruleNumber("lms.assessment_assignment_default_days", 7) * 86400000).toISOString()));
   const [lateUntil, setLateUntil] = useState("");
+  const lateAllowed = useLateAllowed(assessmentId);
+  const lateMissing = lateAllowed === true && !lateUntil;
   const [rule, setRule] = useState<"follow_master" | "keep">("follow_master");
   const [useMaster, setUseMaster] = useState(true);
   const [windows, setWindows] = useState<Record<string, MasterWindow | null>>({});
@@ -81,7 +98,7 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
     } catch (e) { setError(fail(e)); } finally { setBusy(false); }
   };
   return (
-    <Drawer open title="Assign to intakes" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || (!useMaster && !dueAt) || missingMaster} onClick={() => void submit()}>Assign</Button></>}>
+    <Drawer open title="Assign to intakes" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || (!useMaster && !dueAt) || missingMaster || lateMissing} onClick={() => void submit()}>Assign</Button></>}>
       <div className="space-y-4">
         <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Intakes on this course</span>
           {batches.length === 0 ? <p className="text-sm text-foreground-600">No intakes on this course yet (Courses › Intakes).</p> : <ul className="grid gap-1 sm:grid-cols-2">{batches.map((b) => <li key={b.id}><label className="flex cursor-pointer items-center gap-2 rounded-lg border border-background-200 bg-white px-2.5 py-1.5 text-sm hover:border-primary-300"><input type="checkbox" checked={picked.includes(b.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, b.id] : picked.filter((x) => x !== b.id))} /><span className="min-w-0 flex-1 truncate">{b.name}</span><span className="text-xs text-foreground-500">{b.students}</span></label></li>)}</ul>}</div>
@@ -93,8 +110,8 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
         {useMaster ? null : <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Available from"><TextInput type="datetime-local" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} /></Field>
           <Field label="Due" required><TextInput type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></Field>
-          <Field label="Late submissions until" hint="Only matters when the institution blocks late work"><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} /></Field>
         </div>}
+        <Field label="Late submissions until" required={lateAllowed === true} hint={lateHint(lateAllowed)}><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} data-testid="assignment-late-until" /></Field>
         <Field label="Extra assessors (the intake's trainers are always assessors)"><Select multiple size={4} value={trainers} onChange={(e) => setTrainers([...e.target.selectedOptions].map((o) => o.value))}>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}{s.isTrainer ? "" : " (no trainer role)"}</option>)}</Select></Field>
         <Field label="When a student leaves or joins the intake"><Select value={rule} onChange={(e) => setRule(e.target.value as "follow_master" | "keep")}><option value="follow_master">Follow the Master: dates move with the Master unit dates; leavers lose open drafts, joiners are added and told</option><option value="keep">Keep: existing attempts stay as they are</option></Select></Field>
         <div><span className="mb-1.5 block text-label font-medium text-foreground-800">Practical / observation sessions (calendar)</span>
@@ -112,6 +129,7 @@ export function AssignmentDrawer({ assignment: a, onClose, onChanged, onOpenAtte
   const [students, setStudents] = useState<AssignmentStudent[] | null>(null);
   const [dueAt, setDueAt] = useState(toLocalInput(a.dueAt));
   const [lateUntil, setLateUntil] = useState(toLocalInput(a.lateUntil));
+  const lateAllowed = useLateAllowed(a.assessmentId);
   const [status, setStatus] = useState(a.status);
   const [error, setError] = useState("");
   const [win, setWin] = useState<MasterWindow | null | undefined>(undefined);
@@ -121,11 +139,11 @@ export function AssignmentDrawer({ assignment: a, onClose, onChanged, onOpenAtte
   const save = async () => { try { await asmAdmin("assignment_update", { id: a.id, dueAt: fromLocalInput(dueAt), lateUntil: fromLocalInput(lateUntil), status }); push("Assignment saved."); onChanged(); } catch (e) { setError(fail(e)); } };
   const setStudent = async (studentId: string, data: Record<string, unknown>) => { try { await asmAdmin("assignment_student_set", { id: a.id, studentId, ...data }); await load(); onChanged(); } catch (e) { setError(fail(e)); } };
   return (
-    <Drawer open title={`${a.assessmentTitle} · ${a.intake || a.batchName}`} onClose={onClose} width="max-w-3xl" footer={<><Button variant="outline" onClick={onClose}>Close</Button><Button onClick={() => void save()}>Save</Button></>}>
+    <Drawer open title={`${a.assessmentTitle} · ${a.intake || a.batchName}`} onClose={onClose} width="max-w-3xl" footer={<><Button variant="outline" onClick={onClose}>Close</Button><Button disabled={lateAllowed === true && !lateUntil} onClick={() => void save()}>Save</Button></>}>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Due"><TextInput type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></Field>
-          <Field label="Late until"><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} /></Field>
+          <Field label="Late until" required={lateAllowed === true} hint={lateHint(lateAllowed)}><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} data-testid="assignment-late-until" /></Field>
           <Field label="Status"><Select value={status} onChange={(e) => setStatus(e.target.value as AssignmentRow["status"])}><option value="open">Open</option><option value="closed">Closed</option><option value="cancelled">Cancelled</option></Select></Field>
         </div>
         <p className="text-xs text-foreground-700" data-testid="assignment-master-line">Master window: {win === undefined ? "Loading…" : windowText(win)}{a.reassignRule === "follow_master" ? " · follows the Master" : " · kept as set"}</p>

@@ -45,7 +45,9 @@ insert into public.agency_memberships(user_id, agency_id, role, student_id) valu
  ('d5000000-0000-0000-0000-000000000011', 'c5000000-0000-0000-0000-000000000001', 'student', 'e5000000-0000-0000-0000-000000000011'),
  ('d5000000-0000-0000-0000-000000000012', 'c5000000-0000-0000-0000-000000000001', 'student', 'e5000000-0000-0000-0000-000000000012'),
  ('d5000000-0000-0000-0000-000000000013', 'c5000000-0000-0000-0000-000000000001', 'student', 'e5000000-0000-0000-0000-000000000013');
-insert into public.cms_courses(id, slug, code, name, status) values ('course-asm-test', 'asm-test-course', 'ASM101', 'ASM Test Course', 'Published');
+-- A course is published only when reportable (20261126124153: code, field of education, ANZSCO code, qualification level, delivery mode)
+-- with an active unit and an open intake (cms_courses_needs_intake): inserted as Draft and published once its unit and intakes exist.
+insert into public.cms_courses(id, slug, code, name, status, mode, tga_field_of_education_code, tga_anzsco_code, tga_qualification_level) values ('course-asm-test', 'asm-test-course', 'ASM101', 'ASM Test Course', 'Draft', 'Face to Face', '0403', '331212', 'Certificate III');
 insert into public.cms_course_units(id, course_id, code, name) values ('unit-asm-1', 'course-asm-test', 'ASMU1', 'Work safely'), ('unit-asm-2', 'course-asm-test', 'ASMU2', 'Use tools');
 insert into public.course_intakes(id, course_id, start_date, end_date, label) values ('f5000000-0000-0000-0000-000000000001', 'course-asm-test', date '2026-01-05', date '2026-12-18', 'Jan 2026');
 insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('f5000000-0000-0000-0000-000000000001', 'unit-asm-1', date '2026-01-05', date '2026-12-18');
@@ -58,6 +60,7 @@ insert into public.intake_units(intake_id, unit_id, start_date, end_date) values
 insert into public.intake_trainers(intake_id, staff_id) values ('f5000000-0000-0000-0000-000000000011', 'b5000000-0000-0000-0000-000000000003'), ('f5000000-0000-0000-0000-000000000012', 'b5000000-0000-0000-0000-000000000004');
 -- placements are made by the system only (guard intake_enrolments_auto_only, 20261118180000): the fixture places its students as the
 -- system's planner does, for this insert only
+update public.cms_courses set status = 'Published' where id = 'course-asm-test';
 select set_config('rto.carry_over_planning', 'on', true);
 -- AVETMISS (hosted 20261125025533, 20261126124153) refuses an enrolment without the student's AVETMISS details: the fixture students have them.
 update public.enrollment_students set sex_code = 'M', birth_country_code = '1101', home_language_code = '1201', indigenous_status_code = '4',
@@ -71,7 +74,7 @@ insert into public.intake_enrolments(intake_id, student_id, study_reason_code) v
 select set_config('rto.carry_over_planning', '', true);
 -- a second institution with its own course (tenant isolation)
 insert into public.tenants(id, slug, name) values ('15000000-0000-0000-0000-000000000002', 'asm-other', 'Other Institute');
-insert into public.cms_courses(id, slug, code, name, status, tenant_id) values ('course-asm-other', 'asm-other-course', 'ASM202', 'Other Course', 'Published', '15000000-0000-0000-0000-000000000002');
+insert into public.cms_courses(id, slug, code, name, status, tenant_id, mode, tga_field_of_education_code, tga_anzsco_code, tga_qualification_level) values ('course-asm-other', 'asm-other-course', 'ASM202', 'Other Course', 'Draft', '15000000-0000-0000-0000-000000000002', 'Face to Face', '0403', '331212', 'Certificate III');
 
 create function pg_temp.as_user(p uuid) returns void language plpgsql as $$
 begin perform set_config('role', 'authenticated', true); perform set_config('request.jwt.claim.sub', p::text, true); end $$;

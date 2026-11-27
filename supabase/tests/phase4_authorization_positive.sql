@@ -28,6 +28,8 @@ begin
   perform public.record_passport_matched_document('enrollment-documents', p_path, p_category,
     (public.current_upload_passport('enrollment-documents', coalesce(p_owner, case when split_part(p_path, '/', 1) ~ '^[0-9a-f-]{36}$' then split_part(p_path, '/', 1)::uuid end))->>'id')::uuid);
 end $$;
+-- 20261123170457: browsers save document reviews through portal_review_draft_v2 (draft lock + expected version)
+create function pg_temp.dv(p_id uuid) returns bigint language sql stable security definer as $$ select draft_version from public.enrollment_applications where id = p_id $$;
 select pg_temp.checked_upload(p, 'Passport') from unnest(array['43000000-0000-0000-0000-000000000001/a.pdf', '43000000-0000-0000-0000-000000000001/b.pdf', 'foreign/b.pdf']) as p;
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000001';
@@ -36,29 +38,30 @@ select lives_ok($$update public.portal_profiles set phone='123',full_name='Updat
 select throws_ok($$update public.portal_profiles set email='forged@example.test' where id='23000000-0000-0000-0000-000000000001'$$,'42501',null,'identity email cannot be changed directly');
 select throws_ok($$update public.portal_profiles set auth_user_id='33000000-0000-0000-0000-000000000003' where id='23000000-0000-0000-0000-000000000001'$$,'42501',null,'auth identity cannot be rebound');
 select lives_ok($$select public.portal_save_draft_v2('43000000-0000-0000-0000-000000000001',0,'{"courses":[{"courseId":"positive","code":"POS","title":"Positive"}]}')$$,'draft course command preserved');
-select lives_ok($$select public.portal_save_document_review('43000000-0000-0000-0000-000000000001','{"first_name":"Ada"}','{}','["first_name"]','[]')$$,'draft manual confirmation preserved');
+select lives_ok($$select public.portal_review_draft_v2('43000000-0000-0000-0000-000000000001',pg_temp.dv('43000000-0000-0000-0000-000000000001'),'{"first_name":"Ada"}','{}','["first_name"]','[]')$$,'draft manual confirmation preserved');
 select lives_ok($$insert into public.enrollment_application_documents(id,application_id,category,storage_path,filename) values('53000000-0000-0000-0000-000000000001','43000000-0000-0000-0000-000000000001','Passport','43000000-0000-0000-0000-000000000001/a.pdf','a.pdf')$$,'draft document registration preserved');
 select throws_ok($$update public.enrollment_application_documents set storage_path='43000000-0000-0000-0000-000000000001/b.pdf' where id='53000000-0000-0000-0000-000000000001'$$,'42501',null,'draft locator is immutable too');
 -- The foreign file's receipt names the application's passport (as a checked upload would), so only the prefix rule can refuse it.
 select pg_temp.checked_upload('foreign/b.pdf', 'Passport', '43000000-0000-0000-0000-000000000001');
 select throws_ok($$insert into public.enrollment_application_documents(application_id,category,storage_path,filename) values('43000000-0000-0000-0000-000000000001','Passport','foreign/b.pdf','b.pdf')$$,'42501',null,'foreign prefix insertion denied');
-select lives_ok($$insert into public.enrollment_application_messages(application_id,author,body) values('43000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Agency message')$$,'agency public message preserved');
+select throws_ok($$insert into public.enrollment_application_messages(application_id,author,body) values('43000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Agency message')$$,'42501',null,'a direct message row on a draft is refused (wizard_only_messages, 20261123165817)');
 select throws_ok($$insert into public.enrollment_application_messages(application_id,author,body,visibility) values('43000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000001','Forged note','internal')$$,'42501',null,'agency internal-note insertion denied');
-select lives_ok($$insert into public.enrollment_application_consents(application_id,method) values('43000000-0000-0000-0000-000000000001','Signed')$$,'draft consent recording preserved');
+select throws_ok($$insert into public.enrollment_application_consents(application_id,method) values('43000000-0000-0000-0000-000000000001','Signed')$$,'42501',null,'a direct consent row on a draft is refused (wizard_only_consents, 20261123165817: consents come from the student signing)');
 select lives_ok($$update public.portal_notifications set read=true where id='63000000-0000-0000-0000-000000000001'$$,'notification acknowledgement preserved');
 select throws_ok($$update public.portal_notifications set title='Forged' where id='63000000-0000-0000-0000-000000000001'$$,'42501',null,'notification contents cannot be forged');
-select throws_ok($$select public.portal_submit_application('43000000-0000-0000-0000-000000000001','{"values":{"first_name":"Ada"},"wizard":{"confirmed":["first_name"]}}')$$,'22023',null,'incomplete legacy submission is now rejected');
+select throws_ok($$select public.portal_submit_application('43000000-0000-0000-0000-000000000001','{"values":{"first_name":"Ada"},"wizard":{"confirmed":["first_name"]}}')$$,'42501',null,'the legacy submit command is closed to browsers (students sign through portal_submit_v2)');
 select is((select count(*)::int from public.enrollment_application_versions),0,'rejected submission writes no snapshot');
 select is((select count(*)::int from public.enrollment_application_status_history),0,'rejected submission writes no history');
 reset role;
-update enrollment_applications set status='submitted' where id='43000000-0000-0000-0000-000000000001';
+-- fixture only: submitted (the submit guards need the full AVETMISS record since 20261126124153; paused for this one row)
+set local session_replication_role = replica; update enrollment_applications set status='submitted' where id='43000000-0000-0000-0000-000000000001'; set local session_replication_role = origin;
 set local role authenticated;
-select throws_ok($$select public.portal_save_document_review('43000000-0000-0000-0000-000000000001','{"first_name":"Tamper"}')$$,'42501',null,'submitted manual changes denied');
+select throws_ok($$select public.portal_review_draft_v2('43000000-0000-0000-0000-000000000001',pg_temp.dv('43000000-0000-0000-0000-000000000001'),'{"first_name":"Tamper"}')$$,'42501',null,'submitted manual changes denied');
 set local request.jwt.claims='{"email":"positive-admin@example.test"}';
 select is(public.portal_is_slit_admin(),false,'matching email cannot grant another UID administrator access');
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select is((select count(*)::int from public.agencies where id in ('13000000-0000-0000-0000-000000000001','13000000-0000-0000-0000-000000000002')),2,'SLIT admin agency visibility preserved');
-select lives_ok($$select public.portal_save_document_review('43000000-0000-0000-0000-000000000001','{"first_name":"Admin correction"}')$$,'SLIT admin review correction preserved');
+select lives_ok($$select public.portal_review_draft_v2('43000000-0000-0000-0000-000000000001',pg_temp.dv('43000000-0000-0000-0000-000000000001'),'{"first_name":"Admin correction"}')$$,'SLIT admin review correction preserved');
 select lives_ok($$insert into public.enrollment_application_messages(application_id,author,body,visibility) values('43000000-0000-0000-0000-000000000001','33000000-0000-0000-0000-000000000002','Private','internal')$$,'SLIT admin internal note preserved');
 select is((select count(*)::int from public.enrollment_application_messages where visibility='internal' and application_id='43000000-0000-0000-0000-000000000001'),1,'SLIT admin internal-note visibility preserved');
 -- Migration 86: agency invitations and scoped user administration (actor-parameterised, as the edge function calls them).
@@ -224,23 +227,27 @@ insert into auth.users(id,email) values ('33000000-0000-0000-0000-000000000030',
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values ('23000000-0000-0000-0000-000000000030','33000000-0000-0000-0000-000000000030','Status agent','status-agent@example.test');
 insert into public.agency_memberships(user_id,agency_id,role) values ('23000000-0000-0000-0000-000000000030','13000000-0000-0000-0000-000000000001','agent');
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data) values
- ('43000000-0000-0000-0000-000000000030','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-000000000031','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','under_review','{}'),
- ('43000000-0000-0000-0000-000000000032','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','under_review','{}'),
- ('43000000-0000-0000-0000-000000000033','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_issued','{}'),
- ('43000000-0000-0000-0000-000000000034','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_issued','{}'),
- ('43000000-0000-0000-0000-000000000035','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','action_required','{}'),
- ('43000000-0000-0000-0000-000000000036','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-000000000037','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-0000000000e6','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','action_required','{}');
+ ('43000000-0000-0000-0000-000000000030','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000031','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000032','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000033','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000034','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000035','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000036','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000037','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-0000000000e6','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-000000000030' then 'submitted' when '43000000-0000-0000-0000-000000000031' then 'under_review' when '43000000-0000-0000-0000-000000000032' then 'under_review' when '43000000-0000-0000-0000-000000000033' then 'offer_issued' when '43000000-0000-0000-0000-000000000034' then 'offer_issued' when '43000000-0000-0000-0000-000000000035' then 'action_required' when '43000000-0000-0000-0000-000000000036' then 'submitted' when '43000000-0000-0000-0000-000000000037' then 'submitted' when '43000000-0000-0000-0000-0000000000e6' then 'action_required' end where id::text in ('43000000-0000-0000-0000-000000000030','43000000-0000-0000-0000-000000000031','43000000-0000-0000-0000-000000000032','43000000-0000-0000-0000-000000000033','43000000-0000-0000-0000-000000000034','43000000-0000-0000-0000-000000000035','43000000-0000-0000-0000-000000000036','43000000-0000-0000-0000-000000000037','43000000-0000-0000-0000-0000000000e6'); set local session_replication_role = origin;
 -- Migration 20261113260000: statuses and actions from the catalogue tables; Offer letter issued only through the offer letter
 -- command; the applicant resubmits and accepts; staff marking an offer accepted, rejecting or asking for action add a note.
 update public.enrollment_applications set created_by='23000000-0000-0000-0000-000000000030' where id='43000000-0000-0000-0000-000000000030';
 update public.enrollment_applications set student_email='direct.student@example.test', student_name='Direct Student' where id='43000000-0000-0000-0000-000000000036';
 update public.enrollment_applications set student_email='mismatch@example.test', data='{"values":{"declaration_name":"Asha Patel","digital_signature":"Someone Else"}}' where id='43000000-0000-0000-0000-000000000037';
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data) values
- ('43000000-0000-0000-0000-000000000038','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-000000000039','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}');
+ ('43000000-0000-0000-0000-000000000038','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-000000000039','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-000000000038' then 'submitted' when '43000000-0000-0000-0000-000000000039' then 'submitted' end where id::text in ('43000000-0000-0000-0000-000000000038','43000000-0000-0000-0000-000000000039'); set local session_replication_role = origin;
 -- Reads the offer letters table as its owner (the tests run as the signed-in user, who has no direct access).
 create function pg_temp.letter(p_app uuid, p_expr text) returns text language plpgsql security definer as $$ declare r text; begin execute format('select %s from public.enrollment_offer_letters where application_id = $1 order by issued_at desc limit 1', p_expr) into r using p_app; return r; end $$;
 -- Any read as the owner, for tables the signed-in user cannot read (outbox, deliveries).
@@ -327,10 +334,12 @@ reset role;
 insert into public.cms_courses(id, slug, code, name, status) values ('loo-course', 'loo-course', 'BSB50120', 'Diploma of Business', 'Published');
 insert into public.course_intakes(id, course_id, start_date, end_date, label) values ('53000000-0000-0000-0000-0000000000f1', 'loo-course', '2027-02-03', '2028-02-02', 'February 2027');
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,student_email,student_name,data) values
- ('43000000-0000-0000-0000-0000000000f0','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','loo.student@example.test','Asha Patel',
+ ('43000000-0000-0000-0000-0000000000f0','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','loo.student@example.test','Asha Patel',
   '{"values":{"title":"ms","first_name":"ASHA","middle_name":"rani","last_name":"o''neil-smith","dob":"2001-04-12","nationality":"India","passport_number":"N1234567","au_street":"1 Example St","au_suburb":"Melbourne","au_state":"VIC","au_zip":"3000"}}'),
- ('43000000-0000-0000-0000-0000000000f1','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','loo.two@example.test','Ravi Kumar',
+ ('43000000-0000-0000-0000-0000000000f1','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','loo.two@example.test','Ravi Kumar',
   '{"values":{"first_name":"Ravi","last_name":"Kumar","dob":"2000-01-31","nationality":"India"}}');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-0000000000f0' then 'submitted' when '43000000-0000-0000-0000-0000000000f1' then 'submitted' end where id::text in ('43000000-0000-0000-0000-0000000000f0','43000000-0000-0000-0000-0000000000f1'); set local session_replication_role = origin;
 select set_config('portal.draft_command','43000000-0000-0000-0000-0000000000f0',true);
 insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id) values ('43000000-0000-0000-0000-0000000000f0','loo-course','BSB50120','Diploma of Business','53000000-0000-0000-0000-0000000000f1');
 select set_config('portal.draft_command','43000000-0000-0000-0000-0000000000f1',true);
@@ -404,12 +413,14 @@ reset role;
 -- admins write the configuration (audited), guards keep it consistent.
 reset role;
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data) values
- ('43000000-0000-0000-0000-0000000000e0','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-0000000000e1','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-0000000000e2','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-0000000000e3','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}'),
- ('43000000-0000-0000-0000-0000000000e4','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','coe_issued','{}'),
- ('43000000-0000-0000-0000-0000000000e5','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}');
+ ('43000000-0000-0000-0000-0000000000e0','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-0000000000e1','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-0000000000e2','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-0000000000e3','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-0000000000e4','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}'),
+ ('43000000-0000-0000-0000-0000000000e5','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-0000000000e0' then 'submitted' when '43000000-0000-0000-0000-0000000000e1' then 'submitted' when '43000000-0000-0000-0000-0000000000e2' then 'submitted' when '43000000-0000-0000-0000-0000000000e3' then 'submitted' when '43000000-0000-0000-0000-0000000000e4' then 'coe_issued' when '43000000-0000-0000-0000-0000000000e5' then 'submitted' end where id::text in ('43000000-0000-0000-0000-0000000000e0','43000000-0000-0000-0000-0000000000e1','43000000-0000-0000-0000-0000000000e2','43000000-0000-0000-0000-0000000000e3','43000000-0000-0000-0000-0000000000e4','43000000-0000-0000-0000-0000000000e5'); set local session_replication_role = origin;
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select ok('Admin' = any(public.application_caller_roles()),'a CMS admin''s role is Admin');
@@ -469,7 +480,9 @@ insert into public.course_intakes(id, course_id, start_date, end_date, label) va
  ('53000000-0000-0000-0000-0000000000a2', 'pk-b', '2028-02-07', '2029-02-02', 'February 2028');
 insert into public.course_fee_setups(course_id, intake_id, tuition_fee, enrolment_fee) values ('pk-a', null, 14000, 250), ('pk-b', null, 16000, 250);
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,student_email,data) values
- ('43000000-0000-0000-0000-0000000000c0','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','pk.student@example.test','{"values":{"first_name":"Pack","last_name":"Age"}}');
+ ('43000000-0000-0000-0000-0000000000c0','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','pk.student@example.test','{"values":{"first_name":"Pack","last_name":"Age"}}');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-0000000000c0' then 'submitted' end where id::text in ('43000000-0000-0000-0000-0000000000c0'); set local session_replication_role = origin;
 select set_config('portal.draft_command','43000000-0000-0000-0000-0000000000c0',true);
 insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id, created_at) values
  ('43000000-0000-0000-0000-0000000000c0','pk-a','PKA1','PKA1 Certificate III in Packaging','53000000-0000-0000-0000-0000000000a1', now() - interval '1 minute'),
@@ -506,16 +519,18 @@ reset role;
 delete from public.notification_activation where tenant_id is null;
 update public.portal_profiles set email='status-agent@example.test' where id='23000000-0000-0000-0000-000000000030';
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data,student_email) values
- ('43000000-0000-0000-0000-000000000040','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000041','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000042','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_accepted','{}','Student@Example.test'),
- ('43000000-0000-0000-0000-000000000043','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000044','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000045','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000046','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000047','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_issued','{}',''),
- ('43000000-0000-0000-0000-000000000048','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_accepted','{}',''),
- ('43000000-0000-0000-0000-000000000049','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}','');
+ ('43000000-0000-0000-0000-000000000040','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000041','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000042','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}','Student@Example.test'),
+ ('43000000-0000-0000-0000-000000000043','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000044','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000045','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000046','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000047','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000048','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000049','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}','');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-000000000040' then 'submitted' when '43000000-0000-0000-0000-000000000041' then 'submitted' when '43000000-0000-0000-0000-000000000042' then 'offer_accepted' when '43000000-0000-0000-0000-000000000043' then 'submitted' when '43000000-0000-0000-0000-000000000044' then 'submitted' when '43000000-0000-0000-0000-000000000045' then 'submitted' when '43000000-0000-0000-0000-000000000046' then 'submitted' when '43000000-0000-0000-0000-000000000047' then 'offer_issued' when '43000000-0000-0000-0000-000000000048' then 'offer_accepted' when '43000000-0000-0000-0000-000000000049' then 'submitted' end where id::text in ('43000000-0000-0000-0000-000000000040','43000000-0000-0000-0000-000000000041','43000000-0000-0000-0000-000000000042','43000000-0000-0000-0000-000000000043','43000000-0000-0000-0000-000000000044','43000000-0000-0000-0000-000000000045','43000000-0000-0000-0000-000000000046','43000000-0000-0000-0000-000000000047','43000000-0000-0000-0000-000000000048','43000000-0000-0000-0000-000000000049'); set local session_replication_role = origin;
 -- Before activation: the agent's copy is created but suppressed (migration 84 rule, unchanged).
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('43000000-0000-0000-0000-000000000040',null,'offer_accepted','{"from":"submitted","to":"offer_accepted"}');
 select is((select string_agg(recipient_email||':'||state||':'||coalesce(state_reason,''),',') from public.notification_deliveries where application_id='43000000-0000-0000-0000-000000000040'),'status-agent@example.test:suppressed:legacy_scope_not_activated','offer_accepted defaults to the assigned agent only; not activated stays suppressed');
@@ -586,8 +601,10 @@ reset role;
 reset role;
 update public.notification_deliveries set state='suppressed', state_reason='test isolation' where state='pending';
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data,student_email) values
- ('43000000-0000-0000-0000-000000000050','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}',''),
- ('43000000-0000-0000-0000-000000000051','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','coe_issued','{}','student2@example.test');
+ ('43000000-0000-0000-0000-000000000050','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}',''),
+ ('43000000-0000-0000-0000-000000000051','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}','student2@example.test');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-000000000050' then 'submitted' when '43000000-0000-0000-0000-000000000051' then 'coe_issued' end where id::text in ('43000000-0000-0000-0000-000000000050','43000000-0000-0000-0000-000000000051'); set local session_replication_role = origin;
 insert into public.enrollment_application_versions(application_id,version,snapshot,created_by_name) values
  ('43000000-0000-0000-0000-000000000050',1,'{"values":{"first_name":"Ada","passport_copy":"x"},"courses":[{"title":"Cert IV","code":"C4"}],"submission":{"consent":{"method":"electronic","declarationVersion":"1.0"}}}','tester');
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('43000000-0000-0000-0000-000000000050',null,'application_submitted','{"version":1}');
@@ -637,11 +654,13 @@ insert into auth.users(id,email) values ('33000000-0000-0000-0000-000000000031',
 insert into public.portal_profiles(id,auth_user_id,full_name,email) values ('23000000-0000-0000-0000-000000000031','33000000-0000-0000-0000-000000000031','Blank email agent','');
 insert into public.agency_memberships(user_id,agency_id,role) values ('23000000-0000-0000-0000-000000000031','13000000-0000-0000-0000-000000000001','agent');
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data,student_email) values
- ('43000000-0000-0000-0000-000000000060','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_accepted','{}','student3@example.test'),
- ('43000000-0000-0000-0000-000000000061','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','offer_accepted','{}','student4@example.test'),
- ('43000000-0000-0000-0000-000000000062','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','submitted','{}','student5@example.test'),
- ('43000000-0000-0000-0000-000000000063','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','coe_issued','{}','not-an-email'),
- ('43000000-0000-0000-0000-000000000064','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000031','offer_accepted','{}','');
+ ('43000000-0000-0000-0000-000000000060','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}','student3@example.test'),
+ ('43000000-0000-0000-0000-000000000061','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}','student4@example.test'),
+ ('43000000-0000-0000-0000-000000000062','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}','student5@example.test'),
+ ('43000000-0000-0000-0000-000000000063','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000030','draft','{}','not-an-email'),
+ ('43000000-0000-0000-0000-000000000064','13000000-0000-0000-0000-000000000001','23000000-0000-0000-0000-000000000031','draft','{}','');
+-- fixture only: inserted as draft, then given the status the test needs (submit / enrolment guards need full AVETMISS, signing and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '43000000-0000-0000-0000-000000000060' then 'offer_accepted' when '43000000-0000-0000-0000-000000000061' then 'offer_accepted' when '43000000-0000-0000-0000-000000000062' then 'submitted' when '43000000-0000-0000-0000-000000000063' then 'coe_issued' when '43000000-0000-0000-0000-000000000064' then 'offer_accepted' end where id::text in ('43000000-0000-0000-0000-000000000060','43000000-0000-0000-0000-000000000061','43000000-0000-0000-0000-000000000062','43000000-0000-0000-0000-000000000063','43000000-0000-0000-0000-000000000064'); set local session_replication_role = origin;
 set local role authenticated;
 set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
 select set_config('p0807.r1',public.portal_registration_create('43000000-0000-0000-0000-000000000060')::text,true);

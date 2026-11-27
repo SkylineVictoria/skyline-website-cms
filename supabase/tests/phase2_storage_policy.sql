@@ -12,7 +12,9 @@ insert into public.portal_profiles(id,auth_user_id,full_name,email) values('2500
 insert into public.agency_memberships(user_id,agency_id,role) values('25000000-0000-0000-0000-000000000001','15000000-0000-0000-0000-000000000001','agent');
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status) values
  ('45000000-0000-0000-0000-000000000001','15000000-0000-0000-0000-000000000001','25000000-0000-0000-0000-000000000001','draft'),
- ('45000000-0000-0000-0000-000000000002','15000000-0000-0000-0000-000000000001','25000000-0000-0000-0000-000000000001','submitted');
+ ('45000000-0000-0000-0000-000000000002','15000000-0000-0000-0000-000000000001','25000000-0000-0000-0000-000000000001','draft');
+-- fixture only: a submitted application (the submit guards need the full AVETMISS record since 20261126124153; paused for this one row)
+set local session_replication_role = replica; update public.enrollment_applications set status='submitted' where id='45000000-0000-0000-0000-000000000002'; set local session_replication_role = origin;
 insert into storage.objects(bucket_id,name) values
  ('enrollment-documents','45000000-0000-0000-0000-000000000001/passport.pdf'),
  ('enrollment-documents','45000000-0000-0000-0000-000000000001/consent.pdf');

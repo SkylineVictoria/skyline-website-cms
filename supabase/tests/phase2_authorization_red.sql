@@ -11,7 +11,7 @@ select is(has_table_privilege('authenticated','public.admin_menu_items','update'
 select is(has_table_privilege('authenticated','public.admin_menu_items','delete'),false,'browser cannot delete menu');
 select is((select relrowsecurity from pg_class where oid='public.admin_menu_items'::regclass),true,'menu has RLS');
 -- 32 seeded rows plus later menu migrations (businesses, agents, students, staff item, Staff group, Jobs, HRMS pages, ...) on a full repo replay.
-select is((select count(*)::int from public.admin_menu_items),65,'desired menu seeded (65 with Tickets, Bookings, Assessments 20261113430000; 49 with Document signing 20261110154917 and HRMS Locations 20261113090000, 58 with the External Integrations group and its eight pages 20261113180001, 59 with Application statuses 20261113280000)');
+select is((select count(*)::int from public.admin_menu_items),68,'desired menu seeded (68 with Finance + Payments 20261116170000 and Business Rules & Policies 20261120220000; 65 with Tickets, Bookings, Assessments 20261113430000; 49 with Document signing 20261110154917 and HRMS Locations 20261113090000, 58 with the External Integrations group and its eight pages 20261113180001, 59 with Application statuses 20261113280000)');
 -- Seeded hidden: students (unimplemented group), media (unimplemented). 20261102095335: agent_users and agency_directory
 -- (replaced by Agencies > Businesses / Agents / Students). 20261103090000: courses (the group emptied when Course Catalogue
 -- moved under Website).
@@ -40,8 +40,10 @@ insert into public.portal_profiles(id,auth_user_id,full_name,email) values
 insert into public.agency_memberships(user_id,agency_id,role) values
  ('22000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-000000000001','agent');
 insert into public.enrollment_applications(id,agency_id,assigned_agent_id,status,data) values
- ('42000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000001','submitted','{"values":{"first_name":"Confirmed"}}'),
+ ('42000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-000000000001','22000000-0000-0000-0000-000000000001','draft','{"values":{"first_name":"Confirmed"}}'),
  ('42000000-0000-0000-0000-000000000002','12000000-0000-0000-0000-000000000002',null,'draft','{}');
+-- fixture only: a submitted application (the submit guards need the full AVETMISS record since 20261126124153; paused for this one row)
+set local session_replication_role = replica; update public.enrollment_applications set status='submitted' where id='42000000-0000-0000-0000-000000000001'; set local session_replication_role = origin;
 insert into public.enrollment_application_messages(application_id,body,visibility) values
  ('42000000-0000-0000-0000-000000000001','Private staff note','internal'),
  ('42000000-0000-0000-0000-000000000001','Agency message','agency');
@@ -271,7 +273,27 @@ select is(public.tenant_has_role('1a000000-0000-0000-0000-000000000001',array['t
 -- Workflow versions on institution B: v1 has no action_required; v2 does. Both applications are reviewed through the real command.
 reset role;
 set local request.jwt.claim.sub='';
-update public.enrollment_applications set status='submitted' where id in ('42000000-0000-0000-0000-0000000000b1','42000000-0000-0000-0000-0000000000b2');
+-- fixture only: submitted applications (the submit guards need the full AVETMISS record since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status='submitted' where id in ('42000000-0000-0000-0000-0000000000b1','42000000-0000-0000-0000-0000000000b2'); set local session_replication_role = origin;
+-- Fixture only: give an application's student a complete AVETMISS record (NAT00080) and a study reason, as the wizard would, so
+-- moves out of Draft / Action required pass the submit guard (enrollment_applications_avetmiss_submit, 20261126124153).
+-- Only what is missing is filled: the fixture's own names and answers win.
+create or replace function pg_temp.avetmiss_ready(p_app uuid) returns void language plpgsql as $$
+declare v_student uuid;
+begin
+  select student_id into v_student from public.enrollment_applications where id = p_app;
+  if v_student is null then raise exception 'fixture application % has no student', p_app; end if;
+  update public.enrollment_students set sex_code = coalesce(sex_code, 'F'), birth_country_code = coalesce(birth_country_code, '1101'),
+    home_language_code = coalesce(home_language_code, '1201'), indigenous_status_code = coalesce(indigenous_status_code, '4'),
+    school_level_code = coalesce(school_level_code, '12'), school_level_year = coalesce(school_level_year, '2017'),
+    at_school_flag = coalesce(at_school_flag, 'N'), labour_force_code = coalesce(labour_force_code, '01'),
+    disability_flag = coalesce(disability_flag, 'N'), prior_education_flag = coalesce(prior_education_flag, 'N'),
+    full_name = coalesce(nullif(full_name, ''), 'Fixture Student'),
+    details = '{"first_name": "Fixture", "last_name": "Student", "dob": "2000-01-01", "au_street": "1 Test St", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC", "study_reason": "To get a job - 01"}'::jsonb
+      || jsonb_strip_nulls(coalesce(details, '{}'::jsonb))
+   where id = v_student;
+end $$;
+select pg_temp.avetmiss_ready(id) from public.enrollment_applications where id in ('42000000-0000-0000-0000-0000000000b1','42000000-0000-0000-0000-0000000000b2');
 set local request.jwt.claim.sub='a0000000-0000-0000-0000-000000000003';
 set local request.headers='{"x-tenant-domain":"b.p06.example.test"}';
 set local role authenticated;
@@ -613,11 +635,13 @@ set local request.headers='{}';
 insert into public.tenant_memberships(tenant_id,auth_user_id,role) values ('1a000000-0000-0000-0000-000000000002','a0000000-0000-0000-0000-000000000006','staff') on conflict (tenant_id,auth_user_id) do update set role='staff', active=true;
 update public.agency_tenants set active=true where tenant_id='1a000000-0000-0000-0000-000000000001' and agency_id='12000000-0000-0000-0000-0000000000a1';
 insert into public.enrollment_applications(id,agency_id,tenant_id,status,data) values
- ('45000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','coe_issued','{}'),
- ('45000000-0000-0000-0000-000000000002','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','offer_accepted','{}'),
- ('45000000-0000-0000-0000-000000000003','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','submitted','{}'),
- ('45000000-0000-0000-0000-000000000004','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','coe_issued','{}'),
- ('45000000-0000-0000-0000-0000000000a1','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000001','coe_issued','{}');
+ ('45000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','draft','{}'),
+ ('45000000-0000-0000-0000-000000000002','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','draft','{}'),
+ ('45000000-0000-0000-0000-000000000003','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','draft','{}'),
+ ('45000000-0000-0000-0000-000000000004','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','draft','{}'),
+ ('45000000-0000-0000-0000-0000000000a1','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000001','draft','{}');
+-- fixture only: the statuses these registrations need (the submit / enrolment guards need full AVETMISS and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '45000000-0000-0000-0000-000000000001' then 'coe_issued' when '45000000-0000-0000-0000-000000000002' then 'offer_accepted' when '45000000-0000-0000-0000-000000000003' then 'submitted' when '45000000-0000-0000-0000-000000000004' then 'coe_issued' when '45000000-0000-0000-0000-0000000000a1' then 'coe_issued' end where id in ('45000000-0000-0000-0000-000000000001','45000000-0000-0000-0000-000000000002','45000000-0000-0000-0000-000000000003','45000000-0000-0000-0000-000000000004','45000000-0000-0000-0000-0000000000a1'); set local session_replication_role = origin;
 select pg_temp.checked_upload('45000000-0000-0000-0000-000000000001/a.pdf', 'Passport'), pg_temp.checked_upload('45000000-0000-0000-0000-000000000004/a.pdf', 'Passport');
 insert into public.enrollment_application_documents(id,application_id,category,storage_path,filename) values
  ('55000000-0000-0000-0000-000000000001','45000000-0000-0000-0000-000000000001','Passport','45000000-0000-0000-0000-000000000001/a.pdf','a.pdf'),
@@ -751,9 +775,11 @@ update public.tenants set status='active' where id='1a000000-0000-0000-0000-0000
 reset role;
 set local request.jwt.claim.sub='';
 insert into public.enrollment_applications(id,agency_id,tenant_id,status,student_name,data) values
- ('46000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','enrolled','Unregistered Student','{}'),
- ('46000000-0000-0000-0000-000000000002','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','coe_issued','Waiting Student','{}'),
- ('46000000-0000-0000-0000-000000000003','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','coe_issued','Withdrawing Student','{}');
+ ('46000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','draft','Unregistered Student','{}'),
+ ('46000000-0000-0000-0000-000000000002','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','draft','Waiting Student','{}'),
+ ('46000000-0000-0000-0000-000000000003','12000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000002','draft','Withdrawing Student','{}');
+-- fixture only: the statuses these applications need (submit / enrolment guards need full AVETMISS and offer records since 20261126124153; paused for these rows)
+set local session_replication_role = replica; update public.enrollment_applications set status = case id::text when '46000000-0000-0000-0000-000000000001' then 'enrolled' when '46000000-0000-0000-0000-000000000002' then 'coe_issued' when '46000000-0000-0000-0000-000000000003' then 'coe_issued' end where id in ('46000000-0000-0000-0000-000000000001','46000000-0000-0000-0000-000000000002','46000000-0000-0000-0000-000000000003'); set local session_replication_role = origin;
 update public.enrollment_applications set status='enrolled' where id='45000000-0000-0000-0000-0000000000a1';
 update public.enrollment_applications set student_name='Same Person', data='{"values":{"dob":"2000-01-02"}}' where id in ('45000000-0000-0000-0000-000000000001','45000000-0000-0000-0000-000000000004');
 update public.enrollment_registrations set lodged_at=now()-interval '20 days' where id=(select id from p0801 where n=2);
@@ -829,7 +855,9 @@ update public.tenants set status='active' where id='1a000000-0000-0000-0000-0000
 reset role;
 set local request.jwt.claim.sub='';
 set local request.headers='{}';
-insert into public.enrollment_applications(id,agency_id,tenant_id,status,student_name,data) values ('47000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-0000000000a1',null,'submitted','Legacy Student','{}');
+insert into public.enrollment_applications(id,agency_id,tenant_id,status,student_name,data) values ('47000000-0000-0000-0000-000000000001','12000000-0000-0000-0000-0000000000a1',null,'draft','Legacy Student','{}');
+-- fixture only: a submitted legacy application (the submit guard needs the full AVETMISS record since 20261126124153; paused for this row)
+set local session_replication_role = replica; update public.enrollment_applications set status='submitted' where id='47000000-0000-0000-0000-000000000001'; set local session_replication_role = origin;
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('47000000-0000-0000-0000-000000000001',null,'application_status_changed','{"from":"submitted","to":"under_review"}');
 select is((select state||'|'||state_reason from public.notification_deliveries where application_id='47000000-0000-0000-0000-000000000001'),'suppressed|legacy_scope_not_activated','an application without a tenant produces a suppressed delivery, never a pending one');
 insert into public.admission_event_outbox(application_id,tenant_id,event,payload) values ('45000000-0000-0000-0000-0000000000a1','1a000000-0000-0000-0000-000000000001','application_status_changed','{"from":"coe_issued","to":"enrolled"}');

@@ -48,6 +48,25 @@ insert into public.enrollment_applications(id, agency_id, assigned_agent_id, cre
   'd5100000-0000-0000-0000-000000000003', 'draft', format('{"values":{"first_name":"Minor","dob":"%s"}}', (current_date - interval '16 years')::date)::jsonb),
  ('e5100000-0000-0000-0000-000000000005', 'a5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001',
   'd5100000-0000-0000-0000-000000000005', 'draft', '{"values":{"dob":"1990-01-01"}}');
+-- Fixture only: give an application's student a complete AVETMISS record (NAT00080) and a study reason, as the wizard would, so
+-- moves out of Draft / Action required pass the submit guard (enrollment_applications_avetmiss_submit, 20261126124153).
+-- Only what is missing is filled: the fixture's own names and answers win.
+create or replace function pg_temp.avetmiss_ready(p_app uuid) returns void language plpgsql as $$
+declare v_student uuid;
+begin
+  select student_id into v_student from public.enrollment_applications where id = p_app;
+  if v_student is null then raise exception 'fixture application % has no student', p_app; end if;
+  update public.enrollment_students set sex_code = coalesce(sex_code, 'F'), birth_country_code = coalesce(birth_country_code, '1101'),
+    home_language_code = coalesce(home_language_code, '1201'), indigenous_status_code = coalesce(indigenous_status_code, '4'),
+    school_level_code = coalesce(school_level_code, '12'), school_level_year = coalesce(school_level_year, '2017'),
+    at_school_flag = coalesce(at_school_flag, 'N'), labour_force_code = coalesce(labour_force_code, '01'),
+    disability_flag = coalesce(disability_flag, 'N'), prior_education_flag = coalesce(prior_education_flag, 'N'),
+    full_name = coalesce(nullif(full_name, ''), 'Fixture Student'),
+    details = '{"first_name": "Fixture", "last_name": "Student", "dob": "2000-01-01", "au_street": "1 Test St", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC", "study_reason": "To get a job - 01"}'::jsonb
+      || jsonb_strip_nulls(coalesce(details, '{}'::jsonb))
+   where id = v_student;
+end $$;
+select pg_temp.avetmiss_ready(id) from public.enrollment_applications where id::text like 'e5100000-%';
 update public.enrollment_applications set student_email = s.email from public.enrollment_students s where s.id = enrollment_applications.student_id
   and enrollment_applications.id::text like 'e5100000%';
 
@@ -58,6 +77,8 @@ create function pg_temp.tok(n int) returns text language sql as $$ select rpad('
 create function pg_temp.hash(t text) returns text language sql as $$ select encode(sha256(convert_to(t, 'UTF8')), 'hex') $$;
 create function pg_temp.decl() returns jsonb language sql security definer as $$
   select jsonb_object_agg(key, hash) from public.application_declaration_texts where active $$;
+-- APPLICATION-DRAWN-SIGNATURE (20261126233517): the student's drawn signature (a PNG) goes with the declarations.
+create function pg_temp.sig() returns text language sql immutable as $$ select 'data:image/png;base64,' || repeat('iVBORw0KGgo', 30) $$;
 create function pg_temp.dv(app uuid) returns bigint language sql security definer as $$ select draft_version from public.enrollment_applications where id = app $$;
 create function pg_temp.hstate(app uuid) returns text language sql security definer as $$ select state from skyline_private.application_handoffs where application_id = app $$;
 create function pg_temp.inv(app uuid) returns uuid language sql security definer as $$
@@ -77,15 +98,15 @@ select is((select hash from public.application_declaration_texts where key = 'us
 
 -- 2. Agent, agency admin and staff cannot consent / submit.
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-agent', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-agent', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   '42501', null, 'agent submit refused');
 select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-agent2', '{"confirmed":true,"authorised":true,"method":"electronic","declarationVersion":"1.0"}')$$,
   '42501', null, 'agent-ticked electronic consent refused');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000006');
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-aa', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-aa', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   '42501', null, 'agency admin submit refused');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-staff', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-staff', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   '42501', null, 'staff submit refused');
 reset role;
 
@@ -97,9 +118,9 @@ select ok(public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-
 select is(pg_temp.hstate('e5100000-0000-0000-0000-000000000002'), 'with_student', 'handoff with the student');
 select ok((select sent_snapshot->'values'->>'agent_agency' = 'Signs Agency' from skyline_private.application_handoffs where application_id = 'e5100000-0000-0000-0000-000000000002'), 'snapshot taken when sent');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
-select throws_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0411111111"}}')$$,
-  '42501', null, 'agent edit while with the student refused');
-select ok(not public.portal_can_edit_application('e5100000-0000-0000-0000-000000000002'), 'portal_can_edit_application false for the agent');
+select lives_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0411111111"}}')$$,
+  'agent edits while the student has it (ONE-PAGE-EDIT-ALL, 20261127020517)');
+select ok(public.portal_can_edit_application('e5100000-0000-0000-0000-000000000002'), 'portal_can_edit_application true for the agent while the student has it');
 reset role;
 
 -- 4. Student: a link alone is not enough (no password / Google), then accept with a password.
@@ -114,7 +135,7 @@ select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(1)))->>'ac
 select is(public.portal_wizard_invite_lookup(pg_temp.hash(pg_temp.tok(98)))->>'valid', 'false', 'lookup: unknown link invalid');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000005');
 select is(public.portal_wizard_invite_accept(pg_temp.tok(5)), 'e5100000-0000-0000-0000-000000000005'::uuid, 'first-time student opens the application without a password');
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000005', pg_temp.dv('e5100000-0000-0000-0000-000000000005'), 'k-nopass', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000005', pg_temp.dv('e5100000-0000-0000-0000-000000000005'), 'k-nopass', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   '42501', 'Create your password before signing, so you can sign in to your SLIT account later', 'signing needs the password first');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select is(public.portal_wizard_invite_accept(pg_temp.tok(1)), 'e5100000-0000-0000-0000-000000000002'::uuid, 'student accepts with a password');
@@ -127,12 +148,12 @@ select ok(pg_temp.mails('e5100000-0000-0000-0000-000000000002') like '%handoff_a
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select lives_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0422222222","agent_agency":"Signs Agency"}}')$$,
   'student edits contact (unchanged agency allowed)');
-select throws_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"preferred_intake":"Jul 2027"}}')$$,
-  '42501', null, 'student cannot change the intake');
+select lives_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"preferred_intake":"Jul 2027"}}')$$,
+  'student changes the intake (STUDENT-CHANGES-COURSE, 20261126220517)');
 select throws_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"agent_agency":"Other"}}')$$,
   '42501', null, 'student cannot change the agency');
 select throws_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"courses":[{"courseId":"X","variant":""}]}')$$,
-  '42501', null, 'student cannot change the course');
+  null, null, 'a course that does not exist is still refused (the student picks only offered courses)');
 
 -- 6. Request a change: student read-only, agent edits and sends again.
 select lives_ok($$select public.portal_application_request_change('e5100000-0000-0000-0000-000000000002', 'Please change my intake to July')$$, 'student requests a change');
@@ -172,16 +193,16 @@ reset role;
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
 select public.portal_wizard_invite_accept(pg_temp.tok(3));
 select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0455555555"}}');
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult0', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult0', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   '42501', 'Create your password before signing, so you can sign in to your SLIT account later', 'a hidden password does not count: create it at signing');
 select ok(public.portal_my_signing_password_needed('e5100000-0000-0000-0000-000000000002'), 'sign step asks for the password');
 select ok(public.portal_my_password_created(), 'password created at the sign step is recorded');
 select ok(not public.portal_my_signing_password_needed('e5100000-0000-0000-0000-000000000002'), 'then no longer asked');
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('declarations', pg_temp.decl() - 'usi_permission'))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl() - 'usi_permission'))$$,
   '22023', null, 'every declaration must be ticked');
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('declarations', pg_temp.decl() || '{"esos_written_agreement":"00"}'))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl() || '{"esos_written_agreement":"00"}'))$$,
   '22023', null, 'a declaration with another text refused');
-select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), 'k-adult', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   'student signs and submits');
 reset role;
 select is(pg_temp.status('e5100000-0000-0000-0000-000000000002'), 'submitted', 'adult: submitted at once');
@@ -203,7 +224,7 @@ select public.portal_wizard_invite_delivered(pg_temp.inv('e5100000-0000-0000-000
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000003');
 select public.portal_wizard_invite_accept(pg_temp.tok(6));
 select public.portal_my_password_created();
-select is(public.portal_submit_v2('e5100000-0000-0000-0000-000000000003', pg_temp.dv('e5100000-0000-0000-0000-000000000003'), 'k-minor', jsonb_build_object('declarations', pg_temp.decl()))->>'state',
+select is(public.portal_submit_v2('e5100000-0000-0000-0000-000000000003', pg_temp.dv('e5100000-0000-0000-0000-000000000003'), 'k-minor', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))->>'state',
   'waiting_guardian', 'under 18: waits for the guardian');
 select throws_ok($$select public.portal_guardian_request_begin('e5100000-0000-0000-0000-000000000003', 'Pat Parent', 'Mother', 'minor.signs@example.test', '+61400000000', pg_temp.hash(pg_temp.tok(7)))$$,
   '22023', null, 'guardian needs their own email');
@@ -237,7 +258,7 @@ update skyline_private.application_handoffs set state = 'waiting_guardian' where
 select throws_ok($$select public.portal_guardian_open(pg_temp.hash(pg_temp.tok(7)))$$, '42501', null, 'expired guardian link refused');
 update public.enrollment_applications set status = 'action_required' where id = 'e5100000-0000-0000-0000-000000000002';
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
-select throws_ok($$select public.portal_application_resubmit('e5100000-0000-0000-0000-000000000002', 'fixed', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select throws_ok($$select public.portal_application_resubmit('e5100000-0000-0000-0000-000000000002', 'fixed', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   '42501', null, 'agent resubmit refused');
 reset role;
 
@@ -259,6 +280,7 @@ insert into public.enrollment_students(id, agency_id, full_name, email, status) 
 insert into public.enrollment_applications(id, agency_id, assigned_agent_id, created_by, student_id, status, student_email, data) values
  ('e5100000-0000-0000-0000-000000000007', 'a5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001', 'c5100000-0000-0000-0000-000000000001',
   'd5100000-0000-0000-0000-000000000007', 'draft', 'textlink.signs@example.test', '{"values":{"dob":"1995-01-01","mobile":"0412345678"}}');
+select pg_temp.avetmiss_ready('e5100000-0000-0000-0000-000000000007');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
 select public.portal_wizard_invite_begin('e5100000-0000-0000-0000-000000000007', pg_temp.hash(pg_temp.tok(11)));
 reset role;
@@ -269,14 +291,14 @@ select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
 select is(public.portal_wizard_invite_accept(pg_temp.tok(12)), 'e5100000-0000-0000-0000-000000000007'::uuid, 'opened from the text link');
 select is(public.contact_pending_mine()->>'kind', 'email', 'the email still has to be confirmed');
 select public.portal_my_password_created();
-select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select throws_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   '42501', 'Confirm your email with the code we send you before signing', 'no signature before the email code');
 reset role;
 select public.contact_code_issue('b5100000-0000-0000-0000-000000000007', '654321');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
 select is(public.contact_code_verify('111111', 'e5100000-0000-0000-0000-000000000007')->>'ok', 'false', 'wrong email code refused');
 select is(public.contact_code_verify('654321', 'e5100000-0000-0000-0000-000000000007')->>'ok', 'true', 'email confirmed with the code');
-select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('declarations', pg_temp.decl()))$$,
+select lives_ok($$select public.portal_submit_v2('e5100000-0000-0000-0000-000000000007', pg_temp.dv('e5100000-0000-0000-0000-000000000007'), 'k-text', jsonb_build_object('signature', pg_temp.sig(), 'declarations', pg_temp.decl()))$$,
   'then the student signs and submits');
 reset role;
 select ok(pg_temp.events('e5100000-0000-0000-0000-000000000007') like '%mobile_confirmed%email_confirmed%', 'both confirmations on the timeline');

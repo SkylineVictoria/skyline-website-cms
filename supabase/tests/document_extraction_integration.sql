@@ -39,9 +39,6 @@ end $$;
 select pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/a.pdf', 'Passport');
 insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
   ('50000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/a.pdf', 'a.pdf', '{}');
-select pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/b.pdf', 'Passport');
-insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
-  ('50000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/b.pdf', 'b.pdf', '{}');
 
 set local role service_role;
 select is(public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000001', '{"first_name":"Ada","last_name":"Replacement"}'::jsonb)->>'first_name', 'auto_applied', 'an empty form field is populated');
@@ -59,6 +56,11 @@ select is((select count(*)::integer from public.enrollment_document_field_review
 
 -- The locked review save serialises with a worker candidate.
 reset role;
+-- STUDENT-DOCUMENTS (20261127150517): one current passport per student, so the second passport is uploaded only now (it retires a.pdf;
+-- before, both stayed current and a.pdf could still be read after b.pdf arrived).
+select pg_temp.checked_upload('40000000-0000-0000-0000-000000000001/b.pdf', 'Passport');
+insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
+  ('50000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000001', 'Passport', '40000000-0000-0000-0000-000000000001/b.pdf', 'b.pdf', '{}');
 set local role service_role;
 select lives_ok($$select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000002', '{"dob":"2000-01-01"}'::jsonb)$$, 'concurrent worker candidate is accepted safely');
 reset role;
@@ -95,11 +97,13 @@ select pg_temp.checked_upload('40000000-0000-0000-0000-000000000003/' || f, c) f
 set local role service_role;
 insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
   ('50000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000003', 'Driving Licence', '40000000-0000-0000-0000-000000000003/old.pdf', 'old.pdf', '{}'),
-  ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000003', 'Driving Licence', '40000000-0000-0000-0000-000000000003/new.pdf', 'new.pdf', '{}'),
   ('50000000-0000-0000-0000-000000000005', '40000000-0000-0000-0000-000000000003', 'Academic', '40000000-0000-0000-0000-000000000003/a1.pdf', 'a1.pdf', '{}'),
   ('50000000-0000-0000-0000-000000000006', '40000000-0000-0000-0000-000000000003', 'Academic', '40000000-0000-0000-0000-000000000003/a2.pdf', 'a2.pdf', '{}'),
   ('50000000-0000-0000-0000-000000000007', '40000000-0000-0000-0000-000000000003', 'Academic', '40000000-0000-0000-0000-000000000003/a3.pdf', 'a3.pdf', '{}');
 select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000003', '{"au_street":"1 Old St","au_suburb":"Oldtown"}'::jsonb);
+-- STUDENT-DOCUMENTS (20261127150517): the newer licence retires the older one, so it is uploaded after the older one was read.
+insert into public.enrollment_application_documents(id, application_id, category, storage_path, filename, metadata) values
+  ('50000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000003', 'Driving Licence', '40000000-0000-0000-0000-000000000003/new.pdf', 'new.pdf', '{}');
 update public.enrollment_applications set data = jsonb_set(data, '{values,au_suburb}', '"Edited"') where id = '40000000-0000-0000-0000-000000000003';
 delete from public.enrollment_application_documents where id = '50000000-0000-0000-0000-000000000003';
 create temp table replace_result as select public.portal_apply_document_candidates('50000000-0000-0000-0000-000000000004', '{"au_street":"2 New St","au_suburb":"Newtown"}'::jsonb) as r;

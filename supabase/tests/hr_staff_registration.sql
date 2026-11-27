@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Staff enrolment v2 (hr schema): phone normalisation, public apply, token links (hash only, expiry, replace, revoke, read-only
 -- after submit), documents and review, re-upload, offer and signature, activation (new login or existing login), My HR,
 -- rejection, retention, email outbox, privileges and the status log. Fixtures only; rolled back. Run: npx supabase test db
-select plan(697);
+select plan(695);
 
 -- ---------------------------------------------------------------- phone normalisation (same vectors as scripts/test-staff-registration.ts)
 select is(hr.phone_e164('+61 412 345 678'), '+61412345678', 'e164 with spaces');
@@ -132,7 +132,7 @@ select is(hr.staff_transition_allowed('documents_submitted','invited'), true, 'r
 select is(hr.staff_transition_allowed('offer_sent','documents_submitted'), true, 'a withdrawn offer goes back to documents_submitted');
 select is(hr.staff_transition_allowed('rejected','applied'), true, 'rejected -> applied (re-application or reopen)');
 select is(hr.staff_transition_allowed('applied','active') and hr.staff_transition_allowed('invited','inactive'), true, 'an Admin may make anyone Active or Inactive (Employees, 20261110170000 / 20261110220000)');
-select is(hr.staff_transition_allowed('invited','offer_sent'), false, 'no offer before the documents are submitted');
+select is(hr.staff_transition_allowed('invited','offer_sent'), true, 'the offer may go before the documents (STAFF-OFFER-FIRST, 20261124235517)');
 select is(hr.staff_transition_allowed('draft','submitted'), false, 'the old statuses are gone');
 select throws_ok($$insert into hr.staff_profiles(email, phone_e164, status) values ('x@example.test', '+61400000999', 'invited')$$, '23514', 'A staff profile starts as an application.', 'a profile starts as applied');
 select is((select column_default from information_schema.columns where table_schema = 'hr' and table_name = 'staff_profiles' and column_name = 'status'), '''applied''::text', 'the status default is applied');
@@ -214,13 +214,13 @@ select pg_temp.checked_uploads();
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', gen_random_uuid() || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'a file outside the person''s folder is refused');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/visa/v.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, '22023', 'The document location is not valid.', 'the folder must match the document type');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/missing.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)$$, 'P0002', 'The uploaded file was not found.', 'the file must exist');
-select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'Tell us your residency status for tax purposes.', 'submit needs the tax and super answers (20261112110000) before it looks at the documents');
+select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'A passport is required before you can submit.', 'tax and super are no longer asked (STAFF-ONBOARD-SIMPLE, 20261122023517): submit asks for the passport');
 select lives_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-3'), '{"tax_residency":"resident","tax_free_threshold":"yes","study_loan":"no","super_choice":"default"}')$$, 'the person answers them through the link');
 select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'A passport is required before you can submit.', 'submit names the passport first');
 select throws_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10, current_date - 1)$$, '22023', 'This passport has expired. Upload a current one.', 'an expired passport is refused');
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p1.pdf', 'p.pdf', 'application/pdf', 10)$$, 'a passport is recorded without its expiry date (the reader or the person adds it)');
 select is(public.hr_svc_document_add(pg_temp.h('tok-3'), 'Passport', pg_temp.v('a1') || '/passport/p2.pdf', 'p.pdf', 'application/pdf', 10, current_date + 900)->'replacedPaths'->>0, pg_temp.v('a1') || '/passport/p1.pdf', 'a new passport replaces the old one and returns its path for deletion');
-select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'Upload your visa.', 'submit needs every required document');
+-- STAFF-DOCS-PASSPORT-ONLY (20261122053517): only the passport is required; the other documents below are optional extras.
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Visa', pg_temp.v('a1') || '/visa/v.pdf', 'v.pdf', 'application/pdf', 10, current_date + 400)$$, 'visa');
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'English', pg_temp.v('a1') || '/english/e.pdf', 'e.pdf', 'application/pdf', 10)$$, 'English without an expiry date');
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Academic', pg_temp.v('a1') || '/academic/a1.pdf', 'a1.pdf', 'application/pdf', 10)$$, 'academic 1');
@@ -230,7 +230,7 @@ select is(public.hr_svc_document_remove(pg_temp.h('tok-3'), (select id from hr.s
 select lives_ok($$select public.hr_svc_document_add(pg_temp.h('tok-3'), 'Health Insurance', pg_temp.v('a1') || '/health-insurance/h.pdf', 'h.pdf', 'application/pdf', 10, current_date + 300)$$, 'health insurance');
 select is(public.hr_svc_document_for_extraction(pg_temp.h('tok-3'), (select id from hr.staff_documents where storage_path = pg_temp.v('a1') || '/passport/p2.pdf'))->>'category', 'Passport', 'the link holder''s document is offered for reading');
 select throws_ok($$select public.hr_svc_document_for_extraction(pg_temp.h('tok-3'), gen_random_uuid())$$, 'P0002', 'Document not found.', 'another document is not');
-select throws_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, '23514', 'Enter your bank details.', 'submit needs the bank details');
+-- STAFF-ONBOARD-SIMPLE (20261122023517): bank details are optional in the link wizard; the person may still save them.
 select lives_ok($$select public.hr_svc_onboarding_bank_save(pg_temp.h('tok-3'), '{"accountName":"Ann Applicant","bsb":"062-000","accountNumber":"1234 4321","bankName":"Commonwealth Bank"}')$$, 'the person saves their bank details through the link');
 select lives_ok($$select public.hr_svc_onboarding_submit(pg_temp.h('tok-3'))$$, 'the applicant submits');
 select is((select status from hr.staff_profiles where id = pg_temp.v('a1')), 'documents_submitted', 'documents_submitted');
@@ -303,6 +303,7 @@ select is(public.hr_svc_offer_signed_file((select id from hr.staff_offers where 
 insert into t select 'w1', public.hr_svc_apply('Wes', 'Withdrawn', 'wes@example.test', '0400 000 301')->>'profileId';
 update hr.staff_profiles set status = 'invited' where id = pg_temp.v('w1');
 update hr.staff_profiles set status = 'documents_submitted' where id = pg_temp.v('w1');
+update hr.staff_applications set submitted_at = now() where profile_id = pg_temp.v('w1'); -- the documents were really submitted (hr.staff_before_offer, 20261124235517)
 select pg_temp.set_pay(pg_temp.v('w1')); -- pay details before an offer (20261111090000)
 update hr.staff_profiles set status = 'offer_sent' where id = pg_temp.v('w1');
 set local role authenticated;
@@ -724,7 +725,7 @@ select is((public.hr_admin_staff_list(null, null, 50, 0, array['offer_signed','a
 reset role;
 
 -- ---------------------------------------------------------------- guard and append-only
-select throws_ok($$update hr.staff_profiles set status = 'offer_sent' where id = pg_temp.v('x1')$$, '23514', 'A staff record cannot move from invited to offer_sent.', 'invited -> offer_sent is not an allowed transition (the guard still refuses skipped steps)');
+select throws_ok($$update hr.staff_profiles set status = 'offer_signed' where id = pg_temp.v('x1')$$, '23514', 'A staff record cannot move from invited to offer_signed.', 'invited -> offer_signed is not an allowed transition (the guard still refuses skipped steps; invited -> offer_sent is allowed since STAFF-OFFER-FIRST)');
 select throws_ok($$update hr.staff_status_events set note = 'edited'$$, '23514', 'The staff status log is append-only.', 'the log cannot be edited');
 select ok((select count(*) from hr.staff_status_events where profile_id = pg_temp.v('a1')) >= 7, 'every move of the application is logged');
 -- ================================================================ onboarding flow (20261111090000 / 100000 / 110000)
@@ -777,7 +778,10 @@ update hr.staff_applications set submitted_at = now() where profile_id = pg_temp
 select is(hr.onboarding_stage(pg_temp.v('f1'))->>'stage', 'documents_submitted', 'documents in, not all approved: the stage is Documents submitted');
 set local role authenticated;
 set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
-select throws_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{}'))$$, '23514', 'Approve every required document first (passport).', 'blocked: no pay details before the documents are approved');
+select lives_ok($$select public.hr_admin_onboarding_pay_save(pg_temp.v('f1'), pg_temp.pay('{}'))$$, 'pay details may be saved before the documents are approved (STAFF-OFFER-FIRST, 20261124235517)');
+reset role; update hr.employment set pay_details_at = null where profile_id = pg_temp.v('f1'); -- back to no pay details for the stage checks below
+set local role authenticated;
+set local request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000004';
 select lives_ok($$select public.hr_admin_staff_document_review(d.id, 'rejected', 'Photo page cut off') from hr.staff_documents d where d.profile_id = pg_temp.v('f1') and d.category = 'Passport' and d.is_current$$, 'a document is rejected with a reason');
 select is((public.hr_admin_onboarding(pg_temp.v('f1'))->>'stage') || '/' || (public.hr_admin_staff_detail(pg_temp.v('f1'))->'summary'->>'rejected'), 'documents_submitted/1', 'a rejected document keeps the stage at Documents submitted');
 select lives_ok($$select public.hr_admin_staff_document_review(d.id, 'approved') from hr.staff_documents d where d.profile_id = pg_temp.v('f1') and d.is_current$$, 'every document is approved');
@@ -1041,8 +1045,9 @@ select is(hr.v_name_problem('  ', 'first name'), 'Enter your first name.', 'a bl
 select is(hr.v_name_problem(repeat('a', 101), 'last name'), 'The last name must be 100 characters or fewer.', 'a name over 100 characters');
 select is(hr.v_dob_problem('', date '2026-11-10'), 'Enter your date of birth.', 'a blank date of birth');
 select is(hr.v_dob_problem('1990-02-30', date '2026-11-10'), 'Enter a real date of birth.', 'a date that does not exist');
-select is(hr.v_dob_problem('2016-11-11', date '2026-11-10'), 'You must be between 10 and 100 years old.', 'one day too young');
-select is(hr.v_dob_problem('2016-11-10', date '2026-11-10') || hr.v_dob_problem('1926-11-10', date '2026-11-10') || hr.v_dob_problem('5/6/1990', date '2026-11-10'), '', 'exactly 10, exactly 100, and day/month/year are accepted');
+-- BUSINESS-RULES-LIVE batch 4 (20261121002517): the minimum age is the rule hrms.staff_minimum_age (14, the value the database check already had).
+select is(hr.v_dob_problem('2012-11-11', date '2026-11-10'), 'You must be between 14 and 100 years old.', 'one day too young');
+select is(hr.v_dob_problem('2012-11-10', date '2026-11-10') || hr.v_dob_problem('1926-11-10', date '2026-11-10') || hr.v_dob_problem('5/6/1990', date '2026-11-10'), '', 'exactly 14, exactly 100, and day/month/year are accepted');
 select is(hr.v_bank_problem('', '062000', '12345678'), 'Enter the account name.', 'a blank account name');
 select is(hr.v_bank_problem('Jo', '06200', '12345678'), 'The BSB must be 6 digits, for example 062-000.', 'a five-digit BSB');
 select is(hr.v_bank_problem('Jo', '062-000', '123'), 'The account number must be 4 to 10 digits.', 'a three-digit account number');
@@ -1060,7 +1065,7 @@ insert into storage.objects(bucket_id, name) values ('staff-documents', pg_temp.
 select public.hr_svc_apply_resume(pg_temp.v('w1p'), pg_temp.v('w1p') || '/resume/cv.pdf', 'cv.pdf', 'application/pdf', 100);
 update hr.staff_profiles set status = 'invited' where id = pg_temp.v('w1p');
 insert into hr.staff_invites(profile_id, purpose, token_hash, created_by, expires_at) values (pg_temp.v('w1p'), 'documents', pg_temp.h('tok-wiz'), 'a0000000-0000-0000-0000-000000000004', now() + interval '14 days');
-select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"date_of_birth":"2020-01-01"}')$$, '22023', 'You must be between 10 and 100 years old.', 'the date of birth follows the shared rule');
+select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"date_of_birth":"2020-01-01"}')$$, '22023', 'You must be between 14 and 100 years old.', 'the date of birth follows the shared rule');
 select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"emergency_phone":"0422 333 444"}')$$, '22023', 'Enter the emergency contact''s phone number.', 'an emergency phone needs its country code');
 select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"passport_number":"12"}')$$, '22023', 'Enter the passport number: 6 to 12 letters and numbers.', 'the passport number format');
 select throws_ok($$select public.hr_svc_onboarding_save(pg_temp.h('tok-wiz'), '{"phone":"+61400000101"}')$$, '23505', 'This number can''t be used. Sign in or contact the administrator.', 'the mobile cannot become one another person uses');
@@ -1189,7 +1194,7 @@ select is(jsonb_array_length(public.signing_service('notify_claim')),0,'a claime
 select public.signing_service('notify_result',null,null,jsonb_build_object('id',(select id from sign_mail),'state','sent'));
 select is(public.signing_service('notify_result',null,null,jsonb_build_object('id',(select id from sign_mail),'state','sent'))->>'stale','true','a delivery result is recorded once');
 select is(public.signing_service('open',encode(sha256(convert_to((select token from sign_mail),'UTF8')),'hex'))->>'state','viewed','first open records viewed');
-select throws_ok($$select public.signing_service('open',repeat('c',64))$$,'P0001','This signing link is invalid or expired','unknown token refused');
+select throws_ok($$select public.signing_service('open',repeat('c',64))$$,'42501','This link is no longer available.','unknown token refused (neutral message, 20261120133517)');
 select throws_ok($$select public.signing_service('sign',encode(sha256(convert_to((select token from sign_mail),'UTF8')),'hex'),null,'{}')$$,'P0001','Your full name and agreement are required','missing consent refused');
 create temp table sign_ok as select encode(sha256(convert_to(token,'UTF8')),'hex') as h, jsonb_build_object('signer_name','Asha Patel','consent','I have read this document and agree to its contents. I consent to sign it electronically and adopt the signature I provide here as my electronic signature.',
  'document_hash',repeat('a',64),'signed_at',now(),'current_path','d0000000-0000-0000-0000-000000000001/signed-1.pdf','current_hash',repeat('d',64)) as d from sign_mail;

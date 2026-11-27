@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(96);
+select plan(112);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -331,6 +331,53 @@ reset role;
 select is((select status from public.enrollment_applications where id = 'e5100000-0000-0000-0000-000000000007'), 'withdrawn', 'the application is withdrawn');
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000007');
 select throws_ok($$select public.portal_student_withdraw('e5100000-0000-0000-0000-000000000007', 'Studying elsewhere')$$, '22023', null, 'not twice');
+reset role;
+
+-- SUBMITTED-NEEDS-SIGNATURE (20261127180517): only a student-signed application becomes Submitted, whoever asks.
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select lives_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'under_review', 'Checking')$$, 'staff move the signed application on to Under review');
+select lives_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'submitted', 'Back')$$, 'and back to Submitted: what is Submitted is still what the student signed');
+select lives_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'action_required', 'Please fix the passport')$$, 'staff send it back for a correction');
+select throws_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'submitted', 'Set by staff')$$, '42501',
+  'Only the student can submit this application, by signing it (under 18: with their parent or guardian). Send it to the student to sign.', 'a SLIT admin cannot Set to Submitted after a correction: the student signs again');
+reset role;
+-- fixture only: a never-signed application moved on (withdrawn) without the guards
+set local session_replication_role = replica; update public.enrollment_applications set status = 'withdrawn' where id = 'e5100000-0000-0000-0000-000000000005'; set local session_replication_role = origin;
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select throws_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000005', 'submitted', 'Set by staff')$$, '42501', null, 'an application the student never signed cannot be Set to Submitted');
+reset role;
+insert into public.enrollment_applications(id, agency_id, status, data) values ('e5100000-0000-0000-0000-0000000000a9', 'a5100000-0000-0000-0000-000000000001', 'draft', '{}');
+select throws_ok($$update public.enrollment_applications set status = 'submitted' where id = 'e5100000-0000-0000-0000-0000000000a9'$$, '42501', null, 'no writer (not even the database owner) makes an unsigned draft Submitted');
+
+-- ADMIN-EDIT-LOG (20261127190517): a SLIT admin corrects a Submitted application; every changed answer is logged (who, when, old, new)
+reset role;
+set local session_replication_role = replica; update public.enrollment_applications set status = 'submitted' where id = 'e5100000-0000-0000-0000-000000000002'; set local session_replication_role = origin;
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0411000000"}}')$$, '42501', null, 'the agent cannot change a Submitted application');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select lives_ok($$select public.portal_save_draft_v2('e5100000-0000-0000-0000-000000000002', pg_temp.dv('e5100000-0000-0000-0000-000000000002'), '{"values":{"mobile":"0499999999"}}')$$, 'a SLIT admin corrects a Submitted application');
+reset role;
+select is((select c.source || '|' || c.field || '|' || coalesce(c.old_value #>> '{}', '') || '|' || (c.new_value #>> '{}') || '|' || c.changed_by_name || '|' || c.changed_by::text
+  from public.application_admin_changes c where c.application_id = 'e5100000-0000-0000-0000-000000000002' and c.field = 'mobile'),
+  'student|mobile|0455555555|0499999999|Staff Signs|b5100000-0000-0000-0000-000000000004', 'the change is logged: the field, the old and new value, who');
+select ok((select bool_and(changed_at is not null) and count(*) >= 1 from public.application_admin_changes where application_id = 'e5100000-0000-0000-0000-000000000002'), 'with when');
+select throws_ok($$delete from public.application_admin_changes where application_id = 'e5100000-0000-0000-0000-000000000002'$$, '42501', null, 'the log cannot be changed or deleted');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select is(jsonb_array_length(public.application_admin_changes_list('e5100000-0000-0000-0000-000000000002')) >= 1, true, 'SLIT admins read the log');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.application_admin_changes_list('e5100000-0000-0000-0000-000000000002')$$, '42501', null, 'an agent cannot read it');
+reset role;
+-- STUDENT-AGENT-CHANGE (20261127190517): the student picks another active agent of their own agency
+insert into public.agents(id, business_id, full_name, email, status) values
+  ('a6100000-0000-0000-0000-000000000001', 'a5100000-0000-0000-0000-000000000001', 'First Agent', 'first.agent@blackhole.postmarkapp.com', 'Active'),
+  ('a6100000-0000-0000-0000-000000000002', 'a5100000-0000-0000-0000-000000000001', 'Second Agent', 'second.agent@blackhole.postmarkapp.com', 'Active');
+update public.enrollment_students set agent_id = 'a6100000-0000-0000-0000-000000000001' where id = (select student_id from public.enrollment_applications where id = 'e5100000-0000-0000-0000-000000000002');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
+select lives_ok($$select public.portal_student_change_agent('a6100000-0000-0000-0000-000000000002')$$, 'the student changes to another agent of their agency');
+reset role;
+select is((select agent_id from public.enrollment_students where id = (select student_id from public.enrollment_applications where id = 'e5100000-0000-0000-0000-000000000002')), 'a6100000-0000-0000-0000-000000000002'::uuid, 'the student record names the new agent');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000002');
+select throws_ok($$select public.portal_student_change_agent(gen_random_uuid())$$, '22023', null, 'an agent outside the agency is refused');
 reset role;
 
 select * from finish();

@@ -1316,3 +1316,17 @@ branch only. The SLIT design keeps its detector (`detect.ts`) as the fast path; 
 - Answer pages: on a generic layout an answer that does not fit its box at 8 pt prints "See answer page N" and goes in full on pages
   added after its task's last page (question number and text first); the SLIT design keeps its continued pages.
 - Release order: apply the migration, deploy `asm-import`, then the frontend; regression: CPCCPD2012 / RIICWD525E templates identical.
+
+## Only a student-signed application is Submitted (SUBMITTED-NEEDS-SIGNATURE, 2026-11-27)
+Migration `20261127180517_submitted_needs_student_signature`. `skyline_private.application_finalize` (reached only from the student's
+signing, `student_sign`, or for an under-18 student the guardian's, `portal_guardian_sign`) marks its update (`portal.signed_submit`);
+trigger `a0_application_submitted_signed` (insert / update of status, any writer) refuses Submitted from Draft or Action required
+otherwise (42501 "Only the student can submit this application, by signing it ..."), and from a later status allows it only when the
+last signed submission is newer than the last return to Draft / Action required. Tests: `application_student_signs.sql`.
+
+## Student changes agent; admin edits of a Submitted application are logged (2026-11-27)
+Migration `20261127190517_student_agent_change_and_admin_edit_log`: hosted had recorded 20261127030517 and 20261127010517 without their
+SQL taking effect; this applies them with the definitions a fresh lab has (`portal_student_agency_options`, `portal_student_change_agent`,
+`portal_lock_draft`). A SLIT admin's save on a Submitted / Under review application sets `portal.admin_edit_after_submit`; triggers log
+every changed answer to `application_admin_changes` (source application / student / course, field, old and new value, who, when;
+append-only), read by SLIT admins with `application_admin_changes_list(application)`.

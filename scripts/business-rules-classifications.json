@@ -828,5 +828,38 @@
       "eceaeced30d0b1cd05aecd14134f5d278560ce3affded1512b343f24468bab5b",
       "faf62a2f1760965ca692953b2eee69d4e578db46c0122db8d0c359d9c7726feb"
     ]
+  },
+  {
+    "type": "security",
+    "id": "application-signing-and-admin-edit-audit",
+    "reason": "2026-11-27 owner: only a student-signed application becomes Submitted (signature integrity), only SLIT admins edit a Submitted application and every change is logged, a student changes only to an active agent of their own agency; authorization rules, not adjustable settings.",
+    "fingerprints": [
+      "02eaed4e2076b61a994a400cdc1bb4d2d2ae8808577854f198b6cabaa830b85d",
+      "0419c42d1f204afd97438a28f630be86eef155778811cb117cb626deef96ddaf",
+      "14f4f3baa5411b556a2e31f490db3f7e5add767ff3c0fec6c60af28f3f16125f",
+      "2373c4ff8a1fadb00f18fcc56f2aeaff24e829bb9f25d030694e01f22721cae5",
+      "30342b91e4a4cfc818d75652596ba8210eb05cc464edc0972b288a125ba51f51",
+      "3272fd5da983f12987a1bae2e7645f1ce94902a19abdab20f58ff858189fa682",
+      "39e52152da9dc6e94b8de5d7bab3fd04444cb6ccf5936278daa1ef093c22ca8b",
+      "4a12d1dbfc7ebd2654352fdd63d3ba98741c4ff9313a04e8380b8dc2af106d37",
+      "4da0c8479f94808634f935e7ea3ca57ab13b07068e6d31df442d6d37fa73fafb",
+      "60cc37804f9332410d7061bc50e2886065d6e3e138d6dcd3b9fa172a53e82628",
+      "60f1ed47c8073d4d89caef6413fba82ac212099aad7c5dff87f218cd131ef54f",
+      "6609a1a924fff134ba7d29c2ab9b33e6c9799ae2e14890995e09fc80ab417e91",
+      "7aad3dba96bb23a54a2d8bd1d54e74a360d3053eebc4454e5ba19d2627b739e9",
+      "7b1adc5a1d4bc25088b70e1fe96ce4d00ec793e5ba7ee62b307ef78ad972b1c6",
+      "7bf08ffbf111823ad592ed931733ca0fec1d0ffd0bee0a147047c358ae81a3d5",
+      "814f0a4c4daa0a087050a997df9b53ef97b09703071a317460e9448085415d23",
+      "a306291d8f591bc64eb5741f52ded2ffe1d0c28986013a8f9ea93bbbbb38e6c1",
+      "add11a51478dc191058a1f459c3e52d1737ae9d314b2ad4602d4309916ef9761",
+      "b3fc168934e7cc5edcb224bc40b863b5eba173e71052598013c1a59aab9818ed",
+      "b61d43cad492eea7dbc6d0b7ab0d4e7bfac2990c275c13fafa0d3ffd018012b9",
+      "cc6f9f96eeb1f2f3b1ef16b870c6c16c23bf6ace6470feddd0f57170a2d93c57",
+      "dc26b7063bc31996e6330ffa5423882de432df2aab00dff3022d9e96a2670786",
+      "eb92c309ca2da94e84b93209897a6ed63b4f801999b8c21ca1b90b3025ab293a",
+      "f3c3c17e2f6635b00d457b69a8d31ab166a471ec01db2e82b1dd54d3411dccff",
+      "f5f900beaa38c6a5f7debcdca926ea1a6f6e26cdc84719f17ca5b5fec25e9987",
+      "f9525055aa4681c63792f6318afe93da03e19e9d4dbb615e8f9e2594426f9858"
+    ]
   }
 ]

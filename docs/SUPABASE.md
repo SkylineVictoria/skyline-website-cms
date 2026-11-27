@@ -1295,7 +1295,7 @@ Migration `20261127160517_student_picker_search`; no Edge Function.
   `portal_create_student_application`; the separate business / agent step is gone.
 - Tests: `phase4_authorization_positive.sql` (agent cannot find another agency's student), `e2e/regression.spec.ts` "student picker: …" (4).
 
-## Workbooks of any layout (ASM-ANY-LAYOUT, 2026-11-27, branch, NOT deployed)
+## Workbooks of any layout (ASM-ANY-LAYOUT, 2026-11-27, released)
 Migration `20261127170517_asm_any_layout` (LOCAL ONLY); Edge Function `asm-import` action `classify_fields` (NOT deployed); frontend on the
 branch only. The SLIT design keeps its detector (`detect.ts`) as the fast path; any other layout is read by code first:
 - `pdfTemplate/candidates.ts`: every empty fillable area (closed boxes rebuilt from the drawn border segments, so Word boxes drawn as four

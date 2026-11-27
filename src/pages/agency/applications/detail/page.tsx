@@ -317,10 +317,10 @@ export default function ApplicationDetailPage() {
   const handoffBlocks = role === "student"
     ? ["with_agent", "change_requested", "waiting_guardian"].includes(handoff?.state ?? "")
     : handoff?.state === "waiting_guardian"; // the agent and staff edit while the student has it too (migration 20261127020517)
-  // ADMIN-EDIT-SUBMITTED (owner 2026-11-26): SLIT admins correct a submitted application on the same page, until an offer is issued.
-  // The same two statuses portal_lock_draft lets SLIT admins save (migration 20261127010517).
-  const adminEdits = isSlit && (application.status === "submitted" || application.status === "under_review");
-  const readOnly = (!isEditableStatus(workflow, application.status) && !adminEdits) || handoffBlocks;
+  // SIGNED-APPLICATION (owner 2026-11-27, replaces ADMIN-EDIT-SUBMITTED): once the student has signed, nobody edits the application
+  // (SLIT admins included; the database refuses it too, migration 20261128015517). It is corrected by Action required and signed again.
+  const signed = !["draft", "action_required"].includes(application.status) || handoff?.state === "waiting_guardian";
+  const readOnly = !isEditableStatus(workflow, application.status) || handoffBlocks || signed;
   const workspaceAgentEmail = application.agentEmail || (role === "agent" ? profile?.email ?? "" : "");
   const workspaceAgentPhone = application.agentPhone || (role === "agent" ? profile?.phone ?? "" : "");
   const reviewOpen = draftForStudent && !readOnly && !reviewDone && typeof previousRef === "string";
@@ -417,7 +417,7 @@ export default function ApplicationDetailPage() {
       <QualificationCard applicationId={application.id} staffLink={paths.area === "cms"} refreshKey={application.status} />
 
       <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-background-200 pb-px">
-        {[...TABS.slice(0, 1), ...(handoff?.state ? [{ id: "signing" as Tab, label: "Review & signature", icon: "ri-quill-pen-line" }] : []), ...TABS.slice(1),
+        {[...TABS.slice(0, 1), ...(handoff?.state || signed ? [{ id: "signing" as Tab, label: "Review & signature", icon: "ri-quill-pen-line" }] : []), ...TABS.slice(1),
           ...(paths.area === "cms" ? [{ id: "notifications" as Tab, label: "Notifications", icon: "ri-mail-line" }] : [])].map((item) => (
           <button
             key={item.id}
@@ -519,7 +519,7 @@ export default function ApplicationDetailPage() {
           />
         ) : null}
 
-        {tab === "documents" ? <SignedApplicationCard application={application} /> : null}
+        {tab === "documents" ? <SignedApplicationCard application={application} compact /> : null}
         {tab === "documents" ? <OfferLettersList applicationId={application.id} refreshKey={application.status} /> : null}
         {tab === "documents" ? (
           documents.length === 0 ? (
@@ -570,6 +570,7 @@ export default function ApplicationDetailPage() {
           )
         ) : null}
 
+        {tab === "signing" && signed ? <SignedApplicationCard application={application} /> : null}
         {tab === "signing" && handoff?.state ? (
           <AgentHandoffPanel applicationId={application.id} handoff={handoff} viewer={role === "student" ? "student" : "staff"}
             onChanged={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1); }} />

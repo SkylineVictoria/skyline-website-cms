@@ -1202,5 +1202,15 @@
       "8ee1b9c4ea11c1600b19176925e0fb85d3a182cd9ad81404a196e2b2a41d22c0",
       "af6ad94b6d3f6a6331ca04467d437531b2e8399a159970190aadd6a84476c6b3"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "signed-application",
+    "reason": "2026-11-27 owner (SIGNED-APPLICATION): once the student signs, nobody edits the application (it is corrected by Action required and signed again); the signed card shows who signed, the signatures and the declarations as agreed, never signing certificate details. A fixed owner rule, not a business setting.",
+    "fingerprints": [
+      "6c140eb7d1b987f5e2c969056906120000666b05f2314dc2be35bab7d929fa4b",
+      "a6d46a8d25dd69379135f8ebcdddd0b240e5ed12639df958abd4484a8e59550f",
+      "faad476be3eaf59bf9a8702ee980931bf9bea407d248dfb078f3ff1c48f9528a"
+    ]
   }
 ]

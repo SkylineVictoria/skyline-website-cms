@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { createAdmin, inDays, signInAsAdmin, sql } from "./support";
+import { createAdmin, createStudentLogin, createAuthUser, inDays, person, signInAsAdmin, signInThroughTheForm, signOutEverywhere, sql } from "./support";
 
 // QUALIFICATION (20261128003517): an application marked Enrolled gets its Qualification (Tentative, CoE copied); staff see it in
 // Admissions › Qualifications, on the student's Qualification tab and on the application; they defer it (reason + resume date) and
@@ -146,4 +146,78 @@ test("Take action: bottom sheet at 390px, dropdown inside the viewport at 1280px
   expect(d && d.x >= 0 && d.y >= 0 && d.x + d.width <= 1280 && d.y + d.height <= 800).toBe(true);
   await page.screenshot({ path: "test-results/take-action-desktop-1280.png" });
 });
+});
+
+// SIGNED-APPLICATION (owner 2026-11-27): after signing, the Review & signature tab shows the read-only Signed card (who and when, the drawn
+// signature, the declarations in the wording agreed to, ticked) and the signed PDF; no IP or other signing certificate detail; the
+// application is read-only for everyone (the database refuses changes).
+test.describe("Signed application", () => {
+  test.use({ deviceScaleFactor: 2 });
+  test("student, agent and admin see the Signed card; nobody can change the answers", async ({ page }) => {
+    test.setTimeout(180_000);
+    const student = await createStudentLogin("signed-student");
+    const agentWho = person("signed-agent");
+    const agentAuth = await createAuthUser(agentWho.email);
+    const agentProfile = sql(`insert into public.portal_profiles(auth_user_id, full_name, email, phone, status) values ('${agentAuth}', 'Zz Signed Agent', '${agentWho.email}', '${agentWho.local}', 'Active') returning id`).split("\n")[0];
+    sql(`insert into public.agency_memberships(user_id, agency_id, role) values ('${agentProfile}', '${student.agency}', 'agent')`);
+    // A drawn signature (a stroke on a canvas, as the signature box makes it).
+    await page.goto("about:blank");
+    const png = await page.evaluate(() => {
+      const c = document.createElement("canvas"); c.width = 480; c.height = 140; const g = c.getContext("2d")!;
+      g.lineWidth = 3; g.strokeStyle = "#1f2937"; g.beginPath(); g.moveTo(20, 100);
+      for (let x = 20; x < 460; x += 6) g.lineTo(x, 70 + Math.sin(x / 18) * 30 + Math.cos(x / 7) * 8);
+      g.stroke(); return c.toDataURL("image/png");
+    });
+    const app = sql(`insert into public.enrollment_applications(agency_id, student_id, student_name, student_email, status, data, reference, assigned_agent_id, created_by)
+      values ('${student.agency}', '${student.student}', 'Zz Signer', '${student.email}', 'draft', '{"values": {"first_name": "Zz", "last_name": "Signer", "mobile": "0411111111"}}', 'ZZ-SIGN-${tag}', '${agentProfile}', '${agentProfile}') returning id`).split("\n")[0];
+    const consents = sql(`insert into public.enrollment_application_consents(application_id, method, declaration_version, recorded_by_name, signer_role, declaration_key, text_version, text_hash, ip, user_agent)
+      select '${app}', 'portal_signature', t.version, 'Zz Signer', 'student', t.key, t.version, t.hash, '203.0.113.77', 'ZZ-Agent/9.9' from public.application_declaration_texts t where t.active order by t.sort returning id`).split("\n").filter(Boolean);
+    sql(`begin; set local session_replication_role = replica;
+      update public.enrollment_applications set status = 'submitted', submitted_at = now(), version = 1 where id = '${app}';
+      insert into public.application_signatures(application_id, signer_role, signer_name, png, ip, user_agent) values ('${app}', 'student', 'Zz Signer', '${png}', '203.0.113.77', 'ZZ-Agent/9.9');
+      insert into public.enrollment_application_versions(application_id, version, snapshot)
+        select '${app}', 1, a.data || jsonb_build_object('submission', jsonb_build_object('consentIds', '${JSON.stringify(consents)}'::jsonb, 'declarationVersion', '2026-11-25', 'actor', '${agentProfile}'))
+        from public.enrollment_applications a where a.id = '${app}';
+      commit;`);
+    const firstDeclaration = sql(`select title from public.application_declaration_texts where active order by sort limit 1`);
+
+    const check = async (who: string) => {
+      await page.getByRole("button", { name: /Review & signature/ }).click();
+      const card = page.getByTestId("signed-application");
+      await expect(card).toBeVisible();
+      await expect(card.getByTestId("signed-by")).toContainText("Signed by Zz Signer on");
+      await expect(card.getByTestId("signed-student").getByRole("img")).toBeVisible();
+      await expect(card.getByTestId("signed-declarations")).toContainText(firstDeclaration);
+      await expect(card.getByTestId("signed-declaration-text").first()).not.toBeEmpty();
+      for (const box of await card.getByRole("checkbox").all()) { await expect(box).toBeChecked(); await expect(box).toBeDisabled(); }
+      await expect(card).not.toContainText("203.0.113.77");
+      await expect(card).not.toContainText("ZZ-Agent");
+      const download = page.waitForEvent("download");
+      await card.getByTestId("signed-download").click();
+      expect((await download).suggestedFilename()).toBe(`signed-application-ZZ-SIGN-${tag}.pdf`);
+      await page.setViewportSize({ width: 1280, height: 1400 });
+      await page.getByRole("button", { name: /Review & signature/ }).evaluate((el) => el.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: `test-results/signed-${who}.png` });
+    };
+
+    await signInThroughTheForm(page, student.email);
+    await expect(page).toHaveURL(/\/agency/, { timeout: 30_000 });
+    await page.goto(`/agency/applications/${app}`);
+    await check("student");
+    await signOutEverywhere(page);
+
+    await signInThroughTheForm(page, agentWho.email);
+    await expect(page).toHaveURL(/\/agency/, { timeout: 30_000 });
+    await page.goto(`/agency/applications/${app}`);
+    await check("agent");
+    await signOutEverywhere(page);
+
+    const admin = await createAdmin("signed-admin");
+    await signInAsAdmin(page, admin.email);
+    await page.goto(`/admin/applications/${app}`);
+    await expect(page.getByRole("button", { name: /Document upload wizard/ })).toHaveCount(0);
+    await check("admin");
+    // Nobody changes a signed application's answers (the database refuses it, whoever writes).
+    expect(() => sql(`update public.enrollment_applications set data = jsonb_set(data, '{values,preferred_intake}', '"Jan 2030"') where id = '${app}'`)).toThrow(/signed, so it cannot be changed/);
+  });
 });

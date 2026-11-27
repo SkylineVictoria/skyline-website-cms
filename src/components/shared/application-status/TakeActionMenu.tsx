@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConfirmDialog } from "./ActionDrawer";
 import OfferLetterDrawer, { type OfferApplication } from "./OfferLetterDrawer";
@@ -47,7 +47,9 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
 }) {
   const workflow = useApplicationStatuses();
   const [open, setOpen] = useState(false);
-  const [place, setPlace] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+  // MENU-PHONE (owner 2026-11-27): under 640px the menu is a bottom sheet; above, a dropdown kept inside the viewport.
+  const [sheet, setSheet] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const [active, setActive] = useState<StatusAction | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -77,13 +79,41 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
     if (!open) return undefined;
     const close = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node) && !buttonRef.current?.contains(event.target as Node)) setOpen(false); };
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
-    const reflow = () => setOpen(false);
+    // The page scrolling moves the button away from a dropdown; scrolling inside the menu or the sheet does not close it.
+    const reflow = (event: Event) => { if (!sheet && !menuRef.current?.contains(event.target as Node)) setOpen(false); };
+    const resize = () => setOpen(false);
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", onKey);
     window.addEventListener("scroll", reflow, true);
-    menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKey); window.removeEventListener("scroll", reflow, true); };
-  }, [open]);
+    window.addEventListener("resize", resize);
+    // The sheet holds the page still behind it.
+    const overflow = document.body.style.overflow;
+    if (sheet) document.body.style.overflow = "hidden";
+    menuRef.current?.querySelector<HTMLButtonElement>("button[role=menuitem]")?.focus({ preventScroll: true });
+    return () => {
+      document.removeEventListener("mousedown", close); document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", reflow, true); window.removeEventListener("resize", resize);
+      document.body.style.overflow = overflow;
+    };
+  }, [open, sheet]);
+
+  // The dropdown is measured once shown, then placed inside the viewport: below the button, or above it when there is no room
+  // below (flip), and shifted left / right so it never leaves the screen.
+  useLayoutEffect(() => {
+    if (!open || sheet) { setPos(null); return; }
+    const button = buttonRef.current?.getBoundingClientRect();
+    const menu = menuRef.current;
+    if (!button || !menu) return;
+    const vw = window.innerWidth, vh = window.innerHeight, gap = 4, edge = 8;
+    const maxHeight = vh - edge * 2;
+    const height = Math.min(menu.scrollHeight, maxHeight);
+    const width = menu.offsetWidth;
+    let top = button.bottom + gap;
+    if (top + height > vh - edge) top = button.top - gap - height >= edge ? button.top - gap - height : Math.max(edge, vh - edge - height);
+    let left = align === "right" ? button.right - width : button.left;
+    left = Math.max(edge, Math.min(left, vw - edge - width));
+    setPos({ top, left, maxHeight });
+  }, [open, sheet, align]);
 
   if (workflow.error) return <StatusConfigError compact />;
   if (!workflow.ready) return <span className="inline-block h-8 w-20 animate-pulse rounded-lg bg-background-100" aria-label="Loading actions" />;
@@ -93,13 +123,7 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   }
 
   const toggle = () => {
-    const rect = buttonRef.current?.getBoundingClientRect();
-    if (rect) {
-      const needed = 8 + (listed.length + (enrolLater ? 1 : 0)) * 40 + (manual.length ? 28 + manual.length * 32 : 0);
-      const below = window.innerHeight - rect.bottom;
-      const left = align === "right" ? rect.right : rect.left;
-      setPlace(below < needed && rect.top > below ? { bottom: window.innerHeight - rect.top + 4, left } : { top: rect.bottom + 4, left });
-    }
+    setSheet(window.matchMedia("(max-width: 639px)").matches);
     setOpen((value) => !value);
   };
   const choose = (action: StatusAction) => { setOpen(false); setNote(""); setError(""); if (action.kind === "resend_offer") setCcWanted(true); setActive(action); };
@@ -148,6 +172,24 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
     </div>
   );
 
+  // The options, the same in the sheet (phones) and the dropdown.
+  const menuBody = (
+    <>
+          {listed.map((action, index) => <span key={action.action}>
+            {enrolLater && action.tone === "danger" && (index === 0 || listed[index - 1].tone !== "danger") ? enrolLaterItem(enrolLater) : null}
+            {item(action, index, listed)}</span>)}
+          {enrolLater && !listed.some((a) => a.tone === "danger") ? enrolLaterItem(enrolLater) : null}
+          {manual.length ? <div className={listed.length ? "mt-1 border-t border-background-200 pt-1" : ""} data-testid="change-status">
+            <p className="px-3 pb-0.5 pt-1 text-2xs font-semibold uppercase tracking-wide text-foreground-500">Change status to</p>
+            <div>{manual.map((action) => (
+              <button key={action.action} type="button" role="menuitem" onClick={() => choose(action)} data-action={action.action}
+                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground-800 transition-colors hover:bg-background-100 focus:bg-background-100 focus:outline-none">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: action.to ? statusInfo(workflow, action.to).color ?? "#64748b" : "#64748b" }} aria-hidden="true" />
+                {action.to ? statusInfo(workflow, action.to).label : action.label.replace(/^Set to /, "")}
+              </button>))}</div>
+          </div> : null}
+    </>
+  );
   const sizeClass = size === "md" ? "h-9 px-3 text-sm" : "h-8 px-2.5 text-xs";
   const isEnrol = (a: StatusAction | null) => a?.kind === "enrol";
   // ACTIVE-NEEDS-INTAKE (20261123221517): any move to Active asks for the intake and the unit start first.
@@ -174,26 +216,32 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
           </button>
         )
       ) : null}
-      {open && place ? createPortal(
+      {open ? createPortal(sheet ? (
+        <div className="fixed inset-0 z-[86] flex flex-col justify-end" data-testid="take-action-sheet">
+          <div className="absolute inset-0 bg-foreground-950/40" aria-hidden="true" onClick={() => setOpen(false)} />
+          <div ref={menuRef} role="menu" aria-label="Take action" data-testid="take-action-menu"
+            className="modal-in relative flex max-h-[85vh] w-full flex-col rounded-t-2xl border-t border-background-200 bg-background-50 shadow-2xl"
+            style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+            <div className="flex shrink-0 items-center justify-between border-b border-background-200 px-4 py-3">
+              <h2 className="font-heading text-base font-semibold text-foreground-950">Take action</h2>
+              <button type="button" onClick={() => setOpen(false)} aria-label="Close" className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-foreground-500 hover:bg-background-100">
+                <i className="ri-close-line text-xl" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1 [&_[role=menuitem]]:min-h-[44px] [&_[role=menuitem]]:px-4 [&_[role=menuitem]]:text-[15px]">{menuBody}</div>
+            <div className="shrink-0 border-t border-background-200 p-3">
+              <button type="button" onClick={() => setOpen(false)} data-testid="take-action-cancel"
+                className="h-11 w-full cursor-pointer rounded-lg border border-background-300 bg-background-50 text-sm font-semibold text-foreground-800 hover:bg-background-100">Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : (
         <div ref={menuRef} role="menu" aria-label="Actions" data-testid="take-action-menu"
-          style={{ position: "fixed", ...(place.bottom !== undefined ? { bottom: place.bottom } : { top: place.top }), ...(align === "right" ? { right: window.innerWidth - place.left } : { left: place.left }) }}
-          className="fade-in z-[86] min-w-[13rem] overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
-          {listed.map((action, index) => <span key={action.action}>
-            {enrolLater && action.tone === "danger" && (index === 0 || listed[index - 1].tone !== "danger") ? enrolLaterItem(enrolLater) : null}
-            {item(action, index, listed)}</span>)}
-          {enrolLater && !listed.some((a) => a.tone === "danger") ? enrolLaterItem(enrolLater) : null}
-          {manual.length ? <div className={listed.length ? "mt-1 border-t border-background-200 pt-1" : ""} data-testid="change-status">
-            <p className="px-3 pb-0.5 pt-1 text-2xs font-semibold uppercase tracking-wide text-foreground-500">Change status to</p>
-            <div className="max-h-64 overflow-y-auto">{manual.map((action) => (
-              <button key={action.action} type="button" role="menuitem" onClick={() => choose(action)} data-action={action.action}
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground-800 transition-colors hover:bg-background-100 focus:bg-background-100 focus:outline-none">
-                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: action.to ? statusInfo(workflow, action.to).color ?? "#64748b" : "#64748b" }} aria-hidden="true" />
-                {action.to ? statusInfo(workflow, action.to).label : action.label.replace(/^Set to /, "")}
-              </button>))}</div>
-          </div> : null}
-        </div>,
-        document.body,
-      ) : null}
+          style={{ position: "fixed", top: pos?.top ?? -9999, left: pos?.left ?? -9999, maxHeight: pos?.maxHeight, visibility: pos ? "visible" : "hidden" }}
+          className="fade-in z-[86] min-w-[13rem] max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
+          {menuBody}
+        </div>
+      ), document.body) : null}
 
       {active?.kind === "offer_letter" ? (
         <OfferLetterDrawer application={application} reviewIssues={reviewIssues} onClose={close}

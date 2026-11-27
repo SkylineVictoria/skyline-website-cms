@@ -82,3 +82,51 @@ test("an Enrolled application's Qualification: list, detail, defer with a PRISMS
   await page.goto(`/admin/applications/${app}`);
   await expect(page.getByTestId("qualification-card")).toContainText("Deferred");
 });
+
+// MENU-PHONE (owner 2026-11-27): "Take action" opens as a bottom sheet on phones (title, every option in full, Cancel) and as a
+// dropdown kept inside the viewport on desktop.
+test.describe("Take action menu", () => {
+  test.use({ deviceScaleFactor: 2 });
+test("Take action: bottom sheet at 390px, dropdown inside the viewport at 1280px", async ({ page }) => {
+  const admin = await createAdmin("menu-admin");
+  const agency = sql(`insert into public.agencies(name, code, status) values ('ZZ Menu ${tag}', 'ZZM-${tag}', 'Active') returning id`).split("\n")[0];
+  const app = sql(`insert into public.enrollment_applications(agency_id, status, student_name, student_email, data) values ('${agency}', 'draft', 'Zz Menu', 'zz.menu.${tag.toLowerCase()}@blackhole.postmarkapp.com', '{}'::jsonb) returning id`).split("\n")[0];
+  // a submitted application (fixture: set directly, the signing flow is tested elsewhere)
+  sql(`begin; set local session_replication_role = replica; update public.enrollment_applications set status = 'submitted', submitted_at = now() where id = '${app}'; commit;`);
+  await signInAsAdmin(page, admin.email);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/admin/applications/${app}`);
+  await page.getByTestId("take-action").first().click();
+  const sheet = page.getByTestId("take-action-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("heading", { name: "Take action" })).toBeVisible();
+  await expect(sheet.getByTestId("take-action-cancel")).toBeVisible();
+  const menu = page.getByTestId("take-action-menu");
+  const box = await menu.boundingBox();
+  expect(box && box.x >= 0 && box.x + box.width <= 390 + 0.5).toBe(true);
+  // every option is in full width inside the sheet (scrolling to each one)
+  const items = menu.getByRole("menuitem");
+  const count = await items.count();
+  expect(count).toBeGreaterThan(1);
+  for (let i = 0; i < count; i++) {
+    await items.nth(i).scrollIntoViewIfNeeded();
+    const b = await items.nth(i).boundingBox();
+    expect(b && b.x >= 0 && b.x + b.width <= 390 + 0.5).toBe(true);
+  }
+  await items.first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "test-results/take-action-phone-390.png" });
+  await sheet.getByTestId("take-action-cancel").click();
+  await expect(sheet).toBeHidden();
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`/admin/applications/${app}`);
+  await page.getByTestId("take-action").first().click();
+  await expect(page.getByTestId("take-action-sheet")).toHaveCount(0);
+  const drop = page.getByTestId("take-action-menu");
+  await expect(drop).toBeVisible();
+  const d = await drop.boundingBox();
+  expect(d && d.x >= 0 && d.y >= 0 && d.x + d.width <= 1280 && d.y + d.height <= 800).toBe(true);
+  await page.screenshot({ path: "test-results/take-action-desktop-1280.png" });
+});
+});

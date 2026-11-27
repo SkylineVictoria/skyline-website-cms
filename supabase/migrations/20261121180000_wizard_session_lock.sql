@@ -80,5 +80,6 @@ declare d text; a constant text := 'jsonb_build_object(''id'', ci.id, ''load'', 
 begin
  d := pg_get_functiondef('public.rto_intake_wizard(text,jsonb)'::regprocedure);
  if position(a in d) = 0 then raise exception 'anchor not found in rto_intake_wizard (pending)'; end if;
- execute replace(d, a, a || ', ''classes'', exists (select 1 from public.class_sessions s where s.intake_id = ci.id and s.status <> ''cancelled'')');
+ -- 'classes' goes inside the jsonb_build_object call (before its closing parenthesis), not after it
+ execute replace(d, a, left(a, length(a) - 1) || ', ''classes'', exists (select 1 from public.class_sessions s where s.intake_id = ci.id and s.status <> ''cancelled''))');
 end $$;

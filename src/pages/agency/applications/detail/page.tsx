@@ -224,15 +224,6 @@ export default function ApplicationDetailPage() {
   // an application the student started themselves.
   const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded
     && !handoff?.state;
-  const [studentReturning, setStudentReturning] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!studentBlank) return;
-    let live = true;
-    listApplications()
-      .then((rows) => { if (live) setStudentReturning(rows.some((row) => row.id !== id && (!!row.submittedAt || (row.status ?? "draft") !== "draft"))); })
-      .catch(() => { if (live) setStudentReturning(false); });
-    return () => { live = false; };
-  }, [studentBlank, id]);
 
   // PREVIOUS-DATA-REVIEW (owner 2026-11-27): a student applying again opens their new application in a popup "We have your details from
   // your previous application" with the one-page cards (Edit on each); the signature comes after they confirm the details. Once per
@@ -289,9 +280,9 @@ export default function ApplicationDetailPage() {
   // ONE-PAGE (owner 2026-11-26): once the agent has prepared the application and sent it to the student, it opens as one page with
   // every answer (the student checks, edits and signs there); the document wizard is only for a blank application.
   if (needsInitialWizard(application) && !handoffLoaded) return <PortalLoading label="Loading application…" />;
-  // A returning student gets the one page (course and intake were chosen when starting); a first application goes through the wizard.
-  if (studentBlank && studentReturning === null) return <PortalLoading label="Loading application…" />;
-  if (studentBlank && studentReturning === false) {
+  // An application the student started themselves (first or returning) is filled in the document wizard, the same one the agent
+  // uses, ending with the student's declarations and drawn signature (owner 2026-11-27).
+  if (studentBlank) {
     return (
       <ApplicationWizard key={`${application.id}:${carryKey}`} applicationId={application.id}
         agencyName={application.agencyName || agency?.name || ""}

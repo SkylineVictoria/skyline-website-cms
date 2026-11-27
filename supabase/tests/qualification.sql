@@ -6,7 +6,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Enrolled application through the placement path (tentative, CoE copied), In Progress sets the application Active, no Active by hand,
 -- Admin undo, paused attendance, the portal view without notes, the daily start and no-show. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(70);
+select plan(83);
 
 create function pg_temp.as_user(p uuid) returns void language plpgsql as $$
 begin perform set_config('role', 'authenticated', true); perform set_config('request.jwt.claim.sub', p::text, true); end $$;
@@ -124,15 +124,22 @@ insert into public.asm_unit_outcomes(student_id, unit_id, outcome, signed_by, si
 set local session_replication_role = origin;
 select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
 select is(pg_temp.try($$select public.qualification_set_status(pg_temp.qid(), 'completed')$$), 'ok', 'with every unit result it is Completed');
+-- APPLICATION-FINISH (20261128010517): the application finishes with its Qualification and is then locked
+select is((select status from public.enrollment_applications where id = 'a7000000-0000-0000-0000-000000000001'), 'completed', 'finish: the Qualification Completed completes the application');
+select pg_temp.as_postgres();
+select ok(pg_temp.try($$update public.enrollment_applications set status = 'active' where id = 'a7000000-0000-0000-0000-000000000001'$$) like 'refused:%Completed application is final%', 'finish: a Completed application cannot be moved by hand');
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
 select ok(pg_temp.try($$select public.qualification_set_status(pg_temp.qid(), 'active')$$) like 'refused:%cannot move from Completed to In Progress%', 'Completed is final');
 select pg_temp.as_user('a6000000-0000-0000-0000-000000000002');
 select ok(pg_temp.try($$select public.qualification_undo(pg_temp.qid(), 'Recorded by mistake')$$) like 'refused:%Only an Admin%', 'only an Admin can undo');
 select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
 select is(pg_temp.try($$select public.qualification_undo(pg_temp.qid(), 'Recorded by mistake')$$), 'ok', 'an Admin undoes Completed with a reason');
 select is((select status from public.intake_enrolments where id = pg_temp.qid()), 'active', 'back to In Progress');
+select is((select status from public.enrollment_applications where id = 'a7000000-0000-0000-0000-000000000001'), 'active', 'finish: undoing Completed takes the application back to Active');
 select is(pg_temp.try($$select public.qualification_set_status(pg_temp.qid(), 'withdrawn', 'Visa refused or cancelled', null, current_date)$$), 'ok', 'In Progress -> Cancelled');
 select is((select string_agg(kind, ',' order by kind) from public.qualification_tasks where enrolment_id = pg_temp.qid() and status = 'open'), 'prisms_report,refund_check', 'cancelling a CoE raises the PRISMS and refund tasks');
 select is((select withdrawn_on from public.intake_enrolments where id = pg_temp.qid()), current_date, 'the cancellation date is the withdrawal date (AVETMISS outcome 40)');
+select is((select status from public.enrollment_applications where id = 'a7000000-0000-0000-0000-000000000001'), 'withdrawn', 'gate 6: with no live Qualification left the application is Withdrawn');
 
 -- ---------------------------------------------------------------- history is append-only; portal view; paused attendance
 select pg_temp.as_postgres();
@@ -147,6 +154,7 @@ select ok((select prosrc from pg_proc where proname = 'trainer_session_attendanc
 -- daily: a CoE student In Progress for 7+ days with no attendance present or late is a no-show (PRISMS task)
 select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
 select is(pg_temp.try($$select public.qualification_undo(pg_temp.qid(), 'Recorded by mistake')$$), 'ok', 'an Admin undoes Cancelled');
+select is((select status from public.enrollment_applications where id = 'a7000000-0000-0000-0000-000000000001'), 'active', 'gate 6: undoing the cancellation brings the application back to Active');
 select pg_temp.as_postgres();
 update public.intake_enrolments set course_start_date = public.course_intake_today() - 8 where id = pg_temp.qid();
 select is((public.qualification_daily() ->> 'noShows')::int, 1, 'the daily check finds the no-show');
@@ -224,5 +232,21 @@ select is(pg_temp.try($$select public.rto_staff_place('f6000000-0000-0000-0000-0
 select pg_temp.as_postgres();
 select is((select a.source from public.intake_enrolments e join public.enrollment_applications a on a.id = e.application_id where e.student_id = 'e6000000-0000-0000-0000-000000000014'),
   'direct enrolment', 'gate 10: the Qualification is linked to a new direct application, not the rejected one');
+
+-- ---------------------------------------------------------------- MONITORING (20261128010517)
+-- gate 9: the resume date has come -> Resume or extend
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
+select is(pg_temp.try($$select public.qualification_set_status((select id from public.intake_enrolments where student_id = 'e6000000-0000-0000-0000-000000000013'), 'deferred', 'Student request', null, null, current_date - 1)$$), 'ok', 'gate 9: a deferral whose resume date has passed');
+select pg_temp.as_postgres();
+select is((public.qualification_daily() ->> 'resumeChecks')::int, 1, 'gate 9: the daily job finds it');
+select is((select title from public.qualification_tasks where kind = 'resume_check' and student_id = 'e6000000-0000-0000-0000-000000000013'), 'Resume or extend', 'gate 9: a Resume or extend task');
+select is((public.qualification_daily() ->> 'resumeChecks')::int, 0, 'gate 9: once per resume date');
+-- the consistency check lists the mismatches
+select ok(exists (select 1 from public.qualification_consistency_problems() where code = 'QUAL-NO-APP' and student_id = 'e6000000-0000-0000-0000-000000000012'), 'check: a live Qualification with no application is listed');
+select ok(exists (select 1 from public.qualification_consistency_problems() where code = 'QUAL-RESUME-PASSED' and student_id = 'e6000000-0000-0000-0000-000000000013'), 'check: a passed resume date is listed');
+select ok(not exists (select 1 from public.qualification_consistency_problems() where application_id = 'a7000000-0000-0000-0000-000000000004' and code like 'APP-%'), 'check: an application in step is not listed');
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
+select ok((public.qualification_consistency() ->> 'count')::int >= 2, 'check: staff see the out-of-step count');
+select pg_temp.as_postgres();
 select * from finish();
 rollback;

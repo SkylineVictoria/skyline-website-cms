@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { PdfCrop, PdfPageMarked } from "./PdfView";
 import type { PdfHandle } from "./pdfDoc";
-import { useQuestionContent } from "./questionContent";
+import { useQuestionContent, type ReadQuestion } from "./questionContent";
+import { FOCUS, SOFT_CARD, useQuestionMode, useStickySlot, type QuestionMode } from "./ui";
 import { questionName, type PdfTemplate, type Rect, type TemplateQuestion } from "@/lib/assessment/pdfTemplate/model";
 import { questionTextRect, scannedCrop, type QuestionContent, type Run } from "@/lib/assessment/pdfTemplate/questionText";
 
 /**
  * ASM-QUESTION-TEXT (owner 2026-11-27): one question as the student and the trainer see it: the printed label as the only heading,
  * the question's own words read from the PDF's text layer (bold, line breaks, lists, parts kept), the pictures printed in the question
- * area as crops (tap to zoom), and "See on page" with the question highlighted on the original page. A scanned page (no text layer)
- * shows the whole question as a padded crop.
+ * area as crops (tap to zoom). A scanned page (no text layer) shows the whole question as a padded crop.
+ * ASM-QUESTION-POLISH (owner 2026-11-27): a "Workbook / Text" switch: Workbook = the question as printed, a sharp crop of its header
+ * row without the trainer's Satisfactory column (full width, tap to zoom); Text = the words as above. Default Workbook on a wide
+ * screen, Text on a phone; the choice is remembered. The question stays in view while the answers scroll: on a wide screen the card
+ * sticks under the top bar (at most about 40% of the screen, "Show all" when longer); on a phone a compact bar (label and first line,
+ * tap to open) shows under the top bar once the card has scrolled away. "Open full page" shows the original page, question marked.
  */
 function Runs({ runs }: { runs: Run[] }) {
   return <>{runs.map((r, i) => r.bold && r.italic ? <strong key={i}><em>{r.text}</em></strong> : r.bold ? <strong key={i} className="font-semibold">{r.text}</strong> : r.italic ? <em key={i}>{r.text}</em> : <span key={i}>{r.text}</span>)}</>;
@@ -18,38 +24,135 @@ const Lines = ({ lines }: { lines: Run[][] }) => <>{lines.map((l, i) => <span ke
 
 /** The question's words, as read from the page. */
 export function QuestionText({ content }: { content: QuestionContent }) {
-  return <div className="max-w-[70ch] space-y-3 text-base leading-7 text-foreground-900" data-testid="question-text">
+  return <div className="max-w-[70ch] space-y-3 text-base leading-7 text-foreground-900 sm:text-[17px] sm:leading-8" data-testid="question-text">
     {content.blocks.map((b, i) => b.kind === "p"
       ? <p key={i}><Lines lines={b.lines} /></p>
-      : <div key={i} className="flex gap-2.5" data-kind={b.kind}><span className={`shrink-0 ${b.kind === "part" ? "font-semibold" : ""} min-w-[1.25rem] text-foreground-700`}>{b.marker}</span><div className="min-w-0"><Lines lines={b.lines} /></div></div>)}
+      : <div key={i} className="flex gap-2.5" data-kind={b.kind}><span className={`shrink-0 ${b.kind === "part" ? "font-semibold" : ""} min-w-[1.25rem] text-foreground-600`}>{b.marker}</span><div className="min-w-0"><Lines lines={b.lines} /></div></div>)}
   </div>;
 }
 
-export default function QuestionView({ pdf, template, question: q, eyebrow, children, level = 1 }: {
-  pdf: PdfHandle; template: PdfTemplate; question: TemplateQuestion; eyebrow?: ReactNode; children?: ReactNode; level?: 1 | 2;
+const WIDE = "(min-width: 768px)";
+function useWide(): boolean {
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(WIDE).matches);
+  useEffect(() => {
+    const mq = window.matchMedia?.(WIDE); if (!mq) return;
+    const on = () => setWide(mq.matches); on();
+    mq.addEventListener?.("change", on); return () => mq.removeEventListener?.("change", on);
+  }, []);
+  return wide;
+}
+
+/** Workbook / Text. */
+function ModeSwitch({ mode, onMode }: { mode: QuestionMode; onMode: (m: QuestionMode) => void }) {
+  const opts: [QuestionMode, string, string][] = [["workbook", "Workbook", "ri-file-text-line"], ["text", "Text", "ri-text"]];
+  return <div role="radiogroup" aria-label="Show the question as" className="inline-flex shrink-0 rounded-xl bg-background-100 p-1 ring-1 ring-inset ring-foreground-950/[0.06]" data-testid="question-mode">
+    {opts.map(([m, label, icon]) => <button key={m} type="button" role="radio" aria-checked={mode === m} onClick={() => onMode(m)} data-testid={`question-mode-${m}`}
+      className={`inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-sm font-semibold transition-[background-color,color,box-shadow] duration-200 ${FOCUS} ${mode === m ? "bg-white text-foreground-950 shadow-[0_1px_3px_rgba(16,24,40,0.12)]" : "text-foreground-600 hover:text-foreground-900"}`}>
+      <i className={`${icon} text-base`} aria-hidden="true" />{label}</button>)}
+  </div>;
+}
+
+/** The question itself, in the chosen view, with its pictures. */
+function QuestionBody({ pdf, template, q, content, mode, name }: { pdf: PdfHandle; template: PdfTemplate; q: TemplateQuestion; content: ReadQuestion | null; mode: QuestionMode; name: string }) {
+  const scanned = useMemo(() => scannedCrop(template, q, pdf.sizes[questionTextRect(q).page - 1] ?? { w: 595, h: 842 }), [template, q, pdf.sizes]);
+  if (!content) return <div className="max-w-[70ch] space-y-2.5 py-1" aria-busy="true" role="status" aria-label="Reading the question">
+    <div className="h-4 w-11/12 animate-pulse rounded-full bg-background-200" /><div className="h-4 w-9/12 animate-pulse rounded-full bg-background-200" /><div className="h-4 w-6/12 animate-pulse rounded-full bg-background-200" /></div>;
+  const printed = !content.blocks.length || !content.crop;
+  return <div className="space-y-4" data-mode={printed ? "scanned" : mode}>
+    {printed ? <PdfCrop pdf={pdf} rect={scanned} full hiRes frame={false} label={`${name} as printed on page ${scanned.page}`} />
+      : mode === "workbook" ? <div className="-mx-1 rounded-lg ring-1 ring-foreground-950/[0.06]"><PdfCrop pdf={pdf} rect={content.crop!} full hiRes frame={false} testId="question-workbook" label={`${name} as printed on page ${content.crop!.page}`} /></div>
+        : <QuestionText content={content} />}
+    {content.figures.length ? <div className="space-y-3" data-testid="question-figures">
+      {content.figures.map((f, i) => <PdfCrop key={i} pdf={pdf} rect={f} testId="question-figure" hiRes={mode === "workbook"} label={`${content.figures.length > 1 ? `Picture ${i + 1} of ` : "Picture in "}${name}, page ${f.page}`} />)}
+    </div> : null}
+  </div>;
+}
+
+export default function QuestionView({ pdf, template, question: q, eyebrow, status, children, level = 1, who }: {
+  pdf: PdfHandle; template: PdfTemplate; question: TemplateQuestion; who: "student" | "trainer";
+  /** above the heading: task and question n of m */
+  eyebrow?: ReactNode;
+  /** beside the eyebrow: answered / marked */
+  status?: ReactNode;
+  /** under the heading: notes (the previous attempt's mark) */
+  children?: ReactNode; level?: 1 | 2;
 }) {
   const content = useQuestionContent(pdf, template, q);
+  const [mode, setMode] = useQuestionMode(who);
   const [seePage, setSeePage] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const wide = useWide();
+  const slot = useStickySlot();
   const name = questionName(q);
-  const page = q.header.page;
   const H = level === 1 ? "h1" : "h2";
-  const crop = useMemo(() => scannedCrop(template, q, pdf.sizes[questionTextRect(q).page - 1] ?? { w: 595, h: 842 }), [template, q, pdf.sizes]);
-  return <section className="space-y-4" data-testid="question-view" data-question-key={q.key}>
-    <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0">{eyebrow}<H className={`font-heading font-bold text-foreground-950 ${level === 1 ? "text-2xl" : "text-xl"}`} data-testid="question-heading">{name}</H></div>
-      <button type="button" onClick={() => setSeePage(true)} data-testid="see-on-page"
-        className="inline-flex min-h-[44px] shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-primary-700 hover:bg-primary-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500">
-        <i className="ri-file-search-line text-base" aria-hidden="true" />See on page {page}</button>
+  const canSwitch = !!content && content.blocks.length > 0 && !!content.crop;
+  const cardRef = useRef<HTMLElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { setExpanded(false); }, [q.key]);
+
+  // longer than the space it may take while sticking: faded at the bottom, "Show all"
+  useLayoutEffect(() => {
+    const box = boxRef.current; const inner = innerRef.current;
+    if (!box || !inner) return;
+    const measure = () => setOverflows(wide && !expanded && inner.scrollHeight > box.clientHeight + 2);
+    measure();
+    const o = new ResizeObserver(measure); o.observe(inner); o.observe(box);
+    return () => o.disconnect();
+  }, [wide, expanded, mode, content, q.key]);
+
+  // on a phone: the compact bar once the card has scrolled up under the top bar
+  const [compact, setCompact] = useState(false);
+  const [compactOpen, setCompactOpen] = useState(false);
+  useEffect(() => {
+    if (wide || !slot.el) { setCompact(false); return; }
+    let frame = 0;
+    const check = () => { frame = 0; const c = cardRef.current; if (!c || !slot.el) return; const show = c.getBoundingClientRect().bottom < slot.el.getBoundingClientRect().top + 4; setCompact(show); if (!show) setCompactOpen(false); };
+    const on = () => { if (!frame) frame = requestAnimationFrame(check); };
+    check();
+    window.addEventListener("scroll", on, { capture: true, passive: true }); window.addEventListener("resize", on);
+    return () => { window.removeEventListener("scroll", on, { capture: true }); window.removeEventListener("resize", on); if (frame) cancelAnimationFrame(frame); };
+  }, [wide, slot.el, q.key]);
+
+  const firstLine = (content?.plain || q.label || "").split("\n").find((l) => l.trim()) ?? "";
+  const sticky = wide && !expanded;
+  // sticking: the strip above the card is the page's own colour, so nothing shows between the top bar and the card
+  return <div className={sticky ? "z-20 -mt-3 bg-background-100 pt-3 md:sticky" : ""} style={sticky ? { top: slot.top } : undefined} data-testid="question-sticky">
+  <section ref={cardRef} data-testid="question-view" data-question-key={q.key} data-sticky={sticky || undefined}
+    className={`${SOFT_CARD} p-4 sm:p-6`}>
+    {eyebrow || status ? <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">{eyebrow}{status}</div> : null}
+    <div className="flex items-center justify-between gap-3">
+      <H className={`min-w-0 font-heading font-bold tracking-tight text-foreground-950 ${level === 1 ? "text-2xl sm:text-[1.75rem]" : "text-xl sm:text-2xl"}`} data-testid="question-heading">{name}</H>
+      {canSwitch ? <ModeSwitch mode={mode} onMode={setMode} /> : null}
     </div>
-    {children}
-    {!content ? <div className="max-w-[70ch] space-y-2" aria-busy="true" role="status" aria-label="Reading the question"><div className="h-4 w-11/12 animate-pulse rounded bg-background-200" /><div className="h-4 w-8/12 animate-pulse rounded bg-background-200" /></div>
-      : content.blocks.length ? <QuestionText content={content} />
-        : <PdfCrop pdf={pdf} rect={crop} label={`${name} as printed on page ${crop.page}`} />}
-    {content?.figures.length ? <div className="space-y-3" data-testid="question-figures">
-      {content.figures.map((f, i) => <PdfCrop key={i} pdf={pdf} rect={f} testId="question-figure" label={`${content.figures.length > 1 ? `Picture ${i + 1} of ` : "Picture in "}${name}, page ${f.page}`} />)}
-    </div> : null}
+    {children ? <div className="mt-3">{children}</div> : null}
+    <div ref={boxRef} className={`relative mt-4 ${sticky ? "md:max-h-[32vh] md:overflow-hidden" : ""}`} data-testid="question-body">
+      <div ref={innerRef}><QuestionBody pdf={pdf} template={template} q={q} content={content} mode={mode} name={name} /></div>
+      {overflows ? <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-white via-white/80 to-transparent" aria-hidden="true" /> : null}
+    </div>
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+      {overflows || (wide && expanded) ? <button type="button" onClick={() => setExpanded((e) => !e)} aria-expanded={expanded} data-testid="question-show-all"
+        className={`inline-flex min-h-[36px] cursor-pointer items-center gap-1 rounded-lg px-2 text-sm font-semibold text-primary-700 hover:bg-primary-50 ${FOCUS}`}>
+        <i className={expanded ? "ri-arrow-up-s-line" : "ri-arrow-down-s-line"} aria-hidden="true" />{expanded ? "Show less" : "Show all"}</button> : <span />}
+      <button type="button" onClick={() => setSeePage(true)} data-testid="see-on-page"
+        className={`inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg px-2 text-sm text-foreground-600 hover:bg-background-100 hover:text-foreground-900 ${FOCUS}`}>
+        <i className="ri-file-search-line text-base" aria-hidden="true" />Open full page <span className="text-foreground-400">· p{q.header.page}</span></button>
+    </div>
+    {compact && slot.el ? createPortal(<div className={`border-b border-background-200 shadow-[0_6px_16px_-8px_rgba(16,24,40,0.18)] bg-white md:hidden`} data-testid="question-compact">
+      <button type="button" onClick={() => setCompactOpen((o) => !o)} aria-expanded={compactOpen} className={`flex min-h-[48px] w-full cursor-pointer items-center gap-2.5 px-4 text-left ${FOCUS}`}>
+        <span className="shrink-0 rounded-md bg-primary-50 px-1.5 py-0.5 text-xs font-bold text-primary-800 ring-1 ring-inset ring-primary-200">{name}</span>
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground-800">{firstLine}</span>
+        <i className={`ri-arrow-down-s-line shrink-0 text-xl text-foreground-500 transition-transform duration-200 ${compactOpen ? "rotate-180" : ""}`} aria-hidden="true" />
+        <span className="sr-only">{compactOpen ? "Hide the question" : "Show the whole question"}</span>
+      </button>
+      {compactOpen ? <div className="max-h-[60vh] overflow-y-auto overscroll-contain px-4 pb-4 motion-safe:animate-step-in" data-testid="question-compact-body">
+        <QuestionBody pdf={pdf} template={template} q={q} content={content} mode={mode} name={name} />
+      </div> : null}
+    </div>, slot.el) : null}
     {seePage ? <SeeOnPage pdf={pdf} q={q} name={name} onClose={() => setSeePage(false)} /> : null}
-  </section>;
+  </section>
+  </div>;
 }
 
 /** The original page(s) of the question, the question's text highlighted and its answer areas lightly marked. */
@@ -62,7 +165,7 @@ function SeeOnPage({ pdf, q, name, onClose }: { pdf: PdfHandle; q: TemplateQuest
     window.addEventListener("keydown", k, true); return () => window.removeEventListener("keydown", k, true);
   }, [onClose]);
   const page = pages[i];
-  return <div className="fixed inset-0 z-[90] flex flex-col bg-foreground-950/80" role="dialog" aria-modal="true" aria-label={`${name} on page ${page}`} data-testid="see-on-page-dialog" onClick={onClose}>
+  return createPortal(<div className="fixed inset-0 z-[90] flex flex-col bg-foreground-950/80 motion-safe:animate-fade-in" role="dialog" aria-modal="true" aria-label={`${name} on page ${page}`} data-testid="see-on-page-dialog" onClick={onClose}>
     <div className="flex items-center justify-between gap-2 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>
       <p className="min-w-0 truncate text-sm font-semibold">{name} · page {page} of the workbook</p>
       <div className="flex items-center gap-1">
@@ -76,5 +179,5 @@ function SeeOnPage({ pdf, q, name, onClose }: { pdf: PdfHandle; q: TemplateQuest
     <div className="flex-1 overflow-auto px-2 pb-6 sm:px-6" onClick={(e) => e.stopPropagation()}>
       <PdfPageMarked key={page} pdf={pdf} page={page} marks={marks} />
     </div>
-  </div>;
+  </div>, document.body);
 }

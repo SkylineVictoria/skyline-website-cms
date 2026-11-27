@@ -2,6 +2,7 @@
  * Preview as learner (owner 2026-11-26): the admin walks through the student wizard of the draft (else the published version) on its
  * workbook PDF, exactly as a student sees it. Nothing is saved: answers and signatures stay in this dialog, Submit only says what
  * would happen, and closing it forgets everything.
+ * ASM-QUESTION-POLISH: one scroll only: the admin page behind the dialog is held still while it is open (its scroll bar went away).
  */
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -31,6 +32,11 @@ export default function LearnerPreview({ assessmentId, title, unit, onClose }: {
   }, [assessmentId]);
   const close = () => { setParams((p) => { const n = new URLSearchParams(p); n.delete("step"); return n; }, { replace: true }); onClose(); };
   useEffect(() => { const k = (e: KeyboardEvent) => { if (e.key === "Escape") close(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); });
+  useEffect(() => {
+    const html = document.documentElement; const before = html.style.overflow;
+    html.style.overflow = "hidden";
+    return () => { html.style.overflow = before; };
+  }, []);
 
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-background-100" role="dialog" aria-modal="true" aria-label={`Preview as learner · ${title}`} data-testid="learner-preview">
@@ -41,7 +47,7 @@ export default function LearnerPreview({ assessmentId, title, unit, onClose }: {
         </div>
         <button type="button" onClick={close} className="min-h-[44px] rounded-md px-3 text-sm font-semibold text-foreground-700 hover:bg-background-200" data-testid="preview-close">Close preview</button>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-4 pb-4 sm:px-6">
         {error ? <p role="alert" className="text-sm text-primary-700">{error}</p> : null}
         {submitted ? <p role="status" className="mx-auto mb-3 max-w-6xl rounded-xl border border-green-300 bg-green-50 px-4 py-2 text-sm text-green-900" data-testid="preview-submitted">Preview only: a student would submit here. Nothing was saved or submitted.</p> : null}
         {tpl ? <PdfWizard template={tpl.template} pdfBytes={tpl.bytes} responses={responses} onChange={setResponses}

@@ -116,7 +116,7 @@ export default function WorkspaceShell({ portalLabel, workspaceName, roleLabel, 
         ) : null}
 
         <div className="min-w-0 flex-1">
-          <header className="sticky top-0 z-40 border-b border-background-200 bg-background-50">
+          <header data-app-header className="sticky top-0 z-40 border-b border-background-200 bg-background-50">
             <div className="flex items-center justify-between gap-3 px-4 py-3 md:px-6">
               <div className="flex min-w-0 items-center gap-3">
                 <button

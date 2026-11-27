@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { measureText, type PdfHandle } from "./pdfDoc";
 import type { Rect } from "@/lib/assessment/pdfTemplate/model";
 import { fitChain, LINE_HEIGHT, FIT_PADDING, type ChainFit, type FitBox } from "@/lib/assessment/pdfTemplate/student";
@@ -21,7 +22,7 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
 }
 
 /** Draws `rect` (fractions of the page; the whole page when absent) of a page into a canvas `width` CSS px wide, once it is near the view. */
-function CropCanvas({ pdf, page, rect, width, label }: { pdf: PdfHandle; page: number; rect?: Rect | null; width: number; label: string }) {
+function CropCanvas({ pdf, page, rect, width, label, hiRes = false }: { pdf: PdfHandle; page: number; rect?: Rect | null; width: number; label: string; hiRes?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [near, setNear] = useState(typeof IntersectionObserver === "undefined");
   const size = pdf.sizes[page - 1] ?? { w: 595, h: 842 };
@@ -38,7 +39,9 @@ function CropCanvas({ pdf, page, rect, width, label }: { pdf: PdfHandle; page: n
     void (async () => {
       const p = await pdf.doc.getPage(page);
       const el = canvas.current; if (cancelled || !el) return;
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      // hiRes (the question as printed): sharp at any zoom of the browser, up to 3 device pixels per CSS pixel
+      const dpr = window.devicePixelRatio || 1;
+      const ratio = hiRes ? Math.min(3, Math.max(2, dpr * 1.5)) : Math.min(dpr, 2);
       const scale = (width / (r.w * size.w)) * ratio;
       const vp = p.getViewport({ scale });
       el.width = Math.max(1, Math.floor(r.w * vp.width)); el.height = Math.max(1, Math.floor(r.h * vp.height));
@@ -49,7 +52,7 @@ function CropCanvas({ pdf, page, rect, width, label }: { pdf: PdfHandle; page: n
       await task.promise.catch(() => undefined);
     })();
     return () => { cancelled = true; task?.cancel(); };
-  }, [pdf, page, r.x, r.y, r.w, r.h, width, near, size.w]);
+  }, [pdf, page, r.x, r.y, r.w, r.h, width, near, size.w, hiRes]);
   return <canvas ref={canvas} role="img" aria-label={label} style={{ width, height }} className="block max-w-full bg-white" />;
 }
 
@@ -87,7 +90,9 @@ export function PdfPageMarked({ pdf, page, marks, maxWidth = 900 }: { pdf: PdfHa
  * A part of a page (a declaration, a picture of a question, a scanned question); tap or click to see it larger. It fills the column
  * (a small picture is enlarged at most 2.5 times and centred), so no blank block is left beside it.
  */
-export function PdfCrop({ pdf, rect, label, testId = "question-crop" }: { pdf: PdfHandle; rect: Rect; label: string; testId?: string }) {
+export function PdfCrop({ pdf, rect, label, testId = "question-crop", full = false, hiRes = false, frame = true }: { pdf: PdfHandle; rect: Rect; label: string; testId?: string;
+  /** full: always the column's width (the question as printed); else a small picture is enlarged at most 2.5 times */
+  full?: boolean; hiRes?: boolean; frame?: boolean }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [zoom, setZoom] = useState(false);
   useEffect(() => {
@@ -96,22 +101,22 @@ export function PdfCrop({ pdf, rect, label, testId = "question-crop" }: { pdf: P
     window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k);
   }, [zoom]);
   const natural = rect.w * (pdf.sizes[rect.page - 1]?.w ?? 595);
-  const width = Math.min(w, Math.round(natural * 2.5));
+  const width = full ? w : Math.min(w, Math.round(natural * 2.5));
   return <>
     <div ref={ref} className="w-full">
       <button type="button" onClick={() => setZoom(true)} style={w > 0 ? { width } : undefined}
-        className="group relative mx-auto block cursor-zoom-in overflow-hidden rounded-xl border border-background-200 bg-white text-left shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500" aria-label={`${label}: open larger`} data-testid={testId}>
-        {w > 0 ? <CropCanvas pdf={pdf} page={rect.page} rect={rect} width={width} label={label} /> : null}
-        <span className="absolute bottom-1.5 right-1.5 rounded-md bg-white/90 px-1.5 py-0.5 text-xs font-medium text-foreground-700 shadow-sm"><i className="ri-zoom-in-line mr-0.5" aria-hidden="true" />Zoom</span>
+        className={`group relative mx-auto block cursor-zoom-in overflow-hidden bg-white text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 ${frame ? "rounded-xl border border-background-200 shadow-sm" : "rounded-lg"}`} aria-label={`${label}: open larger`} data-testid={testId}>
+        {w > 0 ? <CropCanvas pdf={pdf} page={rect.page} rect={rect} width={width} label={label} hiRes={hiRes} /> : null}
+        <span className="absolute bottom-1.5 right-1.5 rounded-md bg-white/90 px-1.5 py-0.5 text-xs font-medium text-foreground-700 opacity-80 shadow-sm ring-1 ring-foreground-950/10 transition-opacity group-hover:opacity-100"><i className="ri-zoom-in-line sm:mr-0.5" aria-hidden="true" /><span className="hidden sm:inline">Zoom</span></span>
       </button>
     </div>
-    {zoom ? <div className="fixed inset-0 z-[80] flex flex-col bg-foreground-950/80" role="dialog" aria-modal="true" aria-label={label} onClick={() => setZoom(false)} data-testid="crop-zoom">
+    {zoom ? createPortal(<div className="fixed inset-0 z-[90] flex flex-col bg-foreground-950/80" role="dialog" aria-modal="true" aria-label={label} onClick={() => setZoom(false)} data-testid="crop-zoom">
       <div className="flex items-center justify-between px-4 py-3 text-white"><p className="text-sm font-semibold">{label}</p>
         <button type="button" className="rounded-md p-1 hover:bg-white/10" onClick={() => setZoom(false)} aria-label="Close"><i className="ri-close-line text-2xl" aria-hidden="true" /></button></div>
       <div className="flex-1 overflow-auto p-3" onClick={(e) => e.stopPropagation()}>
-        <CropCanvas pdf={pdf} page={rect.page} rect={rect} width={Math.max(900, Math.round(window.innerWidth * 1.6))} label={label} />
+        <CropCanvas pdf={pdf} page={rect.page} rect={rect} width={Math.max(900, Math.round(window.innerWidth * 1.6))} label={label} hiRes={hiRes} />
       </div>
-    </div> : null}
+    </div>, document.body) : null}
   </>;
 }
 

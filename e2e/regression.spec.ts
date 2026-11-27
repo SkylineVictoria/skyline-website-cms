@@ -14,7 +14,6 @@ test("student registration still works and opens the application wizard", async 
   await expect(page.getByRole("radio", { name: /Student/ })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(student.email);
-  await page.locator("#enrol-mobile").fill(student.local);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create student account" }).click();
@@ -99,7 +98,6 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   await page.goto("/login?mode=enroll&as=student");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(student.email);
-  await page.locator("#enrol-mobile").fill(student.local);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create student account" }).click();
@@ -208,7 +206,6 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   await page.goto("/login?mode=enroll&as=student");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(student.email);
-  await page.locator("#enrol-mobile").fill(student.local);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create student account" }).click();
@@ -551,7 +548,6 @@ test("identity email: public student sign-up with an email that already has an a
   await page.goto("/login?mode=enroll&as=student");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(existing.email);
-  await page.locator("#enrol-mobile").fill(existing.local);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create student account" }).click();

@@ -6,7 +6,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Enrolled application through the placement path (tentative, CoE copied), In Progress sets the application Active, no Active by hand,
 -- Admin undo, paused attendance, the portal view without notes, the daily start and no-show. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(83);
+select plan(91);
 
 create function pg_temp.as_user(p uuid) returns void language plpgsql as $$
 begin perform set_config('role', 'authenticated', true); perform set_config('request.jwt.claim.sub', p::text, true); end $$;
@@ -247,6 +247,24 @@ select ok(exists (select 1 from public.qualification_consistency_problems() wher
 select ok(not exists (select 1 from public.qualification_consistency_problems() where application_id = 'a7000000-0000-0000-0000-000000000004' and code like 'APP-%'), 'check: an application in step is not listed');
 select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
 select ok((public.qualification_consistency() ->> 'count')::int >= 2, 'check: staff see the out-of-step count');
+select pg_temp.as_postgres();
+-- ---------------------------------------------------------------- SIGNUP-PHONE-OPTIONAL + MY-QUALIFICATION (20261128011517)
+insert into public.agencies(name, code, status, is_direct) select 'ZZ Direct', 'ZZ-DIRECT', 'Active', true where not exists (select 1 from public.agencies where is_direct and status = 'Active');
+select is(pg_temp.try($$select public.portal_self_register('student', '{"email": "zz.nophone@example.test", "phone": ""}'::jsonb)$$), 'ok', 'signup: a student signs up without a mobile number');
+select is((select phone is null from public.enrollment_students where email = 'zz.nophone@example.test'), true, 'signup: no mobile is stored as empty (null), never junk');
+select is(pg_temp.try($$select public.portal_self_register('student', '{"email": "zz.nophone2@example.test", "phone": ""}'::jsonb)$$), 'ok', 'signup: a second student without a mobile is not a duplicate');
+insert into public.enrollment_students(agency_id, full_name, email, phone) select id, 'Zz Existing', 'zz.existing@example.test', '+61412345678' from public.agencies where is_direct and status = 'Active' limit 1;
+select ok(pg_temp.try($$select public.portal_self_register('student', '{"email": "zz.existing@example.test", "phone": "+61499999999"}'::jsonb)$$) like 'refused:%mobile number does not match%', 'signup: a given mobile must still match an existing record');
+select is(pg_temp.try($$select public.portal_self_register('student', '{"email": "zz.existing@example.test", "phone": ""}'::jsonb)$$), 'ok', 'signup: an existing record is claimed by email (the emailed code proves it)');
+-- My qualification: the signed-in student sees their own Qualification and opens its documents
+insert into public.portal_profiles(id, auth_user_id, full_name, email) values ('d6000000-0000-0000-0000-000000000011', 'a6000000-0000-0000-0000-000000000011', 'Zz Quinn', 'q.student1@example.test');
+insert into public.agency_memberships(user_id, agency_id, role, student_id) values ('d6000000-0000-0000-0000-000000000011', 'c6000000-0000-0000-0000-000000000001', 'student', 'e6000000-0000-0000-0000-000000000011');
+create temp table qdoc as select d.id from public.intake_enrolment_documents d where d.enrolment_id = pg_temp.qid() and d.kind = 'coe';
+grant all on qdoc to public;
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000011');
+select is((public.portal_my_qualifications() -> 0 ->> 'courseCode'), 'Q101', 'my qualification: the student sees their Qualification');
+select ok(not (public.portal_my_qualifications() -> 0 ? 'reason') and not (public.portal_my_qualifications() -> 0 ? 'note'), 'my qualification: no reasons or internal notes');
+select is(pg_temp.try($$select public.qualification_document_get((select id from qdoc))$$), 'ok', 'my qualification: the student opens their CoE copy');
 select pg_temp.as_postgres();
 select * from finish();
 rollback;

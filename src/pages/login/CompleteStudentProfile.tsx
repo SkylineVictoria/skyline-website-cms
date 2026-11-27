@@ -2,7 +2,6 @@ import { useState, type FormEvent } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
-import { PhoneInput } from "@/components/feature/applicationInputs";
 import { mobileProblem, validEmail } from "@/lib/enrolForm";
 import EmailField from "@/components/identity/EmailField";
 import { isEmailTakenError } from "@/lib/identity/email";
@@ -43,7 +42,7 @@ export default function CompleteStudentProfile({ user, onDone, onCancel, embedde
     if (!first.trim()) next.first = "Enter your first name.";
     if (!last.trim()) next.last = "Enter your last name.";
     if (!emailVerified && !validEmail(email)) next.email = "Enter a valid email address.";
-    const mobileError = phoneVerified ? "" : mobileProblem(mobile); if (mobileError) next.mobile = mobileError;
+    const mobileError = phoneVerified || !mobile.trim() ? "" : mobileProblem(mobile); if (mobileError) next.mobile = mobileError;
     setErrors(next);
     setEmailError(null);
     if (Object.keys(next).length) return;
@@ -91,13 +90,7 @@ export default function CompleteStudentProfile({ user, onDone, onCancel, embedde
             {problem("email")}
           </Field>
         )}
-        {phoneVerified ? null : (
-          <div>
-            <label htmlFor="complete-mobile" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
-            <PhoneInput id="complete-mobile" name="mobile" required placeholder="041 234 5678" />
-            {problem("mobile")}
-          </div>
-        )}
+        {/* SIGNUP-PHONE-OPTIONAL (owner 2026-11-27): the mobile field is hidden for now (optional; added back later). */}
         {errors.form ? <div className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2.5 text-label text-primary-900" role="alert">{errors.form}</div> : null}
         <Button type="submit" className="w-full" disabled={busy || emailBlocking}>{busy ? "Creating your account…" : "Create student account"}</Button>
         <p className="text-center text-xs text-foreground-500">

@@ -18,6 +18,7 @@ const AGENCY_NAV: NavEntry[] = [
 // A student sees their own applications and documents only.
 const STUDENT_NAV: NavEntry[] = [
   { to: "/agency/applications", label: "My applications", icon: "ri-file-list-3-line", end: true },
+  { to: "/agency/qualification", label: "My qualification", icon: "ri-graduation-cap-line" },
   { to: "/agency/learning", label: "My learning", icon: "ri-book-open-line" },
   { to: "/agency/timetable", label: "My timetable", icon: "ri-calendar-2-line" },
   { to: "/agency/assessments", label: "My assessments", icon: "ri-edit-box-line" },
@@ -46,6 +47,7 @@ const CRUMB_LABELS: Record<string, string> = {
   documents: "Documents",
   assessments: "Assessments",
   learning: "My learning",
+  qualification: "My qualification",
   timetable: "My timetable",
   messages: "Messages",
   notifications: "Notifications",

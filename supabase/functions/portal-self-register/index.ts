@@ -136,7 +136,8 @@ Deno.serve(async (req) => {
       if (!first.ok) return json({ error: "Check your first name." }, 400);
       if (!last.ok) return json({ error: "Check your last name." }, 400);
       const mobile = text("phone", 40).replace(/[\s().-]/g, "");
-      if (!MOBILE.test(mobile)) return json({ error: "Enter your mobile number with its country code." }, 400);
+      // SIGNUP-PHONE-OPTIONAL (owner 2026-11-27): the mobile is hidden on the form for now; a given one is still checked.
+      if (mobile && !MOBILE.test(mobile)) return json({ error: "Enter your mobile number with its country code." }, 400);
       const dob = text("dateOfBirth", 10);
       if (dob && (!/^\d{4}-\d{2}-\d{2}$/.test(dob) || Number.isNaN(Date.parse(dob)))) return json({ error: "Enter a valid date of birth." }, 400);
       const referral = text("referralCode", 40);

@@ -39,7 +39,7 @@ export default function PortalStudentsPage() {
 
   if (role === "student") return <Navigate to="/agency/applications" replace />;
   const isAdmin = role === "agency_admin" || role === "slit_admin";
-  const title = role === "agency_admin" ? `Our ${agency?.name ?? ""} Students`.replace("  ", " ") : role === "slit_admin" ? "Students" : "My students";
+  const title = role === "agency_admin" ? (agency?.name ? `${agency.name} Students` : "Students") : role === "slit_admin" ? "Students" : "My students";
   const pages = Math.max(1, Math.ceil(total / PAGE));
 
   return (

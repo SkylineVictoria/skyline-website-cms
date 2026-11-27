@@ -1,5 +1,5 @@
 import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
-import { AgentHandoffPanel } from "@/pages/agency/components/ApplicationHandoff";
+import { AgentHandoffPanel, HandoffStrip } from "@/pages/agency/components/ApplicationHandoff";
 import { HANDOFF_STATE_LABEL } from "@/pages/agency/lib/handoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
 import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
@@ -400,13 +400,8 @@ export default function ApplicationDetailPage() {
 
       {/* The student review and signature (timeline, what the student changed, Take back / Resend / Request a change) is its own tab. */}
       {handoff?.state ? (
-        <button type="button" onClick={() => setTab("signing")} data-testid="handoff-strip"
-          className="mt-4 flex w-full cursor-pointer flex-wrap items-center gap-2 rounded-card border border-background-200 bg-background-50 px-4 py-2.5 text-left text-sm hover:border-primary-300">
-          <i className="ri-quill-pen-line text-base text-primary-600" aria-hidden="true" />
-          <span className="font-medium text-foreground-900">Student review and signature</span>
-          <span className="rounded-full bg-background-200 px-2 py-0.5 text-xs font-semibold text-foreground-800">{HANDOFF_STATE_LABEL[handoff.state]}</span>
-          <span className="ml-auto text-xs font-semibold text-primary-700">Open <i className="ri-arrow-right-line" aria-hidden="true" /></span>
-        </button>
+        <HandoffStrip applicationId={application.id} handoff={handoff} viewer={role === "student" ? "student" : "staff"}
+          onOpen={() => setTab("signing")} onChanged={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1); }} />
       ) : null}
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
       {/* OFFER-DEPOSIT: acceptance and deposit at a glance; staff and the agent remind, staff set the automatic reminders. */}

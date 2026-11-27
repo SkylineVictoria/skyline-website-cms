@@ -387,6 +387,19 @@ export default function ApplicationWorkspace({
   const [reviewValues, setReviewValues] = useState<DraftValues | null>(null);
   // ONE-PAGE: the cards of every step (grid), one step being edited, or the declarations and signature (sign).
   const [onePageView, setOnePageView] = useState<{ kind: "grid" } | { kind: "edit"; index: number } | { kind: "sign" }>({ kind: "grid" });
+  // The sign page also opens every step that still had something missing when it was opened (e.g. Course and Intake on a second
+  // application), with its own fields, so the student fixes it there and signs (owner 2026-11-27). Latched on entering the page so
+  // a step does not disappear while it is being filled.
+  const issuesRef = useRef<Array<Array<unknown>>>([]);
+  const [signFix, setSignFix] = useState<Set<number>>(() => new Set());
+  useEffect(() => {
+    if (onePageView.kind !== "sign") return;
+    // The course and start date step is always there for the student to confirm or choose.
+    const courseStep = sections.findIndex((section) => section.fields.some((field) => field.name === COURSE_FIELD));
+    setSignFix(new Set([...(courseStep >= 0 ? [courseStep] : []),
+      ...issuesRef.current.flatMap((list, index) => (list.length && !isDeclarationSection(index) ? [index] : []))]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- computed once each time the sign page opens
+  }, [onePageView.kind]);
   /** Back to the cards (or on to the signature), with the answers as they are on the form now. */
   const showOnePage = (kind: "grid" | "sign") => {
     if (formRef.current) setReviewValues(collectFormValues(formRef.current));
@@ -1267,6 +1280,11 @@ export default function ApplicationWorkspace({
     const target = stageOf(index);
     if (one) {
       // The student's declaration is filled on the sign page, open, with the ticks and the signature.
+      // On the sign page a step shown there is filled in place (the warning links jump to its field).
+      if (studentSigns && onePageView.kind === "sign" && signFix.has(index)) {
+        window.setTimeout(() => focusSection(index, field), 60);
+        return;
+      }
       if (studentSigns && isDeclarationSection(index)) {
         setOnePageView({ kind: "sign" });
         window.setTimeout(() => focusSection(index, field), 120);
@@ -1963,6 +1981,7 @@ export default function ApplicationWorkspace({
 
   // Per step: applies, complete (by the Submit rules), and its one-line summary; per stage: done, needs details, current.
   const issuesBySection = sections.map((_, index) => (sectionShown(index) ? sectionIssues(index) : []));
+  issuesRef.current = issuesBySection;
   const snapshot: DraftValues = formRef.current ? collectFormValues(formRef.current) : {};
   const shownValue = (name: string) => {
     const raw = snapshot[name];
@@ -2115,7 +2134,7 @@ export default function ApplicationWorkspace({
           {stages.flatMap((item) => item.sections).map((index) => {
             const section = sections[index];
             const { subtitle, tip } = stepHelp(section);
-            const shown = one ? sectionShown(index) && ((onePageView.kind === "edit" && onePageView.index === index) || (onePageView.kind === "sign" && studentSigns && isDeclarationSection(index))) : !isReview && stageOf(index) === stage && sectionShown(index);
+            const shown = one ? sectionShown(index) && ((onePageView.kind === "edit" && onePageView.index === index) || (onePageView.kind === "sign" && studentSigns && (isDeclarationSection(index) || signFix.has(index)))) : !isReview && stageOf(index) === stage && sectionShown(index);
             const complete = issuesBySection[index].length === 0;
             const open = one || expanded.has(index) || !ready;
             return (

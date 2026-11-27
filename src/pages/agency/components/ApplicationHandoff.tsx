@@ -206,6 +206,64 @@ export function AgentHandoffPanel({ applicationId, handoff, onChanged, viewer = 
   );
 }
 
+/**
+ * The bar above the application's tabs (owner 2026-11-27): where the application is with the student, and the agent's / staff's
+ * actions in place: Resend link, Take back (the application comes back to the agent to change, then is sent again), Details.
+ */
+export function HandoffStrip({ applicationId, handoff, onChanged, onOpen, viewer = "staff" }: {
+  applicationId: string; handoff: Handoff; onChanged: () => void; onOpen: () => void; viewer?: "staff" | "student";
+}) {
+  const [busy, setBusy] = useState<"" | "take" | "resend">("");
+  const [error, setError] = useState("");
+  const [note, setNote] = useState("");
+  const [confirmTake, setConfirmTake] = useState(false);
+  if (!handoff.state) return null;
+  const withStudent = handoff.state === "with_student" || handoff.state === "waiting_guardian";
+  const staff = viewer === "staff";
+  const run = async (kind: "take" | "resend") => {
+    setBusy(kind); setError(""); setNote("");
+    try {
+      if (kind === "take") await takeBackApplication(applicationId);
+      else { const sms = await sendApplicationInvitation(applicationId); setNote(["Link sent again by email.", INVITE_SMS_LABEL[sms]].filter(Boolean).join(" ")); }
+      setConfirmTake(false);
+      onChanged();
+    } catch (e) { setError(e instanceof Error ? e.message : "That could not be done."); }
+    finally { setBusy(""); }
+  };
+  const tone = withStudent ? "bg-sky-100 text-sky-900" : handoff.state === "change_requested" ? "bg-amber-100 text-amber-900"
+    : handoff.state === "submitted" ? "bg-emerald-100 text-emerald-900" : "bg-background-200 text-foreground-800";
+  return (
+    <div className="mt-4 rounded-card border border-background-200 bg-background-50 px-4 py-2.5" data-testid="handoff-strip">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <i className="ri-quill-pen-line text-base text-primary-600" aria-hidden="true" />
+        <span className="font-medium text-foreground-900">Student review and signature</span>
+        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${tone}`} data-testid="handoff-strip-state">{HANDOFF_STATE_LABEL[handoff.state]}</span>
+        {staff && handoff.invite?.state === "expired" ? <span className="text-xs text-amber-800">Link expired</span> : null}
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          {staff && handoff.state === "with_student" ? (
+            <Button variant="outline" disabled={Boolean(busy)} onClick={() => void run("resend")} data-testid="strip-resend">
+              <i className="ri-mail-send-line" aria-hidden="true" /> {busy === "resend" ? "Sending…" : "Resend link"}
+            </Button>
+          ) : null}
+          {staff && withStudent ? (
+            <Button variant="outline" disabled={Boolean(busy)} onClick={() => setConfirmTake(true)} data-testid="strip-take-back">
+              <i className="ri-arrow-go-back-line" aria-hidden="true" /> Take back to edit
+            </Button>
+          ) : null}
+          <Button variant="ghost" onClick={onOpen} data-testid="strip-open">Details <i className="ri-arrow-right-line" aria-hidden="true" /></Button>
+        </span>
+      </div>
+      {error ? <p role="alert" className="mt-2 text-sm text-red-800">{error}</p> : null}
+      {note ? <p role="status" className="mt-2 text-sm text-emerald-800">{note}</p> : null}
+      <Modal open={confirmTake} title="Take the application back?" onClose={() => setConfirmTake(false)}
+        footer={<><Button variant="ghost" onClick={() => setConfirmTake(false)}>Cancel</Button><Button disabled={busy === "take"} onClick={() => void run("take")}>{busy === "take" ? "Taking back…" : "Take back"}</Button></>}>
+        <p className="text-sm text-foreground-700">The status goes back to “With agent”: the student's link stops working until you send it again.
+          {handoff.state === "waiting_guardian" ? " The student's signature and the parent / guardian's link are cancelled: both sign again." : ""}</p>
+      </Modal>
+    </div>
+  );
+}
+
 /** Request a change (student): a note to the agent; the application goes back to them and is view-only until they send it again. */
 export function RequestChangeButton({ applicationId, onDone, label = "Request a change" }: { applicationId: string; onDone: () => void; label?: string }) {
   const [open, setOpen] = useState(false);

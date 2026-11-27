@@ -50,7 +50,7 @@ export default function PortalApplicationsPage() {
       <SubmittedBanner />
       <PageHeading
         eyebrow={isStudent ? "My applications" : "Applications"}
-        title={isStudent ? "Your applications" : isAgentOnly ? "My applications" : `Our ${agency?.name ?? ""} Applications`.replace("  ", " ")}
+        title={isStudent ? "Your applications" : isAgentOnly ? "My applications" : (agency?.name ? `${agency.name} Applications` : "Applications")}
         description={
           isStudent
             ? `Your applications with ${agency?.name ?? "your agency"}. Open one to upload documents and fill in the form, or start a new one.`

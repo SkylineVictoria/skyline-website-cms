@@ -47,3 +47,22 @@ export function notPermanentSubclass(subclass: string): boolean {
   const digits = subclass.replace(/\D/g, "");
   return digits.length === 3 && !PERMANENT_SUBCLASSES.has(digits);
 }
+
+/** Student visa subclasses: 500 today, 570-576 before July 2016. */
+export function isStudentVisaSubclass(subclass: string): boolean {
+  return /^(500|57[0-6])$/.test(String(subclass ?? "").replace(/\D/g, ""));
+}
+
+/**
+ * Which start-date calendar the student gets (owner 2026-11-27, so the student never has to choose): Australian / NZ citizens and
+ * permanent residents study on a VoE; once a visa is read, a student visa holder on a CoE and any other visa holder on a VoE.
+ * "" while residency is unknown or no visa has been read yet (both calendars open).
+ */
+export function studyLoadFor(kind: "domestic" | "international" | "", visaSubclasses: string[]): "coe" | "voe" | "" {
+  if (kind === "domestic") return "voe";
+  if (kind !== "international") return "";
+  const known = visaSubclasses.map((s) => String(s ?? "").trim()).filter(Boolean);
+  // Decided only once a visa has been read (owner 2026-11-27); until then both calendars stay open (CoE preselected).
+  if (!known.length) return "";
+  return known.some(isStudentVisaSubclass) ? "coe" : "voe";
+}

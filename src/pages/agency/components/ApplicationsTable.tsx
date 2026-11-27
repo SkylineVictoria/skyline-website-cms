@@ -2,7 +2,7 @@ import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import { useContext, useMemo, useState, useEffect, useRef, type ReactNode } from "react";
 import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import { Link, useNavigate } from "react-router-dom";
-import { queryApplications, type ApplicationListRow } from "@/pages/agency/lib/portalApplications";
+import { deleteDraftApplication, queryApplications, type ApplicationListRow } from "@/pages/agency/lib/portalApplications";
 import { formatDate } from "@/pages/agency/lib/portalData";
 import { PortalEmpty, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 import { PortalAuthContext } from "@/pages/agency/lib/portalAuthContext";
@@ -143,6 +143,26 @@ export default function ApplicationsTable({
   const toast = useToast();
   // Statuses changed here, shown at once and undone if the database refuses the change.
   const [statusOverride, setStatusOverride] = useState<Record<string, string>>({});
+  // DRAFT-DELETE (owner 2026-11-27): agents, business admin agents and SLIT admins delete a draft from the list (drafts only;
+  // portal-application-delete checks the caller may edit it). A student withdraws instead.
+  const canDeleteDrafts = portal ? portal.role !== "student" : true;
+  const [deleted, setDeleted] = useState<Set<string>>(() => new Set());
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const removeDraft = async (row: ApplicationListRow) => {
+    setDeletingId(row.id);
+    try {
+      await deleteDraftApplication(row.id);
+      setDeleted((prev) => new Set(prev).add(row.id));
+      toast.show(`Application ${row.reference || ""} deleted.`.replace("  ", " "));
+      if (remote) setRetry((value) => value + 1);
+    } catch (failure) {
+      toast.show(failure instanceof Error ? failure.message : "The application could not be deleted.");
+    } finally {
+      setDeletingId(null);
+      setConfirmDeleteId(null);
+    }
+  };
 
   const filtered = useMemo(() => {
     if (remote) return rows;
@@ -288,7 +308,7 @@ export default function ApplicationsTable({
                 </tr>
               </thead>
               <tbody>
-                {paged.map((source) => {
+                {paged.filter((source) => !deleted.has(source.id)).map((source) => {
                   const row = statusOverride[source.id] ? { ...source, status: statusOverride[source.id] } : source;
                   const applicantAction = actionsFor(workflow, row.status, "applicant")[0];
                   return (
@@ -352,6 +372,20 @@ export default function ApplicationsTable({
                         ) : (
                           <span className="px-2 text-sm text-foreground-400" title="No action available for your role" data-testid="no-action">—</span>
                         )}
+                        {canDeleteDrafts && row.status === "draft" && !row.submittedAt ? (confirmDeleteId === row.id ? (
+                          <span className="ml-2 inline-flex items-center gap-1.5 text-xs" data-testid="row-delete-confirm">
+                            <span className="text-red-800">Delete?</span>
+                            <button type="button" disabled={deletingId === row.id} onClick={() => void removeDraft(row)}
+                              className="h-8 rounded-lg bg-red-600 px-2.5 font-semibold text-white disabled:opacity-60">{deletingId === row.id ? "Deleting…" : "Yes, delete"}</button>
+                            <button type="button" disabled={deletingId === row.id} onClick={() => setConfirmDeleteId(null)}
+                              className="h-8 rounded-lg border border-background-300 px-2.5 font-medium text-foreground-800 hover:bg-background-100">Keep</button>
+                          </span>
+                        ) : (
+                          <button type="button" onClick={() => setConfirmDeleteId(row.id)} title="Delete this draft application and its documents" data-testid="row-delete"
+                            className="ml-2 inline-flex h-8 items-center gap-1 rounded-lg border border-red-200 px-2.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-50">
+                            <i className="ri-delete-bin-line" aria-hidden="true" /> Delete
+                          </button>
+                        )) : null}
                       </td>
                     </tr>
                   );

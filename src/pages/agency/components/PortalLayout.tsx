@@ -40,6 +40,7 @@ const CRUMB_LABELS: Record<string, string> = {
   bookings: "Bookings",
   dashboard: "Dashboard",
   applications: "Applications",
+  students: "Students",
   new: "Add candidate",
   workspace: "Workspace",
   documents: "Documents",
@@ -79,7 +80,14 @@ export default function PortalLayout() {
   const displayName = profile?.fullName?.trim() || authUser?.name || "User";
   const isSlit = role === "slit_admin";
   const isStudent = role === "student";
-  const nav = isSlit ? SLIT_NAV : isStudent ? STUDENT_NAV : role === "agency_admin" ? [...AGENCY_NAV, { to: "/agency/users", label: selectedScope?.tenantId ? "Institution agents" : "Agents", icon: "ri-group-line" }] : AGENCY_NAV;
+  // PORTAL-MY-STUDENTS (owner 2026-11-27): the business admin agent sees "Our <business> Students / Applications" (the whole
+  // business); an agent sees "My students / My applications" (only their own).
+  const ours = agency?.name ? `Our ${agency.name}` : "Our";
+  const agencyNav: NavEntry[] = AGENCY_NAV.flatMap((entry) => entry.to === "/agency/applications" ? [
+    { to: "/agency/students", label: role === "agency_admin" ? `${ours} Students` : "My students", icon: "ri-user-3-line" },
+    { ...entry, label: role === "agency_admin" ? `${ours} Applications` : "My applications" },
+  ] : [entry]);
+  const nav = isSlit ? SLIT_NAV : isStudent ? STUDENT_NAV : role === "agency_admin" ? [...agencyNav, { to: "/agency/users", label: selectedScope?.tenantId ? "Institution agents" : "Agents", icon: "ri-group-line" }] : agencyNav;
   const crumbs = buildCrumbs(location.pathname).map((crumb, index) => (index === 0 && isStudent ? { ...crumb, label: "Student Portal" } : crumb));
   const workspaceName = isSlit ? selectedScope?.tenantId ? selectedScope.name : "SLIT Administration" : isStudent ? "My applications" : agency?.name || "Agency";
 

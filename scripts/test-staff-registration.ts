@@ -5123,7 +5123,7 @@ test("Residency after the passport (2026-11-25): AU / NZ Domestic (no question, 
   assert.ok(wizard.includes("if (skipStep(ALL_STEPS[next]) && next !== step)"), "the visa step is passed over when not needed");
   assert.ok(wizard.includes("values[PR_ANSWER] = pr;") && !wizard.includes("au_currently_in_australia") && !wizard.includes("VisaDetails"));
   assert.ok(!wizard.includes("issuing_country:"), "issuing_country is saved as before (not written by the wizard)");
-  assert.ok(wizard.includes('defaultLoad={kind === "international" ? "coe" : undefined}') && read("src/pages/agency/components/IntakeSelect.tsx").includes("(defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null)"), "international: CoE chosen to start with");
+  assert.ok(wizard.includes('defaultLoad={studyLoad || (kind === "international" ? "coe" : undefined)}') && read("src/pages/agency/components/IntakeSelect.tsx").includes("(defaultLoad && loadsOffered.includes(defaultLoad) ? defaultLoad : null)"), "international: CoE chosen to start with");
   const steps = read("src/pages/agency/lib/wizardConfig.ts").split("export const WIZARD_STEPS")[1].split("];")[0];
   assert.deepEqual([...steps.matchAll(/\n    id: "(\w+)"/g)].map((m) => m[1]).slice(0, 2), ["passport", "visa"], "the visa screen follows the passport");
   assert.ok(ui.includes("a <strong>domestic</strong> student") && ui.includes("The course is offered as <strong>CoE</strong>") && ui.includes("upload the current Australian visa grant notice"));
@@ -5320,7 +5320,7 @@ test("Student picker (owner 2026-11-27): New student application picks the stude
   const picker = read("src/pages/agency/components/StudentPicker.tsx");
   assert.ok(picker.includes('data-testid="student-add-new"') && picker.includes("const count = rows.length + 1;"), "+ Add new student is always the last row");
   assert.ok(picker.includes("if (!row.canStart) return;"), "a student the caller may not start for cannot be picked");
-  assert.ok(picker.includes("sheet width=\"max-w-lg\"") && picker.includes("await saveStudent({") && picker.includes("dateOfBirth: dob"), "popup sheet saves the student with date of birth");
+  assert.ok(picker.includes("sheet width=\"max-w-lg\"") && picker.includes("await saveStudent({") && !picker.includes("new-student-dob"), "popup sheet saves the student without a date of birth (owner 2026-11-27: it comes from the passport)");
   assert.ok(picker.includes("Email already in use.") && picker.includes('data-testid="new-student-use-existing"'), "duplicate email offers the existing student");
   const step = read("src/pages/agency/components/StudentDetailsStep.tsx");
   assert.ok(step.includes("disabled={busy || !student}") && step.includes("setMobile(next && textableMobile(next.phone) ? next.phone : \"\")"), "Continue needs a student; mobile from the student");

@@ -24,7 +24,7 @@ import WizardQuestionStep from "@/pages/agency/components/WizardQuestionStep";
 import { BORN_IN_PASSPORT_COUNTRY, PASSPORT_COUNTRY_LABEL } from "@/pages/agency/lib/birthCountry";
 import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
-import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
+import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, studyLoadFor, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
 import { carriedFromLabel } from "@/pages/agency/lib/documentAttachments";
 import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingField, avetmissMissingScreen, avetmissYear, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
@@ -216,6 +216,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [documents, setDocuments] = useState<WizardDoc[]>([]);
   const [pending, setPending] = useState<PendingUpload[]>([]);
   const [uploadRejections, setUploadRejections] = useState<Record<string, string>>({});
+  // A rejected upload is shown on its own step only until the step changes (owner 2026-11-27: no stale "does not match" message).
+  useEffect(() => { setUploadRejections({}); }, [step]);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [finishing, setFinishing] = useState(false);
   const [finishError, setFinishError] = useState("");
@@ -498,7 +500,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       } catch (error) {
         if (error instanceof RejectedDocumentError) {
           setPending((prev) => prev.filter((entry) => entry.key !== item.key));
-          setUploadRejections((prev) => ({ ...prev, [item.category]: error.message }));
+          setUploadRejections((prev) => ({ ...prev, [item.category]: `${item.file.name}: ${error.message}` }));
         } else {
           setPending((prev) => prev.map((entry) => (entry.key === item.key ? { ...entry, error: error instanceof Error ? error.message : "Upload failed." } : entry)));
         }
@@ -714,6 +716,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const need: VisaNeed = visaNeed(passportCountry, answers[PR_ANSWER] ?? "");
   const residencyDone = residencyAnswered(passportCountry, answers[PR_ANSWER] ?? "");
   const kind = studentKind(passportCountry, answers[PR_ANSWER] ?? "");
+  // The start-date calendar follows the passport, PR answer and visa read from the documents: the student never chooses it.
+  const studyLoad = studyLoadFor(kind, acceptableVisa.filter((doc) => doc.extraction === "done").map((doc) => String(doc.extracted?.visa_subclass ?? "")));
   // PR evidence checked: a subclass read from the upload that is not a permanent visa is flagged.
   const temporaryPrVisa = need === "pr" ? acceptableVisa.find((doc) => doc.extraction === "done" && notPermanentSubclass(String(doc.extracted?.visa_subclass ?? ""))) : undefined;
   const skipStep = (item: WizardStep | WizardQuestion | undefined) => item?.id === "visa" && need === "none";
@@ -1134,8 +1138,10 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       else if (!chosen || (intakeList && !intakeList.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen))) errors.preferred_intake = "Choose the intake.";
       // Australian / NZ citizens and permanent residents study on a VoE; everyone else may start on a CoE or a VoE, by their visa
       // (owner, 2026-11-26).
-      else if (kind === "domestic" && intakeList?.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen && i.studyLoad && i.studyLoad !== "voe"))
-        errors.preferred_intake = "Australian and New Zealand citizens and permanent residents study on a VoE: choose a VoE start date.";
+      else if (studyLoad && intakeList?.some((i) => intakeKey(i.id, i.display, i.joinDate) === chosen && i.studyLoad && i.studyLoad !== studyLoad))
+        errors.preferred_intake = studyLoad === "voe"
+          ? (kind === "domestic" ? "Australian and New Zealand citizens and permanent residents study on a VoE: choose a VoE start date." : "With this visa the student studies on a VoE: choose a VoE start date.")
+          : "Student visa holders study on a CoE: choose a CoE start date.";
       if (filled("course")) {
         const staff = staffCourses ? staffCourseOf(answers.course) : null;
         const course: ApplicationCourseRow | null = staffCourses
@@ -1304,8 +1310,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
             ) : (
               <WizardQuestionStep question={question} answers={answers} errors={answerErrors} courseOptions={courseLabels} courseIdOf={courseIdOf} onChange={setAnswer}
                 onIntake={setIntake} onIntakesLoaded={intakesLoaded} intakeReload={intakeReload} applicationId={applicationId}
-                defaultLoad={kind === "international" ? "coe" : undefined}
-                onlyLoad={kind === "domestic" ? "voe" : undefined} />
+                defaultLoad={studyLoad || (kind === "international" ? "coe" : undefined)}
+                onlyLoad={studyLoad || undefined} />
             )}
             {answerSaveError ? <div className="mt-4"><PortalError message={answerSaveError} /></div> : null}
           </form>

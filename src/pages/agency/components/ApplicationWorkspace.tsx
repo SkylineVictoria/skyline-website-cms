@@ -442,8 +442,12 @@ export default function ApplicationWorkspace({
   const progressRef = useRef(progress);
   const initialCoursesRef = useRef(storedValues[COURSE_FIELD] ?? []);
 
+  // Once, when the course list arrives: a later save refreshes the application (courseLabels changes) and must not put the course
+  // the page opened with back over the one just chosen (owner 2026-11-27: the chosen course and start date vanished).
+  const coursesRestoredRef = useRef(false);
   useEffect(() => {
-    if (!courseLabels.length || !formRef.current) return;
+    if (!courseLabels.length || !formRef.current || coursesRestoredRef.current) return;
+    coursesRestoredRef.current = true;
     // A saved label in another format ("CODE - Name (36 weeks)") shows as the course's current label.
     const saved = initialCoursesRef.current;
     const current = (Array.isArray(saved) ? saved : [saved].filter(Boolean)).map(label => courseChoices?.find(c => c.label === label || c.row.code.toUpperCase() === courseCodeOf(label))?.label ?? label);

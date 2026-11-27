@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- AVETMISS-NO-JUNK (20261127050517): application answers are checked on every write (changed answers only, blanks pass, old answers
 -- kept), and every AVETMISS column has a guard. The installed trigger function is exercised on a scratch copy of the table, so no real
 -- application is touched. Rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(20);
+select plan(21);
 
 -- Every AVETMISS code column has a foreign key, a check or a validating trigger: a new column added without one fails here.
 select is((select count(*)::int from public.avetmiss_guard_gaps()), 0, 'no AVETMISS column without a guard');
@@ -53,5 +53,7 @@ select ok(exists (select 1 from pg_trigger where tgrelid = 'public.enrollment_st
 -- and the new Qualification statuses keep the text columns guarded.
 select ok(exists (select 1 from pg_trigger where tgrelid = 'public.intake_enrolments'::regclass and tgname in ('intake_enrolments_withdrawal_before', 'intake_enrolments_withdrawal_after', 'a1_qualification_status') having count(*) = 3), 'the withdrawal guard and the Qualification status guard are on intake_enrolments');
 select ok(pg_get_constraintdef((select oid from pg_constraint where conname = 'intake_enrolments_status_text_check')) like '%status_reason%', 'the Qualification reason, note and CoE / VoE numbers are length-checked');
+-- QUALIFICATION-BRIEF (2026-11-27): the Qualification's new columns (dates, the Qualification's id on unit enrolments) leave no guard gap
+select is((select count(*)::int from public.avetmiss_guard_gaps() where table_name in ('intake_enrolments', 'lms_unit_students')), 0, 'the Qualification''s dates and links on NAT source tables leave no AVETMISS guard gap');
 select * from finish();
 rollback;

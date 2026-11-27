@@ -96,6 +96,19 @@ Supabase secrets are project-wide; the prefix gives no function isolation. Exist
 Notification email needs only EF_NOTIFICATION_EMAIL_ENABLED and EF_POSTMARK_SERVER_TOKEN. Sender address/name come from the database (migration 87); the scheduler/pg_cron job must call the function with `Authorization: Bearer <service-role key>` read from Supabase Vault at run time (never stored in the repo); unused secrets to delete in Supabase: EF_NOTIFICATION_WORKER_SECRET, EF_POSTMARK_FROM_EMAIL, EF_POSTMARK_FROM_NAME, EF_POSTMARK_WEBHOOK_USER, EF_POSTMARK_WEBHOOK_PASSWORD. Later, for the other workers only: DOCUMENT_EXTRACTION_WORKER_SECRET and PUBLIC_ASSISTANT_WORKER_SECRET are still used by their pg_net schedulers (`x-worker-secret` from Vault) and would need the same Bearer service-role change on both sides; unchanged here.
 | Planned: EF_STRIPE_SECRET_KEY, EF_STRIPE_WEBHOOK_SECRET (P10) | none yet | not consumed |
 
+## Qualification brief fixes (QUALIFICATION-BRIEF, owner 2026-11-27; migration `20261128014517_qualification_brief_fixes`)
+- Reasons: `qualification_set_status` takes a reason from `qualification_status_reasons` for Deferred, Suspended, Cancelled and the manual start of a
+  Tentative one (list status `active`); "Other" needs the note; resuming and Completed take none. `qualification_undo(p_enrolment, p_reason, p_note)`
+  takes a reason from the `undo` list.
+- `intake_enrolments.actual_completion_date` (set by `qualification_status_guard` on Completed / Cancelled, cleared by an undo) and `award_issued_date`
+  (trigger `course_completions_award_on`); `qualification_set_dates(p_enrolment, p_commencement, p_expected, p_note)` (Admin; history row "Dates changed").
+- `lms_unit_students.qualification_id` / `asm_attempts.qualification_id` (`qualification_root_enrolment`, triggers `qualification_unit_link` /
+  `qualification_attempt_link`; existing rows filled with the tables' user triggers off).
+- Personal documents (`student_document_category`) are linked from the student record (`qualification_get` personalDocuments, earlier versions
+  included) and no longer copied (`qualification_copy_documents`); pending personal copies removed.
+- One step: `issue_coe_voe` makes the application Enrolled (enrolment date = issue date); the coe_issued / enrol transition is automatic (not in
+  Take action). The browser copies the application files and offers the Microsoft 365 mailbox after the CoE / VoE step.
+
 ## Qualification (QUALIFICATION, owner 2026-11-27; migration `20261128003517_qualification`; no Edge Function change)
 - The course enrolment record `intake_enrolments` is the Qualification (no new record table; status values kept, two added: `tentative`, `suspended`). Labels: `qualification_label`; moves: `qualification_moves` / trigger `a1_qualification_status` (bypasses: placement path `rto.auto_place`, carry-over planning, Admin undo `qualification.undo`).
 - New tables: `intake_enrolment_status_history` (append-only), `intake_enrolment_documents` (copies; file content in the row; application uploads copied by the staff screens, `copy_state` pending until then), `qualification_tasks` (place_manually / prisms_report / refund_check), `qualification_status_reasons`.

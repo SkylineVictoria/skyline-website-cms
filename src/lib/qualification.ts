@@ -117,6 +117,26 @@ async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
   return data as T;
 }
 
+/**
+ * QUALIFICATION-FILTERS (owner 2026-11-27): the open tasks behind the list's "Needs placement" (Place student manually: the placement
+ * at Enrolled did not go through, so there may be no Qualification yet) and "PRISMS to report" filters. Staff read qualification_tasks.
+ */
+export interface OpenQualificationTask {
+  id: string; kind: "place_manually" | "prisms_report"; title: string; detail: string | null; dueOn: string | null;
+  enrolmentId: string | null; applicationId: string | null; studentId: string | null; studentName: string | null; applicationReference: string | null;
+}
+export async function openQualificationTasks(kind: OpenQualificationTask["kind"]): Promise<OpenQualificationTask[]> {
+  const { data, error } = await supabase.from("qualification_tasks")
+    .select("id, kind, title, detail, due_on, enrolment_id, application_id, student_id, student:enrollment_students(full_name), application:enrollment_applications(reference)")
+    .eq("status", "open").eq("kind", kind).order("due_on", { ascending: true, nullsFirst: false });
+  if (error) throw new Error(error.message);
+  type Row = { id: string; kind: OpenQualificationTask["kind"]; title: string; detail: string | null; due_on: string | null; enrolment_id: string | null; application_id: string | null;
+    student_id: string | null; student: { full_name: string | null } | { full_name: string | null }[] | null; application: { reference: string | null } | { reference: string | null }[] | null };
+  const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);
+  return ((data ?? []) as Row[]).map((r) => ({ id: r.id, kind: r.kind, title: r.title, detail: r.detail, dueOn: r.due_on, enrolmentId: r.enrolment_id, applicationId: r.application_id,
+    studentId: r.student_id, studentName: one(r.student)?.full_name ?? null, applicationReference: one(r.application)?.reference ?? null }));
+}
+
 export const listQualifications = (filter: { status?: string[]; search?: string; studentId?: string; applicationId?: string } = {}) =>
   rpc<QualificationRow[]>("qualification_list", {
     p_status: filter.status?.length ? filter.status : null,

@@ -75,6 +75,15 @@ test("an Enrolled application's Qualification: list, detail, defer with a PRISMS
   await expect(page.getByTestId("qualification-tasks")).toContainText("Report in PRISMS within 14 days");
   expect(sql(`select status || '/' || status_reason from public.intake_enrolments where id = '${qid}'`)).toBe("deferred/Visa delay");
 
+  // QUALIFICATION-FILTERS: "PRISMS to report" lists it; "Needs placement" lists an Enrolled application whose placement did not go through
+  await page.goto("/admin/qualifications?task=prisms");
+  await expect(page.getByTestId("filter-prisms")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("qualifications-table").getByRole("row").filter({ hasText: `ZZQ${tag.slice(-4)}` })).toContainText("Deferred");
+  sql(`insert into public.qualification_tasks(kind, application_id, student_id, title, detail) values ('place_manually', '${app}', '${student}', 'Place student manually', 'ZZ placement check ${tag}')`);
+  await page.goto("/admin/qualifications?task=place");
+  await expect(page.getByTestId("waiting-placement-item").filter({ hasText: `ZZ placement check ${tag}` })).toContainText("Zz Quentin");
+  await expect(page.getByTestId("qualifications-table").getByRole("row").filter({ hasText: `ZZQ${tag.slice(-4)}` })).toHaveCount(0);
+
   // The student's Qualification tab and the application's card.
   await page.goto(`/admin/students/${student}`);
   await page.getByRole("button", { name: "Qualification" }).click();

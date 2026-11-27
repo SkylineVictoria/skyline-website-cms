@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Card, PageHeader } from "@/pages/admin/components/ui";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import QualificationsTable from "@/pages/admin/components/QualificationsTable";
-import { listQualifications, QUALIFICATION_LABELS, QUALIFICATION_STATUSES, type QualificationRow } from "@/lib/qualification";
+import { formatQualificationDate, listQualifications, openQualificationTasks, QUALIFICATION_LABELS, QUALIFICATION_STATUSES, type OpenQualificationTask, type QualificationRow } from "@/lib/qualification";
+
+/** QUALIFICATION-FILTERS (owner 2026-11-27): "Needs placement" and "PRISMS to report", from the open tasks (?task=place|prisms). */
+type TaskFilter = "place" | "prisms";
+const TASK_KIND = { place: "place_manually", prisms: "prisms_report" } as const;
 
 /** Admissions › Qualifications: every student's Qualification, filtered by status (?status=active,deferred) and searched. */
 export default function QualificationsPage() {
@@ -14,6 +18,17 @@ export default function QualificationsPage() {
   const [error, setError] = useState("");
   const statusKey = status.join(",");
   const query = params.get("q") ?? "";
+  const task = (["place", "prisms"] as const).find((t) => t === params.get("task")) ?? null;
+  const [tasks, setTasks] = useState<Record<TaskFilter, OpenQualificationTask[] | null>>({ place: null, prisms: null });
+  useEffect(() => {
+    let live = true;
+    for (const k of ["place", "prisms"] as const) void openQualificationTasks(TASK_KIND[k]).then((x) => { if (live) setTasks((t) => ({ ...t, [k]: x })); }, () => { if (live) setTasks((t) => ({ ...t, [k]: [] })); });
+    return () => { live = false; };
+  }, []);
+  const taskIds = task ? new Set((tasks[task] ?? []).map((x) => x.enrolmentId).filter(Boolean)) : null;
+  const shown = rows && taskIds ? rows.filter((r) => taskIds.has(r.id)) : rows;
+  const waiting = task === "place" ? (tasks.place ?? []).filter((x) => !x.enrolmentId) : [];
+  const setTask = (t: TaskFilter) => { const p = new URLSearchParams(params); if (task === t) p.delete("task"); else p.set("task", t); setParams(p, { replace: true }); };
 
   useEffect(() => {
     let live = true;
@@ -48,16 +63,31 @@ export default function QualificationsPage() {
             {QUALIFICATION_LABELS[s]}
           </button>
         ))}
+        {([["place", "Needs placement"], ["prisms", "PRISMS to report"]] as const).map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setTask(k)} aria-pressed={task === k} data-testid={`filter-${k}`}
+            className={`cursor-pointer rounded-full border px-3 py-1 text-sm ${task === k ? "border-amber-600 bg-amber-600 text-white" : "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"}`}>
+            {label} <span className="tabular-nums opacity-80">{tasks[k] === null ? "–" : tasks[k]!.length}</span>
+          </button>
+        ))}
         <form onSubmit={submit} className="ml-auto flex gap-2">
           <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Student, number, course or CoE"
             className="h-9 w-64 rounded-md border border-background-300 bg-background-50 px-3 text-sm" aria-label="Search Qualifications" />
         </form>
       </div>
+      {waiting.length ? <Card className="mb-4">
+        <div className="border-b border-background-200 px-4 py-3"><h2 className="font-heading text-base font-semibold text-foreground-900">Waiting for placement <span className="font-normal text-foreground-500">{waiting.length}</span></h2>
+          <p className="text-xs text-foreground-600">Enrolled, but the placement in the intake did not go through, so there is no Qualification yet. Place the student by hand from their page.</p></div>
+        <ul className="divide-y divide-background-100" data-testid="waiting-placement">{waiting.map((x) => <li key={x.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm" data-testid="waiting-placement-item">
+          <span className="min-w-0">{x.studentId ? <Link className="font-medium text-foreground-900 hover:text-primary-700" to={`/admin/students/${x.studentId}`}>{x.studentName ?? "Student"}</Link> : <span className="font-medium">{x.studentName ?? "Student"}</span>}
+            {x.applicationId ? <> · <Link className="text-primary-700 hover:underline" to={`/admin/applications/${x.applicationId}`}>{x.applicationReference ?? "Application"}</Link></> : null}
+            {x.detail ? <span className="block text-xs text-foreground-600">{x.detail}</span> : null}</span>
+          {x.dueOn ? <span className="text-xs text-foreground-500">Due {formatQualificationDate(x.dueOn)}</span> : null}</li>)}</ul>
+      </Card> : null}
       <Card>
         {error ? <p className="p-4 text-sm text-red-700" role="alert">{error}</p>
-          : rows === null ? <p className="p-4 text-sm text-foreground-500">Loading…</p>
-          : rows.length ? <QualificationsTable rows={rows} />
-          : <ListMessage icon="ri-graduation-cap-line" title="No Qualifications" text="No Qualification matches these filters." />}
+          : shown === null || (task && tasks[task] === null) ? <p className="p-4 text-sm text-foreground-500">Loading…</p>
+          : shown.length ? <QualificationsTable rows={shown} />
+          : <ListMessage icon="ri-graduation-cap-line" title="No Qualifications" text={task === "place" ? "No Qualification is waiting for placement." : task === "prisms" ? "Nothing to report in PRISMS." : "No Qualification matches these filters."} />}
       </Card>
     </div>
   );

@@ -1256,3 +1256,17 @@ Migration `20261127150517_student_documents` (stage 2 of STUDENT-OWNS-ANSWERS); 
   file keeps its folder; `portal_guard_document_locator` allows only that move, under `portal.document_rehome`).
 - Submit: trigger `a_version_documents` adds `documentVersions` (id, category, filename, path, sha256) to `enrollment_application_versions.snapshot`.
 - DOCUMENT-CARRY copying is off: `application_document_carry_dispatch` dropped, `application_document_carry_pending` answers false.
+
+## Student picker on New application (STUDENT-PICKER, 2026-11-27)
+Migration `20261127160517_student_picker_search`; no Edge Function.
+- `public.portal_student_search(query, limit)` (security definer, authenticated only): 2+ characters matched against name, email, student ID,
+  passport number (spaces ignored, 3+) and mobile digits (4+, a leading 0 ignored, so 0412 000 111 finds +61412000111); archived students
+  left out. Scope in the function: SLIT admins / tenant staff (`portal_is_slit_admin`) every student of the institution; agency admins and agents
+  only their agency's (`portal_agency_id`); students and others nothing. `canStart` mirrors `portal_create_student_application` (an agent only
+  for the students they look after; others of the agency are listed but cannot be picked).
+- Page: `StudentDetailsStep` + `StudentPicker` (New student application in the CMS and the portal). The last row "+ Add new student" opens a
+  sheet (full screen on a phone): first / last name, email, mobile, date of birth, and who looks after the student (SLIT admin: business +
+  agent; agency admin: their own agent record preselected); saved by `portal_student_save`, then selected. An email already used by a student
+  shows "Email already in use." and offers that student when the caller may see them. The application is then made by
+  `portal_create_student_application`; the separate business / agent step is gone.
+- Tests: `phase4_authorization_positive.sql` (agent cannot find another agency's student), `e2e/regression.spec.ts` "student picker: …" (4).

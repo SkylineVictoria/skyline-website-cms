@@ -5298,7 +5298,7 @@ test("Student-only add (owner 2026-11-27): CMS Add student saves only the studen
   assert.ok(!page.includes("FinishApplicationPanel") && page.includes("Open in Applications"), "unfinished applications are finished in Applications");
   assert.ok(read("src/pages/admin/BusinessDetailPage.tsx").includes('navigate("/admin/applications/new")'), "business page New application opens Applications");
   // Agents and students keep their own flows.
-  assert.ok(read("src/pages/agency/applications/new/page.tsx").includes("StudentDetailsStep"), "agent / student New application unchanged");
+  assert.ok(read("src/pages/agency/applications/new/page.tsx").includes("StudentDetailsStep"), "New application starts with the student step");
 });
 
 test("Previous-data review (owner 2026-11-27): a student applying again checks the one-page cards in a popup first, then signs", () => {
@@ -5309,4 +5309,28 @@ test("Previous-data review (owner 2026-11-27): a student applying again checks t
   const ws = read("src/pages/agency/components/ApplicationWorkspace.tsx");
   assert.ok(ws.includes('label: "Everything is correct, continue"') && ws.includes("onePageView.kind === \"grid\" && onReviewDone"), "no sign step inside the popup");
   assert.ok(ws.includes("setOnePageView({ kind: \"sign\" });"), "the page opens on the signature after the check");
+});
+
+test("Student picker (owner 2026-11-27): New student application picks the student; agency users search their agency only (enforced in SQL)", async () => {
+  const sql = read("supabase/migrations/20261127160517_student_picker_search.sql");
+  assert.ok(sql.includes("if length(q) < 2 or length(q) > 200 or public.portal_student_id() is not null then return '[]'::jsonb; end if;"), "2+ characters; students get nothing");
+  assert.ok(sql.includes("and (v_all or x.agency_id = v_agency)") && sql.includes("if not v_all and v_agency is null then return '[]'::jsonb; end if;"), "agency users: their agency only");
+  assert.ok(sql.includes("'canStart', coalesce(") && sql.includes("revoke all on function public.portal_student_search(text, integer) from public, anon;"), "canStart never null; no anonymous access");
+  for (const field of ["full_name", "email", "student_number", "passport_number", "phone"]) assert.ok(sql.includes(`x.${field}`), `searches ${field}`);
+  const picker = read("src/pages/agency/components/StudentPicker.tsx");
+  assert.ok(picker.includes('data-testid="student-add-new"') && picker.includes("const count = rows.length + 1;"), "+ Add new student is always the last row");
+  assert.ok(picker.includes("if (!row.canStart) return;"), "a student the caller may not start for cannot be picked");
+  assert.ok(picker.includes("sheet width=\"max-w-lg\"") && picker.includes("await saveStudent({") && picker.includes("dateOfBirth: dob"), "popup sheet saves the student with date of birth");
+  assert.ok(picker.includes("Email already in use.") && picker.includes('data-testid="new-student-use-existing"'), "duplicate email offers the existing student");
+  const step = read("src/pages/agency/components/StudentDetailsStep.tsx");
+  assert.ok(step.includes("disabled={busy || !student}") && step.includes("setMobile(next && textableMobile(next.phone) ? next.phone : \"\")"), "Continue needs a student; mobile from the student");
+  assert.ok(step.includes("Do you want the student to fill out the application?"), "who fills it out is still asked");
+  const page = read("src/pages/agency/applications/new/page.tsx");
+  assert.ok(page.includes("createApplicationForStudent(key, draftValue.student.id)") && !page.includes('"pick"'), "the application is created for the picked student; no separate agent step");
+  const ui = read("src/pages/admin/components/ui.tsx");
+  assert.ok(ui.includes('sheet ? " flex h-full flex-col rounded-none sm:h-auto'), "full-screen sheet on a phone");
+  const { prefillFromSearch } = await import("../src/pages/agency/lib/studentPicker.ts");
+  assert.deepEqual(prefillFromSearch("Jane.Doe@Example.com"), { firstName: "", lastName: "", email: "jane.doe@example.com" });
+  assert.deepEqual(prefillFromSearch("Jane Mary Doe"), { firstName: "Jane", lastName: "Mary Doe", email: "" });
+  assert.deepEqual(prefillFromSearch("0412 000 111"), { firstName: "", lastName: "", email: "" });
 });

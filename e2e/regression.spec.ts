@@ -399,28 +399,122 @@ test("identity email: Admin > Users flags another CMS user's email live, a free 
   await shot(page, "identity-users-free");
 });
 
-// (Another business's student is "taken" for an agent: phase4_authorization_positive.sql, find_student_by_email.)
-test("identity email: New application offers the existing student for reuse and makes no second student; an agent's email is free", async ({ page }) => {
-  const admin = await createAdmin("idx-app");
-  const mine = person("idx-app-student");
-  const agency = sql(`insert into public.agencies(name, code, status) values ('E2E identity business', 'E2E-' || substr(md5(random()::text), 1, 8), 'Active') returning id`).split("\n")[0];
-  const student = sql(`insert into public.enrollment_students(agency_id, full_name, email, phone) values ('${agency}', 'Reuse Me', '${mine.email}', '${mine.local}') returning id`).split("\n")[0];
-  const agentEmail = person("idx-app-agent").email;
-  sql(`insert into public.agents(business_id, full_name, email) values ('${agency}', 'E2E Agent', '${agentEmail}')`);
+// STUDENT-PICKER (20261127160517): New student application picks the student from a search; agency users see their agency only.
+const pickerAgency = (name: string): string => {
+  const agency = sql(`insert into public.agencies(name, code, status) values ('${name}', 'E2E-' || substr(md5(random()::text), 1, 8), 'Active') returning id`).split("\n")[0];
+  sql(`insert into public.business_documents(business_id, kind, file_name, storage_path) values ('${agency}', 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/${agency}/agreement.pdf')`);
+  return agency;
+};
+const pickerAgentLogin = async (label: string, agency: string) => {
+  const who = person(label);
+  const authId = await createAuthUser(who.email);
+  const profile = sql(`insert into public.portal_profiles(auth_user_id, full_name, email, phone, status) values ('${authId}', 'E2E ${label}', '${who.email}', '${who.local}', 'Active') returning id`).split("\n")[0];
+  sql(`insert into public.agency_memberships(user_id, agency_id, role) values ('${profile}', '${agency}', 'agent')`);
+  const agentId = sql(`select id from public.agents where profile_id = '${profile}'`).split("\n")[0];
+  return { ...who, profile, agentId };
+};
+const pickerStudent = (agency: string, agentId: string | null, name: string, email: string, phone: string): string =>
+  sql(`insert into public.enrollment_students(agency_id, agent_id, full_name, email, phone) values ('${agency}', ${agentId ? `'${agentId}'` : "null"}, '${name}', '${email}', '${phone}') returning id`).split("\n")[0];
+
+test("student picker: an admin searches, selects an existing student (mobile prefilled) and starts the application for them", async ({ page }) => {
+  const admin = await createAdmin("pick-admin");
+  const agency = pickerAgency("E2E picker business");
+  const agentId = sql(`insert into public.agents(business_id, full_name, email) values ('${agency}', 'E2E Picker Agent', '${person("pick-agent").email}') returning id`).split("\n")[0];
+  const who = person("pick-existing");
+  const tag = who.local.slice(-6);
+  const student = pickerStudent(agency, agentId, `Pickable ${tag}`, who.email, who.phone);
   await signInThroughTheForm(page, admin.email);
   await expect(page).toHaveURL(/\/admin/);
   await page.goto("/admin/applications/new");
-  const email = page.locator("#student-email");
-  await email.fill(agentEmail);
-  await expect(page.getByTestId("email-available")).toContainText("Email available");
-  await email.fill(mine.email.toUpperCase());
-  await expect(page.getByTestId("student-email-reuse")).toContainText("A student with this email already exists: Reuse Me");
-  await shot(page, "identity-application-reuse");
-  await page.getByRole("button", { name: "Add application to this student" }).click();
+  await expect(page.getByTestId("student-continue")).toBeDisabled();
+  await page.getByTestId("student-search").fill(`Pickable ${tag}`);
+  await expect(page.getByTestId("student-result")).toHaveCount(1);
+  await expect(page.getByTestId("student-result")).toContainText(who.email);
+  await expect(page.getByTestId("student-add-new")).toBeVisible();
+  await shot(page, "student-picker-results");
+  await page.getByTestId("student-result").click();
+  await expect(page.getByTestId("student-picked")).toContainText(`Pickable ${tag}`);
+  await expect(page.getByTestId("student-picked")).toContainText(who.email);
+  await expect(page.locator("#student-mobile")).not.toHaveValue("");
+  await page.getByRole("radio", { name: "No" }).check();
+  await page.getByTestId("student-continue").click();
   await expect(page.getByText("Add New Form — document wizard")).toBeVisible({ timeout: 30_000 });
-  await shot(page, "identity-application-reuse-wizard");
-  expect(sql(`select count(*) from public.enrollment_students where lower(email) = '${mine.email}'`)).toBe("1");
+  expect(sql(`select count(*) from public.enrollment_students where lower(email) = '${who.email}'`)).toBe("1");
   expect(sql(`select count(*) from public.enrollment_applications where student_id = '${student}'`)).toBe("1");
+});
+
+test("student picker: an agent adds a new student from the popup (search text prefilled) and the new student is selected", async ({ page }) => {
+  const agency = pickerAgency("E2E picker agent business");
+  const agent = await pickerAgentLogin("pick-new-agent", agency);
+  const fresh = person("pick-new-student");
+  const tag = fresh.local.slice(-6);
+  await signInThroughTheForm(page, agent.email);
+  await expect(page).toHaveURL(/\/agency/);
+  await page.goto("/agency/applications/new");
+  await page.getByTestId("student-search").fill(`Newbie Student${tag}`);
+  await expect(page.getByText(`No student matches “Newbie Student${tag}”.`)).toBeVisible();
+  await page.getByTestId("student-add-new").click();
+  const form = page.getByTestId("new-student-form");
+  await expect(form.locator("#new-student-first")).toHaveValue("Newbie");
+  await expect(form.locator("#new-student-last")).toHaveValue(`Student${tag}`);
+  await form.locator("#new-student-email").fill(fresh.email);
+  await form.locator("#new-student-mobile").fill(fresh.local);
+  await form.locator("#new-student-dob").fill("2001-04-15");
+  await shot(page, "student-picker-new-student");
+  await page.getByTestId("new-student-save").click();
+  await expect(page.getByTestId("student-picked")).toContainText(`Newbie Student${tag}`);
+  await expect(page.getByTestId("student-picked")).toContainText(fresh.email);
+  expect(sql(`select agency_id || '|' || agent_id || '|' || date_of_birth from public.enrollment_students where lower(email) = '${fresh.email}'`)).toBe(`${agency}|${agent.agentId}|2001-04-15`);
+  await expect(page.getByTestId("student-continue")).toBeEnabled();
+});
+
+test("student picker: a duplicate email in the popup says it is in use and offers the existing student", async ({ page }) => {
+  const agency = pickerAgency("E2E picker duplicate business");
+  const agent = await pickerAgentLogin("pick-dup-agent", agency);
+  const taken = person("pick-dup-student");
+  pickerStudent(agency, agent.agentId, "Already Here", taken.email, taken.phone);
+  await signInThroughTheForm(page, agent.email);
+  await expect(page).toHaveURL(/\/agency/);
+  await page.goto("/agency/applications/new");
+  await page.getByTestId("student-search").fill(taken.email);
+  await page.getByTestId("student-add-new").click();
+  const form = page.getByTestId("new-student-form");
+  await expect(form.locator("#new-student-email")).toHaveValue(taken.email);
+  await form.locator("#new-student-first").fill("Second");
+  await form.locator("#new-student-last").fill("Copy");
+  await form.locator("#new-student-mobile").fill(person("pick-dup-mobile").local);
+  await form.locator("#new-student-dob").fill("2000-01-01");
+  await page.getByTestId("new-student-save").click();
+  await expect(form).toContainText("Email already in use.");
+  await expect(page.getByTestId("new-student-in-use")).toContainText("Already Here");
+  await shot(page, "student-picker-duplicate");
+  await page.getByTestId("new-student-use-existing").click();
+  await expect(page.getByTestId("student-picked")).toContainText("Already Here");
+  expect(sql(`select count(*) from public.enrollment_students where lower(email) = '${taken.email}'`)).toBe("1");
+});
+
+test("student picker: an agent cannot find another agency's student (only their own agency's)", async ({ page }) => {
+  const agency = pickerAgency("E2E picker own business");
+  const other = pickerAgency("E2E picker other business");
+  const agent = await pickerAgentLogin("pick-scope-agent", agency);
+  const mine = person("pick-scope-mine");
+  const theirs = person("pick-scope-theirs");
+  const tag = mine.local.slice(-6);
+  pickerStudent(agency, agent.agentId, `Scope${tag} Mine`, mine.email, mine.phone);
+  pickerStudent(other, null, `Scope${tag} Theirs`, theirs.email, theirs.phone);
+  await signInThroughTheForm(page, agent.email);
+  await expect(page).toHaveURL(/\/agency/);
+  await page.goto("/agency/applications/new");
+  await page.getByTestId("student-search").fill(`Scope${tag}`);
+  await expect(page.getByTestId("student-result")).toHaveCount(1);
+  await expect(page.getByTestId("student-result")).toContainText(`Scope${tag} Mine`);
+  await page.getByTestId("student-search").fill(theirs.email);
+  await expect(page.getByText(`No student matches “${theirs.email}”.`)).toBeVisible();
+  await expect(page.getByTestId("student-result")).toHaveCount(0);
+  // The page cannot widen it: the database function answers the same.
+  const client = await signedInClient(agent.email);
+  const { data } = await client.rpc("portal_student_search", { p_query: theirs.email });
+  expect(data).toEqual([]);
 });
 
 test("identity email: portal Add user flags another agency's agent live, and a student login on submit (one portal role per login)", async ({ page }) => {

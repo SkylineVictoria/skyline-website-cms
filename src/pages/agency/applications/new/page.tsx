@@ -1,18 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
-import { activateAgent, listBusinesses, setBusinessStatus, type BusinessStatus } from "@/pages/admin/lib/businessData";
 import { useToast } from "@/pages/admin/components/toastContext";
-import SearchPick, { type PickOption } from "@/pages/admin/components/SearchPick";
-import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
-import AddStudentRecordDialog, { type AddStudentRecordValue } from "@/pages/admin/components/AddStudentRecordDialog";
 import StudentDetailsStep, { type StudentDraft } from "@/pages/agency/components/StudentDetailsStep";
 import {
   createApplicationForStudent,
-  createStudentDraft,
-  findAgentByProfile,
   getApplication,
-  agentPickable, listActiveAgentsElsewhere, listAgentsOfBusiness,
   sendApplicationInvitation, saveWizardDraft, INVITE_SMS_LABEL,
   studentAgencyOptions,
   chooseStudentAgency,
@@ -20,8 +13,6 @@ import {
   listInstitutionCourses,
   type ApplicationCourseRow,
   type StudentAgencyOptions,
-  type BusinessAgentOption,
-  type StudentMatch,
 } from "@/pages/agency/lib/portalApplications";
 import { useApplicationPaths } from "@/pages/agency/lib/applicationPaths";
 import ApplicationWizard from "@/pages/agency/components/ApplicationWizard";
@@ -29,7 +20,6 @@ import { isEditableStatus, loadApplicationStatuses } from "@/lib/applicationStat
 import { PageHeading, PortalError, PortalLoading } from "@/pages/agency/components/PortalUI";
 
 import { portalScopeCacheKey } from "@/lib/portalScope";
-import { isEmailTakenError } from "@/lib/identity/email";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import IntakeSelect from "@/pages/agency/components/IntakeSelect";
 import type { OpenIntake } from "@/pages/agency/lib/intakes";
@@ -71,13 +61,12 @@ function clearSession(uid: string): void {
   }
 }
 
-type Phase = "checking" | "student" | "pick" | "agency" | "wizard";
-
-type Business = { id: string; name: string; status: BusinessStatus };
+type Phase = "checking" | "student" | "agency" | "wizard";
 
 /**
- * New application, down the chain: the student first (an existing student is offered when their email, mobile or passport
- * is on record), then — unless the person signed in is the agent — the business and agent who look after them.
+ * New application: the student first, picked from the students the caller may see or added from the picker's last row
+ * (STUDENT-PICKER, owner 2026-11-27; a new student is saved under their agent there), then the application is created for them.
+ * A student starting their own application chooses their agent, course and start date instead.
  */
 export default function NewApplicationPage() {
   const paths = useApplicationPaths();
@@ -91,14 +80,8 @@ export default function NewApplicationPage() {
   const [phase, setPhase] = useState<Phase>("checking");
   const [applicationId, setApplicationId] = useState("");
   const [draft, setDraft] = useState<StudentDraft | null>(null);
-  const [business, setBusiness] = useState<Business | null>(null);
-  const [agent, setAgent] = useState<BusinessAgentOption | null>(null);
-  const [recordDialogMode, setRecordDialogMode] = useState<"business" | "agent" | null>(null);
-  const [initialAgentName, setInitialAgentName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  // An email refused when the student is saved (email unique within the student role) goes back to the email field.
-  const [emailError, setEmailError] = useState<unknown>(null);
   // A self-enrolled student's first application: are they working with an education agency?
   const [agencyChoices, setAgencyChoices] = useState<Array<{ id: string; name: string }>>([]);
   const [withAgency, setWithAgency] = useState<boolean | null>(null);
@@ -118,66 +101,26 @@ export default function NewApplicationPage() {
     listInstitutionCourses().then(setCourseRows, (e: unknown) => { setCourseRows([]); setError(e instanceof Error ? e.message : "The courses could not be loaded."); });
   }, [phase, courseRows]);
 
-  // Agency users work inside their own business; SLIT administrators choose one.
-  const ownBusiness: Business | null = role !== "slit_admin" && agency ? { id: agency.id, name: agency.name, status: "Active" } : null;
-  const chosenBusiness = ownBusiness ?? business;
-
-  const searchBusinesses = useCallback(async (q: string): Promise<PickOption[]> => {
-    // Only active businesses can be chosen.
-    const result = await listBusinesses({ search: q, status: "Active", limit: 8, offset: 0 });
-    return result.rows.map((row) => ({
-      id: row.id,
-      label: row.name,
-      meta: [row.abn ? `ABN ${row.abn}` : "", `${row.agents} agent${row.agents === 1 ? "" : "s"}`, `${row.students} student${row.students === 1 ? "" : "s"}`].filter(Boolean).join(", "),
-      raw: row,
-    })) as PickOption[];
-  }, []);
-
-  const businessId = chosenBusiness?.id ?? "";
-  const isSlitAdmin = role === "slit_admin";
-  const searchAgents = useCallback(async (q: string): Promise<PickOption[]> => {
-    if (!businessId) return [];
-    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-    const hit = (text: string) => words.every((w) => text.toLowerCase().includes(w));
-    const roleWord = (a: BusinessAgentOption) => a.role === "agency_admin" ? "Business admin agent" : "Agent";
-    // Every active agent of this business (also those who have not signed in yet), then active agents of other businesses.
-    const own = (await listAgentsOfBusiness(businessId)).filter(agentPickable)
-      .filter((a) => hit(`${a.name} ${a.email} ${roleWord(a)}`))
-      .map((a) => ({ id: a.id, label: a.name, meta: [a.email, roleWord(a)].filter(Boolean).join(", "), tag: <AgentStatusBadge status={a.status} />, raw: a }));
-    const others = isSlitAdmin ? (await listActiveAgentsElsewhere(businessId).catch(() => []))
-      .filter((o) => hit(`${o.agent.name} ${o.agent.email} ${o.business.name}`))
-      .map((o) => ({ id: `other:${o.agent.id}`, label: o.agent.name, meta: [o.agent.email, `${roleWord(o.agent)} at ${o.business.name}`].filter(Boolean).join(", "),
-        tag: <AgentStatusBadge status={o.agent.status} />, raw: { ...o.agent, otherBusiness: o.business } })) : [];
-    return [...own, ...others] as PickOption[];
-  }, [businessId, isSlitAdmin]);
-
   const openWizard = (id: string) => {
     if (authUser?.id) writeSession(authUser.id, id);
     setApplicationId(id);
     setPhase("wizard");
   };
 
-  // The student record is saved (or the existing one reused) under the agent, then the application is created for them.
-  const start = useCallback(async (student: StudentDraft, existing: StudentMatch | null, chosen: { business: Business | null; agent: BusinessAgentOption } | null) => {
+  // STUDENT-PICKER: the student is always one on record (picked, or added from the picker); the application is created for them.
+  const start = async (draftValue: StudentDraft) => {
+    setDraft(draftValue);
     setCreating(true);
     setError("");
     try {
-      if (!existing && !chosen) throw new Error("Choose the business and agent.");
-      if (!existing && chosen?.business && chosen.business.status !== "Active") await setBusinessStatus(chosen.business.id, "Active");
-      if (!existing && chosen?.business && chosen.agent.status === "Inactive") {
-        const { agent, business } = chosen;
-        await activateAgent({ agentId: agent.id, businessId: business!.id, name: agent.name, email: agent.email, role: agent.role });
-      }
       const key = clientKeyRef.current;
-      const id = existing
-        ? (await createApplicationForStudent(key, existing.id)).id
-        : await createStudentDraft(student.email, chosen!.agent.id, key);
+      const id = (await createApplicationForStudent(key, draftValue.student.id)).id;
       clientKeyRef.current = newClientKey();
       // CONTACT-LINKS: the mobile from the first screen goes on the application (the invitation texts it from there).
-      if (student.mobile) await saveWizardDraft(id, { values: { mobile: student.mobile } }).catch(() => push("The mobile could not be saved. Add it in the application.", "error"));
-      if (student.invite) {
+      if (draftValue.mobile) await saveWizardDraft(id, { values: { mobile: draftValue.mobile } }).catch(() => push("The mobile could not be saved. Add it in the application.", "error"));
+      if (draftValue.invite) {
         try {
-          const sms = await sendApplicationInvitation(id, undefined, Boolean(student.sendText));
+          const sms = await sendApplicationInvitation(id, undefined, Boolean(draftValue.sendText));
           push(["Application invitation sent by email.", INVITE_SMS_LABEL[sms]].filter(Boolean).join(" "));
         } catch (e) {
           push(e instanceof Error ? e.message : "Invitation failed. Try again from Finish Application.", "error");
@@ -187,39 +130,10 @@ export default function NewApplicationPage() {
         openWizard(id);
       }
     } catch (e) {
-      if (isEmailTakenError(e)) { setEmailError(e); setPhase("student"); return; }
       setError(e instanceof Error ? e.message : "We could not start a new application.");
     } finally {
       setCreating(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [role, authUser?.id, paths, navigate]);
-
-  const continueFromStudent = async (student: StudentDraft, existing: StudentMatch | null) => {
-    setDraft(student);
-    setError("");
-    setEmailError(null);
-    if (existing) { await start(student, existing, null); return; }
-    if (role === "agent") {
-      // The signed-in agent looks after their own students.
-      setCreating(true);
-      try {
-        const own = profile ? await findAgentByProfile(profile.id) : null;
-        if (!own) throw new Error("Your sign-in is not set up as an agent of this business yet. Ask your administrator.");
-        setCreating(false);
-        await start(student, null, { business: ownBusiness, agent: own });
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "We could not start a new application.");
-        setCreating(false);
-      }
-      return;
-    }
-    // The business admin agent filling the form looks after the student unless they pick another agent (owner 2026-11-26).
-    if (role === "agency_admin" && !agent && profile) {
-      const own = await findAgentByProfile(profile.id).catch(() => null);
-      if (own && agentPickable(own)) setAgent(own);
-    }
-    setPhase("pick");
   };
 
   // Resolve an existing wizard session, or start with the student.
@@ -266,16 +180,6 @@ export default function NewApplicationPage() {
       }
     })();
   }, [authLoading, identityLoading, role, studentId, authUser]);
-
-  const saveNewRecord = (value: AddStudentRecordValue) => {
-    setRecordDialogMode(null);
-    if (value.kind === "business") {
-      setBusiness({ id: value.business.agencyId, name: value.business.name, status: "Active" });
-      setAgent(null);
-    } else {
-      setAgent({ id: value.agent.agentId, profileId: null, name: value.agent.name, email: value.agent.email, role: value.agent.role, status: "Invited" });
-    }
-  };
 
   const handleFinish = () => {
     if (authUser?.id) clearSession(authUser.id);
@@ -332,7 +236,6 @@ export default function NewApplicationPage() {
       if (authUser?.id) clearSession(authUser.id);
       navigate(paths.detail(id), { replace: true });
     } catch (e) {
-      if (isEmailTakenError(e)) { setEmailError(e); setPhase("student"); return; }
       setError(e instanceof Error ? e.message : "We could not start a new application.");
     } finally {
       setCreating(false);
@@ -371,7 +274,7 @@ export default function NewApplicationPage() {
     return (
       <ApplicationWizard
         applicationId={applicationId}
-        agencyName={chosenBusiness?.name ?? agency?.name ?? ""}
+        agencyName={agency?.name ?? ""}
         onFinish={handleFinish}
         onCancel={() => void handleCancel()}
       />
@@ -485,121 +388,20 @@ export default function NewApplicationPage() {
     );
   }
 
-  if (phase === "student") {
-    return (
-      <div>
-        <PageHeading
-          eyebrow="Add New Form"
-          title="New student application"
-          description="Start with the student. A student already on record keeps one record with all their applications."
-        />
-        <div className="mt-6 max-w-2xl rounded-card border border-background-200 bg-background-50 p-6">
-          <StudentDetailsStep initial={draft ?? undefined} busy={creating} error={error}
-            context={role === "slit_admin" ? "admin" : "portal"} emailError={emailError}
-            onContinue={(student, existing) => void continueFromStudent(student, existing)}
-            cancel={<Link to={paths.list} className={secondary}>Cancel</Link>} />
-        </div>
-      </div>
-    );
-  }
-
-  const ready = Boolean(chosenBusiness && agent);
   return (
     <div>
       <PageHeading
         eyebrow="Add New Form"
         title="New student application"
-        description={role === "slit_admin" ? "Choose the business and the agent who looks after this student." : "Choose the agent who looks after this student."}
+        description="Start with the student. Search for a student on record, or add a new one from the last row of the list."
       />
-
-      {draft ? (
-        <div className="mt-6 flex max-w-2xl items-center justify-between gap-3 rounded-card border border-background-200 bg-background-50 px-4 py-3">
-          <span className="min-w-0 text-sm text-foreground-700">
-            <span className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Student</span>{" "}
-            <b className="font-medium text-foreground-900">{draft.email}</b>
-          </span>
-        </div>
-      ) : null}
-
-      <div className="mt-4 max-w-2xl rounded-card border border-background-200 bg-background-50 p-6">
-        <h2 className="font-heading text-base font-semibold text-foreground-950">Who looks after this student?</h2>
-        <p className="mt-1.5 text-sm text-foreground-600">The student is recorded under this agent. Next opens the document wizard.</p>
-
-        <div className="mt-5 space-y-5">
-          {role === "slit_admin" ? (
-            <div>
-              {business ? (
-                <>
-                  <p className="mb-1.5 text-label font-medium text-foreground-800">Business</p>
-                  <div className="flex items-center justify-between gap-3 rounded-md border border-background-300 bg-background-50 px-3 py-2.5">
-                    <span className="min-w-0">
-                      <b className="block truncate text-sm text-foreground-900">{business.name}</b>
-                      <span className="block truncate text-xs text-foreground-500">{business.status === "Active" ? "Active business" : "Inactive, activated when you start the application"}</span>
-                    </span>
-                    <button type="button" disabled={creating} onClick={() => { setBusiness(null); setAgent(null); }} className="rounded px-2 py-1 text-sm font-medium text-primary-700 hover:bg-background-100 disabled:opacity-60">Change</button>
-                  </div>
-                </>
-              ) : (
-                <SearchPick label="Business" addNoun="business" autoFocus placeholder="Search business name, ABN or agent"
-                  search={searchBusinesses}
-                  onPick={(option) => { const row = (option as PickOption & { raw: { id: string; name: string; status: BusinessStatus } }).raw; setBusiness({ id: row.id, name: row.name, status: row.status }); setAgent(null); }}
-                  onAddNew={() => { setInitialAgentName(""); setRecordDialogMode("business"); }} />
-              )}
-            </div>
-          ) : null}
-
-          {chosenBusiness ? (
-            <div>
-              {agent ? (
-                <>
-                  <p className="mb-1.5 text-label font-medium text-foreground-800">Agent</p>
-                  <div className="flex items-center justify-between gap-3 rounded-md border border-background-300 bg-background-50 px-3 py-2.5">
-                    <span className="min-w-0">
-                      <span className="flex items-center gap-2"><b className="truncate text-sm text-foreground-900">{agent.name}</b><AgentStatusBadge status={agent.status} /></span>
-                      <span className="block truncate text-xs text-foreground-500">{[agent.email, agent.role === "agency_admin" ? "Business admin agent" : "Agent"].filter(Boolean).join(", ")}</span>
-                    </span>
-                    <button type="button" disabled={creating} onClick={() => setAgent(null)} className="rounded px-2 py-1 text-sm font-medium text-primary-700 hover:bg-background-100 disabled:opacity-60">Change</button>
-                  </div>
-                </>
-              ) : (
-                <SearchPick label="Agent" addNoun="agent" placeholder={`Search or pick an agent at ${chosenBusiness.name}`} resetKey={chosenBusiness.id} autoFocus searchWhenEmpty openOnMount
-                  search={searchAgents}
-                  onPick={(option) => { const raw = (option as PickOption & { raw: BusinessAgentOption & { otherBusiness?: { id: string; name: string; status: "Active" } } }).raw;
-                  // An agent of another business: the student goes to that business.
-                  if (raw.otherBusiness) setBusiness({ id: raw.otherBusiness.id, name: raw.otherBusiness.name, status: raw.otherBusiness.status });
-                  const { otherBusiness: _other, ...agentOnly } = raw; void _other; setAgent(agentOnly); }}
-                  onAddNew={role === "slit_admin" ? (name) => { setInitialAgentName(name); setRecordDialogMode("agent"); } : undefined} />
-              )}
-            </div>
-          ) : null}
-
-          {business && business.status !== "Active" && agent ? (
-            <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-900">{business.name} will be activated when the application starts.</p>
-          ) : null}
-        </div>
-
-        {error ? <div className="mt-4"><PortalError message={error} /></div> : null}
-
-        <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
-          <Link to={paths.list} className={secondary}>Cancel</Link>
-          <div className="flex flex-col-reverse gap-3 sm:ml-auto sm:flex-row">
-            <button type="button" disabled={creating} onClick={() => { setError(""); setPhase("student"); }} className={secondary}>
-              <i className="ri-arrow-left-line" aria-hidden="true" />
-              Back
-            </button>
-            <button type="button" disabled={creating || !ready || !draft} onClick={() => { if (draft && agent) void start(draft, null, { business: chosenBusiness, agent }); }} className={primary}>
-              {creating ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Creating&hellip;</> : <>Next <i className="ri-arrow-right-line" aria-hidden="true" /></>}
-            </button>
-          </div>
-        </div>
+      <div className="mt-6 w-full max-w-2xl rounded-card border border-background-200 bg-background-50 p-4 sm:p-6">
+        <StudentDetailsStep initial={draft ?? undefined} busy={creating} error={error}
+          role={role === "slit_admin" ? "slit_admin" : role === "agency_admin" ? "agency_admin" : "agent"}
+          agency={agency ? { id: agency.id, name: agency.name } : null} profileId={profile?.id ?? null}
+          onContinue={(value) => void start(value)}
+          cancel={<Link to={paths.list} className={secondary}>Cancel</Link>} />
       </div>
-      <AddStudentRecordDialog
-        mode={recordDialogMode}
-        business={chosenBusiness ? { id: chosenBusiness.id, name: chosenBusiness.name, status: chosenBusiness.status } : null}
-        initialAgentName={initialAgentName}
-        onCancel={() => setRecordDialogMode(null)}
-        onSave={saveNewRecord}
-      />
     </div>
   );
 }

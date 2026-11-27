@@ -372,6 +372,7 @@ export function Modal({
   width = "max-w-lg",
   fill = false,
   keepOpen = false,
+  sheet = false,
 }: {
   open: boolean;
   title: string;
@@ -383,14 +384,17 @@ export function Modal({
   width?: string;
   /** A tall dialog whose content manages its own scrolling (the PDF field editor): the body never scrolls, header and footer stay put. */
   fill?: boolean;
+  /** On a phone the dialog fills the screen (a full-screen sheet); from the sm breakpoint up it is the usual centred dialog. */
+  sheet?: boolean;
 }) {
   if (!open) return null;
   // Rendered on <body>: inside a table frame (CSS containment) or a transformed parent, a fixed dialog would be placed
   // relative to that box instead of the screen and could open out of sight on a long page.
   return createPortal(
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+    <div className={`fixed inset-0 z-[80] flex items-center justify-center ${sheet ? "p-0 sm:p-4" : "p-4"}`}>
       <div className="absolute inset-0 bg-foreground-950/40" onClick={keepOpen ? undefined : onClose} aria-hidden="true" />
-      <div className={`modal-in relative w-full ${width} rounded-card border border-background-200 bg-background-50 shadow-xl${fill ? " flex h-[92vh] flex-col" : ""}`}>
+      <div
+        className={`modal-in relative w-full ${width} border border-background-200 bg-background-50 shadow-xl${fill ? " flex h-[92vh] flex-col" : ""}${sheet ? " flex h-full flex-col rounded-none sm:h-auto sm:max-h-[92vh] sm:rounded-card" : " rounded-card"}`}>
         <div className="flex shrink-0 items-center justify-between border-b border-background-200 px-5 py-3.5">
           <h2 className="font-heading text-base font-semibold text-foreground-950">{title}</h2>
           <button
@@ -402,7 +406,7 @@ export function Modal({
             <i className="ri-close-line text-lg" aria-hidden="true" />
           </button>
         </div>
-        <div className={fill ? "flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4" : "max-h-[70vh] overflow-y-auto px-5 py-4"}>{children}</div>
+        <div className={fill ? "flex min-h-0 flex-1 flex-col overflow-hidden px-5 py-4" : sheet ? "min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:max-h-[70vh]" : "max-h-[70vh] overflow-y-auto px-5 py-4"}>{children}</div>
         {footer ? (
           <div className="flex shrink-0 justify-end gap-2 border-t border-background-200 px-5 py-3.5">{footer}</div>
         ) : null}

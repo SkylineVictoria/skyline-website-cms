@@ -152,11 +152,13 @@ test.beforeAll(async () => {
   admin = await createAdmin("asm-admin");
   sql(`update public.cms_users set rto_manager = true where email = '${admin.email}'`);
   courseId = `course-e2e-asm-${RUN}`;
-  sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${courseId}', 'e2e-asm-${RUN}', 'E2E${RUN.slice(-4).toUpperCase()}', 'E2E Assessment Course ${RUN}', 'Published')`);
+  // a course is published only when reportable (AVETMISS fields) with a unit and an intake: inserted as Draft, published below
+  sql(`insert into public.cms_courses(id, slug, code, name, status, mode, tga_field_of_education_code, tga_anzsco_code, tga_qualification_level) values ('${courseId}', 'e2e-asm-${RUN}', 'E2E${RUN.slice(-4).toUpperCase()}', 'E2E Assessment Course ${RUN}', 'Draft', 'Face to Face', '0403', '331212', 'Certificate III')`);
   unitId = `unit-e2e-asm-${RUN}`;
   sql(`insert into public.cms_course_units(id, course_id, code, name) values ('${unitId}', '${courseId}', 'E2EU1', 'Work safely in the lab')`);
   const intakeId = sql(`insert into public.course_intakes(course_id, start_date, end_date, label) values ('${courseId}', date '2026-01-05', date '2026-12-18', 'Jan 2026') returning id`).split("\n")[0];
   sql(`insert into public.intake_units(intake_id, unit_id, start_date, end_date) values ('${intakeId}', '${unitId}', date '2026-01-05', date '2026-12-18')`);
+  sql(`update public.cms_courses set status = 'Published' where id = '${courseId}'`);
   // INTAKE-REPLACES-BATCH (2026-11-19): the intake is the class group (G1); a second intake of the course is G2
   batchId = intakeId;
   sql(`update public.course_intakes set label = 'G1' where id = '${intakeId}'`);
@@ -822,7 +824,7 @@ test.describe("ASM-WORKBOOK", () => {
   test.beforeAll(async () => {
     test.skip(!workbook, "the RIICWD525E workbook PDF is not on this machine (set ASM_WORKBOOK)");
     const course = sql(`select id from public.cms_courses where code = 'RII50520'`) || `course-e2e-rii-${RUN}`;
-    sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${course}', 'e2e-rii-${RUN}', 'RII50520', 'Diploma of Civil Construction Design', 'Published') on conflict (id) do nothing`);
+    sql(`insert into public.cms_courses(id, slug, code, name, status, mode, tga_field_of_education_code, tga_anzsco_code, tga_qualification_level) values ('${course}', 'e2e-rii-${RUN}', 'RII50520', 'Diploma of Civil Construction Design', 'Draft', 'Face to Face', '0403', '331212', 'Diploma') on conflict (id) do nothing`);
     // an earlier run leaves the course and unit in the lab: reuse them
     const unit = sql(`select id from public.cms_course_units where course_id = '${course}' and code = 'RIICWD525E'`) || `unit-e2e-riicwd525e-${RUN}`;
     sql(`insert into public.cms_course_units(id, course_id, code, name) values ('${unit}', '${course}', 'RIICWD525E', 'Select Pavement surfacing') on conflict (id) do nothing`);
@@ -1005,4 +1007,58 @@ test.describe("ASM-WORKBOOK", () => {
     expect(() => sql(`insert into public.asm_attempts(assignment_id, version_id, student_id, attempt_no, due_at)
       select assignment_id, version_id, student_id, attempt_no + 1, due_at from public.asm_attempts where assignment_id = '${two}'`)).toThrow(/asm_attempts_one_open/);
   });
+});
+
+// ASM-ANY-LAYOUT (owner 2026-11-27): a workbook of another layout (CPCCPD3035): fields by rules, the rest classified by the AI (the
+// lab's stand-in), each AI field marked and accepted or rejected (Publish waits), an empty area added with one click, the decisions
+// kept as the layout's profile.
+test("PDF-WORKBOOK any layout: CPCCPD3035 by rules, AI fields to accept, click an empty area, Publish waits, the layout profile is kept", async ({ page }) => {
+  const anyPdf = workbook("CPCCPD3035_Student Assessment Pack.pdf", "ASM_WORKBOOK_3");
+  test.skip(!anyPdf, "the CPCCPD3035 workbook is not on this machine (set ASM_WORKBOOK_3)");
+  test.setTimeout(300_000);
+  sql("delete from public.asm_layout_profiles"); // a layout seen for the first time
+  await signInAsAdmin(page, admin.email);
+  await page.goto("/admin/assessments");
+  await page.getByRole("button", { name: "New assessment" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Add assessment" });
+  await dialog.getByTestId("new-assessment-skip").click();
+  await choose(dialog.getByLabel("Qualification"), courseId);
+  await choose(dialog.getByLabel("Unit"), unitId);
+  await dialog.getByRole("button", { name: "Create and upload the workbook" }).click();
+  await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/);
+  const url = page.url().replace(/\?.*$/, ""); const id = url.split("/").pop()!;
+  await page.goto(`${url}?tab=pdf`);
+  await page.getByTestId("pdf-template-file").setInputFiles(anyPdf!);
+  await expect(page.getByTestId("pdf-template-summary")).toContainText("19 questions", { timeout: 120_000 });
+  // rules first; the AI only for the 35 areas left, on 7 pages; every call logged against the workbook
+  await expect(page.getByTestId("pdf-template-ai")).toContainText("asked about 35 areas on 7 pages");
+  expect(sql(`select count(*) || ':' || count(distinct page) from public.asm_ai_usage where assessment_id = '${id}'`)).toBe("7:7");
+  await expect(page.getByTestId("pdf-template-ai-pending")).toBeVisible();
+  await expect(page.getByTestId("field-badge").first()).toHaveText("AI", { timeout: 30_000 });
+  // the unit named by the workbook (CPCCPD3035) is not the test unit: keep it, with a reason
+  if (await page.getByTestId("unit-mismatch").count()) { await page.getByTestId("unit-keep-reason").fill("E2E: filed under the test unit on purpose"); await page.getByTestId("unit-keep").click(); }
+  // an empty area no field covers: one click adds a field of exactly its size
+  const before = await page.getByTestId("placed-field").count();
+  const slot = page.getByTestId("empty-slot").first();
+  await slot.scrollIntoViewIfNeeded(); await slot.click();
+  await expect(page.getByTestId("placed-field")).toHaveCount(before + 1);
+  // saved with AI fields still pending: Publish is refused until each is accepted or rejected
+  await page.getByTestId("pdf-template-save").click();
+  await expect(page.getByTestId("pdf-template-summary")).not.toContainText("Not saved", { timeout: 30_000 });
+  // the server refuses Publish as the signed-in admin (checked in a rolled-back call)
+  const adminUser = sql(`select auth_user_id from public.cms_users where email = '${admin.email}'`);
+  expect(sql(`begin; select set_config('request.jwt.claim.sub', '${adminUser}', true), set_config('role', 'authenticated', true);
+    select (public.asm_admin('version_publish', jsonb_build_object('assessmentId', '${id}'::uuid)))->'errors'->0->>'code'; rollback;`).split("\n")).toContain("ai_pending");
+  await page.getByTestId("ai-accept-all").click();
+  await expect(page.getByTestId("pdf-template-ai-pending")).toHaveCount(0);
+  await page.getByTestId("pdf-template-save").click();
+  await expect(page.getByTestId("pdf-template-summary")).not.toContainText("Not saved", { timeout: 30_000 });
+  expect(sql(`select count(*) from jsonb_array_elements((select template->'fields' from public.asm_versions where assessment_id = '${id}' and status = 'draft')) f where f->>'review' = 'pending'`)).toBe("0");
+  // what was decided is kept for later workbooks of this layout
+  expect(Number(sql(`select coalesce(max(jsonb_array_length(corrections)), 0) from public.asm_layout_profiles`))).toBeGreaterThan(0);
+  // the next reading of this layout uses the profile: no AI call
+  await page.getByRole("button", { name: "Find fields again" }).click();
+  await expect(page.getByTestId("pdf-template-ai")).toContainText("by this layout's saved profile; no AI needed", { timeout: 120_000 });
+  expect(sql(`select count(*) from public.asm_ai_usage where assessment_id = '${id}'`)).toBe("7");
+  sql(`delete from public.asm_assessments where id = '${id}'`);
 });

@@ -62,7 +62,10 @@ interface Drag {
  * requestAnimationFrame loop (no React render per move), scrolls the pages area when the pointer is near its top or bottom edge, and
  * commits the position once, on drop, to the page under the field.
  */
-export default function FieldEditor<T extends string = SignFieldType>({ source, owners, fields, onChange, panel, kinds, presets = true, details, ownerLabel = "Fields for", lazy = false }: {
+/** An empty area of a page that can become a field with one click, sized exactly to it (fractions of the page). */
+export interface EditorSlot { id: string; page: number; x: number; y: number; w: number; h: number; label?: string }
+
+export default function FieldEditor<T extends string = SignFieldType>({ source, owners, fields, onChange, panel, kinds, presets = true, details, ownerLabel = "Fields for", lazy = false, slots, onSlot, badge }: {
   source: string | Uint8Array; owners: EditorOwner[]; fields: EditorField<T>[]; onChange: (fields: EditorField<T>[]) => void;
   /** Shown at the foot of the sidebar (the request's payment): not a field, so it changes neither the count nor the PDF. */
   panel?: ReactNode;
@@ -75,6 +78,11 @@ export default function FieldEditor<T extends string = SignFieldType>({ source, 
   ownerLabel?: string;
   /** Draw pages only when they come near the view (long documents). */
   lazy?: boolean;
+  /** ASM-ANY-LAYOUT: empty areas shown as faint outlines; a click adds a field there (onSlot decides what it is). */
+  slots?: EditorSlot[];
+  onSlot?: (slot: EditorSlot) => void;
+  /** A short tag on a placed field ("AI"), with its outline dotted. */
+  badge?: (field: EditorField<T>) => string | null;
 }) {
   const KINDS = (kinds ?? FIELD_KINDS) as Record<string, FieldKindSpec>;
   const [owner, setOwner] = useState(owners[0]?.id ?? "");
@@ -341,11 +349,16 @@ export default function FieldEditor<T extends string = SignFieldType>({ source, 
     </aside>
     <div ref={scroller} data-testid="field-pages" className={`min-h-[240px] flex-1 overflow-y-auto overscroll-contain rounded-md bg-background-200 p-3 ${armed ? "cursor-crosshair" : ""}`}>
       <PdfPages source={source} maxWidth={820} lazy={lazy} overlay={(page) => <div className="absolute inset-0" data-testid={`field-page-${page}`} onClick={(e) => click(e, page)}>
+        {(slots ?? []).filter((s) => s.page === page).map((s) => <button key={s.id} type="button" data-testid="empty-slot" data-slot-id={s.id} title={s.label ? `Add a field here (${s.label})` : "Add a field here"}
+          onClick={(e) => { e.stopPropagation(); onSlot?.(s); }}
+          className="absolute rounded-sm border border-dashed border-foreground-400/60 bg-transparent hover:border-primary-500 hover:bg-primary-500/10"
+          style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%`, width: `${s.w * 100}%`, height: `${s.h * 100}%` }} aria-label={s.label ? `Add a field: ${s.label}` : "Add a field here"} />)}
         {fields.filter((f) => f.page === page).map((f) => {
-          const colour = colourOf(f.owner), active = f.key === selected;
+          const colour = colourOf(f.owner), active = f.key === selected; const tag = badge?.(f) ?? null;
           return <div key={f.key} data-testid="placed-field" data-field-type={f.type} data-field-key={f.key} onPointerDown={(e) => startMove(e, f)}
             className="absolute flex cursor-move touch-none select-none items-center overflow-hidden rounded-sm text-2xs font-medium leading-none"
-            style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, border: `${active ? 2 : 1}px ${active ? "solid" : "dashed"} ${colour}`, background: `${colour}22`, color: colour }}>
+            style={{ left: `${f.x * 100}%`, top: `${f.y * 100}%`, width: `${f.w * 100}%`, height: `${f.h * 100}%`, border: `${active ? 2 : 1}px ${active ? "solid" : tag ? "dotted" : "dashed"} ${colour}`, background: `${colour}22`, color: colour }}>
+            {tag && <span data-testid="field-badge" className="absolute -top-3 left-0 rounded-sm bg-purple-700 px-1 text-[9px] font-semibold leading-3 text-white">{tag}</span>}
             <span className="truncate px-1">{f.type === "checkbox" ? "☐" : f.value || f.label || (KINDS[f.type]?.label ?? f.type)}</span>
             <span onPointerDown={(e) => startResize(e, f)} aria-hidden="true" data-testid="field-resize" className="absolute bottom-0 right-0 h-2.5 w-2.5 cursor-nwse-resize touch-none" style={{ background: colour }} />
           </div>;

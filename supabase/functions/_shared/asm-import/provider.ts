@@ -5,7 +5,8 @@
  * Only workbooks and answer guides are ever sent; never student data. The AI does not mark.
  */
 export interface AiUsage { inputTokens: number; outputTokens: number }
-export type AiInput = { kind: "text"; text: string } | { kind: "image"; dataUrl: string };
+/** detail: how closely the model looks at an image ("high" by default; "low" is a fixed small cost). */
+export type AiInput = { kind: "text"; text: string } | { kind: "image"; dataUrl: string; detail?: "low" | "high" | "auto" };
 export interface StructuredRequest {
   /** Schema name (a-z, 0-9, _). */
   name: string;
@@ -80,7 +81,7 @@ function openAi(config: ProviderConfig): StructuredProvider {
   return {
     id: "openai", model: config.model, vision: true,
     async generate(request) {
-      const content = request.input.map((p) => (p.kind === "text" ? { type: "input_text", text: p.text } : { type: "input_image", image_url: p.dataUrl, detail: "high" }));
+      const content = request.input.map((p) => (p.kind === "text" ? { type: "input_text", text: p.text } : { type: "input_image", image_url: p.dataUrl, detail: p.detail ?? "high" }));
       let res: Response;
       try {
         res = await call(url, {

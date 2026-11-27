@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(517);
+select plan(525);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -130,6 +130,21 @@ select pg_temp.put('v1', pg_temp.s('draft')::jsonb->>'versionId');
 select is((select count(*)::int from public.asm_unit_mappings where version_id = pg_temp.v('v1')), 2, 'the mapping rows are on the draft');
 select is(jsonb_array_length(public.asm_admin('coverage', jsonb_build_object('versionId', pg_temp.v('v1')))->'gaps'), 1, 'coverage shows the unmapped element as a gap');
 select is(public.asm_admin('coverage', jsonb_build_object('versionId', pg_temp.v('v1')))->'unmappedQuestions', '["2.1"]'::jsonb, 'P4 coverage lists the workbook questions not mapped yet');
+
+-- ASM-ANY-LAYOUT (20261127170517): a field set by AI waits for the admin's Accept / Reject before Publish; layout profiles; AI usage
+select is((public.asm_template_save(pg_temp.v('assessment')::uuid, jsonb_set(pg_temp.tplmain(pg_temp.s('assessment') || '/' || repeat('c', 64) || '.pdf'), '{fields,0,review}', '"pending"')))->>'ok', 'true', 'ANY a template with a pending AI field saves (the admin reviews it later)');
+select is((public.asm_admin('assessment_get', jsonb_build_object('id', pg_temp.v('assessment')))->'editing'->>'aiPending')::int, 1, 'ANY the editing summary counts the AI fields waiting for review');
+select is((public.asm_admin('version_publish', jsonb_build_object('assessmentId', pg_temp.v('assessment'))))->'errors'->0->>'code', 'ai_pending', 'ANY Publish waits until every AI field is accepted or rejected');
+select is((public.asm_template_save(pg_temp.v('assessment')::uuid, pg_temp.tplmain(pg_temp.s('assessment') || '/' || repeat('c', 64) || '.pdf')))->>'ok', 'true', 'ANY reviewed: the template saves again without pending fields');
+select is(jsonb_array_length(public.asm_layout_profile_save(repeat('a', 64), '["unit code: #"]', '[{"key":"cell|student name|||#1","set":{"role":"auto","kind":"auto","dataKey":"student_name"}},{"key":"tick|by hand||||#1","set":null}]', pg_temp.v('assessment')::uuid)->'corrections'), 2, 'ANY an admin saves a layout profile (two decisions)');
+select pg_temp.put('profile2', public.asm_layout_profile_save(repeat('a', 64), '[]', '[{"key":"tick|by hand||||#1","set":{"role":"trainer","kind":"checkbox"}},{"key":"cell|notes|||#1","set":null}]', pg_temp.v('assessment')::uuid)::text);
+select is((select string_agg(c->>'key', ',' order by c->>'key') from jsonb_array_elements(pg_temp.s('profile2')::jsonb->'corrections') c)
+  || '/' || (select c->'set'->>'kind' from jsonb_array_elements(public.asm_layout_profile_get(repeat('a', 64))->'corrections') c where c->>'key' = 'tick|by hand||||#1'),
+  'cell|notes|||#1,cell|student name|||#1,tick|by hand||||#1/checkbox', 'ANY a later save merges: a new decision for the same area replaces the old one, the others stay');
+select is(public.asm_ai_usage_summary(pg_temp.v('assessment')::uuid)->>'limitUsd', '2', 'ANY the AI usage of a workbook is reported with its US$2 limit');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
+select throws_ok($$select public.asm_layout_profile_get(repeat('a', 64))$$, '42501', null, 'ANY layout profiles are for Admins and RTO Managers only');
+select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 
 -- publishing freezes the version
 select throws_ok(format($$select public.asm_admin('version_publish', '{"assessmentId": "%s"}')$$, '00000000-0000-0000-0000-000000000000'), 'P0002', null, 'publishing an unknown assessment fails');

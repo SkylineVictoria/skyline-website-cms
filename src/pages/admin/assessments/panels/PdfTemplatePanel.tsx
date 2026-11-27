@@ -3,9 +3,10 @@ import { Badge, Button, ConfirmDialog } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
 import { SkeletonLines } from "@/pages/admin/components/rto/overlay";
 import { ErrorNote } from "@/pages/admin/components/rto/shared";
-import FieldEditor, { type EditorField, type EditorOwner, type FieldKindSpec } from "@/components/signing/FieldEditor";
+import FieldEditor, { type EditorField, type EditorOwner, type EditorSlot, type FieldKindSpec } from "@/components/signing/FieldEditor";
 import { AUTO_KEYS, SUBMISSION_OPTIONS, templateProblems, type AutoKey, type FieldKind, type FieldRole, type PdfTemplate, type TemplateField } from "@/lib/assessment/pdfTemplate/model";
-import { detectWorkbook, downloadWorkbook, loadTemplate, saveTemplate, unitInWorkbook, uploadWorkbook, type TemplateState } from "@/lib/assessment/pdfTemplate/api";
+import { detectWorkbookAny, downloadWorkbook, loadTemplate, saveLayoutProfile, saveTemplate, unitInWorkbook, uploadWorkbook, type AnyLayoutRun, type TemplateState } from "@/lib/assessment/pdfTemplate/api";
+import { toFraction } from "@/lib/assessment/pdfTemplate/model";
 import { checkUnit, unitDecisionError, type UnitCheck } from "@/lib/assessment/workbookFiling";
 import { takePendingWorkbook } from "@/lib/assessment/pdfTemplate/pending";
 import { asmAdmin } from "@/pages/admin/lib/assessments";
@@ -26,7 +27,7 @@ const KINDS: Record<FieldKind, FieldKindSpec> = {
 
 type Field = EditorField<FieldKind>;
 const toEditor = (f: TemplateField): Field => ({ key: f.id, type: f.kind, owner: f.role, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, required: !!f.required, label: f.label,
-  meta: { questionKey: f.questionKey, dataKey: f.dataKey ?? null, option: f.option ?? null, group: f.group ?? null, attempt: f.attempt ?? null, table: f.table ?? null, step: f.step ?? null, slot: f.slot ?? null, checklist: f.checklist ?? null } });
+  meta: { questionKey: f.questionKey, dataKey: f.dataKey ?? null, option: f.option ?? null, group: f.group ?? null, attempt: f.attempt ?? null, table: f.table ?? null, step: f.step ?? null, slot: f.slot ?? null, checklist: f.checklist ?? null, origin: f.origin ?? null, review: f.review ?? null } });
 const fromEditor = (f: Field): TemplateField => {
   const m = (f.meta ?? {}) as Partial<TemplateField>;
   const out: TemplateField = { id: f.key, page: f.page, x: f.x, y: f.y, w: f.w, h: f.h, role: f.owner as FieldRole, kind: f.type, questionKey: m.questionKey ?? null, label: f.label };
@@ -39,6 +40,8 @@ const fromEditor = (f: Field): TemplateField => {
   if (m.step) out.step = m.step;
   if (m.slot) out.slot = m.slot;
   if (m.checklist) out.checklist = m.checklist;
+  if (m.origin) out.origin = m.origin;
+  if (m.review) out.review = m.review;
   return out;
 };
 /** A field moved to "Filled from the record" becomes an auto field, and back (the database requires both together). */
@@ -64,6 +67,8 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmReplace, setConfirmReplace] = useState<File | null>(null);
+  // ASM-ANY-LAYOUT: the last detection (empty areas, the layout profile, what the AI did and cost)
+  const [run, setRun] = useState<AnyLayoutRun | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   // ASM-UNIT-CHECK: the unit the uploaded workbook names, against the assessment's unit; a mismatch waits for Switch or Keep (with a
   // reason) before the template can be saved, and the decision is audited (asm_import_unit_check)
@@ -97,6 +102,33 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
   const problems = useMemo(() => current ? templateProblems(current) : [], [current]);
   const counts = useMemo(() => ({ student: fields.filter((f) => f.owner === "student").length, trainer: fields.filter((f) => f.owner === "trainer").length, auto: fields.filter((f) => f.owner === "auto").length }), [fields]);
   const trainerPages = useMemo(() => template?.pages.filter((p) => p.audience === "trainer").map((p) => p.page) ?? [], [template]);
+  const aiPending = fields.filter((f) => (f.meta as Partial<TemplateField> | undefined)?.review === "pending").length;
+  // ASM-ANY-LAYOUT: empty areas no field covers: one click adds a field sized exactly to the area
+  const slots = useMemo<EditorSlot[]>(() => {
+    if (!run?.result) return [];
+    const out: EditorSlot[] = [];
+    for (const c of run.result.candidates) {
+      const size = run.result.sizes?.[c.page]; if (!size) continue;
+      const r = toFraction(c.page, size.W, size.H, c.box);
+      const covered = fields.some((f) => f.page === c.page && Math.max(0, Math.min(f.x + f.w, r.x + r.w) - Math.max(f.x, r.x)) * Math.max(0, Math.min(f.y + f.h, r.y + r.h) - Math.max(f.y, r.y)) > 0.5 * r.w * r.h);
+      if (!covered) out.push({ id: c.id, page: c.page, x: r.x, y: r.y, w: r.w, h: r.h, label: [c.left, c.column, c.tickLabel].filter(Boolean).join(" · ").slice(0, 80) || c.above.slice(0, 80) });
+    }
+    return out;
+  }, [run, fields]);
+  const addAtSlot = (s: EditorSlot) => {
+    if (!editable || !template) return;
+    const c = run?.result?.candidates.find((x) => x.id === s.id);
+    const trainer = template.pages[s.page - 1]?.audience === "trainer";
+    let key = "h" + s.page + "-" + (c?.n ?? fields.length); while (fields.some((f) => f.key === key)) key += "x";
+    const type: FieldKind = c?.shape === "tick" ? "checkbox" : c?.shape === "cell" ? "table_cell" : /date/i.test(s.label ?? "") ? "date" : /sign/i.test(s.label ?? "") ? "signature" : "text";
+    setFields(normalise([...fields, { key, type, owner: trainer ? "trainer" : "student", page: s.page, x: s.x, y: s.y, w: s.w, h: s.h, required: false, label: s.label || KINDS[type].label,
+      meta: { questionKey: null, origin: "admin", table: type === "table_cell" && c?.table ? { row: c.table.row, col: c.table.col, rowLabel: c.left || undefined, column: c.column || undefined, group: "g" + c.page + "-" + c.table.id } : null } }]));
+    setDirty(true);
+  };
+  const review = (key: string, accept: boolean) => {
+    setFields(accept ? fields.map((f) => f.key === key ? { ...f, meta: { ...(f.meta ?? {}), review: "accepted" } } : f) : fields.filter((f) => f.key !== key));
+    setDirty(true);
+  };
 
   const readFile = async (file: File) => {
     setError(null);
@@ -104,19 +136,22 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
       setBusy("Uploading the PDF…");
       const bytes = new Uint8Array(await file.arrayBuffer());
       const where = await uploadWorkbook(assessmentId, bytes);
-      const found = await detectWorkbook(bytes, { ...where, fileName: file.name }, (n, of) => setBusy(`Reading page ${n} of ${of}…`));
+      const found0 = await detectWorkbookAny(bytes, { ...where, fileName: file.name }, assessmentId, (m) => setBusy(m));
+      const found = found0.template; setRun(found0);
       // the unit the workbook names, read from its own copy before the page viewer takes the bytes
       const named = await unitInWorkbook(bytes.slice()).catch(() => ({ code: null, name: null }));
       setPdf(bytes); shownPath.current = where.path; setTemplate(found); setFields(found.fields.map(toEditor)); setDirty(true);
       setUnitCheck(null); setWorkbookUnit(named);
-      toast.push(`${found.questions.length} questions and ${found.fields.length} fields found. Check them, then save.`, "success");
+      toast.push(`${found.questions.length} questions and ${found.fields.length} fields found${found0.ai.added ? ` (${found0.ai.added} set by AI: accept or reject them)` : ""}. Check them, then save.`, "success");
+      if (found0.ai.stopped) setError(found0.ai.stopped);
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
   const detectAgain = async () => {
     if (!pdf || !template) return;
     setBusy("Reading the pages again…");
     try {
-      const found = await detectWorkbook(pdf, template.pdf, (n, of) => setBusy(`Reading page ${n} of ${of}…`));
+      const again = await detectWorkbookAny(pdf, template.pdf, assessmentId, (m) => setBusy(m));
+      const found = again.template; setRun(again); if (again.ai.stopped) setError(again.ai.stopped);
       setTemplate(found); setFields(found.fields.map(toEditor)); setDirty(true);
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
@@ -144,6 +179,8 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
       const out = await saveTemplate(assessmentId, current, state?.status === "draft" ? state.updatedAt : null);
       if (!out.ok) { setError((out.errors ?? ["The template could not be saved."]).slice(0, 5).join(" ")); return; }
       toast.push(`PDF template saved on draft v${out.versionNo}.`, "success");
+      // ASM-ANY-LAYOUT: what was decided here is kept for later workbooks of the same layout
+      if (run?.path === "generic") await saveLayoutProfile(run, current, assessmentId).then((n) => { if (n) toast.push(`${n} decisions kept for this workbook layout.`, "success"); }, () => undefined);
       // the page header (Preview as learner, Publish, question count) follows at once, never behind this panel's reload
       onChanged(); await load();
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
@@ -175,6 +212,11 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
             </p>
           : <p className="text-xs text-foreground-600">Upload the workbook as it is. Its answer boxes, the trainer's marks, signatures and the student's details are found on its pages; you check them here.</p>}
         {trainerPages.length ? <p className="text-xs text-foreground-500">Trainer only (never shown to the student): pages {ranges(trainerPages)}.</p> : null}
+        {run?.path === "generic" ? <p className="text-xs text-foreground-600" data-testid="pdf-template-ai">
+          Found by rules{run.profile?.applied ? ", " + run.profile.applied + " by this layout's saved profile" : ""}{run.ai.pages ? "; AI (" + run.ai.model + ") asked about " + run.ai.asked + " areas on " + run.ai.pages + " pages, US$" + run.ai.costUsd.toFixed(4) + " (this workbook US$" + run.ai.spentUsd.toFixed(4) + " of US$2.00)" : "; no AI needed"}.
+          {slots.length ? " " + slots.length + " empty areas are outlined: click one to add a field there." : ""}</p> : null}
+        {aiPending ? <p className="flex flex-wrap items-center gap-2 text-xs font-medium text-purple-800" data-testid="pdf-template-ai-pending">{aiPending} field{aiPending === 1 ? "" : "s"} set by AI wait for Accept or Reject (Publish waits for them).
+          {editable ? <button type="button" className="underline" onClick={() => { setFields(fields.map((f) => (f.meta as Partial<TemplateField> | undefined)?.review === "pending" ? { ...f, meta: { ...(f.meta ?? {}), review: "accepted" } } : f)); setDirty(true); }} data-testid="ai-accept-all">Accept all</button> : null}</p> : null}
       </div>
       {editable ? <div className="flex flex-wrap gap-2">
         <Button variant={template ? "outline" : "primary"} size="sm" icon="ri-upload-2-line" disabled={!!busy} onClick={() => fileInput.current?.click()} data-testid="pdf-template-upload">{template ? "Replace PDF" : "Upload workbook PDF"}</Button>
@@ -199,7 +241,9 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
     {template && pdf ? <div className="flex h-[78vh] min-h-[520px] flex-col">
       <FieldEditor<FieldKind> source={pdf} owners={OWNERS} kinds={KINDS} presets={false} lazy ownerLabel="New fields are filled by"
         fields={fields} onChange={(next) => { if (!editable) return; setFields(normalise(next)); setDirty(true); }}
-        details={(f, update) => <FieldDetails field={f} update={update} questions={template.questions.map((q) => q.key)} />}
+        details={(f, update) => <FieldDetails field={f} update={update} questions={template.questions.map((q) => q.key)} onReview={editable ? (accept) => review(f.key, accept) : undefined} />}
+        slots={editable ? slots : []} onSlot={addAtSlot}
+        badge={(f) => { const m = f.meta as Partial<TemplateField> | undefined; return m?.origin === "ai" ? (m.review === "pending" ? "AI" : "AI ✓") : null; }}
         panel={<QuestionList template={template} fields={fields} />} />
     </div> : null}
     <ConfirmDialog open={!!confirmReplace} title="Replace the workbook PDF?" confirmLabel="Replace and find fields"
@@ -210,10 +254,16 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
 
 const input = "mt-1 w-full rounded border border-background-300 px-2 py-1.5 text-sm";
 
-function FieldDetails({ field, update, questions }: { field: Field; update: (patch: Partial<Field>) => void; questions: string[] }) {
+function FieldDetails({ field, update, questions, onReview }: { field: Field; update: (patch: Partial<Field>) => void; questions: string[]; onReview?: (accept: boolean) => void }) {
   const meta = (field.meta ?? {}) as Partial<TemplateField>;
   const setMeta = (patch: Partial<TemplateField>) => update({ meta: { ...meta, ...patch } });
   return <>
+    {meta.origin === "ai" ? <div className="rounded border border-purple-300 bg-purple-50 px-2 py-1.5 text-xs text-purple-900" data-testid="tpl-field-ai">
+      <p className="font-medium">{meta.review === "pending" ? "Set by AI: check it." : "Set by AI, accepted."}</p>
+      {meta.review === "pending" && onReview ? <div className="mt-1 flex gap-3">
+        <button type="button" className="font-semibold underline" onClick={() => onReview(true)} data-testid="ai-accept">Accept</button>
+        <button type="button" className="font-semibold text-red-700 underline" onClick={() => onReview(false)} data-testid="ai-reject">Reject (remove)</button></div> : null}
+    </div> : null}
     <label className="block text-xs">Filled by
       <select value={field.owner} onChange={(e) => update({ owner: e.target.value, ...(e.target.value === "auto" ? { type: "auto" as FieldKind } : field.type === "auto" ? { type: "text" as FieldKind } : {}) })} className={input} data-testid="tpl-field-role">
         {OWNERS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select></label>
@@ -257,7 +307,7 @@ function QuestionList({ template, fields }: { template: PdfTemplate; fields: Fie
         const answers = own.filter((f) => f.owner === "student").length; const marks = own.filter((f) => f.owner === "trainer").length;
         return <li key={q.key} className="flex items-baseline justify-between gap-2">
           <span className="min-w-0 truncate"><span className="font-semibold">{q.key}</span> {q.label}</span>
-          <span className={`shrink-0 ${answers && marks ? "text-foreground-500" : "font-medium text-red-700"}`}>p{ranges(pages)} · {answers}/{marks}</span>
+          <span className={`shrink-0 ${answers ? "text-foreground-500" : "font-medium text-red-700"}`} title={marks ? undefined : "No Satisfactory boxes on the workbook: the trainer marks it in the marking view"}>p{ranges(pages)} · {answers}/{marks}</span>
         </li>;
       })}
     </ul>

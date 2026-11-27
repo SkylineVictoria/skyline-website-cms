@@ -1910,7 +1910,7 @@ test("Microsoft 365 status (2026-11-20): one app-only check behind Email Managem
   // The screens: no hard-coded status; one shared check; Microsoft 365 first on Connections; named "connection verified" messages.
   const page = read("src/pages/admin/EmailManagementPage.tsx"), connections = read("src/pages/admin/integrations/ConnectionsPage.tsx"), fn = read("supabase/functions/student-office365/index.ts"), adminFn = read("supabase/functions/integrations-admin/index.ts");
   assert.ok(!page.includes("Not configured") && !page.includes("Microsoft 365 connection required.") && page.includes("<Microsoft365Badge />") && read("src/pages/admin/components/CreateEmailSection.tsx").includes("fetchEmailPeople(kind, personQuery)"), "Email Management reads the live status and loads people");
-  assert.ok(connections.includes("Number(b.connector_id === M365) - Number(a.connector_id === M365)") && connections.includes("<Microsoft365Panel />") && !connections.includes("announce('Connection verified.')") && !connections.includes("setNotice('Connection verified.')"), "Microsoft 365 first, its own panel, named messages");
+  assert.ok(connections.includes("Number(b.id === M365) - Number(a.id === M365)") && connections.includes("<Microsoft365Panel />") && !connections.includes("announce('Connection verified.')") && !connections.includes("setNotice('Connection verified.')"), "Microsoft 365 first, its own panel, named messages");
   assert.ok(fn.includes("action==='m365_status'||action==='people'") && fn.includes("caller.rpc('admin_business_require')") && adminFn.includes("c.connector_id==='microsoft365'") && adminFn.includes("microsoft365Status("), "both functions use the one check");
   const sql = read("supabase/migrations/20261120163517_email_management_people.sql").replace(/\r\n/g, "\n");
   assert.ok(sql.includes("perform public.admin_business_require();") && sql.includes("revoke all on function public.email_mgmt_people(text, text) from public, anon;"), "people list: SLIT administrators only");
@@ -4902,7 +4902,7 @@ test("OMARA: Brave / Tavily request shapes, hits filtered to the register, one G
   // These agents are never SLIT education agents: nothing here writes public.agents.
   assert.ok(!/from\("agents"\)|\.from\('agents'\)|insert into public\.agents/.test(read("supabase/functions/omara-discovery/index.ts") + read("supabase/functions/omara-discovery/core.ts") + read("supabase/functions/_shared/omara.ts")));
   assert.ok(read("src/pages/admin/components/OmaraAgentsPanel.tsx").includes("not for marketing"));
-  assert.ok(read("supabase/config.toml").includes("[functions.omara-discovery]\n# OMARA-DISCOVERY") && /\[functions\.omara-discovery\][\s\S]*?verify_jwt = true/.test(read("supabase/config.toml")));
+  assert.ok(read("supabase/config.toml").replace(/\r\n/g, "\n").includes("[functions.omara-discovery]\n# OMARA-DISCOVERY") && /\[functions\.omara-discovery\][\s\S]*?verify_jwt = true/.test(read("supabase/config.toml")));
 });
 
 test("Business Documents tab (2026-11-24): upload / view / resend / change email checked and logged in the database, never a certificate", () => {
@@ -5140,7 +5140,7 @@ test("Full form country of birth (2026-11-25): the same AVETMISS country search 
 });
 
 test("Funding onshore only (2026-11-25): AVETMISS funding source 32 (offshore) switched off and refused; visa holders default to 31", () => {
-  const sql = read("supabase/migrations/20261125160517_funding_onshore_only.sql");
+  const sql = read("supabase/migrations/20261125160517_funding_onshore_only.sql").replace(/\r\n/g, "\n");
   assert.ok(sql.includes("set is_active = false\n where code_set = 'funding_source' and code = '32'"));
   assert.ok(sql.includes("intake_enrolments_funding_onshore_only check (funding_source_code is distinct from '32')"));
   assert.ok(sql.includes("lms_unit_students_funding_onshore_only check (funding_source_code is distinct from '32')"));
@@ -5196,7 +5196,7 @@ test("Agent fills, student signs (2026-11-25, 20261125190517): only the student 
   assert.ok(!wizard.includes('method: "electronic", confirmed: true, authorised: true') && wizard.includes("declarationConsent(declarationsRef.current.ticked, signatureRef.current)"));
   assert.ok(read("src/router/config.tsx").includes('{ path: "/guardian-sign", element: <GuardianSignPage /> }'));
   // The lab suite proves the behaviour (agent / admin / staff refused, locks, take back, change request, diff, guardian, expired links).
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(96);"));
+  assert.ok(Number(/select plan\((\d+)\);/.exec(read("supabase/tests/application_student_signs.sql"))?.[1] ?? 0) >= 96, "the suite keeps at least its 96 checks (it grows with later features)");
 });
 
 test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Forgot password); a first-time email starts as a guest and creates the password at the signature", () => {
@@ -5209,7 +5209,7 @@ test("Invite link (2026-11-26, 20261126090517): an existing account signs in (Fo
   const page = read("src/pages/agency/application-invite/page.tsx");
   assert.ok(page.includes('check.account === "login"') && page.includes("Forgot password?") && page.includes("Start my application"));
   assert.ok(read("src/pages/agency/components/ApplicationWizard.tsx").includes("await saveSignPassword(signPasswordRef.current);"));
-  assert.ok(read("supabase/tests/application_student_signs.sql").includes("select plan(96);"));
+  assert.ok(Number(/select plan\((\d+)\);/.exec(read("supabase/tests/application_student_signs.sql"))?.[1] ?? 0) >= 96, "the suite keeps at least its 96 checks (it grows with later features)");
 });
 
 test("Student confirms every screen (2026-11-26): an application sent by the agent opens at the passport and moves one screen at a time to the signature", () => {

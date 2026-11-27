@@ -57,11 +57,17 @@ insert into public.tenant_domains(hostname,tenant_id,verified_at,verification_ev
  ('p9-b.example.test','9b000000-0000-4000-8000-000000000002',now(),'pgtap'),
  ('p9-a-unverified.example.test','9a000000-0000-4000-8000-000000000001',null,null),
  ('p9-c.example.test','9c000000-0000-4000-8000-000000000003',now(),'pgtap');
-insert into public.cms_courses(id,slug,code,name,fees,status,tenant_id) values
- ('p9-course-a','p9-course-a','P9A01','Alpha Secret Diploma','AUD 11,111','Published','9a000000-0000-4000-8000-000000000001'),
- ('p9-course-b','p9-course-b','P9B01','Bravo Certificate','AUD 22,222','Published','9b000000-0000-4000-8000-000000000002'),
- ('p9-course-b-draft','p9-course-b-draft','P9B02','Bravo Unpublished Course','AUD 1','Draft','9b000000-0000-4000-8000-000000000002'),
- ('p9-course-c','p9-course-c','P9C01','Charlie Course','AUD 3','Published','9c000000-0000-4000-8000-000000000003');
+-- a published course must be reportable (20261126124153: field of education, ANZSCO code, qualification level, delivery mode)
+-- and it needs an active unit and an open intake (cms_courses_needs_intake stores an insert without them as Draft): insert as Draft,
+-- add both, then publish
+insert into public.cms_courses(id,slug,code,name,fees,status,tenant_id,mode,tga_field_of_education_code,tga_anzsco_code,tga_qualification_level) values
+ ('p9-course-a','p9-course-a','P9A01','Alpha Secret Diploma','AUD 11,111','Draft','9a000000-0000-4000-8000-000000000001','Face to Face','0403','331212','Diploma'),
+ ('p9-course-b','p9-course-b','P9B01','Bravo Certificate','AUD 22,222','Draft','9b000000-0000-4000-8000-000000000002','Face to Face','0403','331212','Certificate III'),
+ ('p9-course-b-draft','p9-course-b-draft','P9B02','Bravo Unpublished Course','AUD 1','Draft','9b000000-0000-4000-8000-000000000002','Face to Face','0403','331212','Certificate III'),
+ ('p9-course-c','p9-course-c','P9C01','Charlie Course','AUD 3','Draft','9c000000-0000-4000-8000-000000000003','Face to Face','0403','331212','Certificate III');
+insert into public.cms_course_units(id,course_id,code,name) select 'unit-'||c.id, c.id, 'P9U'||right(c.code,3), 'P9 unit' from public.cms_courses c where c.id like 'p9-course-%';
+insert into public.course_intakes(course_id,start_date,end_date,label) select c.id, current_date + 30, current_date + 400, 'P9' from public.cms_courses c where c.id like 'p9-course-%';
+update public.cms_courses set status = 'Published' where id in ('p9-course-a','p9-course-b','p9-course-c');
 insert into public.public_assistant_faqs(question,normalized_question,answer,source_url,status,tenant_id) values
  ('What is the refund policy?','what is the refund policy','Alpha refunds within 7 days','/refunds','published','9a000000-0000-4000-8000-000000000001'),
  ('What is the refund policy?','what is the refund policy','Bravo refunds within 30 days','/refunds','published','9b000000-0000-4000-8000-000000000002'),

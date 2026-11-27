@@ -196,6 +196,7 @@ async function publishWorkbook(page: Page, file: string, questions: number): Pro
   await page.goto("/admin/assessments");
   await page.getByRole("button", { name: "New assessment" }).first().click();
   const dialog = page.getByRole("dialog", { name: "Add assessment" });
+  await dialog.getByTestId("new-assessment-skip").click(); // the unit first, the workbook on the PDF template tab
   await choose(dialog.getByLabel("Qualification"), courseId);
   await choose(dialog.getByLabel("Unit"), unitId);
   await dialog.getByRole("button", { name: "Create and upload the workbook" }).click();
@@ -265,6 +266,119 @@ async function signHere(page: Page, scope: ReturnType<Page["locator"]>): Promise
   if (await scope.getByTestId("signature-pad").count()) await drawSignature(page, scope);
   await scope.getByTestId("sign-button").click();
 }
+
+// ASM-PREVIEW-AFTER-SAVE (owner 2026-11-26): Preview as learner and Publish stayed disabled after Save draft until the page was reloaded
+test("PDF-WORKBOOK Save draft enables Preview as learner and Publish without a reload", async ({ page }) => {
+  test.skip(!CPC_PDF, "the CPCCPD2012 workbook is not on this machine (set ASM_WORKBOOK_2)");
+  test.setTimeout(180_000);
+  await signInAsAdmin(page, admin.email);
+  await page.goto("/admin/assessments");
+  await page.getByRole("button", { name: "New assessment" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Add assessment" });
+  await dialog.getByTestId("new-assessment-skip").click(); // the unit first, the workbook on the PDF template tab
+  await choose(dialog.getByLabel("Qualification"), courseId);
+  await choose(dialog.getByLabel("Unit"), unitId);
+  await dialog.getByRole("button", { name: "Create and upload the workbook" }).click();
+  await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/);
+  const id = page.url().replace(/[?#].*$/, "").split("/").pop()!;
+  await expect(page.getByTestId("preview-learner")).toBeDisabled();
+  await page.getByTestId("pdf-template-file").setInputFiles(CPC_PDF!);
+  await expect(page.getByTestId("pdf-template-summary")).toContainText("14 questions", { timeout: 90_000 });
+  await expect.poll(async () => (await page.getByTestId("unit-mismatch").count()) > 0 || await page.getByTestId("pdf-template-save").isEnabled(), { timeout: 60_000 }).toBe(true);
+  if (await page.getByTestId("unit-mismatch").count()) {
+    await page.getByTestId("unit-keep-reason").fill("E2E: filed under the test unit on purpose");
+    await page.getByTestId("unit-keep").click();
+    await expect(page.getByTestId("unit-mismatch")).toHaveCount(0);
+  }
+  await expect(page.getByTestId("preview-learner")).toBeDisabled(); // nothing saved yet
+  // a slow workbook download (hosted: 6 MB) must not hold the header back: the refresh after saving never waits for the PDF
+  let downloads = 0;
+  await page.route("**/storage/v1/object/**/assessment-templates/**", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    downloads++; await new Promise((r) => setTimeout(r, 20_000)); return route.continue().catch(() => undefined);
+  });
+  await page.getByTestId("pdf-template-save").click();
+  await expect.poll(() => sql(`select count(*) from public.asm_versions where assessment_id = '${id}' and template is not null`), { timeout: 30_000 }).toBe("1");
+  // the same page, no reload: the header follows the saved draft
+  await expect(page.getByTestId("preview-learner")).toBeEnabled({ timeout: 5_000 });
+  await expect(page.getByTestId("publish-version")).toBeEnabled({ timeout: 5_000 });
+  await expect(page.getByTestId("header-line")).toContainText("14 questions on the workbook");
+  expect(downloads).toBe(0); // the saved workbook is the one in memory: not downloaded again
+  await page.unroute("**/storage/v1/object/**/assessment-templates/**");
+  await page.getByTestId("preview-learner").click();
+  await expect(page.getByTestId("learner-preview").getByTestId("wizard-step-count")).toHaveText(/^Step 1 of \d+$/, { timeout: 60_000 });
+  await page.getByTestId("preview-close").click();
+  await expect(page.getByTestId("learner-preview")).toHaveCount(0);
+  sql(`delete from public.asm_assessments where id = '${id}'`);
+});
+
+// UPLOAD-FIRST Add assessment (owner 2026-11-26): the workbook first, its qualification and unit read from its first pages and prefilled
+test("PDF-WORKBOOK upload-first Add assessment: CPCCPD2012 prefills CPC30620 and the unit, opens with the workbook attached; from a unit a mismatch asks Switch or Keep", async ({ page }) => {
+  test.skip(!CPC_PDF, "the CPCCPD2012 workbook is not on this machine (set ASM_WORKBOOK_2)");
+  test.setTimeout(240_000);
+  // the qualification and unit the workbook names, in the lab once (course code and unit code per course are unique)
+  let cpcCourse = sql(`select id from public.cms_courses where code = 'CPC30620'`);
+  if (!cpcCourse) { cpcCourse = `course-e2e-cpc30620`; sql(`insert into public.cms_courses(id, slug, code, name, status) values ('${cpcCourse}', 'e2e-cpc30620', 'CPC30620', 'Certificate III in Painting and Decorating', 'Draft')`); }
+  let cpcUnit = sql(`select id from public.cms_course_units where course_id = '${cpcCourse}' and code = 'CPCCPD2012'`);
+  if (!cpcUnit) { cpcUnit = `unit-e2e-cpccpd2012`; sql(`insert into public.cms_course_units(id, course_id, code, name) values ('${cpcUnit}', '${cpcCourse}', 'CPCCPD2012', 'Use painting and decorating tools and equipment')`); }
+  sql(`update public.cms_course_units set is_active = true where id = '${cpcUnit}'`);
+  await signInAsAdmin(page, admin.email);
+  await page.goto("/admin/assessments");
+  await page.getByRole("button", { name: "New assessment" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Add assessment" });
+  await expect(dialog.getByTestId("new-assessment-upload")).toContainText("Upload workbook PDF"); // the first step
+  await expect(dialog.getByRole("combobox", { name: "Qualification" })).toHaveCount(0);
+  await dialog.getByTestId("new-assessment-file").setInputFiles(CPC_PDF!);
+  await expect(dialog.getByRole("combobox", { name: "Qualification" })).toContainText("CPC30620", { timeout: 30_000 });
+  await expect(dialog.getByRole("combobox", { name: "Unit" })).toContainText("CPCCPD2012", { timeout: 15_000 });
+  await expect(selectOf(dialog.getByRole("combobox", { name: "Qualification" }))).toHaveValue(cpcCourse);
+  await expect(selectOf(dialog.getByRole("combobox", { name: "Unit" }))).toHaveValue(cpcUnit);
+  await expect(dialog.getByTestId("new-assessment-found")).toContainText("CPC30620 · CPCCPD2012");
+  await expect(dialog.getByTestId("new-assessment-note")).toHaveCount(0);
+  await expect(dialog.getByTestId("new-assessment-workbook")).toContainText("CPCCPD2012");
+  await dialog.getByTestId("create-assessment").click();
+  await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}\?tab=pdf/);
+  const first = page.url().replace(/[?#].*$/, "").split("/").pop()!;
+  // the workbook is already attached: read on the PDF template tab without choosing it again, no unit question
+  await expect(page.getByTestId("pdf-template-summary")).toContainText("14 questions", { timeout: 90_000 });
+  await expect(page.getByTestId("pdf-template-save")).toBeEnabled({ timeout: 30_000 });
+  await expect(page.getByTestId("unit-mismatch")).toHaveCount(0);
+  await page.getByTestId("pdf-template-save").click();
+  await expect(page.getByTestId("preview-learner")).toBeEnabled({ timeout: 15_000 });
+  expect(sql(`select a.course_id || ':' || a.unit_id || ':' || jsonb_array_length(v.template->'questions') from public.asm_assessments a join public.asm_versions v on v.assessment_id = a.id where a.id = '${first}'`)).toBe(`${cpcCourse}:${cpcUnit}:14`);
+
+  // a workbook whose codes are not in Skyline: the boxes stay empty with a note (the lab's other course has neither code)
+  sql(`update public.cms_course_units set is_active = false where id = '${cpcUnit}'`);
+  await page.goto("/admin/assessments");
+  await page.getByRole("button", { name: "New assessment" }).first().click();
+  await dialog.getByTestId("new-assessment-file").setInputFiles(CPC_PDF!);
+  await expect(dialog.getByTestId("new-assessment-note")).toContainText("CPCCPD2012 (read from the workbook) is not a unit of CPC30620 in Skyline: choose the unit.", { timeout: 30_000 });
+  await expect(selectOf(dialog.getByRole("combobox", { name: "Unit" }))).toHaveValue("");
+  await expect(dialog.getByTestId("create-assessment")).toBeDisabled();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  sql(`update public.cms_course_units set is_active = true where id = '${cpcUnit}'`);
+
+  // opened from a unit (LMS > Assessments, E2EU1 selected): still upload-first; the workbook names CPCCPD2012, so Switch or Keep
+  const e2eCode = sql(`select code from public.cms_courses where id = '${courseId}'`);
+  await page.goto("/admin/lms/assessments");
+  await page.getByRole("button", { name: new RegExp(e2eCode) }).first().click();
+  await expect(page.getByRole("heading", { name: /E2EU1/ })).toBeVisible({ timeout: 20_000 });
+  await page.getByRole("button", { name: "+ Add assessment" }).click();
+  await expect(dialog.getByTestId("new-assessment-upload")).toBeVisible();
+  await dialog.getByTestId("new-assessment-file").setInputFiles(CPC_PDF!);
+  await expect(dialog.getByTestId("new-assessment-note")).toContainText("This workbook names CPCCPD2012, not the selected E2EU1.", { timeout: 30_000 });
+  await expect(selectOf(dialog.getByRole("combobox", { name: "Unit" }))).toHaveValue(unitId); // the unit it was opened from
+  await dialog.getByTestId("create-assessment").click();
+  await page.waitForURL(/\/admin\/assessments\/[0-9a-f-]{36}/);
+  const second = page.url().replace(/[?#].*$/, "").split("/").pop()!;
+  await expect(page.getByTestId("unit-mismatch")).toContainText("but you selected E2EU1", { timeout: 90_000 });
+  await expect(page.getByTestId("pdf-template-save")).toBeDisabled();
+  await page.getByTestId("unit-keep-reason").fill("E2E: upload-first from a unit, kept on purpose");
+  await page.getByTestId("unit-keep").click();
+  await expect(page.getByTestId("unit-mismatch")).toHaveCount(0);
+  expect(sql(`select count(*) from public.asm_audit_log where action = 'import_unit_mismatch' and target_id = '${second}' and detail->>'decision' = 'kept'`)).toBe("1");
+  for (const id of [first, second]) sql(`delete from public.asm_assessments where id = '${id}'`);
+});
 
 test("PDF-WORKBOOK CPCCPD2012 on its workbook: questions cropped from the PDF, tables as grids or cards, autosave, review, each declaration signed and submit", async ({ page }) => {
   test.skip(!CPC_PDF, "the CPCCPD2012 workbook is not on this machine (set ASM_WORKBOOK_2)");
@@ -772,6 +886,7 @@ test.describe("ASM-WORKBOOK", () => {
     await page.goto("/admin/assessments");
     await page.getByRole("button", { name: "New assessment" }).first().click();
     const wizard = page.getByRole("dialog", { name: "Add assessment" });
+    await wizard.getByTestId("new-assessment-skip").click();
     const qual = wizard.getByRole("combobox", { name: "Qualification" });
     await expect(async () => { if (!(await list.isVisible())) await qual.click(); await expect(list).toBeVisible({ timeout: 2_000 }); }).toPass({ timeout: 20_000 });
     await page.getByRole("searchbox", { name: "Search the options" }).fill("RII50520");

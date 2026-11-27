@@ -7,6 +7,7 @@ import FieldEditor, { type EditorField, type EditorOwner, type FieldKindSpec } f
 import { AUTO_KEYS, SUBMISSION_OPTIONS, templateProblems, type AutoKey, type FieldKind, type FieldRole, type PdfTemplate, type TemplateField } from "@/lib/assessment/pdfTemplate/model";
 import { detectWorkbook, downloadWorkbook, loadTemplate, saveTemplate, unitInWorkbook, uploadWorkbook, type TemplateState } from "@/lib/assessment/pdfTemplate/api";
 import { checkUnit, unitDecisionError, type UnitCheck } from "@/lib/assessment/workbookFiling";
+import { takePendingWorkbook } from "@/lib/assessment/pdfTemplate/pending";
 import { asmAdmin } from "@/pages/admin/lib/assessments";
 import { supabase } from "@/pages/admin/lib/supabase";
 
@@ -77,12 +78,17 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
     setUnitCheck(check.status === "mismatch" ? check : null); setKeepReason(""); setWorkbookUnit(null);
   }, [workbookUnit, unit]);
 
+  // the storage path of the workbook whose bytes are on screen: after Save draft the saved workbook is that one, so it is not
+  // downloaded again (hosted workbooks are several MB)
+  const shownPath = useRef<string | null>(null);
   const load = useCallback(async () => {
     setError(null);
     try {
       const s = await loadTemplate(assessmentId);
       setState(s); setTemplate(s.template); setFields((s.template?.fields ?? []).map(toEditor)); setDirty(false);
-      setPdf(s.template ? await downloadWorkbook(s.template.pdf.path) : null);
+      const path = s.template?.pdf.path ?? null;
+      if (path && path === shownPath.current) return;
+      setPdf(path ? await downloadWorkbook(path) : null); shownPath.current = path;
     } catch (e) { setError((e as Error).message); }
   }, [assessmentId]);
   useEffect(() => { void load(); }, [load]);
@@ -101,7 +107,7 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
       const found = await detectWorkbook(bytes, { ...where, fileName: file.name }, (n, of) => setBusy(`Reading page ${n} of ${of}…`));
       // the unit the workbook names, read from its own copy before the page viewer takes the bytes
       const named = await unitInWorkbook(bytes.slice()).catch(() => ({ code: null, name: null }));
-      setPdf(bytes); setTemplate(found); setFields(found.fields.map(toEditor)); setDirty(true);
+      setPdf(bytes); shownPath.current = where.path; setTemplate(found); setFields(found.fields.map(toEditor)); setDirty(true);
       setUnitCheck(null); setWorkbookUnit(named);
       toast.push(`${found.questions.length} questions and ${found.fields.length} fields found. Check them, then save.`, "success");
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
@@ -138,9 +144,18 @@ export default function PdfTemplatePanel({ assessmentId, editable, onChanged, un
       const out = await saveTemplate(assessmentId, current, state?.status === "draft" ? state.updatedAt : null);
       if (!out.ok) { setError((out.errors ?? ["The template could not be saved."]).slice(0, 5).join(" ")); return; }
       toast.push(`PDF template saved on draft v${out.versionNo}.`, "success");
-      await load(); onChanged();
+      // the page header (Preview as learner, Publish, question count) follows at once, never behind this panel's reload
+      onChanged(); await load();
     } catch (e) { setError((e as Error).message); } finally { setBusy(null); }
   };
+
+  // UPLOAD-FIRST: the workbook chosen in the Add assessment dialog is read here once the empty draft has loaded
+  useEffect(() => {
+    if (!state || state.template || template || busy) return;
+    const file = takePendingWorkbook(assessmentId);
+    if (file) void readFile(file);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- readFile is recreated each render; the file is taken once
+  }, [state, template, busy, assessmentId]);
 
   if (!state && !error) return <SkeletonLines lines={6} />;
   const pick = (file: File | undefined) => { if (!file) return; if (template) setConfirmReplace(file); else void readFile(file); };

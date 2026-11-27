@@ -3,7 +3,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(25);
+select plan(26);
 
 insert into public.agencies(id, name, code) values
   ('10000000-0000-0000-0000-000000000001', 'Extraction test A', 'EXT-A'),
@@ -26,6 +26,8 @@ insert into public.enrollment_applications(id, agency_id, assigned_agent_id, dat
 -- validation receipt before its row can be written. Fixture files stand for files the Edge Function checked.
 -- The merged application (its own answers plus the student record, 20261104120000) read as the owner whatever role a test runs as.
 create function pg_temp.app_data(p_id uuid) returns jsonb language sql stable security definer as $$ select public.application_data(p_id) $$;
+-- 20261123170457: browsers save reviews through portal_review_draft_v2 (draft lock + expected version); the old command is owner-only
+create function pg_temp.dv(p_id uuid) returns bigint language sql stable security definer as $$ select draft_version from public.enrollment_applications where id = p_id $$;
 -- Holder-name matching (20261113160000): the receipt names the application's current passport at the time (none before the first one),
 -- so a replacement passport is recorded after the first and a supporting document after the passport, as the uploader does.
 create function pg_temp.checked_upload(p_path text, p_category text) returns void language plpgsql as $$
@@ -50,7 +52,7 @@ select is((select state from public.enrollment_document_field_reviews where fiel
 reset role;
 set local role authenticated;
 set local request.jwt.claim.sub = '30000000-0000-0000-0000-000000000001';
-select lives_ok($$select public.portal_save_document_review('40000000-0000-0000-0000-000000000001', '{"first_name":"Ada Lovelace"}', '{"first_name":"Manual entry"}', '["first_name"]', '[{"field":"first_name","state":"corrected"}]')$$, 'assigned agent saves a correction and confirmation');
+select lives_ok($$select public.portal_review_draft_v2('40000000-0000-0000-0000-000000000001', pg_temp.dv('40000000-0000-0000-0000-000000000001'), '{"first_name":"Ada Lovelace"}', '{"first_name":"Manual entry"}', '["first_name"]', '[{"field":"first_name","state":"corrected"}]')$$, 'assigned agent saves a correction and confirmation');
 select is((pg_temp.app_data('40000000-0000-0000-0000-000000000001')->'values'->>'first_name'), 'Ada Lovelace', 'correction persists on reload');
 select is((select state from public.enrollment_document_field_reviews where field_identifier = 'first_name' order by audit_revision desc limit 1), 'corrected', 'correction is the latest immutable audit revision');
 select is((select count(*)::integer from public.enrollment_document_field_reviews where field_identifier = 'first_name' and state = 'corrected'), 1, 'correction has a durable immutable audit row');
@@ -62,15 +64,16 @@ select lives_ok($$select public.portal_apply_document_candidates('50000000-0000-
 reset role;
 set local role authenticated;
 set local request.jwt.claim.sub = '30000000-0000-0000-0000-000000000001';
-select lives_ok($$select public.portal_save_document_review('40000000-0000-0000-0000-000000000001', '{"dob":"2000-02-02"}', '{"dob":"Manual entry"}', '["first_name","dob"]', '[{"field":"dob","state":"corrected"}]')$$, 'manual edit serialises with extraction');
+select lives_ok($$select public.portal_review_draft_v2('40000000-0000-0000-0000-000000000001', pg_temp.dv('40000000-0000-0000-0000-000000000001'), '{"dob":"2000-02-02"}', '{"dob":"Manual entry"}', '["first_name","dob"]', '[{"field":"dob","state":"corrected"}]')$$, 'manual edit serialises with extraction');
 select is((pg_temp.app_data('40000000-0000-0000-0000-000000000001')->'values'->>'dob'), '2000-02-02', 'manual edit is the durable final value');
 
 set local request.jwt.claim.sub = '30000000-0000-0000-0000-000000000002';
 select is((select count(*) from public.enrollment_document_field_reviews where application_id = '40000000-0000-0000-0000-000000000001')::integer, 0, 'other agency cannot read candidates');
-select throws_ok($$select public.portal_save_document_review('40000000-0000-0000-0000-000000000001', '{"dob":"bad"}', '{}', '[]', '[]')$$, '42501', 'not authorised', 'other agency cannot edit candidates');
+select throws_ok($$select public.portal_review_draft_v2('40000000-0000-0000-0000-000000000001', pg_temp.dv('40000000-0000-0000-0000-000000000001'), '{"dob":"bad"}', '{}', '[]', '[]')$$, '42501', null, 'other agency cannot edit candidates');
 set local request.jwt.claim.sub = '30000000-0000-0000-0000-000000000003';
 select is((select count(*) from public.enrollment_document_field_reviews where application_id = '40000000-0000-0000-0000-000000000001')::integer, 0, 'an unassigned agent in the same agency cannot read candidates');
-select throws_ok($$select public.portal_save_document_review('40000000-0000-0000-0000-000000000001', '{"dob":"bad"}', '{}', '[]', '[]')$$, '42501', 'not authorised', 'an unassigned agent cannot edit candidates');
+select throws_ok($$select public.portal_review_draft_v2('40000000-0000-0000-0000-000000000001', pg_temp.dv('40000000-0000-0000-0000-000000000001'), '{"dob":"bad"}', '{}', '[]', '[]')$$, '42501', null, 'an unassigned agent cannot edit candidates');
+select throws_ok($$select public.portal_save_document_review('40000000-0000-0000-0000-000000000001', '{"dob":"bad"}', '{}', '[]', '[]')$$, '42501', null, 'the old review command is closed to browsers (20261123170457)');
 
 reset role;
 set local role service_role;

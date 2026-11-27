@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { asmAdmin, type AssessmentRow } from "@/pages/admin/lib/assessments";
 import NewAssessmentDialog from "@/pages/admin/assessments/NewAssessmentDialog";
 
@@ -12,6 +12,7 @@ export default function UnitAssessmentsPanel({ courseId, unitId, canEdit }: { co
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const load = useCallback(async () => {
     setError("");
@@ -32,7 +33,7 @@ export default function UnitAssessmentsPanel({ courseId, unitId, canEdit }: { co
       {error ? <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
       {created ? <p role="status" className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-primary-900">
         Assessment saved. <Link className="font-semibold underline" to={`/admin/assessments/${created}`}>Open it</Link> to edit, publish or assign it.</p> : null}
-      {adding ? <NewAssessmentDialog courseId={courseId} unitId={unitId} onClose={() => setAdding(false)} onSaved={(id) => { setAdding(false); setCreated(id); void load(); }} /> : null}
+      {adding ? <NewAssessmentDialog courseId={courseId} unitId={unitId} onClose={() => setAdding(false)} onSaved={(id, { workbook }) => { setAdding(false); if (workbook) { navigate(`/admin/assessments/${id}?tab=pdf`); return; } setCreated(id); void load(); }} /> : null}
       {loading ? <p className="text-sm text-foreground-500" role="status">Loading assessments…</p>
         : rows.length === 0 ? <p className="rounded-xl border border-dashed border-background-300 p-6 text-center text-sm text-foreground-500">No assessments for this unit yet.{canEdit ? " Use + New assessment." : ""}</p>
         : <ul className="divide-y divide-background-100 rounded-xl border border-background-200 bg-background-50">{rows.map(a => (

@@ -141,22 +141,47 @@ async function pdfjs() {
  * 2-4 letters, 3-4 digits, maybe a letter; qualification codes such as CPC30620 do not match).
  */
 export async function unitInWorkbook(bytes: Uint8Array, pages = 6): Promise<{ code: string | null; name: string | null }> {
+  return { code: (await codesInWorkbook(bytes, pages)).unit, name: null };
+}
+
+/** Page text of the first pages, joined per page (one pdf.js pass shared by the unit and qualification readers). */
+async function firstPagesText(bytes: Uint8Array, pages: number): Promise<string[]> {
   const pdf = await pdfjs();
   const doc = await pdf.getDocument({ data: bytes.slice() }).promise;
   try {
-    // the code only: a title read from the page text picks up the headers around it (checkUnit compares codes when there is one)
-    const counts = new Map<string, number>(); let labelled: string | null = null;
+    const out: string[] = [];
     for (let n = 1; n <= Math.min(pages, doc.numPages); n++) {
-      const text = ((await (await doc.getPage(n)).getTextContent()).items as { str?: string }[]).map((x) => x.str ?? "").join(" ").replace(/\s+/g, " ");
-      const near = /unit\s+code\s*(?:&\s*name)?\s*[:-]?\s*([A-Z]{3}[A-Z]{2,4}\d{3,4}[A-Z]?)\b/i.exec(text);
-      if (near && !labelled) labelled = near[1].toUpperCase();
-      for (const m of text.matchAll(/\b([A-Z]{3}[A-Z]{2,4}\d{3,4}[A-Z]?)\b/g)) counts.set(m[1], (counts.get(m[1]) ?? 0) + 1);
+      out.push(((await (await doc.getPage(n)).getTextContent()).items as { str?: string }[]).map((x) => x.str ?? "").join(" ").replace(/\s+/g, " "));
     }
-    const common = [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
-    return { code: labelled ?? common, name: null };
+    return out;
   } finally {
     void (doc as unknown as { destroy?: () => Promise<void> }).destroy?.();
   }
+}
+
+/** The code printed most often (null when none). */
+const mostCommon = (texts: string[], re: RegExp) => {
+  const counts = new Map<string, number>();
+  for (const t of texts) for (const m of t.matchAll(re)) counts.set(m[1].toUpperCase(), (counts.get(m[1].toUpperCase()) ?? 0) + 1);
+  return [...counts.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] ?? null;
+};
+
+/**
+ * UPLOAD-FIRST Add assessment (owner 2026-11-26) and ASM-UNIT-CHECK: the unit code and the qualification code the workbook names on its
+ * first pages. Unit: a code next to "Unit Code" wins, else the code printed most often (training.gov.au unit codes: 3 letters, 2-4
+ * letters, 3-4 digits, maybe a letter). Qualification: a code next to "Qualification" / "Course" wins, else the one printed most often
+ * (3 letters + 5 digits, such as CPC30620; unit codes never match it). The code only: a title read from the page text picks up the
+ * headers around it.
+ */
+export async function codesInWorkbook(bytes: Uint8Array, pages = 6): Promise<{ unit: string | null; qualification: string | null }> {
+  const texts = await firstPagesText(bytes, pages);
+  const UNIT = /\b([A-Z]{3}[A-Z]{2,4}\d{3,4}[A-Z]?)\b/g; const QUAL = /\b([A-Z]{3}\d{5})\b/g;
+  let unit: string | null = null; let qualification: string | null = null;
+  for (const t of texts) {
+    unit ??= /unit\s+code\s*(?:&\s*name)?\s*[:-]?\s*([A-Z]{3}[A-Z]{2,4}\d{3,4}[A-Z]?)\b/i.exec(t)?.[1].toUpperCase() ?? null;
+    qualification ??= /(?:qualification|course)\s*(?:code)?\s*(?:&\s*name)?\s*[:-]?\s*([A-Z]{3}\d{5})\b/i.exec(t)?.[1].toUpperCase() ?? null;
+  }
+  return { unit: unit ?? mostCommon(texts, UNIT), qualification: qualification ?? mostCommon(texts, QUAL) };
 }
 
 export async function detectWorkbook(bytes: Uint8Array, pdfInfo: { path: string; sha256: string; fileName?: string | null }, onProgress?: (page: number, pages: number) => void): Promise<PdfTemplate> {

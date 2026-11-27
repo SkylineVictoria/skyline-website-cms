@@ -1208,3 +1208,14 @@ Migration `20261127130517_application_document_carry` + `validated-document-uplo
 - Prior qualifications: trigger `zzy_application_prior_education_fill` (before insert / update of data, student_id; drafts) puts the
   student's `student_prior_education` rows into an application's answers when it has none (`prior_ed` Yes when unanswered; No kept).
 - The wizard and the one-page form show "From your previous application (SLIT-…)" under a copied document; Replace / Delete as usual.
+
+## Course delivery mode restored into the repo (DELIVERY-MODE-RESTORE, 2026-11-26)
+- `cms_courses.delivery_mode_identifier` / `predominant_delivery_mode` (+ checks, comments, trigger `cms_courses_avetmiss_delivery`,
+  `lms_unit_students_avetmiss` course defaults, trigger `intake_enrolments_funding_to_units`) were applied on hosted 2026-11-25 as
+  `20261125122425_avetmiss_course_delivery_mode_and_unit_defaults` and `20261125122452_avetmiss_unit_funding_fix` without repo files, so a
+  fresh lab / the AVETMISS CI had no such columns (`avetmiss_audit`, `avetmiss_nat`: column c.delivery_mode_identifier does not exist).
+  Both files restored verbatim from `schema_migrations.statements` under their hosted versions (md5 in each header); nothing applied to
+  hosted (already there). Fresh lab replay: 2 columns, 3 checks, 3 functions, 2 triggers identical to hosted.
+- Still hosted-only (content not in the repo): 20261118004823, 20261118004948, 20261122153509, 20261122153835, 20261122154043, 20261122154344,
+  20261125112611, 20261125112956, 20261125113726, 20261125114936, 20261125120557, 20261125121142, 20261125123147 (owner to decide; the
+  avetmiss_no_junk failures on a fresh lab likely come from the 2026-11-25 wizard ones).

@@ -18,9 +18,16 @@ Deno.serve(async (request) => {
   if (typeof documentId !== "string") return reply({ ok: false, error: "Document ID is required." }, 400);
   const caller = createClient(url, anonKey, { global: { headers: { Authorization: `Bearer ${token}`, ...(request.headers.has("x-tenant-domain") ? { "x-tenant-domain": request.headers.get("x-tenant-domain")! } : {}) } }, auth: { persistSession: false } });
   // RLS lookup establishes caller access before the service client is used.
-  const { data: document, error } = await caller.from("enrollment_application_documents").select("id, application_id, bucket_name, storage_path, category, metadata, enrollment_applications!enrollment_application_documents_application_id_fkey(status)").eq("id", documentId).maybeSingle();
+  const { data: document, error } = await caller.from("enrollment_application_documents").select("id, application_id, student_id, bucket_name, storage_path, category, metadata, enrollment_applications!enrollment_application_documents_application_id_fkey(status)").eq("id", documentId).maybeSingle();
   if (error || !document) return reply({ ok: false, error: "Document not found or not authorised." }, 403);
   const application = Array.isArray(document.enrollment_applications) ? document.enrollment_applications[0] : document.enrollment_applications;
+  // STUDENT-DOCUMENTS (20261127150517): a student's document is shared by their applications. Once one of them is past draft it is
+  // retired (kept as history for that record); while all are drafts it is deleted as before.
+  if (document.student_id) {
+    const { data: removal, error: removalError } = await caller.rpc("portal_student_document_removal", { p_document: documentId });
+    if (removalError) return reply({ ok: false, error: removalError.message || "This document cannot be removed now." }, 403);
+    if (removal === "retired") return reply({ ok: true, documentId, retired: true });
+  }
   // Business Rules admissions.document_delete_states (Draft, Action required) and admissions.retained_document_categories (Consent, Offer, CoE).
   const rules = await loadRules(caller, ["admissions.document_delete_states", "admissions.retained_document_categories"]);
   const deletableStates: string[] = ruleList(rules, "admissions.document_delete_states", ["Draft", "Action required"]).map((label) => label.trim().toLowerCase().replace(/\s+/g, "_"))
@@ -31,7 +38,8 @@ Deno.serve(async (request) => {
   const path = String(document.storage_path ?? "");
   const segments = path.split("/");
   if (document.bucket_name !== "enrollment-documents" || segments.length < 2 ||
-      segments[0] !== String(document.application_id) ||
+      // A student document moved with its student to another application keeps its original folder.
+      (segments[0] !== String(document.application_id) && !(document.student_id && /^[0-9a-f-]{36}$/i.test(segments[0]))) ||
       segments.some((segment) => !segment || segment === "." || segment === "..") ||
       // eslint-disable-next-line no-control-regex -- storage paths must not contain control characters
       /[\\%\u0000-\u001f]/.test(path)) {

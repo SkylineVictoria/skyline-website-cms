@@ -128,11 +128,12 @@ async function processOne(scope?: { job: string; tenant: string }) {
     return reply({ ok: false, jobId: job.id, retrying: settled.retrying, error: message }, settled.retrying ? 202 : 422);
   };
   try {
-  const { data: doc } = await admin.from("enrollment_application_documents").select("id, application_id, category, bucket_name, storage_path, filename, mime_type, file_size, metadata, is_current, tenant_id").eq("id", job.document_id).maybeSingle();
+  const { data: doc } = await admin.from("enrollment_application_documents").select("id, application_id, student_id, category, bucket_name, storage_path, filename, mime_type, file_size, metadata, is_current, tenant_id").eq("id", job.document_id).maybeSingle();
   if (!doc || !doc.is_current || doc.application_id !== job.application_id || (doc.tenant_id ?? null) !== (job.tenant_id ?? null)) return await fail("stale", "The document was deleted or replaced before extraction.", false);
   const path = String(doc.storage_path ?? "");
   const segments = path.split("/");
-  if (doc.bucket_name !== "enrollment-documents" || segments.length < 2 || segments[0] !== String(doc.application_id) ||
+  // STUDENT-DOCUMENTS: a student document moved with its student to another application keeps its original folder.
+  if (doc.bucket_name !== "enrollment-documents" || segments.length < 2 || (segments[0] !== String(doc.application_id) && !(doc.student_id && /^[0-9a-f-]{36}$/i.test(segments[0]))) ||
       // eslint-disable-next-line no-control-regex -- storage paths must not contain control characters
       segments.some((segment) => !segment || segment === "." || segment === "..") || /[\\%\u0000-\u001f]/.test(path)) {
     return await fail("target", "Document storage target is invalid.", false);

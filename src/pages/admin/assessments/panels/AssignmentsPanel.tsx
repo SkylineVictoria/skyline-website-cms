@@ -23,11 +23,13 @@ function useLateAllowed(assessmentId: string): boolean | null {
   const [allowed, setAllowed] = useState<boolean | null>(null);
   useEffect(() => {
     let off = false;
+    // rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
     void supabase.rpc("asm_late_allowed", { p_assessment: assessmentId }).then(({ data, error }) => { if (!off) setAllowed(error ? false : data === true); });
     return () => { off = true; };
   }, [assessmentId]);
   return allowed;
 }
+// rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
 const lateHint = (allowed: boolean | null) => (allowed ? "Late work is allowed for this assessment: the last moment it is accepted, after the due date." : "Optional: late work is accepted until then.");
 
 const windowText = (w: MasterWindow | null | undefined) => (w ? `${fmtDateTime(w.opens_at)} – ${fmtDateTime(w.closes_at)} (${(w.master_kind ?? "coe").toUpperCase()} Master${w.master_cycle ? `, cycle ${w.master_cycle}` : ""})` : "No Master dates for this unit in the intake");
@@ -77,6 +79,7 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
   const [dueAt, setDueAt] = useState(toLocalInput(new Date(Date.now() + ruleNumber("lms.assessment_assignment_default_days", 7) * 86400000).toISOString()));
   const [lateUntil, setLateUntil] = useState("");
   const lateAllowed = useLateAllowed(assessmentId);
+  // rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
   const lateMissing = lateAllowed === true && !lateUntil;
   const [rule, setRule] = useState<"follow_master" | "keep">("follow_master");
   const [useMaster, setUseMaster] = useState(true);
@@ -97,6 +100,7 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
       if (out.created > 0) onDone();
     } catch (e) { setError(fail(e)); } finally { setBusy(false); }
   };
+  // rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
   return (
     <Drawer open title="Assign to intakes" onClose={onClose} width="max-w-2xl" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={busy || !picked.length || (!useMaster && !dueAt) || missingMaster || lateMissing} onClick={() => void submit()}>Assign</Button></>}>
       <div className="space-y-4">
@@ -111,6 +115,7 @@ function CreateDrawer({ assessmentId, courseId, onClose, onDone }: { assessmentI
           <Field label="Available from"><TextInput type="datetime-local" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} /></Field>
           <Field label="Due" required><TextInput type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></Field>
         </div>}
+        {/* // rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value. */}
         <Field label="Late submissions until" required={lateAllowed === true} hint={lateHint(lateAllowed)}><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} data-testid="assignment-late-until" /></Field>
         <Field label="Extra assessors (the intake's trainers are always assessors)"><Select multiple size={4} value={trainers} onChange={(e) => setTrainers([...e.target.selectedOptions].map((o) => o.value))}>{staff.map((s) => <option key={s.id} value={s.id}>{s.name}{s.isTrainer ? "" : " (no trainer role)"}</option>)}</Select></Field>
         <Field label="When a student leaves or joins the intake"><Select value={rule} onChange={(e) => setRule(e.target.value as "follow_master" | "keep")}><option value="follow_master">Follow the Master: dates move with the Master unit dates; leavers lose open drafts, joiners are added and told</option><option value="keep">Keep: existing attempts stay as they are</option></Select></Field>
@@ -138,11 +143,13 @@ export function AssignmentDrawer({ assignment: a, onClose, onChanged, onOpenAtte
   useEffect(() => { void load(); }, [a.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = async () => { try { await asmAdmin("assignment_update", { id: a.id, dueAt: fromLocalInput(dueAt), lateUntil: fromLocalInput(lateUntil), status }); push("Assignment saved."); onChanged(); } catch (e) { setError(fail(e)); } };
   const setStudent = async (studentId: string, data: Record<string, unknown>) => { try { await asmAdmin("assignment_student_set", { id: a.id, studentId, ...data }); await load(); onChanged(); } catch (e) { setError(fail(e)); } };
+  // rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
   return (
     <Drawer open title={`${a.assessmentTitle} · ${a.intake || a.batchName}`} onClose={onClose} width="max-w-3xl" footer={<><Button variant="outline" onClick={onClose}>Close</Button><Button disabled={lateAllowed === true && !lateUntil} onClick={() => void save()}>Save</Button></>}>
       <div className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Due"><TextInput type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></Field>
+          {/* // rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value. */}
           <Field label="Late until" required={lateAllowed === true} hint={lateHint(lateAllowed)}><TextInput type="datetime-local" value={lateUntil} onChange={(e) => setLateUntil(e.target.value)} data-testid="assignment-late-until" /></Field>
           <Field label="Status"><Select value={status} onChange={(e) => setStatus(e.target.value as AssignmentRow["status"])}><option value="open">Open</option><option value="closed">Closed</option><option value="cancelled">Cancelled</option></Select></Field>
         </div>

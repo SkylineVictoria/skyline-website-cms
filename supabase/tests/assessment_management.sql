@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(525);
+select plan(538);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -302,6 +302,15 @@ select is((select count(*)::int from public.asm_evidence_files where attempt_id 
 select is((select state from public.asm_reassessments where attempt_id = pg_temp.v('attempt')), 'opened', 'the reassessment is recorded');
 select pg_temp.as_postgres();
 select throws_ok(format($$update public.asm_results set outcome = 'S' where attempt_id = '%s' and question_id = '1.2'$$, pg_temp.v('attempt')), '42501', null, 'results of a returned attempt are frozen');
+-- ASM-DATES (owner 2026-11-27): students never enter dates; the database keeps every date to the rules
+select is((select marked_on from public.asm_attempts where id = pg_temp.v('attempt')), (now() at time zone public.institution_tz())::date, 'DATES attempt 1 released without a chosen marking date is marked on the release day');
+select throws_like(format($$update public.asm_attempts set marked_on = marked_on - 1 where id = '%s'$$, pg_temp.v('attempt')), '%keeps its marking date%', 'DATES a released result keeps its marking date');
+select throws_like(format($$update public.asm_attempts set state = 'submitted', submitted_at = timestamptz '2025-12-01 10:00+11' where id = '%s'$$, pg_temp.v('attempt2')), '%opens on%', 'DATES 1 a submission before the assignment opens is refused');
+select throws_like(format($$update public.asm_attempts set state = 'submitted', submitted_at = now() + interval '30 days' where id = '%s'$$, pg_temp.v('attempt2')), '%submission window closed%', 'DATES 1 a submission after the end of the window is refused');
+select throws_like(format($$update public.asm_attempts set state = 'submitted', submitted_at = now() - interval '1 day' where id = '%s'$$, pg_temp.v('attempt2')), '%on or after the day the previous attempt was marked%', 'DATES 4 a resubmission before the day attempt 1 was marked is refused');
+select throws_like(format($$update public.asm_attempts set acknowledged_at = now() - interval '1 day' where id = '%s'$$, pg_temp.v('attempt')), '%acknowledgement cannot be dated before the marking date%', 'DATES 5 an acknowledgement dated before the marking date is refused');
+select throws_like(format($$insert into public.asm_attempt_signatures(attempt_id, kind, signer_user, signer_role, signer_name, method, signed_at) values ('%s', 'student_acknowledgement', 'a5000000-0000-0000-0000-000000000011', 'student', 'Sam Student', 'typed', now() - interval '1 day')$$, pg_temp.v('attempt')), '%acknowledgement cannot be dated before the marking date%', 'DATES 5 a signed acknowledgement dated before the marking date is refused');
+select is(jsonb_array_length(public.asm_template_missing(jsonb_set(pg_temp.tplmain('x'), '{fields}', pg_temp.tplmain('x')->'fields' || '[{"id":"sd","page":1,"x":0.1,"y":0.9,"w":0.2,"h":0.03,"role":"student","kind":"date","label":"Date","required":true}]'::jsonb), pg_temp.responses(), '{}'::text[])), 0, 'DATES 2 a student date field is never asked for (the PDF prints the submission date)');
 
 -- the student sees the feedback and completes attempt 2
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000011');
@@ -316,6 +325,11 @@ select is((select count(*)::int from public.asm_task_results where attempt_id = 
 select is((public.asm_trainer('mark_return', jsonb_build_object('id', pg_temp.v('attempt2'), 'outcome', 'S')))->'errors'->0->>'code', 'unmarked', 'ASM-IMPORT-SIMPLE: the sign-off waits until every question is marked (automatic task results)');
 select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attempt2'), 'results', pg_temp.all_marks('S'), 'taskResults', '[{"taskId":"1","outcome":"NYS"}]'::jsonb)))->>'state', 'marking', 'attempt 2: every question marked Yes');
 select is((select string_agg(task_id || '=' || outcome, ',' order by task_id) from public.asm_task_results where attempt_id = pg_temp.v('attempt2')), '1=S,2=S', 'ASM-IMPORT-SIMPLE: every question Yes: both tasks Satisfactory (the NYS the caller sent for task 1 is not taken)');
+select throws_like(format($$select public.asm_trainer('mark_save', '{"id": "%s", "markedOn": "%s"}')$$, pg_temp.v('attempt2'), (now() at time zone public.institution_tz())::date - 1), '%cannot be before the student''s attempt date%', 'DATES 3 a marking date before the student''s attempt date is refused');
+select throws_like(format($$select public.asm_trainer('mark_save', '{"id": "%s", "markedOn": "%s"}')$$, pg_temp.v('attempt2'), (now() at time zone public.institution_tz())::date + 1), '%cannot be after today%', 'DATES 3 a marking date after today is refused');
+select throws_like(format($$select public.asm_trainer('mark_return', '{"id": "%s", "outcome": "S", "markedOn": "%s"}')$$, pg_temp.v('attempt2'), (now() at time zone public.institution_tz())::date - 1), '%cannot be before the student''s attempt date%', 'DATES 3 the decision refuses it too');
+select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('attempt2'), 'markedOn', (now() at time zone public.institution_tz())::date)))->>'state', 'marking', 'DATES 3 the attempt date itself (today) is accepted');
+select is((select marked_on from public.asm_attempts where id = pg_temp.v('attempt2')), (now() at time zone public.institution_tz())::date, 'DATES 3 and stored as the marking date');
 select pg_temp.as_postgres();
 update public.asm_task_results set outcome = 'NYS' where attempt_id = pg_temp.v('attempt2') and task_id = '2';
 select is((select outcome from public.asm_task_results where attempt_id = pg_temp.v('attempt2') and task_id = '2'), 'S', 'ASM-IMPORT-SIMPLE: a task result written directly is put back to the rule');

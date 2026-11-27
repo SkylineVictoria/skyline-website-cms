@@ -1182,7 +1182,15 @@ export async function deleteDraftApplication(id: string): Promise<void> {
   const result = data as { ok?: boolean; error?: string; results?: Array<{ ok: boolean; error?: string }> } | null;
   if (error || !result?.ok) throw new Error(result?.error || "The application could not be deleted.");
   const outcome = result.results?.[0];
-  if (!outcome?.ok) throw new Error(outcome?.error || "The application could not be deleted.");
+  if (!outcome?.ok) {
+    // The function only passes on a few database messages ("This draft can't be deleted." otherwise): ask the database for the
+    // real reason with its own check (portal_delete_draft_prepare; it only revokes links / cancels readings of this draft).
+    if (outcome?.error === "This draft can't be deleted.") {
+      const { error: why } = await supabase.rpc("portal_delete_draft_prepare", { p_application: id });
+      throw new Error(why?.message ? `This draft can't be deleted: ${why.message}` : "This draft can't be deleted. Try again, or ask SLIT Administration.");
+    }
+    throw new Error(outcome?.error || "The application could not be deleted.");
+  }
 }
 
 export interface MyStudentRow {

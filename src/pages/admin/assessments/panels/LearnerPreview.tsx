@@ -37,7 +37,7 @@ export default function LearnerPreview({ assessmentId, title, unit, onClose }: {
       <div className="flex items-center justify-between gap-3 border-b border-background-200 bg-white px-5 py-3">
         <div className="min-w-0">
           <p className="font-heading text-lg font-semibold text-foreground-950">Preview as learner</p>
-          <p className="text-xs text-foreground-600">{tpl ? `${tpl.status === "draft" ? "Draft" : "Version"} v${tpl.versionNo ?? 1} · ` : ""}What a student sees. Nothing you type or sign here is saved.</p>
+          <p className="text-xs text-foreground-600">{tpl ? `${tpl.status === "draft" ? "Draft" : "Version"} v${tpl.versionNo ?? 1} · ` : ""}What a student sees</p>
         </div>
         <button type="button" onClick={close} className="min-h-[44px] rounded-md px-3 text-sm font-semibold text-foreground-700 hover:bg-background-200" data-testid="preview-close">Close preview</button>
       </div>

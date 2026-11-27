@@ -393,12 +393,18 @@ test("PDF-WORKBOOK CPCCPD2012 on its workbook: questions cropped from the PDF, t
   await expect(page.getByTestId("pdf-wizard")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("wizard-step-count")).toHaveText("Step 1 of 21");
   await expect(page.getByTestId("record-fields")).toContainText(student.email);
-  // a text question: the question as printed, the answer, how it fits its box
+  // a text question (ASM-QUESTION-TEXT): its words read from the PDF, the label once as the heading, See on page; the answer, its word count
   await page.goto(`${base}?step=q-1.1`);
-  await expect(page.getByTestId("question-crop").locator("canvas")).toBeVisible();
+  await expect(page.getByTestId("question-text")).toHaveText("Outline the safety requirements relevant to using painting and decorating tools and equipment.", { timeout: 30_000 });
+  await expect(page.getByTestId("question-heading")).toHaveText("Q1");
+  await expect(page.getByTestId("question-crop")).toHaveCount(0);
+  await page.getByTestId("see-on-page").click();
+  await expect(page.getByTestId("see-on-page-dialog").getByTestId("marked-page-13")).toBeVisible({ timeout: 30_000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("see-on-page-dialog")).toHaveCount(0);
   await page.getByTestId("answer-text").first().fill("Brushes, rollers and spray equipment are cleaned straight after use with the right solvent, dried and stored hanging so the bristles keep their shape. ".repeat(4).trim());
   await expect(page.getByTestId("autosave")).toContainText(/Saved/, { timeout: 10_000 });
-  await expect(page.getByTestId("fit-preview")).toBeVisible();
+  await expect(page.getByTestId("word-count")).toHaveText(/^\d+ words$/);
   await shot(page, "pdf-wizard-text-question");
   // Q3: the fixed rows (tool names) as row titles on a grid; cards on a phone; every cell is required
   await page.goto(`${base}?step=q-1.3`);
@@ -451,6 +457,16 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   const attempt1 = sql(`select id from public.asm_attempts where assignment_id = '${cpcAssignment}' and attempt_no = 1`);
   await signInStaff(page, trainer.email, `/staff/assessments/attempts/${attempt1}`);
   await expect(page.getByTestId("pdf-marking")).toBeVisible({ timeout: 30_000 });
+  // the Questions view (ASM-QUESTION-TEXT): the question as the student saw it, their answer, large Yes / No, Next unmarked
+  await expect(page.getByTestId("question-marker")).toHaveAttribute("data-key", "1.1", { timeout: 30_000 });
+  await expect(page.getByTestId("question-marker").getByTestId("question-text")).toContainText("Outline the safety requirements", { timeout: 30_000 });
+  await expect(page.getByTestId("student-answer")).toContainText("Answer to 1.1");
+  await page.getByTestId("q-mark-S").click();
+  await expect(page.getByTestId("q-mark-S")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("q-next-unmarked").click();
+  await expect(page.getByTestId("question-marker")).toHaveAttribute("data-key", "1.2");
+  await shot(page, "pdf-marking-questions");
+  await page.getByTestId("marking-view-pages").click();
   await expect(page.locator("[data-pdf-page='13'] canvas")).toBeVisible({ timeout: 30_000 });
   for (const key of CPC_KEYS) await page.locator(`[data-testid=marking-question][data-key='${key}']`).getByTestId(key === "2.3" ? "mark-NYS" : "mark-S").click();
   await page.locator("[data-testid=marking-question][data-key='2.3'] input").fill("Add the safe method of use for each tool.");
@@ -511,6 +527,7 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await expect(page.getByTestId("pdf-marking")).toBeVisible({ timeout: 30_000 });
   for (const key of CPC_KEYS) await page.locator(`[data-testid=marking-question][data-key='${key}']`).getByTestId("mark-S").click();
   await expect(page.getByTestId("marking-missing")).toContainText("page 43");
+  await page.getByTestId("marking-view-pages").click();
   await tickEvidence(page, "yes");
   await expect(page.getByTestId("marking-missing")).toHaveCount(0);
   await page.getByTestId("overall-S").click();

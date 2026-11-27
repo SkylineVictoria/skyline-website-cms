@@ -476,5 +476,83 @@ void writeFileSync;
   check("AUTOSAVE drafts older than 7 days (or unreadable) are deleted; younger ones and other settings stay", removed === 2 && [...mem.keys()].join() === "asm-draft:u2:a2,other-setting", [...mem.keys()]);
 }
 
+// ASM-QUESTION-TEXT (owner 2026-11-27): a question is shown as its text read from the PDF's text layer (code only, word for word),
+// one heading (the printed label, never repeated in the text), pictures in the question area as crops, a padded crop for scans.
+{
+  const { pageInk, questionContent, readQuestion, figuresIn, scannedCrop } = await import("../src/lib/assessment/pdfTemplate/questionText");
+  const { detectAny } = await import("../src/lib/assessment/pdfTemplate/generic");
+  const { pageModel } = await import("../src/lib/assessment/pdfTemplate/pageModel");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  type Ink = import("../src/lib/assessment/pdfTemplate/questionText").PageInk;
+  type T = import("../src/lib/assessment/pdfTemplate/model").PdfTemplate;
+  const read = async (file: string) => {
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), verbosity: 0, fontExtraProperties: true }).promise;
+    const models = [];
+    for (let n = 1; n <= doc.numPages; n++) models.push(await pageModel(pdfjs as never, await doc.getPage(n) as never, n));
+    const t: T = detectAny(models, { path: "x/y.pdf", sha256: "d".repeat(64) }, "2026-11-27T00:00:00Z").template;
+    const inks = new Map<number, Ink>();
+    const of = async (key: string) => {
+      const q = t.questions.find((x) => x.key === key)!;
+      const p = (q.prompt ?? q.header).page;
+      if (!inks.has(p)) inks.set(p, await pageInk(pdfjs as never, await doc.getPage(p) as never, p));
+      return questionContent(t, q, inks.get(p)!);
+    };
+    return { t, of };
+  };
+  const files = {
+    cpc: [process.env.ASM_WORKBOOK_2, "CPC30620_CPCCPD2012_Use painting and decorating tools and equipment.pdf", `${process.env.USERPROFILE ?? process.env.HOME}/Downloads/CPC30620_CPCCPD2012_Use painting and decorating tools and equipment.pdf`].find((p) => p && existsSync(p)),
+    rii: workbookPath,
+    c35: [process.env.ASM_WORKBOOK_3, "CPCCPD3035_Student Assessment Pack.pdf", `${process.env.USERPROFILE ?? process.env.HOME}/Downloads/CPCCPD3035_Student Assessment Pack.pdf`].find((p) => p && existsSync(p)),
+  };
+  const allBold = (c: { blocks: { lines: { bold?: boolean; text: string }[][] }[] }) => c.blocks.every((b) => b.lines.every((l) => l.every((r) => r.bold || !r.text.trim())));
+  if (!files.cpc) console.log("SKIP - TEXT CPCCPD2012 (file not found)");
+  else {
+    const { t, of } = await read(files.cpc);
+    const q1 = await of("1.1"); const q3 = await of("1.3"); const q11 = await of("2.11");
+    check("TEXT CPCCPD2012 Q1: the printed words, bold as printed, no 'Q1' in the text (it is the heading)", q1.plain === "Outline the safety requirements relevant to using painting and decorating tools and equipment." && allBold(q1) && !q1.scanned, q1.plain);
+    check("TEXT CPCCPD2012 Q3: the wrapped lines joined back; the table's column headings stay with the table", q3.plain === "Identify and briefly describe the types, characteristics, uses, and limitations of painting and decorating tools and equipment listed below. Complete the table.", q3.plain);
+    check("TEXT CPCCPD2012 Task 2 Q11: 'Cleaning and Maintenance' only (not the table headings or 'Waste Disposal')", q11.plain === "Cleaning and Maintenance", q11.plain);
+    const all = await Promise.all(t.questions.map((q) => of(q.key)));
+    check("TEXT CPCCPD2012: every question has text, none starts with its label, none needs the crop", all.every((c, i) => c.blocks.length > 0 && !c.plain.startsWith(t.questions[i].display ?? "§")), all.map((c) => c.plain.slice(0, 20)));
+  }
+  if (!files.rii) console.log("SKIP - TEXT RIICWD525E (file not found)");
+  else {
+    const { t, of } = await read(files.rii);
+    const q12 = await of("1.2"); const q218 = await of("2.1.8"); const refs = await of("1.references");
+    check("TEXT RIICWD525E Q1.2: neither 'Q2' nor 'Q1.2' in the text; the line ending ':' keeps its break; part a. (an answer label) shown once, above its box",
+      q12.plain === "Outline the policies, procedures and documentation required to select pavement surfacing, including those related to the following categories:\nUse the table below to write your answers:"
+      && t.fields.some((f) => f.questionKey === "1.2" && f.label.startsWith("a. Australian")), q12.plain);
+    check("TEXT RIICWD525E Q2.1.8: 'Surfacing Selection Plan Document'; the form's rows are its answer table", q218.plain === "Surfacing Selection Plan Document", q218.plain);
+    check("TEXT RIICWD525E References: two paragraphs, 'Note:' bold as printed", refs.blocks.length === 2 && refs.blocks[1].lines[0][0].bold === true && refs.blocks[1].lines[0][0].text === "Note:", refs.blocks.map((b) => b.lines[0][0]));
+  }
+  if (!files.c35) console.log("SKIP - TEXT CPCCPD3035 (file not found)");
+  else {
+    const { of } = await read(files.c35);
+    const q1 = await of("1.1"); const q2 = await of("1.2"); const q4 = await of("1.4"); const s6 = await of("2.6");
+    check("TEXT CPCCPD3035 page 5: Question 1 bold, Question 2 plain, no 'Question n' in the text", q1.plain === "Identify and briefly describe the safety requirements relevant to preparing new surfaces for painting." && allBold(q1)
+      && q2.plain === "Outline the environmental requirements relevant to preparing new surfaces for painting." && !allBold(q2), [q1.plain, q2.plain]);
+    check("TEXT CPCCPD3035 Question 4: the table's heading row (Substrate / Preparation Process) is left to the table", q4.plain === "Describe the processes for preparing uncoated substrates for painting. Complete the table below.", q4.plain);
+    check("TEXT CPCCPD3035 Task 2 template 6: a heading and a smaller sub-heading keep their line break; '6.' is the heading", s6.plain === "Sanding Log + Acid Wash Report\nSanding Log", s6.plain);
+  }
+  // synthetic pages: lists, parts, pictures, a scan
+  const tx = (s: string, x: number, base: number, bold = false, h = 10) => ({ s, x, y: base - h * 0.8, w: s.length * h * 0.5, h, base, bold, italic: false });
+  const page: Ink = { page: 3, W: 600, H: 800, lines: [], rects: [], images: [{ x: 100, y: 300, w: 300, h: 150 }, { x: 40, y: 20, w: 120, h: 60 }, { x: 500, y: 700, w: 10, h: 10 }],
+    texts: [tx("Q5", 50, 110), tx("Look at the diagram and answer:", 100, 110, true), tx("•", 110, 125), tx("name each part", 125, 125), tx("•", 110, 140), tx("say what it does", 125, 140),
+      tx("a)", 100, 170), tx("the first part", 120, 170), tx("b)", 100, 185), tx("the second part", 120, 185), tx("Version 1", 50, 780)] };
+  const rect = { page: 3, x: 0.08, y: 0.1, w: 0.75, h: 0.15 };
+  const c = readQuestion(page, rect, ["Q5"], { page: 3, x: 0.08, y: 0.1, w: 0.75, h: 0.5 });
+  check("TEXT lists and parts: '•' items and a) b) parts kept with their markers; the label left out; the footer not read",
+    c.blocks.map((b) => `${b.kind}${b.marker ?? ""}:${b.lines.map((l) => l.map((r) => r.text).join("")).join("|")}`).join(" / ") === "p:Look at the diagram and answer: / li•:name each part / li•:say what it does / parta):the first part / partb):the second part", c.blocks);
+  check("TEXT pictures: the picture in the question area is a crop (padded); the page logo and a tiny mark are not", c.figures.length === 1 && Math.abs(c.figures[0].y - 296 / 800) < 1e-6 && Math.abs(c.figures[0].w - 308 / 600) < 1e-6, c.figures);
+  check("TEXT pictures: a picture mostly outside the area is not the question's", figuresIn(page, { page: 3, x: 0, y: 0.6, w: 1, h: 0.3 }).length === 0);
+  const scan = readQuestion({ ...page, texts: [] }, rect, ["Q5"]);
+  check("TEXT a scanned page (no text layer) is reported as scanned (the wizard shows the crop)", scan.scanned && scan.blocks.length === 0);
+  const tq = { key: "5", seq: "Q5", label: "", task: 1, header: { page: 3, x: 0.08, y: 0.1, w: 0.85, h: 0.15 }, prompt: rect, areas: [{ page: 3, x: 0.08, y: 0.3, w: 0.85, h: 0.3 }] };
+  const tpl = { version: 1, pdf: { path: "x", sha256: "e".repeat(64), pages: 3 }, pages: [], tasks: [], questions: [tq], fields: [{ id: "a", role: "student", kind: "text", questionKey: "5", label: "Answer", page: 3, x: 0.08, y: 0.62, w: 0.85, h: 0.2 }] } as unknown as T;
+  const sc = scannedCrop(tpl, tpl.questions[0], { w: 600, h: 800 });
+  check("TEXT scanned crop: the whole question with padding, down to its answer box, without the trainer's column",
+    sc.x < rect.x && sc.y < rect.y && sc.x + sc.w <= rect.x + rect.w + 9 / 600 + 1e-9 && sc.y + sc.h >= rect.y + rect.h && sc.y + sc.h <= 0.62 + 9 / 800, sc);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

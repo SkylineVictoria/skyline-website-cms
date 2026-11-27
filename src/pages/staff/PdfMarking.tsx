@@ -6,8 +6,11 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import PdfPages from "@/components/signing/PdfPages";
 import SignatureField, { SignatureImage, type SignatureValue } from "@/components/assessment/SignatureField";
 import { asmSign, asmTrainer, keepSignature, mySignature } from "@/lib/assessment/api";
-import { buildStampedPdf, ensureAcknowledgedCopy, loadPdfAttempt, storeFinalPdf } from "@/lib/assessment/pdfTemplate/api";
-import { questionName, type TemplateField } from "@/lib/assessment/pdfTemplate/model";
+import { buildStampedPdf, downloadWorkbook, ensureAcknowledgedCopy, loadPdfAttempt, storeFinalPdf } from "@/lib/assessment/pdfTemplate/api";
+import { questionName, type PdfTemplate, type TemplateField, type TemplateQuestion } from "@/lib/assessment/pdfTemplate/model";
+import QuestionView from "@/components/assessment/pdf/QuestionView";
+import AnswerReadOnly from "@/components/assessment/pdf/AnswerReadOnly";
+import { usePdf, type PdfHandle } from "@/components/assessment/pdf/pdfDoc";
 import { answered, markingMissing, stampValues, type BundleAttempt, type PdfBundle, type StampValue } from "@/lib/assessment/pdfTemplate/output";
 import { reviewName } from "@/lib/assessment/pdfTemplate/student";
 
@@ -19,6 +22,9 @@ import { reviewName } from "@/lib/assessment/pdfTemplate/student";
  * Appendix A and office use are clicked on the page. Overall Competent / Not Yet Competent with feedback; the assessor signs off;
  * Release result, or Return for resubmission (the student's next attempt starts from their answers). A final result stores the
  * stamped PDF with the snapshot hash.
+ * ASM-QUESTION-TEXT (owner 2026-11-27): the Questions view (the default) marks one question at a time, shown as in the student's
+ * wizard (its text read from the PDF, pictures, See on page), the student's answer under it, Satisfactory Yes / No as large toggles,
+ * a comment, Next unmarked. The Workbook pages view is the workbook with the answers in place (checklists, Appendix A, office use).
  */
 type Mark = { outcome: "S" | "NYS" | null; feedback: string };
 const BTN = "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50";
@@ -39,6 +45,12 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
+  const [view, setView] = useState<"questions" | "pages">("questions");
+  const [current, setCurrent] = useState<string>(() => (t.questions.find((q) => !cur.results.some((r) => r.questionId === q.key && !r.criterionId && r.outcome)) ?? t.questions[0])?.key ?? "");
+  // the original workbook: the question display reads each question's words from it
+  const [orig, setOrig] = useState<Uint8Array | null>(null);
+  useEffect(() => { let off = false; void downloadWorkbook(t.pdf.path).then((b) => { if (!off) setOrig(b); }).catch(() => undefined); return () => { off = true; }; }, [t.pdf.path]);
+  const { pdf: origPdf, error: origError } = usePdf(orig);
   const rowVersion = useRef(cur.rowVersion ?? 1);
   const open = cur.state === "submitted" || cur.state === "marking";
   const editable = open && bundle.canAssess;
@@ -126,11 +138,20 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
         {earlier.length ? <p className="text-xs text-foreground-600" data-testid="earlier-attempts">Earlier attempts (their own answers, marks and checklists): {earlier.map((a) => <Link key={a.id} to={`/staff/assessments/attempts/${a.id}`} className="mr-2 font-semibold text-primary-700 underline">Attempt {a.attemptNo}</Link>)}</p> : null}</div>
       <UnsavedGuard when={editable && autosave.pending} message="Your latest marks are not saved yet. Stay to let them save." />
       <div className="flex items-center gap-3"><span className={`text-sm font-semibold ${saveTone(autosave.status)}`} role="status" data-testid="marking-saved">{autosave.status.state === "idle" ? "" : saveLabel(autosave.status, "")}</span>
+        <div className="inline-flex rounded-lg border border-background-300 bg-background-50 p-0.5" role="tablist" aria-label="View" data-testid="marking-view">
+          {(["questions", "pages"] as const).map((v) => <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} data-testid={`marking-view-${v}`}
+            className={`min-h-[40px] rounded-md px-3 text-sm font-semibold ${view === v ? "bg-white text-foreground-950 shadow-sm" : "text-foreground-600 hover:text-foreground-900"}`}>{v === "questions" ? "Questions" : "Workbook pages"}</button>)}
+        </div>
         <button type="button" className={SECONDARY} onClick={() => void openStamped()} data-testid="open-stamped">Open stamped PDF</button></div>
     </header>
     {error ? <p role="alert" className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
     <div className="grid flex-1 gap-4 p-4 lg:h-[calc(100vh-5.5rem)] lg:grid-cols-[minmax(0,1fr)_380px] lg:overflow-hidden">
-      <main className="min-w-0 rounded-xl bg-background-200 p-3 lg:overflow-y-auto" data-testid="marking-pdf">
+      {view === "questions" ? <main className="min-w-0 lg:overflow-y-auto" data-testid="marking-questions">
+        {origPdf && t.questions.find((q) => q.key === current) ? <QuestionMarker pdf={origPdf} t={t} q={t.questions.find((q) => q.key === current)!} answers={cur.snapshot?.answers ?? {}}
+          mark={marks[current]} editable={editable} onMark={(p) => mark(current, p)} marks={marks} onGo={setCurrent} />
+          : <p role="status" className="rounded-xl bg-white p-6 text-base text-foreground-600">{origError || "Opening the workbook…"}</p>}
+      </main> : null}
+      <main className={`min-w-0 rounded-xl bg-background-200 p-3 lg:overflow-y-auto ${view === "questions" ? "hidden" : ""}`} data-testid="marking-pdf">
         {base ? <PdfPages source={base} maxWidth={860} lazy overlay={(page) => <PageOverlay page={page} fields={t.fields.filter((f) => f.page === page && f.role === "trainer")} values={values} editable={editable}
           derived={(f) => derived(f, t.pages[f.page - 1]?.kind)} onToggle={(f) => {
             if ((f.kind === "yes_no" || f.kind === "rating") && f.group) { const as = { ...assessor, pdfChoice: { ...assessor.pdfChoice, [f.group]: f.option ?? "" } }; setAssessor(as); queue(marks, taskFeedback, as); }
@@ -147,9 +168,9 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
             <div className="flex items-start justify-between gap-2"><h2 className="text-sm font-semibold text-foreground-950">Task {tk.number} · {tk.title}</h2>
               <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${out === "S" ? "bg-green-100 text-green-800" : out === "NYS" ? "bg-amber-100 text-amber-900" : "bg-background-100 text-foreground-500"}`} data-testid="task-auto">{out === "S" ? "Satisfactory" : out === "NYS" ? "Not satisfactory" : "Not marked yet"}</span></div>
             <ul className="mt-2 divide-y divide-background-100">
-              {qs.map((q) => { const m = marks[q.key]; const did = answered(t, cur.snapshot, q.key); return <li key={q.key} className="py-2" data-testid="marking-question" data-key={q.key}>
+              {qs.map((q) => { const m = marks[q.key]; const did = answered(t, cur.snapshot, q.key); return <li key={q.key} className={`py-2 ${view === "questions" && current === q.key ? "-mx-1.5 rounded-lg bg-primary-50 px-1.5" : ""}`} data-testid="marking-question" data-key={q.key}>
                 <div className="flex items-center gap-2">
-                  <button type="button" className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm font-medium text-primary-700 underline-offset-2 hover:underline" onClick={() => goPage(q.header.page)} title={q.label}>
+                  <button type="button" className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm font-medium text-primary-700 underline-offset-2 hover:underline" onClick={() => (view === "questions" ? setCurrent(q.key) : goPage(q.header.page))} title={q.label} aria-current={view === "questions" && current === q.key ? "true" : undefined}>
                     {reviewName(t, q)} <span className="font-normal text-foreground-500">· p{q.header.page}{did ? "" : " · not answered"}</span></button>
                   {(["S", "NYS"] as const).map((o) => <button key={o} type="button" disabled={!editable} onClick={() => mark(q.key, { outcome: o })} aria-pressed={m?.outcome === o} data-testid={`mark-${o}`}
                     className={`rounded-md border px-2 py-1 text-xs font-semibold ${m?.outcome === o ? (o === "S" ? "border-green-600 bg-green-600 text-white" : "border-amber-600 bg-amber-500 text-white") : "border-background-300 bg-white text-foreground-700"}`}>{o === "S" ? "Yes" : "No"}</button>)}
@@ -179,6 +200,45 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
         </section>
         {cur.state === "final" && bundle.canAssess && bundle.unitId && bundle.studentId ? <UnitOutcome studentId={bundle.studentId} unitId={bundle.unitId} attemptId={cur.id} suggested={cur.outcome === "S" ? "C" : "NYC"} /> : null}
       </aside>
+    </div>
+  </div>;
+}
+
+/** One question to mark: as the student saw it, their answer, Satisfactory Yes / No, a comment, and the way to the next one. */
+function QuestionMarker({ pdf, t, q, answers, mark, marks, editable, onMark, onGo }: { pdf: PdfHandle; t: PdfTemplate; q: TemplateQuestion; answers: { pdf?: Record<string, string>; pdfChoice?: Record<string, string> };
+  mark: Mark | undefined; marks: Record<string, Mark>; editable: boolean; onMark: (p: Partial<Mark>) => void; onGo: (key: string) => void }) {
+  const i = t.questions.findIndex((x) => x.key === q.key);
+  const n = t.questions.length;
+  const unmarked = (from: number) => { for (let k = 1; k <= n; k++) { const x = t.questions[(from + k) % n]; if (!marks[x.key]?.outcome) return x.key; } return null; };
+  const nextUnmarked = unmarked(i);
+  const go = (key: string) => { onGo(key); document.querySelector("[data-testid=marking-questions]")?.scrollTo({ top: 0 }); window.scrollTo({ top: 0 }); };
+  const task = t.tasks.find((x) => Number(x.number) === q.task);
+  const left = t.questions.filter((x) => !marks[x.key]?.outcome).length;
+  const TOGGLE = "flex min-h-[56px] flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border-2 px-4 text-base font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2";
+  return <div className="mx-auto max-w-3xl space-y-5 rounded-2xl border border-background-200 bg-white p-4 sm:p-6" data-testid="question-marker" data-key={q.key}>
+    <QuestionView pdf={pdf} template={t} question={q} level={2}
+      eyebrow={<p className="mb-1 text-sm font-medium text-foreground-600">{task ? `Task ${task.number} · ${task.title} · ` : ""}question {i + 1} of {n}</p>} />
+    <section className="space-y-2 border-t border-background-200 pt-4">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-foreground-600">Student's answer</h3>
+      <AnswerReadOnly template={t} questionKey={q.key} answers={answers} />
+    </section>
+    <section className="space-y-3 border-t border-background-200 pt-4">
+      <h3 className="text-sm font-semibold uppercase tracking-wide text-foreground-600" id={`sat-${q.key}`}>Satisfactory response?</h3>
+      <div className="flex gap-3" role="group" aria-labelledby={`sat-${q.key}`}>
+        <button type="button" disabled={!editable} aria-pressed={mark?.outcome === "S"} onClick={() => onMark({ outcome: "S" })} data-testid="q-mark-S"
+          className={`${TOGGLE} ${mark?.outcome === "S" ? "border-green-600 bg-green-600 text-white" : "border-background-300 bg-white text-foreground-800 hover:border-green-500"}`}><i className="ri-check-line text-xl" aria-hidden="true" />Yes</button>
+        <button type="button" disabled={!editable} aria-pressed={mark?.outcome === "NYS"} onClick={() => onMark({ outcome: "NYS" })} data-testid="q-mark-NYS"
+          className={`${TOGGLE} ${mark?.outcome === "NYS" ? "border-amber-600 bg-amber-500 text-white" : "border-background-300 bg-white text-foreground-800 hover:border-amber-500"}`}><i className="ri-close-line text-xl" aria-hidden="true" />No, not yet</button>
+      </div>
+      <label className="block text-sm font-semibold text-foreground-800" htmlFor={`c-${q.key}`}>Comment to the student {mark?.outcome === "NYS" ? "(what to change)" : "(optional)"}</label>
+      <textarea id={`c-${q.key}`} rows={3} className="w-full rounded-lg border border-background-300 bg-white px-3 py-2.5 text-base leading-7 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:bg-background-50"
+        value={mark?.feedback ?? ""} disabled={!editable} onChange={(e) => onMark({ feedback: e.target.value })} data-testid="q-comment" />
+    </section>
+    <div className="flex flex-wrap items-center gap-2 border-t border-background-200 pt-4">
+      <button type="button" className={`${SECONDARY} min-h-[44px]`} disabled={i === 0} onClick={() => go(t.questions[i - 1].key)} data-testid="q-prev">← Previous</button>
+      <button type="button" className={`${SECONDARY} min-h-[44px]`} disabled={i === n - 1} onClick={() => go(t.questions[i + 1].key)} data-testid="q-next">Next →</button>
+      <span className="ml-auto text-sm text-foreground-600" data-testid="q-left">{left ? `${left} not marked` : "All questions marked"}</span>
+      <button type="button" className={`${PRIMARY} min-h-[44px]`} disabled={!nextUnmarked || nextUnmarked === q.key} onClick={() => nextUnmarked && go(nextUnmarked)} data-testid="q-next-unmarked">Next unmarked →</button>
     </div>
   </div>;
 }

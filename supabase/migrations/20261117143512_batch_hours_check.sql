@@ -1,7 +1,3 @@
--- BATCH-HOURS-CHECK (2026-11-18): does a batch's weekly timetable give enough class hours to finish the course by the intake's end? A batch with, say,
--- one 4-hour class a week against a 180- or 700-hour course silently got no class calendar (generation refuses). This reads, per batch: the course hours
--- the intake teaches, the hours a week the batch's classes give, the teaching weeks of the intake (term breaks excluded) and the hours a week needed.
--- Read only; staff only. Additive.
 create function public.rto_batches_hours_check(p_batches uuid[]) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare r jsonb := '{}'::jsonb; b record; v_needed numeric; v_weekly numeric; v_start date; v_end date; v_break integer; v_weeks numeric; v_req numeric; v_fits boolean; v_msg text;

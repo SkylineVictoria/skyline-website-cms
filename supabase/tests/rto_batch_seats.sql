@@ -248,7 +248,7 @@ select ok(not exists(select 1 from jsonb_array_elements(public.rto_placement_wai
 select is((select jsonb_array_length(public.rto_placement_overrides_list('e6000000-0000-0000-0000-000000000008'))), 3, 'the override log shows place, move and remove');
 select set_config('rto.auto_place', 'on', false);
 
--- ---------------------------------------------------------------- Hours check (20261118170000)
+-- ---------------------------------------------------------------- Hours check (20261117143512)
 select is((public.rto_batches_hours_check(array['f6000000-0000-0000-0000-000000000020'::uuid])->'f6000000-0000-0000-0000-000000000020'->>'fits')::boolean, false, 'a batch with no weekly classes cannot fit the course hours');
 select ok((public.rto_batches_hours_check(array['f6000000-0000-0000-0000-000000000020'::uuid])->'f6000000-0000-0000-0000-000000000020'->>'message') like '%no weekly classes%', 'and says so');
 select is((public.rto_batches_hours_check(array['f6000000-0000-0000-0000-000000000011'::uuid])->'f6000000-0000-0000-0000-000000000011'->>'fits')::boolean, true, 'a batch whose classes give enough hours fits');

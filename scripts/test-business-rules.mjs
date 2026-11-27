@@ -241,7 +241,7 @@ try {
   `);
   const batch = await readFile(new URL("../supabase/migrations/20261120233517_business_rules_live_batch1.sql", import.meta.url), "utf8");
   await db.exec(batch.slice(batch.indexOf("create or replace function public.business_rule_patch_function"), batch.indexOf("-- Turns a reference")));
-  const bulkMigration = "20261123081000_lms_bulk_resources.sql";
+  const bulkMigration = "20261123030147_lms_bulk_resources.sql";
   await db.exec(await readFile(new URL(`../supabase/migrations/${bulkMigration}`, import.meta.url), "utf8"));
   const bulk = async (action, data = {}) =>
     (await db.query("select public.lms_bulk_admin($1,$2::jsonb) result", [action, data])).rows[0].result;
@@ -363,7 +363,7 @@ try {
       (991,'unit-a','text','Safety guide','Reporting hazards helps you prevent incidents.'),
       (992,'unit-a','text','Assessor Resources: Marking keys','This must never be used to generate practice.');
   `);
-  await db.exec(await readFile(new URL("../supabase/migrations/20261123173000_student_practice.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../supabase/migrations/20261123093839_student_practice.sql", import.meta.url), "utf8"));
   await db.exec("set role authenticated");
   const practice = async (action, input = {}) =>
     (await db.query("select public.student_practice($1,$2::jsonb) result", [action,input])).rows[0].result;

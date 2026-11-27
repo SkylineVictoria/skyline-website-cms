@@ -249,6 +249,12 @@ async function up() {
     // Hosted-only AVETMISS files (pulled into the repo 2026-11-25) that read the LMS-BATCHES tables (batch_students, 20261125030517+).
     "20261125024946_avetmiss_rto_hours_and_batch_location.sql": "20261125050518_avetmiss_rto_hours_and_batch_location.sql",
     "20261125025533_avetmiss_results_withdrawals_enrolment_rules.sql": "20261125050519_avetmiss_results_withdrawals_enrolment_rules.sql",
+    // MIGRATION-SYNC (2026-11-27): these files carry the version hosted recorded (an MCP apply, stamped with the real UTC time); the
+    // repo kept them under a later version until then, and the lab replays them where it always did.
+    "20261117143512_batch_hours_check.sql": "20261118170000_batch_hours_check.sql",  // rule-policy: technical lab-replay-order Maps a migration file name to the version the lab replays it under.
+    "20261120021703_support_attachment_count.sql": "20261121001517_support_attachment_count.sql",
+    "20261123030147_lms_bulk_resources.sql": "20261123081000_lms_bulk_resources.sql",
+    "20261123093839_student_practice.sql": "20261123173000_student_practice.sql",
   };
   // Lab copy only: the CLI replays every migration in ONE session, where a pg_temp function made by an earlier file still exists.
   // Hosted applied these files one by one, so the repo files stay as they are.
@@ -259,9 +265,16 @@ async function up() {
     "20261125080517_email_one_role.sql": [["select 'agent', 'agents', g.id::text, g.name, 'an agent of '", "select 'agent', 'agents', g.id::text, g.full_name, 'an agent of '"]],
     "20261124235517_staff_offer_full_part_time.sql": [["  raise exception 'Run 20261124001517_staff_offer_variables first (the staff offer letter must use placeholders).' using errcode = '55000';", "  return; -- (lab) the hand-inserted hosted template is not in the lab"]],
   };
-  // Repo files hosted never applied, whose effect later hosted files contradict (lab replays the hosted state):
-  // 20261121170100 drops intake_wizard_cleanup, which 20261125042517 patches on hosted.
-  const LAB_SKIP = new Set(["20261121170100_remove_wizard_cleanup_job.sql"]);
+  // MIGRATION-SYNC (2026-11-27): hosted ran these first drafts through MCP (versions = the real UTC time) and then the finished file
+  // under the repo version, which carries all of their SQL (20261118234157 has rto_direct_application, the rto_batch_pick change and the
+  // prerequisites-first logic; 20261119003517 ... 20261119050311 are the same SQL with comments). The repo keeps both versions so its
+  // list matches hosted's; the lab replays only the finished file (a draft run at its own version would find functions not made yet).
+  const LAB_SKIP = new Set([
+    "20261118004743_prereq_first_then_running_intake.sql", "20261118004823_direct_application_offered_intake.sql",
+    "20261118004948_prereq_first_return_same_intake.sql", "20261118010015_portal_course_options_offered.sql",
+    "20261118011634_intake_delete_application_unlock.sql", "20261118012832_prereq_started_counts_as_missed.sql",
+    "20261118013558_allocations_permanent_except_test.sql", "20261118013921_course_without_intake_gets_next_month.sql",
+  ]);
   for (const file of fs.readdirSync(path.join(REPO, "supabase", "migrations")).filter((f) => f.endsWith(".sql")).sort()) {
     if (LAB_SKIP.has(file)) continue;
     // Line ends, lab copy only: hosted function bodies are CRLF (Windows `db push`) or LF (SQL editor / MCP), and each in-place

@@ -1220,6 +1220,30 @@ Migration `20261127130517_application_document_carry` + `validated-document-uplo
   20261125112611, 20261125112956, 20261125113726, 20261125114936, 20261125120557, 20261125121142, 20261125123147 (owner to decide; the
   avetmiss_no_junk failures on a fresh lab likely come from the 2026-11-25 wizard ones).
 
+## Hosted history and the migrations folder (MIGRATION-SYNC, 2026-11-27)
+- Every version hosted holds now has its file, byte for byte the SQL hosted ran (md5 of the file = md5 of `statements`):
+  the 13 above; 6 first drafts hosted ran by MCP before recording the finished file under the repo version (20261118004743,
+  010015, 011634, 012832, 013558, 013921: the same SQL as 20261118234157, 20261119003517, 020517, 033517, 041237, 050311);
+  4 files renamed to the version hosted recorded (batch_hours_check 20261118170000 -> 20261117143512, support_attachment_count
+  20261121001517 -> 20261120021703, lms_bulk_resources 20261123081000 -> 20261123030147, student_practice 20261123173000 -> 20261123093839).
+  All of them were applied with the claude.ai Supabase connector (`created_by` subscriptions@slit.edu.au) and not committed.
+- Lab (`scripts/lab/staff-lab.mjs`): the 8 drafts are in LAB_SKIP (their finished file carries their SQL), the 4 renamed files replay
+  where they always did (HOSTED_LATER). `20261121170100_remove_wizard_cleanup_job` was removed: hosted never ran it and still runs the
+  job it drops (20261125042517 patches it).
+- Still in the repo without a hosted history row (need a hosted write): applied, objects identical to the lab, row missing:
+  20261118180000, 20261120110000, 20261120211741, 20261121080100, 20261123121517, 20261123131517; never applied: 20261121180000
+  wizard_session_lock (a rolled-back hosted probe applied it cleanly, functions = lab).
+- `node scripts/check-migration-sync.mjs` (or `--hosted-file <json>` from `supabase db query --remote --read-only`) lists every
+  difference and fails on any.
+- Schema drift no version explains (fresh lab vs hosted, `pg_get_functiondef` and catalogue fingerprints): hosted rows 20261127010517
+  and 20261127030517 are recorded but their SQL is not on hosted (`portal_lock_draft` without the admin edit of a Submitted
+  application, no `portal_student_change_agent`); changed on hosted outside any migration: `application_letter_course` (CRICOS tuition
+  fallback), `hr.template_values`, `portal_offer_letter_issue_template`, `intake_group_name` / `intake_has_group` (parameter names),
+  `hr_staff_document_add` / `_set_expiry`, `hr_staff_set_citizenship`, `hr_admin_staff_activate_account` (hosted only, called by
+  staff-admin), bucket asm-imports removed, `agency_offices_*` dropped; legacy tables `student_applications` / `student_documents` /
+  `student_profiles` + bucket student-documents (2026-10-14, one row each, unused). pgvector lives in `extensions` on hosted, `public`
+  in the lab (type names differ only).
+
 ## The student owns their answers (STUDENT-OWNS-ANSWERS, 2026-11-27)
 Migration `20261127140517_student_owns_answers`. Every answer except the application's own is stored once on the student
 (`enrollment_students.details`); an application keeps only `public.application_field` keys: course and intake (`courses_of_interest`,

@@ -8,7 +8,7 @@ import { courses } from "../src/data/courses";
 test.describe.configure({ mode: "serial" });
 test.beforeAll(() => { resetRateLimits(); });
 
-test("student registration still works and asks 'Do you want to apply at SLIT?'", async ({ page }) => {
+test("student registration still works and opens the application wizard", async ({ page }) => {
   const student = person("reg-student");
   await page.goto("/login?mode=enroll&as=student");
   await expect(page.getByRole("radio", { name: /Student/ })).toHaveAttribute("aria-checked", "true");
@@ -18,7 +18,7 @@ test("student registration still works and asks 'Do you want to apply at SLIT?'"
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create student account" }).click();
-  await expect(page.getByRole("heading", { name: "Do you want to apply at SLIT?" })).toBeVisible();
+  await expect(page.locator("#wizard-title")).toBeVisible();
   // Same records as before: a student on record, a login, and no staff data.
   expect(sql(`select count(*) from public.enrollment_students where lower(email) = '${student.email}'`)).toBe("1");
   expect(sql(`select count(*) from auth.users where lower(email) = '${student.email}'`)).toBe("1");
@@ -103,7 +103,6 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create student account" }).click();
-  await page.getByRole("button", { name: "Yes, start my application" }).click();
   const alone = page.getByRole("button", { name: /I am applying by myself/ });
   await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
   if (await alone.isVisible()) await alone.click();
@@ -213,7 +212,6 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create student account" }).click();
-  await page.getByRole("button", { name: "Yes, start my application" }).click();
   const alone = page.getByRole("button", { name: /I am applying by myself/ });
   await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
   if (await alone.isVisible()) await alone.click();

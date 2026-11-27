@@ -94,6 +94,13 @@ export default function NewApplicationPage() {
     setApplicationId(id);
     setPhase("wizard");
   };
+  // A student applying again already has their details on record: the new application opens as the card view to check and edit,
+  // then the declarations and signature (owner 2026-11-27). A first application goes through the document wizard.
+  const openStudentApplication = (id: string, returning: boolean) => {
+    if (!returning) { openWizard(id); return; }
+    if (authUser?.id) clearSession(authUser.id);
+    navigate(paths.detail(id), { replace: true });
+  };
 
   // STUDENT-PICKER: the student is always one on record (picked, or added from the picker); the application is created for them.
   const start = async (draftValue: StudentDraft) => {
@@ -151,6 +158,14 @@ export default function NewApplicationPage() {
           // Every new application starts with: are you working with an agent? (owner 2026-11-26)
           const options = await studentAgencyOptions().catch(() => null);
           setStudentOptions(options);
+          // A direct student (signed up through Enroll now, applying to SLIT) is never asked about an agent: straight to the wizard
+          // (owner 2026-11-27). Only a student recorded with an agency is asked, to confirm or change their agent.
+          if (!options?.current || options.current.direct) {
+            const { id } = await createApplicationForStudent(clientKeyRef.current, studentId);
+            clientKeyRef.current = newClientKey();
+            openStudentApplication(id, options?.current?.hasApplications === true);
+            return;
+          }
           if (options?.ask) setAgencyChoices(options.businesses);
           if (options?.current && !options.current.direct) {
             setWithAgency(true);
@@ -167,6 +182,7 @@ export default function NewApplicationPage() {
         bootRef.current = false;
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once (bootRef); openWizard only sets state
   }, [authLoading, identityLoading, role, studentId, authUser]);
 
   const handleFinish = () => {
@@ -214,7 +230,7 @@ export default function NewApplicationPage() {
       clientKeyRef.current = newClientKey();
       // Every application a student starts goes through the document wizard, the same one the agent fills (passport and
       // documents, course and start date, the rest), ending with the student's declarations and drawn signature.
-      openWizard(id);
+      openStudentApplication(id, studentOptions?.current?.hasApplications === true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "We could not start a new application.");
     } finally {

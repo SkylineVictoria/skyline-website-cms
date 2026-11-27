@@ -17,7 +17,6 @@ export default function CompleteSignUp({ user, onStudentDone, onAgentDone, onCan
   // Agencies are set up by SLIT for now (the server refuses agent self-registration), so only the student form is offered.
   // Set AGENT_SELF_SIGN_UP to true to bring the Agent tab back.
   const [kind, setKind] = useState<SignUpIntent>(() => (AGENT_SELF_SIGN_UP ? readSignUpIntent() : "student"));
-  const [studentReady, setStudentReady] = useState(false);
   const pick = (next: SignUpIntent) => { setKind(next); rememberSignUpIntent(next); };
   const tab = (value: SignUpIntent, label: string) => (
     <button type="button" role="tab" aria-selected={kind === value} onClick={() => pick(value)}
@@ -25,7 +24,6 @@ export default function CompleteSignUp({ user, onStudentDone, onAgentDone, onCan
       {label}
     </button>
   );
-  if (studentReady) return <ApplyQuestion onAnswer={onStudentDone} />;
   return (
     <div>
       <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">Almost done</p>
@@ -40,7 +38,7 @@ export default function CompleteSignUp({ user, onStudentDone, onAgentDone, onCan
       <div className="mt-5">
         {kind === "agent"
           ? <CompleteAgentProfile user={user} onDone={(name) => { rememberSignUpIntent(null); onAgentDone(name); }} />
-          : <CompleteStudentProfile user={user} onDone={() => { rememberSignUpIntent(null); setStudentReady(true); }} onCancel={onCancel} embedded />}
+          : <CompleteStudentProfile user={user} onDone={() => { rememberSignUpIntent(null); onStudentDone(true); }} onCancel={onCancel} embedded />}
       </div>
       {kind === "agent" ? <button type="button" onClick={onCancel} className="mt-3 w-full cursor-pointer text-center text-xs text-foreground-600 hover:text-foreground-900">Not you? Sign out</button> : null}
     </div>

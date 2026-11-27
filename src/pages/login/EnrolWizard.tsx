@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { Link, useNavigate } from "react-router-dom";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { MIN_PASSWORD_LENGTH } from "@/lib/passwords";
-import { ApplyQuestion } from "@/pages/login/CompleteSignUp";
 import { Button, Field, TextInput } from "@/pages/admin/components/ui";
 import { PhoneInput } from "@/components/feature/applicationInputs";
 import QuickSignIn from "@/pages/login/QuickSignIn";
@@ -238,9 +237,9 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
     finally { setBusy(false); }
   };
 
-  if (readyUser) {
-    return <ApplyQuestion onAnswer={(apply) => { if (apply) navigate("/agency/applications/new", { replace: true }); else onSignedIn(readyUser); }} />;
-  }
+  // The account is ready: straight into the application (owner 2026-11-27: no "Do you want to apply at SLIT?" question).
+  useEffect(() => { if (readyUser) navigate("/agency/applications/new", { replace: true }); }, [readyUser, navigate]);
+  if (readyUser) return <p role="status" className="text-center text-sm text-foreground-600">Opening your application…</p>;
 
   if (claim) {
     return (

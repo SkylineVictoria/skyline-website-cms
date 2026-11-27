@@ -479,7 +479,7 @@ void writeFileSync;
 // ASM-QUESTION-TEXT (owner 2026-11-27): a question is shown as its text read from the PDF's text layer (code only, word for word),
 // one heading (the printed label, never repeated in the text), pictures in the question area as crops, a padded crop for scans.
 {
-  const { pageInk, questionContent, readQuestion, figuresIn, scannedCrop, workbookCrop } = await import("../src/lib/assessment/pdfTemplate/questionText");
+  const { pageInk, questionContent, readQuestion, figuresIn, scannedCrop } = await import("../src/lib/assessment/pdfTemplate/questionText");
   const { detectAny } = await import("../src/lib/assessment/pdfTemplate/generic");
   const { pageModel } = await import("../src/lib/assessment/pdfTemplate/pageModel");
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -498,15 +498,7 @@ void writeFileSync;
       return { q, ink: inks.get(p)! };
     };
     const of = async (key: string) => { const { q, ink } = await inkFor(key); return questionContent(t, q, ink); };
-    // ASM-QUESTION-POLISH: the Workbook view's crop, and every word of the question inside it
-    const crop = async (key: string) => {
-      const { q, ink } = await inkFor(key); const r = workbookCrop(q, ink); const pr = q.prompt ?? q.header;
-      const words = ink.texts.filter((x) => { const cx = (x.x + x.w / 2) / ink.W; const cy = (x.y + x.h / 2) / ink.H; return cx >= pr.x && cx <= pr.x + pr.w && cy >= pr.y && cy <= pr.y + pr.h; });
-      const inside = words.every((x) => x.x / ink.W >= r.x - 1e-6 && (x.x + x.w) / ink.W <= r.x + r.w + 1e-6 && x.y / ink.H >= r.y - 1e-6 && x.base / ink.H <= r.y + r.h + 1e-6);
-      const satisfactory = ink.texts.some((x) => /^(Yes|No|Satisfactory)/i.test(x.s.trim()) && (x.x + x.w / 2) / ink.W > r.x + r.w && x.y / ink.H < r.y + r.h && x.base / ink.H > r.y);
-      return { r, q, inside, words: words.length, satisfactoryBeside: satisfactory };
-    };
-    return { t, of, crop };
+    return { t, of };
   };
   const files = {
     cpc: [process.env.ASM_WORKBOOK_2, "CPC30620_CPCCPD2012_Use painting and decorating tools and equipment.pdf", `${process.env.USERPROFILE ?? process.env.HOME}/Downloads/CPC30620_CPCCPD2012_Use painting and decorating tools and equipment.pdf`].find((p) => p && existsSync(p)),
@@ -516,34 +508,27 @@ void writeFileSync;
   const allBold = (c: { blocks: { lines: { bold?: boolean; text: string }[][] }[] }) => c.blocks.every((b) => b.lines.every((l) => l.every((r) => r.bold || !r.text.trim())));
   if (!files.cpc) console.log("SKIP - TEXT CPCCPD2012 (file not found)");
   else {
-    const { t, of, crop } = await read(files.cpc);
+    const { t, of } = await read(files.cpc);
     const q1 = await of("1.1"); const q3 = await of("1.3"); const q11 = await of("2.11");
     check("TEXT CPCCPD2012 Q1: the printed words, bold as printed, no 'Q1' in the text (it is the heading)", q1.plain === "Outline the safety requirements relevant to using painting and decorating tools and equipment." && allBold(q1) && !q1.scanned, q1.plain);
     check("TEXT CPCCPD2012 Q3: the wrapped lines joined back; the table's column headings stay with the table", q3.plain === "Identify and briefly describe the types, characteristics, uses, and limitations of painting and decorating tools and equipment listed below. Complete the table.", q3.plain);
     check("TEXT CPCCPD2012 Task 2 Q11: 'Cleaning and Maintenance' only (not the table headings or 'Waste Disposal')", q11.plain === "Cleaning and Maintenance", q11.plain);
-    for (const key of ["1.1", "1.3", "2.11"]) {
-      const c = await crop(key);
-      check(`WORKBOOK CPCCPD2012 ${key}: the crop holds every word of the question, ends where the Satisfactory column begins (no blank block), never goes into the next row`,
-        c.inside && c.words > 0 && c.r.x + c.r.w <= (c.q.prompt!.x + c.q.prompt!.w) + 0.01 && c.r.y + c.r.h <= c.q.prompt!.y + c.q.prompt!.h + 0.006 && c.r.w > 0.5, c);
-    }
     const all = await Promise.all(t.questions.map((q) => of(q.key)));
     check("TEXT CPCCPD2012: every question has text, none starts with its label, none needs the crop", all.every((c, i) => c.blocks.length > 0 && !c.plain.startsWith(t.questions[i].display ?? "§")), all.map((c) => c.plain.slice(0, 20)));
   }
   if (!files.rii) console.log("SKIP - TEXT RIICWD525E (file not found)");
   else {
-    const { t, of, crop } = await read(files.rii);
+    const { t, of } = await read(files.rii);
     const q12 = await of("1.2"); const q218 = await of("2.1.8"); const refs = await of("1.references");
     check("TEXT RIICWD525E Q1.2: neither 'Q2' nor 'Q1.2' in the text; the line ending ':' keeps its break; part a. (an answer label) shown once, above its box",
       q12.plain === "Outline the policies, procedures and documentation required to select pavement surfacing, including those related to the following categories:\nUse the table below to write your answers:"
       && t.fields.some((f) => f.questionKey === "1.2" && f.label.startsWith("a. Australian")), q12.plain);
     check("TEXT RIICWD525E Q2.1.8: 'Surfacing Selection Plan Document'; the form's rows are its answer table", q218.plain === "Surfacing Selection Plan Document", q218.plain);
-    for (const key of ["1.2", "2.1.8"]) { const c = await crop(key); check(`WORKBOOK RIICWD525E ${key}: every word inside the crop, the Satisfactory column left out`, c.inside && c.words > 0 && c.r.x + c.r.w <= c.q.prompt!.x + c.q.prompt!.w + 0.01, c); }
     check("TEXT RIICWD525E References: two paragraphs, 'Note:' bold as printed", refs.blocks.length === 2 && refs.blocks[1].lines[0][0].bold === true && refs.blocks[1].lines[0][0].text === "Note:", refs.blocks.map((b) => b.lines[0][0]));
   }
   if (!files.c35) console.log("SKIP - TEXT CPCCPD3035 (file not found)");
   else {
-    const { of, crop } = await read(files.c35);
-    for (const key of ["1.1", "1.2", "1.3"]) { const c = await crop(key); check(`WORKBOOK CPCCPD3035 page 5 Question ${key.slice(2)}: every word inside the crop, on page 5`, c.inside && c.words > 0 && c.r.page === 5, c); }
+    const { of } = await read(files.c35);
     const q1 = await of("1.1"); const q2 = await of("1.2"); const q4 = await of("1.4"); const s6 = await of("2.6");
     check("TEXT CPCCPD3035 page 5: Question 1 bold, Question 2 plain, no 'Question n' in the text", q1.plain === "Identify and briefly describe the safety requirements relevant to preparing new surfaces for painting." && allBold(q1)
       && q2.plain === "Outline the environmental requirements relevant to preparing new surfaces for painting." && !allBold(q2), [q1.plain, q2.plain]);
@@ -565,14 +550,22 @@ void writeFileSync;
   check("TEXT a scanned page (no text layer) is reported as scanned (the wizard shows the crop)", scan.scanned && scan.blocks.length === 0);
   const tq = { key: "5", seq: "Q5", label: "", task: 1, header: { page: 3, x: 0.08, y: 0.1, w: 0.85, h: 0.15 }, prompt: rect, areas: [{ page: 3, x: 0.08, y: 0.3, w: 0.85, h: 0.3 }] };
   const tpl = { version: 1, pdf: { path: "x", sha256: "e".repeat(64), pages: 3 }, pages: [], tasks: [], questions: [tq], fields: [{ id: "a", role: "student", kind: "text", questionKey: "5", label: "Answer", page: 3, x: 0.08, y: 0.62, w: 0.85, h: 0.2 }] } as unknown as T;
-  // Workbook crop: the row up to the Satisfactory column; a word reaching past the row's edge widens it; the column's Yes / No never in it
-  const wbPage = { W: 600, H: 800, texts: [tx("Q5", 50, 110), tx("A long question that runs to the edge of its cell", 260, 120), tx("Yes", 520, 110), tx("No", 550, 110)] };
-  const wb = workbookCrop(tq as never, wbPage);
-  check("WORKBOOK crop: the word reaching past the row's right edge is whole; the Satisfactory column's Yes / No are left out; nothing below the row",
-    wb.x + wb.w >= (260 + 49 * 5) / 600 && wb.x + wb.w < 520 / 600 && wb.y + wb.h <= rect.y + rect.h + 2 / 800 && wb.x <= 50 / 600, wb);
   const sc = scannedCrop(tpl, tpl.questions[0], { w: 600, h: 800 });
   check("TEXT scanned crop: the whole question with padding, down to its answer box, without the trainer's column",
     sc.x < rect.x && sc.y < rect.y && sc.x + sc.w <= rect.x + rect.w + 9 / 600 + 1e-9 && sc.y + sc.h >= rect.y + rect.h && sc.y + sc.h <= 0.62 + 9 / 800, sc);
+}
+
+// ASM-QUESTION-TEXT-ONLY (owner 2026-11-27): no Workbook / Text switch and no saved preference; the question is always its text,
+// a scan falls back to the padded crop, pictures stay crops, Open full page stays
+{
+  const qv = readFileSync("src/components/assessment/pdf/QuestionView.tsx", "utf8");
+  const ui = readFileSync("src/components/assessment/pdf/ui.ts", "utf8");
+  const qc = readFileSync("src/components/assessment/pdf/questionContent.ts", "utf8");
+  check("TEXT-ONLY: no Workbook / Text switch, no workbook crop, no remembered choice",
+    !/ModeSwitch|question-mode|question-workbook|useQuestionMode|QuestionMode/.test(qv) && !/questionMode|localStorage|QuestionMode/.test(ui) && !/workbookCrop|crop:/.test(qc));
+  check("TEXT-ONLY: the words always (QuestionText), the padded crop only for a scan, pictures as crops, Open full page kept",
+    /const printed = !content\.blocks\.length;/.test(qv) && /printed \? <PdfCrop pdf=\{pdf\} rect=\{scanned\}/.test(qv) && /: <QuestionText content=\{content\} \/>/.test(qv)
+    && /testId="question-figure"/.test(qv) && /data-testid="see-on-page"/.test(qv) && /Open full page/.test(qv));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

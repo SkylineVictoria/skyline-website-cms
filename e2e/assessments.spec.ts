@@ -402,17 +402,13 @@ test("PDF-WORKBOOK CPCCPD2012 on its workbook: questions cropped from the PDF, t
   await expect(page.getByTestId("pdf-wizard")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("wizard-step-count")).toHaveText("Step 1 of 21");
   await expect(page.getByTestId("record-fields")).toContainText(student.email);
-  // a question (ASM-QUESTION-POLISH): as printed (Workbook) by default on a wide screen, its words read from the PDF in the Text view
-  // (remembered), the label once as the heading, Open full page; the answer, its word count
+  // a question (ASM-QUESTION-TEXT-ONLY): always its words read from the PDF (no Workbook / Text switch), the label once as the
+  // heading, Open full page as the only way to the printed page; the answer, its word count
   await page.goto(`${base}?step=q-1.1`);
-  await expect(page.getByTestId("question-workbook")).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("question-heading")).toHaveText("Q1");
-  await page.getByTestId("question-mode-text").click();
   await expect(page.getByTestId("question-text")).toHaveText("Outline the safety requirements relevant to using painting and decorating tools and equipment.", { timeout: 30_000 });
-  await expect(page.getByTestId("question-workbook")).toHaveCount(0);
+  await expect(page.getByTestId("question-heading")).toHaveText("Q1");
+  await expect(page.getByTestId("question-mode")).toHaveCount(0);
   await expect(page.getByTestId("question-crop")).toHaveCount(0);
-  await page.reload();
-  await expect(page.getByTestId("question-mode-text")).toHaveAttribute("aria-checked", "true", { timeout: 30_000 });
   await page.getByTestId("see-on-page").click();
   await expect(page.getByTestId("see-on-page-dialog").getByTestId("marked-page-13")).toBeVisible({ timeout: 30_000 });
   await page.keyboard.press("Escape");
@@ -474,9 +470,8 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await expect(page.getByTestId("pdf-marking")).toBeVisible({ timeout: 30_000 });
   // the Questions view (ASM-QUESTION-TEXT): the question as the student saw it, their answer, large Yes / No, Next unmarked
   await expect(page.getByTestId("question-marker")).toHaveAttribute("data-key", "1.1", { timeout: 30_000 });
-  await expect(page.getByTestId("question-marker").getByTestId("question-workbook")).toBeVisible({ timeout: 30_000 });
-  await page.getByTestId("question-mode-text").click();
   await expect(page.getByTestId("question-marker").getByTestId("question-text")).toContainText("Outline the safety requirements", { timeout: 30_000 });
+  await expect(page.getByTestId("question-marker").getByTestId("question-mode")).toHaveCount(0);
   await expect(page.getByTestId("student-answer")).toContainText("Answer to 1.1");
   await page.getByTestId("q-mark-S").click();
   await expect(page.getByTestId("q-mark-S")).toHaveAttribute("aria-pressed", "true");

@@ -2,8 +2,8 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { createPortal } from "react-dom";
 import { PdfCrop, PdfPageMarked } from "./PdfView";
 import type { PdfHandle } from "./pdfDoc";
-import { useQuestionContent, type ReadQuestion } from "./questionContent";
-import { FOCUS, SOFT_CARD, useQuestionMode, useStickySlot, type QuestionMode } from "./ui";
+import { useQuestionContent } from "./questionContent";
+import { FOCUS, SOFT_CARD, useStickySlot } from "./ui";
 import { questionName, type PdfTemplate, type Rect, type TemplateQuestion } from "@/lib/assessment/pdfTemplate/model";
 import { questionTextRect, scannedCrop, type QuestionContent, type Run } from "@/lib/assessment/pdfTemplate/questionText";
 
@@ -11,11 +11,11 @@ import { questionTextRect, scannedCrop, type QuestionContent, type Run } from "@
  * ASM-QUESTION-TEXT (owner 2026-11-27): one question as the student and the trainer see it: the printed label as the only heading,
  * the question's own words read from the PDF's text layer (bold, line breaks, lists, parts kept), the pictures printed in the question
  * area as crops (tap to zoom). A scanned page (no text layer) shows the whole question as a padded crop.
- * ASM-QUESTION-POLISH (owner 2026-11-27): a "Workbook / Text" switch: Workbook = the question as printed, a sharp crop of its header
- * row without the trainer's Satisfactory column (full width, tap to zoom); Text = the words as above. Default Workbook on a wide
- * screen, Text on a phone; the choice is remembered. The question stays in view while the answers scroll: on a wide screen the card
- * sticks under the top bar (at most about 40% of the screen, "Show all" when longer); on a phone a compact bar (label and first line,
- * tap to open) shows under the top bar once the card has scrolled away. "Open full page" shows the original page, question marked.
+ * ASM-QUESTION-POLISH (owner 2026-11-27): the question stays in view while the answers scroll: on a wide screen the card sticks under
+ * the top bar (at most about 32% of the screen, "Show all" when longer); on a phone a compact bar (label and first line, tap to open)
+ * shows under the top bar once the card has scrolled away. "Open full page" shows the original page, question marked.
+ * ASM-QUESTION-TEXT-ONLY (owner 2026-11-27): no Workbook / Text switch: the question is always its text (a scan still falls back to
+ * the padded crop); "Open full page" is the only way to the workbook page; pictures stay sharp crops (tap to zoom).
  */
 function Runs({ runs }: { runs: Run[] }) {
   return <>{runs.map((r, i) => r.bold && r.italic ? <strong key={i}><em>{r.text}</em></strong> : r.bold ? <strong key={i} className="font-semibold">{r.text}</strong> : r.italic ? <em key={i}>{r.text}</em> : <span key={i}>{r.text}</span>)}</>;
@@ -42,34 +42,24 @@ function useWide(): boolean {
   return wide;
 }
 
-/** Workbook / Text. */
-function ModeSwitch({ mode, onMode }: { mode: QuestionMode; onMode: (m: QuestionMode) => void }) {
-  const opts: [QuestionMode, string, string][] = [["workbook", "Workbook", "ri-file-text-line"], ["text", "Text", "ri-text"]];
-  return <div role="radiogroup" aria-label="Show the question as" className="inline-flex shrink-0 rounded-xl bg-background-100 p-1 ring-1 ring-inset ring-foreground-950/[0.06]" data-testid="question-mode">
-    {opts.map(([m, label, icon]) => <button key={m} type="button" role="radio" aria-checked={mode === m} onClick={() => onMode(m)} data-testid={`question-mode-${m}`}
-      className={`inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-lg px-2.5 text-sm font-semibold transition-[background-color,color,box-shadow] duration-200 ${FOCUS} ${mode === m ? "bg-white text-foreground-950 shadow-[0_1px_3px_rgba(16,24,40,0.12)]" : "text-foreground-600 hover:text-foreground-900"}`}>
-      <i className={`${icon} text-base`} aria-hidden="true" />{label}</button>)}
-  </div>;
-}
-
-/** The question itself, in the chosen view, with its pictures. */
-function QuestionBody({ pdf, template, q, content, mode, name }: { pdf: PdfHandle; template: PdfTemplate; q: TemplateQuestion; content: ReadQuestion | null; mode: QuestionMode; name: string }) {
+/** The question itself (its words; the padded crop for a scan), with its pictures. */
+function QuestionBody({ pdf, template, q, content, name }: { pdf: PdfHandle; template: PdfTemplate; q: TemplateQuestion; content: QuestionContent | null; name: string }) {
   const scanned = useMemo(() => scannedCrop(template, q, pdf.sizes[questionTextRect(q).page - 1] ?? { w: 595, h: 842 }), [template, q, pdf.sizes]);
   if (!content) return <div className="max-w-[70ch] space-y-2.5 py-1" aria-busy="true" role="status" aria-label="Reading the question">
     <div className="h-4 w-11/12 animate-pulse rounded-full bg-background-200" /><div className="h-4 w-9/12 animate-pulse rounded-full bg-background-200" /><div className="h-4 w-6/12 animate-pulse rounded-full bg-background-200" /></div>;
-  const printed = !content.blocks.length || !content.crop;
-  return <div className="space-y-4" data-mode={printed ? "scanned" : mode}>
+  const printed = !content.blocks.length;
+  return <div className="space-y-4" data-mode={printed ? "scanned" : "text"}>
     {printed ? <PdfCrop pdf={pdf} rect={scanned} full hiRes frame={false} label={`${name} as printed on page ${scanned.page}`} />
-      : mode === "workbook" ? <div className="-mx-1 rounded-lg ring-1 ring-foreground-950/[0.06]"><PdfCrop pdf={pdf} rect={content.crop!} full hiRes frame={false} testId="question-workbook" label={`${name} as printed on page ${content.crop!.page}`} /></div>
-        : <QuestionText content={content} />}
+      : <QuestionText content={content} />}
     {content.figures.length ? <div className="space-y-3" data-testid="question-figures">
-      {content.figures.map((f, i) => <PdfCrop key={i} pdf={pdf} rect={f} testId="question-figure" hiRes={mode === "workbook"} label={`${content.figures.length > 1 ? `Picture ${i + 1} of ` : "Picture in "}${name}, page ${f.page}`} />)}
+      {content.figures.map((f, i) => <PdfCrop key={i} pdf={pdf} rect={f} testId="question-figure" hiRes label={`${content.figures.length > 1 ? `Picture ${i + 1} of ` : "Picture in "}${name}, page ${f.page}`} />)}
     </div> : null}
   </div>;
 }
 
-export default function QuestionView({ pdf, template, question: q, eyebrow, status, children, level = 1, who }: {
-  pdf: PdfHandle; template: PdfTemplate; question: TemplateQuestion; who: "student" | "trainer";
+// rule-policy: technical question-heading-level The question heading is an h1 on its own step and an h2 inside the marking screen.
+export default function QuestionView({ pdf, template, question: q, eyebrow, status, children, level = 1 }: {
+  pdf: PdfHandle; template: PdfTemplate; question: TemplateQuestion;
   /** above the heading: task and question n of m */
   eyebrow?: ReactNode;
   /** beside the eyebrow: answered / marked */
@@ -78,7 +68,6 @@ export default function QuestionView({ pdf, template, question: q, eyebrow, stat
   children?: ReactNode; level?: 1 | 2;
 }) {
   const content = useQuestionContent(pdf, template, q);
-  const [mode, setMode] = useQuestionMode(who);
   const [seePage, setSeePage] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -86,7 +75,6 @@ export default function QuestionView({ pdf, template, question: q, eyebrow, stat
   const slot = useStickySlot();
   const name = questionName(q);
   const H = level === 1 ? "h1" : "h2";
-  const canSwitch = !!content && content.blocks.length > 0 && !!content.crop;
   const cardRef = useRef<HTMLElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -100,7 +88,7 @@ export default function QuestionView({ pdf, template, question: q, eyebrow, stat
     measure();
     const o = new ResizeObserver(measure); o.observe(inner); o.observe(box);
     return () => o.disconnect();
-  }, [wide, expanded, mode, content, q.key]);
+  }, [wide, expanded, content, q.key]);
 
   // on a phone: the compact bar once the card has scrolled up under the top bar
   const [compact, setCompact] = useState(false);
@@ -122,13 +110,10 @@ export default function QuestionView({ pdf, template, question: q, eyebrow, stat
   <section ref={cardRef} data-testid="question-view" data-question-key={q.key} data-sticky={sticky || undefined}
     className={`${SOFT_CARD} p-4 sm:p-6`}>
     {eyebrow || status ? <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">{eyebrow}{status}</div> : null}
-    <div className="flex items-center justify-between gap-3">
-      <H className={`min-w-0 font-heading font-bold tracking-tight text-foreground-950 ${level === 1 ? "text-2xl sm:text-[1.75rem]" : "text-xl sm:text-2xl"}`} data-testid="question-heading">{name}</H>
-      {canSwitch ? <ModeSwitch mode={mode} onMode={setMode} /> : null}
-    </div>
+    <H className={`min-w-0 font-heading font-bold tracking-tight text-foreground-950 ${level === 1 ? "text-2xl sm:text-[1.75rem]" : "text-xl sm:text-2xl"}`} data-testid="question-heading">{name}</H>
     {children ? <div className="mt-3">{children}</div> : null}
     <div ref={boxRef} className={`relative mt-4 ${sticky ? "md:max-h-[32vh] md:overflow-hidden" : ""}`} data-testid="question-body">
-      <div ref={innerRef}><QuestionBody pdf={pdf} template={template} q={q} content={content} mode={mode} name={name} /></div>
+      <div ref={innerRef}><QuestionBody pdf={pdf} template={template} q={q} content={content} name={name} /></div>
       {overflows ? <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-t from-white via-white/80 to-transparent" aria-hidden="true" /> : null}
     </div>
     <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
@@ -147,7 +132,7 @@ export default function QuestionView({ pdf, template, question: q, eyebrow, stat
         <span className="sr-only">{compactOpen ? "Hide the question" : "Show the whole question"}</span>
       </button>
       {compactOpen ? <div className="max-h-[60vh] overflow-y-auto overscroll-contain px-4 pb-4 motion-safe:animate-step-in" data-testid="question-compact-body">
-        <QuestionBody pdf={pdf} template={template} q={q} content={content} mode={mode} name={name} />
+        <QuestionBody pdf={pdf} template={template} q={q} content={content} name={name} />
       </div> : null}
     </div>, slot.el) : null}
     {seePage ? <SeeOnPage pdf={pdf} q={q} name={name} onClose={() => setSeePage(false)} /> : null}

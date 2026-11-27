@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useState } from "react";
 
 /**
  * ASM-QUESTION-POLISH (owner 2026-11-27): the shared look of the student's wizard, Preview as learner and the trainer's marking:
@@ -12,31 +12,6 @@ export const PRIMARY = `inline-flex min-h-[48px] cursor-pointer items-center jus
 export const SECONDARY = `inline-flex min-h-[48px] cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-white px-4 text-base font-semibold text-foreground-800 shadow-[0_1px_2px_rgba(16,24,40,0.05)] ring-1 ring-foreground-950/10 transition-colors hover:text-primary-700 hover:ring-primary-300 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`;
 /** A step's content coming in (a short fade and rise; nothing moves for people who ask for less motion). */
 export const STEP_IN = "motion-safe:animate-step-in";
-
-/* ------------------------------------------------------------------ Workbook / Text */
-export type QuestionMode = "workbook" | "text";
-const WIDE = "(min-width: 768px)";
-const keyOf = (who: string) => `skyline.asm.questionMode.${who}`;
-function stored(who: string): QuestionMode | null {
-  try { const v = window.localStorage.getItem(keyOf(who)); return v === "workbook" || v === "text" ? v : null; } catch { return null; }
-}
-
-/**
- * How a question is shown: as printed in the workbook (a crop of the PDF) or as text read from it. Default: Workbook on a wide screen,
- * Text on a phone; the person's own choice is remembered in this browser (per student / trainer).
- */
-export function useQuestionMode(who: "student" | "trainer"): [QuestionMode, (m: QuestionMode) => void] {
-  const wide = () => typeof window !== "undefined" && !!window.matchMedia?.(WIDE).matches;
-  const [mode, setMode] = useState<QuestionMode>(() => stored(who) ?? (wide() ? "workbook" : "text"));
-  useEffect(() => {
-    // no choice made yet: follow the screen (a phone turned to landscape, a window made narrow)
-    const mq = window.matchMedia?.(WIDE); if (!mq) return;
-    const on = () => { if (!stored(who)) setMode(mq.matches ? "workbook" : "text"); };
-    mq.addEventListener?.("change", on); return () => mq.removeEventListener?.("change", on);
-  }, [who]);
-  const choose = useCallback((m: QuestionMode) => { setMode(m); try { window.localStorage.setItem(keyOf(who), m); } catch { /* private window: this visit only */ } }, [who]);
-  return [mode, choose];
-}
 
 /* ------------------------------------------------------------------ the sticky question */
 /**

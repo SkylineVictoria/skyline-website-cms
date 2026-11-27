@@ -294,7 +294,7 @@ function StepView({ step, template, pdf, a, record, recordValue, setValue, setCh
     let tableNo = 0;
     const prev = previous?.marks[q.key];
     return <section className="space-y-5" data-testid="step-question" data-question-key={q.key}>
-      <QuestionView pdf={pdf} template={template} question={q} who="student"
+      <QuestionView pdf={pdf} template={template} question={q}
         eyebrow={<p className={EYEBROW}>{taskTitle(step.task).replace(/ · .*/, "")}{position ? ` · ${position}` : ""}</p>} status={<StatusChip status={status} />}>
         {prev?.outcome ? <p className={`rounded-xl px-3 py-2 text-base ${prev.outcome === "NYS" ? "border border-amber-300 bg-amber-50 text-amber-900" : "border border-green-200 bg-green-50 text-green-800"}`} data-testid="previous-mark">
           {prev.outcome === "NYS" ? `Not yet satisfactory in attempt ${previous!.attemptNo}` : `Satisfactory in attempt ${previous!.attemptNo}`}{prev.feedback ? `: ${prev.feedback}` : "."}</p> : null}

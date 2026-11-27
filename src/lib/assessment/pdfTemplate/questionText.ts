@@ -291,28 +291,6 @@ export function questionContent(t: PdfTemplate, q: TemplateQuestion, ink: PageIn
 }
 
 /**
- * ASM-QUESTION-POLISH: the question as printed (the Workbook view): its header row without the trainer's Satisfactory column, so the
- * crop ends where that column began and leaves no blank block. Never clipped: every word whose middle is in the row widens the crop
- * to its full extent, plus a small margin. The pictures under the question are shown as their own crops below it (`figures`).
- */
-export function workbookCrop(q: TemplateQuestion, ink: Pick<PageInk, "W" | "H" | "texts">): Rect {
-  const r = questionTextRect(q);
-  const { W, H } = ink;
-  // the row's own edges (its ruled lines included, nothing of the next row); a word reaching past them widens it, with a margin
-  const R = { x0: r.x * W, y0: r.y * H, x1: (r.x + r.w) * W, y1: (r.y + r.h) * H };
-  let x0 = R.x0 - 1; let y0 = R.y0 - 1; let x1 = R.x1; let y1 = R.y1 + 1;
-  const m = 2;
-  for (const t of ink.texts) {
-    const cx = t.x + t.w / 2; const cy = t.y + t.h / 2;
-    if (cx < R.x0 || cx > R.x1 || cy < R.y0 || cy > R.y1) continue;
-    x0 = Math.min(x0, t.x - m); x1 = Math.max(x1, t.x + t.w + m);
-    y0 = Math.min(y0, t.y - m); y1 = Math.max(y1, t.base + t.h * 0.3 + m);
-  }
-  x0 = Math.max(0, x0); y0 = Math.max(0, y0); x1 = Math.min(W, x1); y1 = Math.min(H, y1);
-  return { page: r.page, x: x0 / W, y: y0 / H, w: (x1 - x0) / W, h: (y1 - y0) / H };
-}
-
-/**
  * The crop shown for a scanned page (no text layer): the whole question, padded, never cut, and without the trainer's column (so no
  * blank block is left where it was): the text rect widened by a margin on every side and down to the first answer box.
  */

@@ -236,7 +236,7 @@ function QuestionMarker({ pdf, t, q, answers, mark, marks, editable, onMark, onG
       <div className="min-w-0 flex-1"><p className="font-heading text-lg font-semibold text-foreground-950">All questions marked</p><p className="text-sm text-foreground-600">Choose the overall result, sign off and release it.</p></div>
       <button type="button" className={`${PRIMARY} min-h-[44px]`} onClick={onOverall} data-testid="go-overall">Overall result<i className="ri-arrow-right-line" aria-hidden="true" /></button>
     </div> : null}
-    <QuestionView pdf={pdf} template={t} question={q} level={2} who="trainer"
+    <QuestionView pdf={pdf} template={t} question={q} level={2}
       eyebrow={<p className={EYEBROW}>{task ? `Task ${task.number} · ` : ""}Question {i + 1} of {n}</p>}
       status={<span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${chip[0]}`} data-testid="question-status"><i className={chip[1]} aria-hidden="true" />{chip[2]}</span>} />
     <div className={`${CARD} space-y-5`}>

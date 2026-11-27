@@ -185,7 +185,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
     event.preventDefault();
     if (busy) return;
     // The phone field keeps its value (E.164, with the country code) in a hidden input named "mobile".
-    const current = { ...form, mobile: String(new FormData(event.currentTarget).get("mobile") ?? "") };
+    const current = { ...form, mobile: String(new FormData(event.currentTarget).get("mobile") ?? form.mobile ?? "") };
     setForm(current);
     const checked = validateStudentEnrol(current, undefined, applicantAgeRange());
     setErrors(checked);
@@ -268,11 +268,7 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
       <QuickStart onSignedIn={onSignedIn} intent="student" />
       <div className="mt-6 space-y-4">
         <Field label="Email" required><EmailField value={form.email} onChange={(email) => patch({ email })} kind="student" context="public" serverError={emailError} placeholder="you@example.com" autoComplete="email" /><Problem text={errors.email} /></Field>
-        <div>
-          <label htmlFor="enrol-mobile" className="mb-1.5 block text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></label>
-          <PhoneInput id="enrol-mobile" name="mobile" value={form.mobile} required placeholder="041 234 5678" />
-          <Problem text={errors.mobile} />
-        </div>
+        {/* SIGNUP-PHONE-OPTIONAL (owner 2026-11-27): the mobile field is hidden for now (optional; added back later). */}
         <Field label="Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters. You sign in with your email and this password.`}>
           <TextInput type="password" value={form.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" /><Problem text={errors.password} />
         </Field>

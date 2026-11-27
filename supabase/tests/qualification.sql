@@ -6,7 +6,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Enrolled application through the placement path (tentative, CoE copied), In Progress sets the application Active, no Active by hand,
 -- Admin undo, paused attendance, the portal view without notes, the daily start and no-show. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(91);
+select plan(94);
 
 create function pg_temp.as_user(p uuid) returns void language plpgsql as $$
 begin perform set_config('role', 'authenticated', true); perform set_config('request.jwt.claim.sub', p::text, true); end $$;
@@ -266,5 +266,13 @@ select is((public.portal_my_qualifications() -> 0 ->> 'courseCode'), 'Q101', 'my
 select ok(not (public.portal_my_qualifications() -> 0 ? 'reason') and not (public.portal_my_qualifications() -> 0 ? 'note'), 'my qualification: no reasons or internal notes');
 select is(pg_temp.try($$select public.qualification_document_get((select id from qdoc))$$), 'ok', 'my qualification: the student opens their CoE copy');
 select pg_temp.as_postgres();
+-- ---------------------------------------------------------------- STATUS-OVERRIDES (20261128012517): the Admin overrides follow the proper path
+select is((select count(*)::int from public.application_status_transitions where action_key like 'set\_%' and is_active
+  and (to_status in ('coe_issued', 'enrolled', 'active', 'under_review', 'completed') or from_status in ('coe_issued', 'enrolled', 'active', 'completed'))), 0,
+  'overrides: none into CoE issued / Enrolled / Active / Under review, none out of CoE issued / Enrolled / Active');
+select ok((select count(*) from public.application_status_transitions where action_key like 'set\_%' and is_active and from_status = 'submitted' and to_status = 'draft') = 1,
+  'overrides: corrections between the early statuses stay');
+select ok(exists (select 1 from public.application_status_transitions where action_key = 'issue_coe' and is_active) and exists (select 1 from public.application_status_transitions where action_key = 'enrol' and is_active),
+  'overrides: Issue CoE / VoE and Mark as enrolled stay the way forward');
 select * from finish();
 rollback;

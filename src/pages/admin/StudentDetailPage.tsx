@@ -1,4 +1,3 @@
-import FinishApplicationPanel from "@/pages/agency/components/FinishApplicationPanel";
 import { needsInitialWizard } from "@/pages/agency/lib/portalApplications";
 import { useEffect, useState } from "react";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
@@ -95,9 +94,12 @@ export default function StudentDetailPage() {
           </Button>
         )} />
 
-      {drafts.length ? <div className="mb-4 space-y-3">{drafts.map((draft) => (
-        <FinishApplicationPanel key={draft.id} id={draft.id} email={student.email} canInvite
-          onContinue={() => navigate(`/admin/applications/${draft.id}?wizard=1`)} />
+      {/* STUDENT-ONLY-ADD (owner 2026-11-27): an unfinished application is finished in Applications, not on the student page. */}
+      {drafts.length ? <div className="mb-4 space-y-2" data-testid="student-draft-applications">{drafts.map((draft) => (
+        <div key={draft.id} className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <span className="text-foreground-800"><b>{draft.reference || "Draft application"}</b> is not finished yet. Finish it in Applications.</span>
+          <Link to={`/admin/applications/${draft.id}`} className="font-semibold text-primary-700 hover:underline">Open in Applications</Link>
+        </div>
       ))}</div> : null}
 
       <div className="flex flex-wrap items-start gap-5">

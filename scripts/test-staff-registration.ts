@@ -5300,3 +5300,13 @@ test("Student-only add (owner 2026-11-27): CMS Add student saves only the studen
   // Agents and students keep their own flows.
   assert.ok(read("src/pages/agency/applications/new/page.tsx").includes("StudentDetailsStep"), "agent / student New application unchanged");
 });
+
+test("Previous-data review (owner 2026-11-27): a student applying again checks the one-page cards in a popup first, then signs", () => {
+  const page = read("src/pages/agency/applications/detail/page.tsx");
+  assert.ok(page.includes('title="We have your details from your previous application"'), "popup title");
+  assert.ok(page.includes("(!!row.submittedAt || (row.status ?? \"draft\") !== \"draft\")"), "only when the student has an earlier application past draft");
+  assert.ok(page.includes("onReviewDone={reviewOpen ? finishReview : undefined}") && page.includes("startOnSign={!reviewOpen && signAfterReview}"), "popup cards, then the page opens on the signature");
+  const ws = read("src/pages/agency/components/ApplicationWorkspace.tsx");
+  assert.ok(ws.includes('label: "Everything is correct, continue"') && ws.includes("onePageView.kind === \"grid\" && onReviewDone"), "no sign step inside the popup");
+  assert.ok(ws.includes("setOnePageView({ kind: \"sign\" });"), "the page opens on the signature after the check");
+});

@@ -210,6 +210,11 @@ interface WorkspaceProps {
   sentToStudent?: boolean;
   /** Opens the step holding this field once the form is ready (a returning student's new application starts on the course). */
   initialEdit?: string;
+  /** PREVIOUS-DATA-REVIEW (owner 2026-11-27): the cards are shown in the "We have your details" popup: no sign step there; the
+   *  grid's button finishes the check (onReviewDone) and the page then opens on the signature. */
+  onReviewDone?: () => void;
+  /** Open on the declarations and signature once the form is ready (after the popup check). */
+  startOnSign?: boolean;
 }
 
 type SaveState = "idle" | "saving" | "saved" | "error";
@@ -235,6 +240,8 @@ export default function ApplicationWorkspace({
   onePage = false,
   sentToStudent = false,
   initialEdit,
+  onReviewDone,
+  startOnSign = false,
 }: WorkspaceProps) {
   const workflow = useApplicationStatuses();
   // The same cards for staff, agents and students; read-only (submitted, or the other side has it) = the cards without Edit.
@@ -1321,6 +1328,12 @@ export default function ApplicationWorkspace({
     if (index >= 0) openSectionRef.current(index, initialEdit);
   }, [ready, one, initialEdit, readOnly, sections]);
   useEffect(() => { if (ready) stageOpenedRef.current(); }, [stage, ready]);
+  const startOnSignDone = useRef(false);
+  useEffect(() => {
+    if (!ready || !one || !startOnSign || startOnSignDone.current || readOnly) return;
+    startOnSignDone.current = true;
+    setOnePageView({ kind: "sign" });
+  }, [ready, one, startOnSign, readOnly]);
 
   // After a read or a pick: if its step is now complete, it closes, and the next incomplete step on the stage opens.
   const advance = (name: string) => {
@@ -2026,6 +2039,8 @@ export default function ApplicationWorkspace({
         message={isReview && reviewBar ? (typeof reviewBar === "function" ? reviewBar(missingNow.length + documentProblems.filter(Boolean).length + crossFieldProblems.reduce((n, list) => n + list.length, 0)) : reviewBar) : footerMessage ? <FooterMessage>{footerMessage}</FooterMessage> : null}
         primary={
           one && onePageView.kind === "edit" ? { label: "Done", icon: "ri-check-line", testId: "section-done", onClick: () => showOnePage("grid") }
+          : one && onePageView.kind === "grid" && onReviewDone ? { label: "Everything is correct, continue", icon: "ri-arrow-right-line", testId: "previous-data-continue",
+            onClick: () => { void flushSave().catch(() => undefined).then(() => onReviewDone()); } }
           : one && onePageView.kind === "grid" ? (canSubmitHere && !readOnly && (studentSigns || !sentToStudent) ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
           : isReview
             ? !readOnly && canSubmitHere

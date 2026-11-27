@@ -71,7 +71,7 @@ export interface QualificationDocument {
 
 export interface QualificationTask {
   id: string;
-  kind: "place_manually" | "prisms_report" | "refund_check";
+  kind: "place_manually" | "prisms_report" | "refund_check" | "resume_check";
   event: string | null;
   title: string;
   detail: string | null;
@@ -207,7 +207,7 @@ export const DOCUMENT_KIND_LABELS: Record<string, string> = {
 };
 
 export const TASK_KIND_LABELS: Record<QualificationTask["kind"], string> = {
-  place_manually: "Place student manually", prisms_report: "Report in PRISMS", refund_check: "Check for a refund",
+  place_manually: "Place student manually", prisms_report: "Report in PRISMS", refund_check: "Check for a refund", resume_check: "Resume or extend",
 };
 
 export const formatQualificationDate = (iso: string | null | undefined) =>

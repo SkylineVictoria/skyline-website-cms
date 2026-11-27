@@ -394,10 +394,8 @@ export default function ApplicationWorkspace({
   const [signFix, setSignFix] = useState<Set<number>>(() => new Set());
   useEffect(() => {
     if (onePageView.kind !== "sign") return;
-    // The course and start date step is always there for the student to confirm or choose.
-    const courseStep = sections.findIndex((section) => section.fields.some((field) => field.name === COURSE_FIELD));
-    setSignFix(new Set([...(courseStep >= 0 ? [courseStep] : []),
-      ...issuesRef.current.flatMap((list, index) => (list.length && !isDeclarationSection(index) ? [index] : []))]));
+    // Only a step that still misses something (owner 2026-11-27: a course and start date already chosen are not asked again).
+    setSignFix(new Set(issuesRef.current.flatMap((list, index) => (list.length && !isDeclarationSection(index) ? [index] : []))));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- computed once each time the sign page opens
   }, [onePageView.kind]);
   /** Back to the cards (or on to the signature), with the answers as they are on the form now. */
@@ -2027,7 +2025,17 @@ export default function ApplicationWorkspace({
   const documentProblems = isReview ? sections.map((_, index) => documentProblem(index)) : [];
   const crossFieldProblems = isReview ? sections.map((_, index) => fieldProblems(index)) : [];
   // A submitted (read-only) application is not being filled in: no "still needs details" line under it.
-  const footerMessage = stageOpen && !readOnly ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "";
+  // The sign page says what still holds Sign and submit back (owner 2026-11-27: it was greyed out with no reason).
+  const signBlocker = one && onePageView.kind === "sign" && studentSigns && !readOnly
+    ? missingNow[0] ? `Still to fill in: ${missingNow[0]}${missingNow.length > 1 ? ` (and ${missingNow.length - 1} more)` : ""}`
+      : documentProblems.find(Boolean) ? String(documentProblems.find(Boolean))
+      : crossFieldProblems.flat()[0] ? crossFieldProblems.flat()[0].text
+      : !consent.complete ? "Tick each declaration to agree to it."
+      : !consent.signature ? "Draw your signature."
+      : !consent.password.valid ? "Create your password to sign."
+      : ""
+    : "";
+  const footerMessage = signBlocker || (stageOpen && !readOnly ? `${stageOpen === 1 ? "1 section still needs" : `${stageOpen} sections still need`} details` : "");
   const firstSubmit = canSubmitFrom(workflow, application.status);
   // Action required: whoever the backend allows (the student, the agent, staff) corrects the form and resubmits it from here.
   const resubmitHere = actionsFor(workflow, application.status, "applicant")

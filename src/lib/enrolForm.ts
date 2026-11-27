@@ -52,7 +52,8 @@ export function validateStudentEnrol(form: StudentEnrolForm, today?: Date, ageRa
   const first = form.firstName.trim() ? nameProblem(form.firstName, "first name") : ""; if (first) errors.firstName = first;
   const last = form.lastName.trim() ? nameProblem(form.lastName, "last name") : ""; if (last) errors.lastName = last;
   const email = emailProblem(form.email); if (email) errors.email = email;
-  const mobile = mobileProblem(form.mobile); if (mobile) errors.mobile = mobile;
+  // SIGNUP-PHONE-OPTIONAL (owner 2026-11-27): the mobile is hidden for now; checked only when given.
+  const mobile = form.mobile.trim() ? mobileProblem(form.mobile) : ""; if (mobile) errors.mobile = mobile;
   const password = passwordProblem(form.password); if (password) errors.password = password;
   const dob = form.dateOfBirth.trim() ? dateOfBirthProblem(form.dateOfBirth, today, ageRange) : ""; if (dob) errors.dateOfBirth = dob;
   if (form.referralCode.trim().length > 40 || CONTROL.test(form.referralCode)) errors.referralCode = "Check the referral code.";

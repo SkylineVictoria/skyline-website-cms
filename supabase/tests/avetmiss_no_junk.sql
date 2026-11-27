@@ -37,7 +37,7 @@ select ok(pg_temp.refused($$update avetmiss_junk_t.apps set data = jsonb_set(dat
 select ok(exists (select 1 from pg_trigger where tgname = 'avetmiss_application_values' and tgrelid = 'public.enrollment_applications'::regclass), 'the trigger is on enrollment_applications');
 
 -- AVETMISS-SUBMIT-FIX (20261127100517): the student's answers reach the student record the submit check reads.
-select ok(exists (select 1 from pg_trigger where tgname = 'avetmiss_answers_to_student' and tgrelid = 'public.enrollment_applications'::regclass), 'application answers are copied to the student record');
+select ok(exists (select 1 from pg_trigger where tgname = 'student_details_avetmiss_sync' and tgrelid = 'public.enrollment_students'::regclass), 'the student''s answers reach the AVETMISS columns and tables (STUDENT-OWNS-ANSWERS)');
 -- AVETMISS-PAGE-CHECK (20261127110517): each wizard page is checked against the same required answers as Submit.
 select ok(cardinality(public.avetmiss_answers_missing('{}'::jsonb)) >= 12, 'an empty application misses every required AVETMISS answer');
 select ok('year highest school level completed' = any(public.avetmiss_answers_missing('{"school_level": "Year 12 or equivalent - 12"}'::jsonb)),

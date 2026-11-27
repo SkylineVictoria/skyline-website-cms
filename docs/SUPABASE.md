@@ -1219,3 +1219,19 @@ Migration `20261127130517_application_document_carry` + `validated-document-uplo
 - Still hosted-only (content not in the repo): 20261118004823, 20261118004948, 20261122153509, 20261122153835, 20261122154043, 20261122154344,
   20261125112611, 20261125112956, 20261125113726, 20261125114936, 20261125120557, 20261125121142, 20261125123147 (owner to decide; the
   avetmiss_no_junk failures on a fresh lab likely come from the 2026-11-25 wizard ones).
+
+## The student owns their answers (STUDENT-OWNS-ANSWERS, 2026-11-27)
+Migration `20261127140517_student_owns_answers`. Every answer except the application's own is stored once on the student
+(`enrollment_students.details`); an application keeps only `public.application_field` keys: course and intake (`courses_of_interest`,
+`preferred_intake`, `intake_*`, `course_*`, `study_reason`, `rpl`, `credit_upload`), consents and declarations (`consent*`, `declaration*`,
+`usi_consent`, `checklist*`), signature (`digital_signature`, `signature_*`), guardian (`guardian_*`), agent block (`via_agent`, `agent_*`),
+OSHC, offer, fees / payment / deposit, `hear_about`, internal `_*` keys. `is_student_field` = not an application field.
+- Write: trigger `b_route_student_fields` (now BEFORE INSERT OR UPDATE OF data, student_id) moves the student's answers into
+  `enrollment_students.details` (`student_apply_details`, also name / email / phone / date of birth / passport / nationality) and strips them
+  from the application. Editing an answer in any draft changes the student, so every application of the student shows it.
+- Read: `application_data` / `application_values` merge the student's details over the application's own (`portal_wizard_application`,
+  submit checks, letters, document reading); `guest-documents` reads through `application_data` too.
+- Submit: `skyline_private.application_finalize` freezes the merged answers in `enrollment_application_versions.snapshot` (unchanged).
+- AVETMISS: trigger `student_details_avetmiss_sync` on `enrollment_students` copies English proficiency, school year, prior education rows
+  and disability types from the details (replaces `avetmiss_answers_to_student`; `zzy_application_prior_education_fill` dropped).
+- Documents stay per application in this stage (DOCUMENT-CARRY copies them to a student's next application).

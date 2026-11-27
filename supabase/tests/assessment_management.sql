@@ -405,7 +405,10 @@ select pg_temp.as_postgres();
 update public.intake_enrolments set status = 'withdrawn', withdrawn_on = current_date where intake_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
 select is((select state || '/' || void_reason from public.asm_attempts where id = pg_temp.v('attempt3')), 'void/left the intake', 'a student who leaves the batch loses the open draft (kept as history)');
 select is((select count(*)::int from public.asm_assignment_eligible(pg_temp.v('assignment'))), 1, 'and is no longer eligible');
+-- QUALIFICATION (20261128003517): Cancelled is final; bringing the student back is an Admin undo.
+select set_config('qualification.undo', 'on', true);
 update public.intake_enrolments set status = 'active' where intake_id = 'f5000000-0000-0000-0000-000000000011' and student_id = 'e5000000-0000-0000-0000-000000000013';
+select set_config('qualification.undo', '', true);
 select is((select count(*)::int from public.asm_notifications where recipient_auth_user = 'a5000000-0000-0000-0000-000000000013' and event = 'reassigned'), 1, 'a student who joins is told about the open assessment');
 
 -- ---------------------------------------------------------------- tenant isolation (D-03)

@@ -254,6 +254,15 @@ async function failDraftSave(page: Page, status: number, body: { code: string; m
   });
 }
 
+/** Marks a question in the marking view: picked in the side panel, then the large Yes / No (and the comment) of the Questions view. */
+async function markQuestion(page: Page, key: string, outcome: "S" | "NYS", comment?: string): Promise<void> {
+  await page.locator(`[data-testid=marking-question][data-key='${key}'] button`).first().click();
+  await expect(page.getByTestId("question-marker")).toHaveAttribute("data-key", key);
+  await page.getByTestId(`q-mark-${outcome}`).click();
+  if (comment) await page.getByTestId("q-comment").fill(comment);
+  await expect(page.locator(`[data-testid=marking-question][data-key='${key}']`).getByTestId("mark-status")).toHaveAttribute("data-outcome", outcome);
+}
+
 /** Ticks every Evidence Outcome row of the marking checklists (Yes or No) on the page. */
 async function tickEvidence(page: Page, option: "yes" | "no"): Promise<void> {
   const rows = page.locator(`[data-testid=trainer-field][data-checklist=evidence][data-option=${option}]`);
@@ -466,10 +475,10 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await page.getByTestId("q-next-unmarked").click();
   await expect(page.getByTestId("question-marker")).toHaveAttribute("data-key", "1.2");
   await shot(page, "pdf-marking-questions");
+  for (const key of CPC_KEYS) await markQuestion(page, key, key === "2.3" ? "NYS" : "S", key === "2.3" ? "Add the safe method of use for each tool." : undefined);
+  await expect(page.locator("[data-testid=marking-question][data-key='2.3']").getByTestId("mark-comment")).toHaveText("Add the safe method of use for each tool.");
   await page.getByTestId("marking-view-pages").click();
   await expect(page.locator("[data-pdf-page='13'] canvas")).toBeVisible({ timeout: 30_000 });
-  for (const key of CPC_KEYS) await page.locator(`[data-testid=marking-question][data-key='${key}']`).getByTestId(key === "2.3" ? "mark-NYS" : "mark-S").click();
-  await page.locator("[data-testid=marking-question][data-key='2.3'] input").fill("Add the safe method of use for each tool.");
   await expect(page.getByTestId("task-auto").nth(0)).toHaveText("Satisfactory");
   await expect(page.getByTestId("task-auto").nth(1)).toHaveText("Not satisfactory");
   await page.getByTestId("task-feedback").nth(1).fill("Q3 needs the safe methods of use.");
@@ -525,7 +534,7 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   const attempt2 = sql(`select id from public.asm_attempts where assignment_id = '${cpcAssignment}' and attempt_no = 2`);
   await signInStaff(page, trainer.email, `/staff/assessments/attempts/${attempt2}`);
   await expect(page.getByTestId("pdf-marking")).toBeVisible({ timeout: 30_000 });
-  for (const key of CPC_KEYS) await page.locator(`[data-testid=marking-question][data-key='${key}']`).getByTestId("mark-S").click();
+  for (const key of CPC_KEYS) await markQuestion(page, key, "S");
   await expect(page.getByTestId("marking-missing")).toContainText("page 43");
   await page.getByTestId("marking-view-pages").click();
   await tickEvidence(page, "yes");
@@ -560,7 +569,7 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   // attempt 1 keeps its own answers, marks and checklists: opened from attempt 2's history, read-only
   await page.getByTestId("earlier-attempts").getByRole("link", { name: "Attempt 1" }).click();
   await expect(page.getByTestId("decided")).toContainText("Returned for resubmission", { timeout: 30_000 });
-  await expect(page.locator("[data-testid=marking-question][data-key='2.3']").getByTestId("mark-NYS")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("[data-testid=marking-question][data-key='2.3']").getByTestId("mark-status")).toHaveAttribute("data-outcome", "NYS");
   expect(sql(`select (select count(*) from jsonb_object_keys(assessor_responses->'pdfChoice')) from public.asm_attempts where id = '${attempt1}'`)).toBe("13");
   expect(sql(`select (o.snapshot_hash = s.hash)::text || ':' || (o.path = a.id || '/final-' || o.pdf_sha256 || '.pdf')::text from public.asm_attempt_outputs o join public.asm_attempt_snapshots s on s.attempt_id = o.attempt_id join public.asm_attempts a on a.id = o.attempt_id where o.attempt_id = '${attempt2}' and o.kind = 'final'`)).toBe("true:true");
   const outPath = sql(`select path from public.asm_attempt_outputs where attempt_id = '${attempt2}' and kind = 'final'`);

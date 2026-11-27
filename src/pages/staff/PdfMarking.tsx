@@ -172,10 +172,12 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
                 <div className="flex items-center gap-2">
                   <button type="button" className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm font-medium text-primary-700 underline-offset-2 hover:underline" onClick={() => (view === "questions" ? setCurrent(q.key) : goPage(q.header.page))} title={q.label} aria-current={view === "questions" && current === q.key ? "true" : undefined}>
                     {reviewName(t, q)} <span className="font-normal text-foreground-500">· p{q.header.page}{did ? "" : " · not answered"}</span></button>
-                  {(["S", "NYS"] as const).map((o) => <button key={o} type="button" disabled={!editable} onClick={() => mark(q.key, { outcome: o })} aria-pressed={m?.outcome === o} data-testid={`mark-${o}`}
-                    className={`rounded-md border px-2 py-1 text-xs font-semibold ${m?.outcome === o ? (o === "S" ? "border-green-600 bg-green-600 text-white" : "border-amber-600 bg-amber-500 text-white") : "border-background-300 bg-white text-foreground-700"}`}>{o === "S" ? "Yes" : "No"}</button>)}
+                  {/* status only (owner 2026-11-27): a question is marked with the large Yes / No of the Questions view */}
+                  <span className="flex w-6 shrink-0 justify-center" data-testid="mark-status" data-outcome={m?.outcome ?? "none"} role="img"
+                    aria-label={m?.outcome === "S" ? "Satisfactory" : m?.outcome === "NYS" ? "Not satisfactory" : "Not marked"} title={m?.outcome === "S" ? "Satisfactory" : m?.outcome === "NYS" ? "Not satisfactory" : "Not marked"}>
+                    <i className={`text-lg leading-none ${m?.outcome === "S" ? "ri-checkbox-circle-fill text-green-600" : m?.outcome === "NYS" ? "ri-close-circle-fill text-amber-600" : "ri-circle-line text-foreground-300"}`} aria-hidden="true" /></span>
                 </div>
-                {editable || m?.feedback ? <input className={`${INPUT} mt-1 text-xs`} placeholder="Comment (optional)" value={m?.feedback ?? ""} disabled={!editable} onChange={(e) => mark(q.key, { feedback: e.target.value })} aria-label={`Comment on ${questionName(q)}`} /> : null}
+                {m?.feedback ? <p className="mt-0.5 truncate pl-0.5 text-xs text-foreground-600" title={m.feedback} data-testid="mark-comment">{m.feedback}</p> : null}
               </li>; })}
             </ul>
             <label className="mt-2 block text-xs font-medium text-foreground-600">Task {tk.number} feedback (results sheet)

@@ -92,6 +92,9 @@ export default function NewApplicationPage() {
   // STUDENT-NEW-APPLICATION-AGENT: who the student is with now (their agent preselected; same business only).
   const [studentOptions, setStudentOptions] = useState<StudentAgencyOptions | null>(null);
   const withBusiness = Boolean(studentOptions?.current && !studentOptions.current.direct);
+  // A returning student (an application on record) picks course and start date here and goes to the one page; a first
+  // application goes through the document wizard instead.
+  const returning = Boolean(studentOptions?.current?.hasApplications);
   // The course and start date are chosen on the same screen; the application then opens as the one page to check and sign.
   const [courseRows, setCourseRows] = useState<ApplicationCourseRow[] | null>(null);
   const [chosenCourseId, setChosenCourseId] = useState("");
@@ -224,6 +227,8 @@ export default function NewApplicationPage() {
       }
       const { id } = await createApplicationForStudent(clientKeyRef.current, studentId);
       clientKeyRef.current = newClientKey();
+      // A student's first application: the document wizard (passport, course and start date, documents, then sign).
+      if (!returning) { openWizard(id); return; }
       // The chosen course and start date are saved first. The application page then opens the document wizard for a student's
       // first application (the whole application is finished there), or the one page for a returning student (course and intake).
       const course = courseRows?.find((row) => row.courseId === chosenCourseId) ?? null;
@@ -288,7 +293,7 @@ export default function NewApplicationPage() {
     // Yes: a student with a business picks among its agents; a direct student with no application picks a business and agent.
     const yesBlocked = withAgency === true && !withBusiness && !ask;
     const noBlocked = withAgency === false && withBusiness;
-    const canContinue = !creating && withAgency !== null && !yesBlocked && !noBlocked && Boolean(chosenCourseId && chosenIntake)
+    const canContinue = !creating && withAgency !== null && !yesBlocked && !noBlocked && (!returning || Boolean(chosenCourseId && chosenIntake))
       && (withAgency === false || Boolean((withBusiness || chosenBusinessId) && chosenAgentId));
     const go = () => void startAsStudent(withAgency ? { businessId: withBusiness ? current?.businessId ?? "" : chosenBusinessId, agentId: chosenAgentId } : null);
     return (
@@ -354,7 +359,10 @@ export default function NewApplicationPage() {
           {yesBlocked ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">You applied to SLIT directly before. To work with an agency now, <Link to="/agency/messages" className="font-semibold underline">message SLIT</Link> to link you to it.</p> : null}
           {noBlocked ? <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">You are recorded with {current?.businessName}{current?.agentName ? ` (${current.agentName})` : ""}. To apply without an agent, <Link to="/agency/messages" className="font-semibold underline">message SLIT</Link>, or choose Yes.</p> : null}
 
-          {withAgency !== null && !yesBlocked && !noBlocked ? (
+          {withAgency !== null && !yesBlocked && !noBlocked && !returning ? (
+            <p className="mt-6 border-t border-background-200 pt-5 text-sm text-foreground-600">Continue opens the application wizard: upload your passport and documents, choose your course and start date, then check and sign.</p>
+          ) : null}
+          {withAgency !== null && !yesBlocked && !noBlocked && returning ? (
             <div className="mt-6 space-y-4 border-t border-background-200 pt-5" data-testid="student-course-intake">
               <h2 className="font-heading text-base font-semibold text-foreground-950">Course and start date</h2>
               <div>

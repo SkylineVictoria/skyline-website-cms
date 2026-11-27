@@ -24,6 +24,7 @@ import { contentPages } from "@/data/pages";
 import ResetPasswordPage from "@/pages/ResetPasswordPage";
 import AcceptInvitePage from "@/pages/agency/accept-invite/page";
 import ApplicationInvitePage from "@/pages/agency/application-invite/page";
+import PortalStudentsPage from "@/pages/agency/students/page";
 import ForgotPasswordPage from "@/pages/ForgotPasswordPage";
 
 import PortalProviders from "@/pages/agency/components/PortalProviders";
@@ -200,6 +201,7 @@ const routes: RouteObject[] = [
           { path: "applications", element: <PortalApplicationsPage /> },
           { path: "applications/new", element: <NewApplicationPage /> },
           { path: "applications/:id", element: <ApplicationDetailPage /> },
+          { path: "students", element: <PortalStudentsPage /> },
           { path: "documents", element: <PortalDocumentsPage /> },
           // Assessment Management for students (ASM-01): my assessments, the form, results, calendar.
           { path: "assessments", element: <StudentAssessmentsPage /> },

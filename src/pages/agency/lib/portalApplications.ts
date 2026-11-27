@@ -621,6 +621,9 @@ export interface WizardSummary {
   lastSaved: string;
   lastStep: string | null;
   updatedBy: string;
+  /** Every required answer filled except the student's own declaration and signature (20261127200517; undefined before it). */
+  agentComplete?: boolean;
+  agentMissing?: number;
 }
 
 export async function getWizardSummary(id: string): Promise<WizardSummary | null> {
@@ -1180,4 +1183,26 @@ export async function deleteDraftApplication(id: string): Promise<void> {
   if (error || !result?.ok) throw new Error(result?.error || "The application could not be deleted.");
   const outcome = result.results?.[0];
   if (!outcome?.ok) throw new Error(outcome?.error || "The application could not be deleted.");
+}
+
+export interface MyStudentRow {
+  id: string; name: string; email: string; studentNumber: string; phone: string; businessName: string;
+  agentId: string | null; agentName: string; applications: number;
+  latest: { id: string; reference: string; status: string; updatedAt: string } | null;
+}
+
+/** PORTAL-MY-STUDENTS: the business admin agent's whole business, or an agent's own students (portal_my_students, 20261127210517). */
+export async function listMyStudents(query = "", limit = 25, offset = 0): Promise<{ total: number; rows: MyStudentRow[] }> {
+  const { data, error } = await supabase.rpc("portal_my_students", { p_query: query, p_limit: limit, p_offset: offset });
+  if (error) throw new Error(error.message);
+  const d = (data ?? {}) as { total?: number; rows?: Array<Record<string, unknown>> };
+  return {
+    total: Number(d.total ?? 0),
+    rows: (d.rows ?? []).map((r) => ({
+      id: str(r.id), name: str(r.name), email: str(r.email), studentNumber: str(r.studentNumber), phone: str(r.phone),
+      businessName: str(r.businessName), agentId: r.agentId ? str(r.agentId) : null, agentName: str(r.agentName),
+      applications: Number(r.applications ?? 0),
+      latest: r.latest && typeof r.latest === "object" ? (() => { const l = r.latest as Record<string, unknown>; return { id: str(l.id), reference: str(l.reference), status: str(l.status), updatedAt: str(l.updatedAt) }; })() : null,
+    })),
+  };
 }

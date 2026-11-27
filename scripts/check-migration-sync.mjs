@@ -44,6 +44,7 @@ async function hostedVersions() {
     method: "POST", headers,
     body: JSON.stringify({ query: "select version, name from supabase_migrations.schema_migrations order by version", read_only: true }),
   });
+  // rule-policy: technical migration-sync-read Reports the HTTP status when hosted's migration history cannot be read.
   if (!q.ok) throw new Error(`could not read hosted's migration history: ${list.status} / ${q.status} ${await q.text()}`);
   return await q.json();
 }

@@ -4,7 +4,8 @@ import SignatureField, { SignatureImage, type SignatureValue } from "@/component
 import { FitHint, PdfCrop, PdfPageImage } from "@/components/assessment/pdf/PdfView";
 import QuestionView from "@/components/assessment/pdf/QuestionView";
 import { usePdf, type PdfHandle } from "@/components/assessment/pdf/pdfDoc";
-import { CARD, EYEBROW, FOCUS, PRIMARY, SECONDARY, STEP_IN, StickySlot, useAppHeaderOffset, useHeight } from "@/components/assessment/pdf/ui";
+import { CARD, EYEBROW, FOCUS, PRIMARY, SECONDARY, STEP_IN, StickySlot, useAppHeaderOffset, useHeight } from "@/components/assessment/pdf/ui";
+import TaskProgress, { type ProgressTask } from "@/components/assessment/pdf/TaskProgress";
 import { questionName, type AutoKey, type PdfTemplate, type TemplateField } from "@/lib/assessment/pdfTemplate/model";
 import { fieldValue, missingItems, questionInputs, studentFields, wizardSteps, type FitBox, type Missing, type PdfAnswers, type Table, type WizardStep } from "@/lib/assessment/pdfTemplate/student";
 import { mySignature } from "@/lib/assessment/api";
@@ -20,8 +21,10 @@ import type { Responses } from "@/lib/assessment/types";
  * The top bar shows the task, step X of Y and the progress; the side list (a drawer behind "Questions" on a phone) groups the steps
  * by task with their status. Preview as learner uses the same wizard.
  * ASM-QUESTION-POLISH (owner 2026-11-27): one scroll (the page; only the side list scrolls on its own, when taller than the screen);
- * the top bar sticks under the portal's own header; the question stays in view while the answers scroll (QuestionView); a progress
- * bar in task segments; steps fade in; a finished state ("All questions answered — review and submit") and an empty state.
+ * the top bar sticks under the portal's own header; the question stays in view while the answers scroll (QuestionView); steps fade in;
+ * a finished state ("All questions answered — review and submit") and an empty state.
+ * ASM-PROGRESS-BAR (owner 2026-11-27): the top bar is a card as wide as the content; its progress is one continuous bar with a tick
+ * and a label where each task starts (TaskProgress), the task's name above it when the labels do not fit.
  */
 /** The returned attempt this one follows: its marks and comments, shown next to the questions. */
 export interface PreviousAttempt { attemptNo: number; overallFeedback: string; marks: Record<string, { outcome: "S" | "NYS" | null; feedback: string }> }
@@ -100,7 +103,14 @@ export default function PdfWizard({ template, pdfBytes, responses, onChange, sav
     return 0;
   };
   const taskOfStep = "task" in step && step.task != null ? template.tasks.find((t) => Number(t.number) === step.task) : undefined;
-  const topTitle = taskOfStep ? `Task ${taskOfStep.number} · ${taskOfStep.title}` : `${record.unitCode}${record.unitCode ? " · " : ""}${record.unitName}`;
+  // the task's name: in the title while the progress shows its task labels, above the bar (TaskProgress) when it shows only ticks
+  const [compactProgress, setCompactProgress] = useState(false);
+  const unitTitle = `${record.unitCode}${record.unitCode ? " · " : ""}${record.unitName}`;
+  const topTitle = taskOfStep && !compactProgress ? `Task ${taskOfStep.number} of ${template.tasks.length} · ${taskOfStep.title}` : unitTitle;
+  const progressTasks = useMemo<ProgressTask[]>(() => groups.filter((g) => g.task != null).map((g) => ({
+    number: String(g.task), title: template.tasks.find((x) => Number(x.number) === g.task)?.title ?? "", start: g.items[0].i,
+    done: g.items.some(({ s }) => statusOf(s) === "done") && g.items.every(({ s }) => { const st = statusOf(s); return st === "done" || st === "info"; }),
+  })), [groups, template, missing, signed]); // eslint-disable-line react-hooks/exhaustive-deps
   const saveStatus = <p className={`text-sm font-medium ${saveClass}`} role="status" data-testid="autosave">{savedLabel || dueLabel}</p>;
   const list = <StepList groups={groups} steps={steps} template={template} index={index} statusOf={statusOf} go={go} />;
   const qTop = appTop + barH;
@@ -113,7 +123,7 @@ export default function PdfWizard({ template, pdfBytes, responses, onChange, sav
 
   return <StickySlot.Provider value={{ el: slotEl, top: qTop }}>
     <div ref={setRoot} className="mx-auto max-w-6xl pb-6" data-testid="pdf-wizard">
-      <div ref={setBar} className="sticky z-30 -mx-4 mb-5 border-b border-background-200/80 bg-white/90 px-4 pb-3 pt-2.5 shadow-[0_4px_16px_-12px_rgba(16,24,40,0.25)] backdrop-blur-md sm:-mx-6 sm:px-6" style={{ top: appTop }}>
+      <div ref={setBar} className="sticky z-30 mb-5 rounded-2xl bg-white/95 px-4 pb-3 pt-2.5 shadow-[0_1px_2px_rgba(16,24,40,0.04),0_6px_20px_-8px_rgba(16,24,40,0.14)] ring-1 ring-foreground-950/[0.06] backdrop-blur-md sm:px-5" style={{ top: appTop }} data-testid="wizard-bar">
         <div className="flex min-h-[44px] items-center gap-2">
           <button type="button" onClick={() => setDrawer(true)} className={`inline-flex min-h-[44px] shrink-0 cursor-pointer items-center gap-1.5 rounded-xl bg-white px-3 text-sm font-semibold text-foreground-800 ring-1 ring-foreground-950/10 lg:hidden ${FOCUS}`} aria-haspopup="dialog" aria-expanded={drawer} data-testid="questions-button">
             <i className="ri-list-check-2 text-base" aria-hidden="true" />Questions</button>
@@ -121,7 +131,7 @@ export default function PdfWizard({ template, pdfBytes, responses, onChange, sav
           {step.kind !== "question" ? <div className="hidden shrink-0 items-center gap-2 sm:flex">{saveStatus}{saveAction}</div> : null}
           <span className="shrink-0 rounded-full bg-background-100 px-2.5 py-1 text-xs font-semibold tabular-nums text-foreground-700" data-testid="wizard-step-count">Step {index + 1} of {steps.length}</span>
         </div>
-        <SegmentedProgress groups={groups} template={template} index={index} total={steps.length} statusOf={statusOf} />
+        <TaskProgress tasks={progressTasks} index={index} total={steps.length} currentTask={taskOfStep ? taskOfStep.number : null} outside={step.title} onCompact={setCompactProgress} />
         {/* the question's compact bar on a phone (QuestionView), just under this bar */}
         <div ref={setSlotEl} className="absolute inset-x-0 top-full" />
       </div>
@@ -163,26 +173,6 @@ function positionOf(steps: WizardStep[], template: PdfTemplate, step: WizardStep
   const inTask = template.questions.filter((q) => q.task === step.task);
   const n = inTask.findIndex((q) => q.key === step.key);
   return n >= 0 ? `Question ${n + 1} of ${inTask.length}` : "";
-}
-
-/** The progress in segments: one per task (sized by its steps), filled as its questions are answered; the current one outlined. */
-function SegmentedProgress({ groups, template, index, total, statusOf }: { groups: Group[]; template: PdfTemplate; index: number; total: number; statusOf: (s: WizardStep) => StepStatus }) {
-  return <div className="mt-2" data-testid="wizard-progress-wrap">
-    <div className="flex items-center gap-1" role="progressbar" aria-valuemin={1} aria-valuemax={total} aria-valuenow={index + 1} aria-label="Progress" data-testid="wizard-progress">
-      {groups.map((g, gi) => {
-        const done = g.items.filter(({ s, i }) => { const st = statusOf(s); return st === "done" || (st === "info" && i <= index); }).length;
-        const here = g.items.some(({ i }) => i === index);
-        const t = g.task != null ? template.tasks.find((x) => Number(x.number) === g.task) : null;
-        const label = t ? `Task ${t.number}` : gi === 0 ? "Start" : "Finish";
-        return <div key={gi} className="min-w-[14px] basis-0" style={{ flexGrow: g.items.length }} title={`${label}: ${done} of ${g.items.length} done`} data-testid="progress-segment" data-current={here || undefined}>
-          <div className={`h-2 overflow-hidden rounded-full ${here ? "bg-primary-100 ring-1 ring-primary-300" : "bg-background-200"}`}>
-            <div className="h-full rounded-full bg-gradient-to-r from-primary-500 to-primary-600 transition-[width] duration-500 ease-out" style={{ width: `${(done / g.items.length) * 100}%` }} />
-          </div>
-          {t ? <p className={`mt-1 hidden truncate text-2xs sm:block ${here ? "font-semibold text-primary-800" : "text-foreground-500"}`}>{label}</p> : null}
-        </div>;
-      })}
-    </div>
-  </div>;
 }
 
 /** The steps, grouped by task (collapsible; the current task open), with their status: ✓ done, • something required missing, ○ not started. */

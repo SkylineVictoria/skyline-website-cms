@@ -11,7 +11,8 @@ import { questionName, type PdfTemplate, type TemplateField, type TemplateQuesti
 import QuestionView from "@/components/assessment/pdf/QuestionView";
 import AnswerReadOnly from "@/components/assessment/pdf/AnswerReadOnly";
 import { usePdf, type PdfHandle } from "@/components/assessment/pdf/pdfDoc";
-import { CARD, EYEBROW, FOCUS, SOFT_CARD, STEP_IN, StickySlot, useHeight } from "@/components/assessment/pdf/ui";
+import { CARD, EYEBROW, FOCUS, SOFT_CARD, STEP_IN, StickySlot, useHeight } from "@/components/assessment/pdf/ui";
+import TaskProgress, { type ProgressTask } from "@/components/assessment/pdf/TaskProgress";
 import { answered, markingMissing, stampValues, type BundleAttempt, type PdfBundle, type StampValue } from "@/lib/assessment/pdfTemplate/output";
 import { reviewName } from "@/lib/assessment/pdfTemplate/student";
 
@@ -140,6 +141,13 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
   };
 
   const tasks = t.tasks;
+  // ASM-PROGRESS-BAR: the marking progress, as in the student's wizard: the current question of all, a tick where each task starts,
+  // a task finished when all its questions are marked
+  const qIndex = Math.max(0, t.questions.findIndex((q) => q.key === current));
+  const progressTasks: ProgressTask[] = tasks.map((tk) => ({ number: tk.number, title: tk.title, start: Math.max(0, t.questions.findIndex((q) => String(q.task) === tk.number)),
+    done: t.questions.some((q) => String(q.task) === tk.number) && t.questions.filter((q) => String(q.task) === tk.number).every((q) => !!marks[q.key]?.outcome) }))
+    .filter((x) => t.questions.some((q) => String(q.task) === x.number));
+  const curTask = t.questions[qIndex]?.task;
   return <StickySlot.Provider value={{ el: slotEl, top: headH }}><div className="min-h-screen bg-background-100" data-testid="pdf-marking">
     <header ref={setHead} className="top-0 z-30 flex flex-wrap md:sticky items-center justify-between gap-3 border-b border-background-200/80 bg-white/90 px-4 py-3 shadow-[0_4px_16px_-12px_rgba(16,24,40,0.25)] backdrop-blur-md">
       <div className="min-w-0"><Link to="/staff/assessments" className="text-xs text-foreground-500 underline">Assessments</Link>
@@ -153,6 +161,8 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
             className={`min-h-[36px] cursor-pointer whitespace-nowrap rounded-lg px-3 text-sm font-semibold transition-[background-color,color,box-shadow] ${FOCUS} ${view === v ? "bg-white text-foreground-950 shadow-[0_1px_3px_rgba(16,24,40,0.12)]" : "text-foreground-600 hover:text-foreground-900"}`}>{v === "questions" ? "Questions" : "Workbook pages"}</button>)}
         </div>
         <button type="button" className={`${SECONDARY} whitespace-nowrap`} onClick={() => void openStamped()} data-testid="open-stamped">Open stamped PDF</button></div>
+      {t.questions.length ? <div className="basis-full" data-testid="marking-progress">
+        <TaskProgress tasks={progressTasks} index={qIndex} total={t.questions.length} currentTask={curTask != null ? String(curTask) : null} label="Marking progress" /></div> : null}
     </header>
     {/* on a phone the header scrolls away (it is tall there); the question's compact bar (QuestionView) sticks at the top instead */}
     <div className="sticky top-0 z-30 h-0 md:hidden"><div ref={setSlotEl} className="absolute inset-x-0 top-0" /></div>

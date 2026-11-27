@@ -455,6 +455,11 @@ test("PDF-WORKBOOK CPCCPD2012 on its workbook: questions cropped from the PDF, t
   await page.getByTestId("pack-declaration").getByTestId("sign-button").click();
   await expect(page.getByTestId("review-ready")).toBeVisible({ timeout: 10_000 });
   await shot(page, "pdf-wizard-review-ready");
+  // ASM-PROGRESS-BAR: both tasks finished (✓), the bar full on the last step
+  for (const task of ["1", "2"]) await expect(page.locator(`[data-testid=progress-label][data-task="${task}"]`)).toHaveAttribute("data-state", "done");
+  await expect(page.getByTestId("progress-label").first()).toContainText("✓ Task 1");
+  expect(await page.getByTestId("progress-fill").evaluate((el) => (el as HTMLElement).style.width)).toBe("100%");
+  if (process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, "progress-student-review-done.png") });
   await page.getByTestId("submit").click();
   await expect(page.getByTestId("pdf-results")).toContainText(/receipt/i, { timeout: 20_000 });
   expect(sql(`select a.state || ':' || (a.declaration->>'text' like '%I have read and understood%' and a.declaration->>'text' like '%I declare that the answers I have provided are my own work.%')::text || ':' || (select string_agg(slot, ',' order by slot) from public.asm_pdf_signatures s where s.attempt_id = a.id)
@@ -478,6 +483,16 @@ test("PDF-WORKBOOK CPCCPD2012 marking on the workbook: the trainer marks, return
   await page.getByTestId("q-next-unmarked").click();
   await expect(page.getByTestId("question-marker")).toHaveAttribute("data-key", "1.2");
   await shot(page, "pdf-marking-questions");
+  // ASM-PROGRESS-BAR: the marking header shows the same bar: one tick per task, the current task in orange
+  await expect(page.getByTestId("marking-progress").getByTestId("progress-tick")).toHaveCount(2);
+  await expect(page.getByTestId("marking-progress").locator('[data-testid=progress-label][data-task="1"]')).toHaveAttribute("data-state", "current");
+  if (process.env.E2E_SHOTS_DIR) {
+    await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, "progress-marking-desktop.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, "progress-marking-phone.png") });
+    await page.setViewportSize({ width: 1280, height: 900 });
+  }
   for (const key of CPC_KEYS) await markQuestion(page, key, key === "2.3" ? "NYS" : "S", key === "2.3" ? "Add the safe method of use for each tool." : undefined);
   await expect(page.locator("[data-testid=marking-question][data-key='2.3']").getByTestId("mark-comment")).toHaveText("Add the safe method of use for each tool.");
   await page.getByTestId("marking-view-pages").click();
@@ -839,6 +854,77 @@ test("PDF-WORKBOOK preview as learner: the admin walks the student wizard of the
   await dlg.getByTestId("wizard-next").click();
   await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 3 of 36");
   await expect(dlg.getByTestId("answer-text").first()).toHaveValue(""); // closing forgot the answers
+});
+
+// ASM-PROGRESS-BAR (owner 2026-11-27): one continuous 6 px bar with a tick where each task starts, for any number of tasks; the task
+// labels under it only when they fit (never overlapping, never outside the bar), else only the ticks and the current task's name above
+// it; no segment for "Your details" or "Review & submit"; the header card as wide as the content. The workbook's questions are split
+// into 1, 2, 3 and 5 tasks (the template the preview reads, rewritten in the browser), each at desktop and phone width.
+type Tpl = { tasks: { number: string; title: string; firstPage: number; lastPage: number }[]; questions: { key: string; task: number | null; header: { page: number } }[]; pages: { page: number; task: number | null }[] };
+function withTasks(t: Tpl, n: number): Tpl {
+  const qPages = [...new Set(t.questions.map((q) => q.header.page))].sort((a, b) => a - b);
+  const first = Math.min(...t.tasks.map((x) => x.firstPage)), last = Math.max(...t.tasks.map((x) => x.lastPage));
+  const cuts = Array.from({ length: n }, (_, k) => qPages[Math.floor((k * qPages.length) / n)]);
+  const titles = ["Knowledge questions", "Practical", "Project", "Workplace report", "Final review"];
+  const tasks = cuts.map((pg, k) => ({ number: String(k + 1), title: titles[k], firstPage: k === 0 ? first : pg, lastPage: k < n - 1 ? cuts[k + 1] - 1 : last }));
+  const taskOf = (page: number) => tasks.findIndex((x) => page >= x.firstPage && page <= x.lastPage) + 1 || null;
+  return { ...t, tasks, questions: t.questions.map((q) => ({ ...q, task: taskOf(q.header.page) })), pages: t.pages.map((pg) => ({ ...pg, task: pg.task == null ? null : taskOf(pg.page) })) };
+}
+test("PDF-WORKBOOK progress bar: one bar with task ticks and labels for 1, 2, 3 and 5 tasks, desktop and phone", async ({ page }) => {
+  test.skip(!riiAssignment, "needs the RIICWD525E assessment above");
+  test.setTimeout(420_000);
+  const assessment = sql(`select assessment_id from public.asm_assignments where id = '${riiAssignment}'`);
+  const original = JSON.parse(sql(`select template::text from public.asm_versions where assessment_id = '${assessment}' and template is not null order by version_no desc limit 1`)) as Tpl;
+  let n = 1;
+  await page.route("**/rest/v1/rpc/asm_template_get", async (route) => {
+    const res = await route.fetch(); const body = await res.json();
+    if (body?.template) body.template = withTasks(body.template, n);
+    await route.fulfill({ response: res, json: body });
+  });
+  await signInAsAdmin(page, admin.email);
+  for (const tasks of [1, 2, 3, 5]) {
+    n = tasks;
+    const tpl = withTasks(original, n);
+    const m = Math.min(n, 2); // the task the preview opens in (task 2 when there is one)
+    const key = tpl.questions.find((q) => q.task === m)!.key;
+    for (const [w, h, name] of [[1280, 900, "desktop"], [390, 844, "phone"]] as const) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.goto(`/admin/assessments/${assessment}?step=q-${key}`);
+      await page.getByTestId("preview-learner").click();
+      const dlg = page.getByTestId("learner-preview");
+      await expect(dlg.getByTestId("step-question")).toHaveAttribute("data-question-key", key, { timeout: 60_000 });
+      const bar = dlg.getByTestId("task-progress");
+      await expect(bar).toHaveAttribute("data-tasks", String(n));
+      await expect(dlg.getByTestId("progress-tick")).toHaveCount(n);
+      await expect(dlg.getByTestId("progress-segment")).toHaveCount(0);
+      const track = (await dlg.getByTestId("progress-track").boundingBox())!;
+      expect(Math.round(track.height), `${n} tasks ${name}: the bar is 6 px`).toBe(6);
+      const mode = await bar.getAttribute("data-mode");
+      if (name === "desktop" && n <= 3) expect(mode, `${n} tasks on a desktop: the labels fit`).toBe("labels");
+      if (name === "phone" && n === 5) expect(mode, "5 tasks on a phone: only the ticks and the current task's name").toBe("compact");
+      if (mode === "labels") {
+        const boxes = (await Promise.all((await dlg.getByTestId("progress-label").all()).map((l) => l.boundingBox()))).map((b) => b!);
+        expect(boxes).toHaveLength(n);
+        boxes.forEach((b, i) => {
+          expect(b.x, `label ${i + 1} inside the bar`).toBeGreaterThanOrEqual(track.x - 0.5);
+          expect(b.x + b.width, `label ${i + 1} inside the bar`).toBeLessThanOrEqual(track.x + track.width + 0.5);
+          if (i) expect(b.x, `label ${i + 1} does not overlap label ${i}`).toBeGreaterThanOrEqual(boxes[i - 1].x + boxes[i - 1].width);
+        });
+        await expect(dlg.locator(`[data-testid=progress-label][data-task="${m}"]`)).toHaveAttribute("data-state", "current");
+        await expect(dlg.getByTestId("wizard-task")).toHaveText(new RegExp(`^Task ${m} of ${n} · `));
+      } else {
+        await expect(dlg.getByTestId("progress-label")).toHaveCount(0);
+        await expect(dlg.getByTestId("progress-caption")).toHaveText(new RegExp(`^Task ${m} of ${n} · `));
+      }
+      // the header card spans the wizard's content width
+      const card = (await dlg.getByTestId("wizard-bar").boundingBox())!, body = (await dlg.getByTestId("pdf-wizard").boundingBox())!;
+      expect(Math.abs(card.x - body.x) + Math.abs(card.width - body.width), `${n} tasks ${name}: the header card spans the content`).toBeLessThan(1.5);
+      if (process.env.E2E_SHOTS_DIR) await page.screenshot({ path: path.join(process.env.E2E_SHOTS_DIR, `progress-${n}-tasks-${name}.png`) });
+      await dlg.getByTestId("preview-close").click();
+      await expect(dlg).toHaveCount(0);
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
 });
 
 // The shared dropdown in the assessment area, and two simultaneous starts of the same assessment (moved here from the old

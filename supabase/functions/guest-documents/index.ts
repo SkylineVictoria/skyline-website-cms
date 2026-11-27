@@ -91,8 +91,9 @@ Deno.serve(async (request) => {
   };
   // Used only to decide whether the Visa step applies; the values themselves are never returned.
   const readValues = async () => {
-    const { data } = await admin.from("enrollment_applications").select("data").eq("id", applicationId).maybeSingle();
-    return ((data?.data as { values?: Record<string, unknown> } | null)?.values ?? {}) as Record<string, unknown>;
+    // STUDENT-OWNS-ANSWERS: the student's answers live on the student record; application_data merges them with the application's.
+    const { data } = await admin.rpc("application_data", { p_application: applicationId });
+    return ((data as { values?: Record<string, unknown> } | null)?.values ?? {}) as Record<string, unknown>;
   };
   const declaredList = async () => {
     const { data } = await admin.from("guest_document_links").select("declared").eq("id", linkId).maybeSingle();

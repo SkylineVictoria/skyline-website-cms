@@ -48,3 +48,8 @@ Status: DONE = enforced in the database and tested; PARTIAL = enforced but not a
   so the submit check (avetmiss_student_missing) sees them for every writer; the wizard asks the year completed. Status: DONE locally.
 - 2026-11-26 AVETMISS-PAGE-CHECK (20261127110517): avetmiss_answers_missing applies the Submit rules to the answers so every wizard
   page's Next stops while that page's AVETMISS answers are incomplete. Status: DONE locally.
+- 2026-11-27 STUDENT-OWNS-ANSWERS (20261127140517): every answer except the application's own (course / intake, consent, declaration,
+  signature, guardian, agent, OSHC, offer, fees: public.application_field) is stored once on the student (enrollment_students.details,
+  routed on insert and every save); English proficiency, school year, prior education rows and disability types reach the AVETMISS
+  columns / tables from the student's details (trigger student_details_avetmiss_sync, replacing avetmiss_answers_to_student). The NAT
+  source (student record) is unchanged; the submit check reads it as before. Status: DONE locally.

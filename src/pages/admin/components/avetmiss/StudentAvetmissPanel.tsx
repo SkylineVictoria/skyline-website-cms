@@ -65,14 +65,16 @@ export default function StudentAvetmissPanel({ studentId }: { studentId: string 
 
   const load = useCallback(async () => {
     setError("");
-    const [s, d, p, e, a] = await Promise.all([
+    const [s, d, p, e, a, sd] = await Promise.all([
       supabase.from("enrollment_students").select(STUDENT_COLUMNS).eq("id", studentId).maybeSingle(),
       supabase.from("student_disabilities").select("disability_type_code").eq("student_id", studentId),
       supabase.from("student_prior_education").select("prior_education_code, recognition_code, qualification_name").eq("student_id", studentId).order("created_at"),
       supabase.from("intake_enrolments").select("id, status, study_reason_code, funding_source_code, intake:course_intakes(name, label, start_date, course:cms_courses(code, name))").eq("student_id", studentId),
       supabase.from("enrollment_applications").select("id, reference, data").eq("student_id", studentId).order("updated_at", { ascending: false }).limit(1),
+      // STUDENT-OWNS-ANSWERS: the student's own answers live on the student record (details); the application keeps only its own.
+      supabase.from("enrollment_students").select("details").eq("id", studentId).maybeSingle(),
     ]);
-    const failed = [s, d, p, e, a].find((r) => r.error);
+    const failed = [s, d, p, e, a, sd].find((r) => r.error);
     if (failed?.error) { setError(failed.error.message); return; }
     setStudent((s.data as Student | null) ?? null);
     setDisabilities(((d.data ?? []) as { disability_type_code: string }[]).map((r) => r.disability_type_code));
@@ -84,7 +86,7 @@ export default function StudentAvetmissPanel({ studentId }: { studentId: string 
       intakeName: r.intake?.name || r.intake?.label || r.intake?.start_date || "Intake", course: r.intake?.course ? `${r.intake.course.code} ${r.intake.course.name}` : "",
     })));
     const latest = ((a.data ?? []) as { id: string; reference: string | null; data: { values?: AppValues } | null }[])[0];
-    setApp(latest ? { id: latest.id, reference: latest.reference, values: latest.data?.values ?? {} } : null);
+    setApp(latest ? { id: latest.id, reference: latest.reference, values: { ...(latest.data?.values ?? {}), ...(((sd.data as { details?: AppValues } | null)?.details) ?? {}) } } : null);
     setUsi(latest ? await usiState(latest.id).catch(() => null) : null);
   }, [studentId]);
   useEffect(() => { void load(); }, [load]);

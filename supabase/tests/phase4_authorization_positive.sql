@@ -1955,12 +1955,15 @@ select ok(not public.application_document_carry_category('Health Insurance') and
 select ok(not has_function_privilege('authenticated', 'public.application_document_carry_record(uuid, uuid, text)', 'execute'), 'a signed-in user cannot record a copy');
 select ok(not has_function_privilege('authenticated', 'public.application_document_carry_plan(uuid)', 'execute'), 'a signed-in user cannot read another student''s copy plan');
 select ok(not has_function_privilege('anon', 'public.application_document_carry_pending(uuid)', 'execute'), 'anon cannot ask for a copy');
-insert into public.student_prior_education(student_id, prior_education_code, recognition_code) values ('c7000000-0000-0000-0000-000000000001', '008', 'I');
+-- STUDENT-OWNS-ANSWERS (20261127140517): the student's answers are stored once on the student; an application keeps only its own.
 insert into public.enrollment_applications(id, agency_id, student_id, status, data) values
- ('c7100000-0000-0000-0000-000000000003', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft', '{}'),
- ('c7100000-0000-0000-0000-000000000004', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft', '{"values":{"prior_ed":"No"}}');
-select is((select (data #>> '{values,prior_education}')::jsonb -> 0 ->> 'code' from public.enrollment_applications where id = 'c7100000-0000-0000-0000-000000000003'), '008', 'a new application gets the student''s prior qualifications');
-select is((select data #>> '{values,prior_ed}' from public.enrollment_applications where id = 'c7100000-0000-0000-0000-000000000003'), 'Yes', 'and prior education is answered Yes');
-select is((select data #>> '{values,prior_education}' from public.enrollment_applications where id = 'c7100000-0000-0000-0000-000000000004'), null, 'an application answered No keeps No without rows');
+ ('c7100000-0000-0000-0000-000000000003', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft',
+  '{"values":{"passport_number":"N1234567","prior_ed":"Yes","prior_education":"[{\"code\":\"008\",\"recognition\":\"I\",\"name\":\"\"}]","courses_of_interest":["AUR30620"],"consent":"Yes"}}'),
+ ('c7100000-0000-0000-0000-000000000004', '13000000-0000-0000-0000-000000000001', 'c7000000-0000-0000-0000-000000000001', 'draft', '{"values":{"courses_of_interest":["BSB80120"]}}');
+select is((select string_agg(k, ',' order by k) from jsonb_object_keys((select data->'values' from public.enrollment_applications where id = 'c7100000-0000-0000-0000-000000000003')) k)
+  ~ 'passport_number|prior_ed', false, 'the student''s answers are not kept on the application');
+select is(public.application_data('c7100000-0000-0000-0000-000000000004') -> 'values' ->> 'passport_number', 'N1234567', 'another application of the student reads them from the student');
+select is((select count(*)::int from public.student_prior_education where student_id = 'c7000000-0000-0000-0000-000000000001' and prior_education_code = '008'), 1,
+  'the prior qualification reaches the AVETMISS table from the student''s answers');
 select * from finish();
 rollback;

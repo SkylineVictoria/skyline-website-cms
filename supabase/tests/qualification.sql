@@ -6,7 +6,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Enrolled application through the placement path (tentative, CoE copied), In Progress sets the application Active, no Active by hand,
 -- Admin undo, paused attendance, the portal view without notes, the daily start and no-show. Fixtures only; rolled back.
 -- Run: node scripts/lab/staff-lab.mjs sql
-select plan(61);
+select plan(70);
 
 create function pg_temp.as_user(p uuid) returns void language plpgsql as $$
 begin perform set_config('role', 'authenticated', true); perform set_config('request.jwt.claim.sub', p::text, true); end $$;
@@ -182,5 +182,47 @@ select set_config('qualification.sync', 'on', true);
 select ok(pg_temp.try($$update public.enrollment_applications set status = 'active' where id = 'a7000000-0000-0000-0000-000000000002'$$) like 'refused:%no Qualification In Progress%', 'gate 4: a placement without this application does not make it Active');
 select set_config('qualification.sync', '', true);
 select is((select count(*)::int from public.intake_enrolment_status_history where enrolment_id = pg_temp.qid() and to_status = 'withdrawn' and reason = 'Application Withdrawn'), 1, 'gate 3: the cancellation is in the history');
+-- ---------------------------------------------------------------- QUALIFICATION-LINK (20261128005517): every Qualification has its application
+insert into public.enrollment_students(id, agency_id, full_name, email) values
+ ('e6000000-0000-0000-0000-000000000013', 'c6000000-0000-0000-0000-000000000001', 'Zz Quest', 'q.student3@example.test'),
+ ('e6000000-0000-0000-0000-000000000014', 'c6000000-0000-0000-0000-000000000001', 'Zz Quill Two', 'q.student4@example.test');
+update public.enrollment_students set sex_code = 'M', birth_country_code = '1101', home_language_code = '1201', indigenous_status_code = '4',
+  school_level_code = '12', school_level_year = '2017', at_school_flag = 'N', labour_force_code = '01', disability_flag = 'N', prior_education_flag = 'N',
+  details = coalesce(details, '{}'::jsonb) || jsonb_build_object('first_name', split_part(full_name, ' ', 1), 'last_name', split_part(full_name, ' ', 2))
+    || '{"dob": "2000-01-01", "usi_number": "ABCDE12345", "au_street": "1 Test St", "au_suburb": "Melbourne", "au_zip": "3000", "au_state": "VIC"}'::jsonb
+ where id in ('e6000000-0000-0000-0000-000000000013', 'e6000000-0000-0000-0000-000000000014');
+insert into public.enrollment_applications(id, agency_id, student_id, student_name, student_email, status, data, reference)
+values ('a7000000-0000-0000-0000-000000000004', 'c6000000-0000-0000-0000-000000000001', 'e6000000-0000-0000-0000-000000000013', 'Zz Quest', 'q.student3@example.test', 'draft', '{"values": {"study_reason": "12"}}', 'ZZ-Q-4');
+insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id)
+values ('a7000000-0000-0000-0000-000000000004', 'course-q-test', 'Q101', 'Q Test Course', 'f6000000-0000-0000-0000-000000000001');
+set local session_replication_role = replica;
+update public.enrollment_applications set status = 'offer_accepted' where id = 'a7000000-0000-0000-0000-000000000004';
+set local session_replication_role = origin;
+select public.qualification_open_task('place_manually', 'course-q-test', null, 'a7000000-0000-0000-0000-000000000004', 'e6000000-0000-0000-0000-000000000013', 'Place student manually', 'test', current_date);
+-- 5. Re-add to intake links the Qualification and closes the task
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
+select is(pg_temp.try($$select public.rto_staff_place('f6000000-0000-0000-0000-000000000001', 'e6000000-0000-0000-0000-000000000013', 'CoE', current_date, 'Re-add test')$$), 'ok', 'gate 5: Re-add to intake places the student');
+select pg_temp.as_postgres();
+select is((select application_id from public.intake_enrolments where student_id = 'e6000000-0000-0000-0000-000000000013'), 'a7000000-0000-0000-0000-000000000004'::uuid, 'gate 5: the Qualification is linked to the student''s application for the course');
+select is((select status || '/' || closed_note from public.qualification_tasks where application_id = 'a7000000-0000-0000-0000-000000000004' and kind = 'place_manually'), 'done/Placed by hand: Re-add test', 'gate 5: its Place student manually task is closed');
+-- gate 1 is direction-aware: the linked application still moves forward, never back
+select is(pg_temp.try($$update public.enrollment_applications set status = 'coe_issued' where id = 'a7000000-0000-0000-0000-000000000004'$$), 'ok', 'gate 1: a linked application still moves forward');
+select ok(pg_temp.try($$update public.enrollment_applications set status = 'offer_issued' where id = 'a7000000-0000-0000-0000-000000000004'$$) like 'refused:%cancel the Qualification first%', 'gate 1: but never back');
+update public.enrollment_applications set status = 'enrolled' where id = 'a7000000-0000-0000-0000-000000000004';
+select is((select status from public.enrollment_applications where id = 'a7000000-0000-0000-0000-000000000004'), 'active', 'gate 5: Enrolled with its Qualification already In Progress becomes Active');
+select is((select count(*)::int from public.intake_enrolments where application_id = 'a7000000-0000-0000-0000-000000000004'), 1, 'gate 5: no second Qualification is created');
+-- 10. a student whose only application for the course was rejected: the direct application is made and linked
+insert into public.enrollment_applications(id, agency_id, student_id, student_name, student_email, status, data, reference)
+values ('a7000000-0000-0000-0000-000000000005', 'c6000000-0000-0000-0000-000000000001', 'e6000000-0000-0000-0000-000000000014', 'Zz Quill Two', 'q.student4@example.test', 'draft', '{"values": {"study_reason": "12"}}', 'ZZ-Q-5');
+insert into public.enrollment_application_courses(application_id, course_id, course_code, course_title, intake_id)
+values ('a7000000-0000-0000-0000-000000000005', 'course-q-test', 'Q101', 'Q Test Course', 'f6000000-0000-0000-0000-000000000001');
+set local session_replication_role = replica;
+update public.enrollment_applications set status = 'rejected' where id = 'a7000000-0000-0000-0000-000000000005';
+set local session_replication_role = origin;
+select pg_temp.as_user('a6000000-0000-0000-0000-000000000001');
+select is(pg_temp.try($$select public.rto_staff_place('f6000000-0000-0000-0000-000000000001', 'e6000000-0000-0000-0000-000000000014', 'CoE', current_date, 'No open application')$$), 'ok', 'gate 10: a student whose only application was rejected is placed');
+select pg_temp.as_postgres();
+select is((select a.source from public.intake_enrolments e join public.enrollment_applications a on a.id = e.application_id where e.student_id = 'e6000000-0000-0000-0000-000000000014'),
+  'direct enrolment', 'gate 10: the Qualification is linked to a new direct application, not the rejected one');
 select * from finish();
 rollback;

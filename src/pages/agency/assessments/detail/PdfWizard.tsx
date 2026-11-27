@@ -109,6 +109,7 @@ export default function PdfWizard({ template, pdfBytes, responses, onChange, sav
   const topTitle = taskOfStep && !compactProgress ? `Task ${taskOfStep.number} of ${template.tasks.length} · ${taskOfStep.title}` : unitTitle;
   const progressTasks = useMemo<ProgressTask[]>(() => groups.filter((g) => g.task != null).map((g) => ({
     number: String(g.task), title: template.tasks.find((x) => Number(x.number) === g.task)?.title ?? "", start: g.items[0].i,
+    // rule-policy: technical progress-task-done Display only: a task shows its tick when its steps are all done, from the same statuses as the step list.
     done: g.items.some(({ s }) => statusOf(s) === "done") && g.items.every(({ s }) => { const st = statusOf(s); return st === "done" || st === "info"; }),
   })), [groups, template, missing, signed]); // eslint-disable-line react-hooks/exhaustive-deps
   const saveStatus = <p className={`text-sm font-medium ${saveClass}`} role="status" data-testid="autosave">{savedLabel || dueLabel}</p>;

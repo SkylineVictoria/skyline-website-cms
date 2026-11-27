@@ -18,8 +18,10 @@ export interface ProgressTask {
 
 const GAP = 10;
 /** narrower than this (a phone): the current task's name above the bar instead of the labels, so the title is never cut */
+// rule-policy: technical progress-labels-width Layout only: below this width the bar shows the caption instead of the task labels.
 const LABELS_MIN_WIDTH = 480;
 
+// rule-policy: technical progress-aria-label Accessible name of the progress bar, overridden by the marking view.
 export default function TaskProgress({ tasks, index, total, currentTask, outside, label = "Progress", onCompact }: {
   tasks: ProgressTask[];
   /** the current step, 0-based */
@@ -70,6 +72,7 @@ export default function TaskProgress({ tasks, index, total, currentTask, outside
       {cur ? <><span className="text-primary-700">Task {cur.number} of {tasks.length}</span>{cur.title ? <span className="font-normal text-foreground-600"> · {cur.title}</span> : null}</> : outside ?? ""}</p> : null}
     <div className="relative h-1.5 rounded-full bg-background-200" role="progressbar" aria-valuemin={1} aria-valuemax={total} aria-valuenow={index + 1} aria-label={label}
       aria-valuetext={`Step ${index + 1} of ${total}${cur ? `, task ${cur.number} of ${tasks.length}` : ""}`} data-testid="progress-track">
+      {/* // rule-policy: technical progress-fill Display only: the bar is filled by the current step of all steps. */}
       <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-primary-500 to-primary-600 transition-[width] duration-500 ease-out" style={{ width: `${pct}%` }} data-testid="progress-fill" />
       {tasks.map((t) => <span key={t.number} className={`absolute top-1/2 h-3 w-0.5 -translate-y-1/2 rounded-full ${state(t) === "current" ? "bg-primary-700" : "bg-foreground-950/30"}`}
         style={{ left: `calc(${at(t.start) * 100}% - ${at(t.start) > 0 ? 1 : 0}px)` }} data-testid="progress-tick" data-task={t.number} aria-hidden="true" />)}

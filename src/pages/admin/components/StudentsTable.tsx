@@ -9,10 +9,7 @@ import { useToast } from "@/pages/admin/components/toastContext";
 import { deleteStudentEverything, studentDeletePreview, studentLinks, ENROLMENT_LABEL, ENROLMENT_ORDER, listStudents, PORTAL_ACCESS_LABEL, sendStudentInvitation, setStudentStatus, type EnrolmentStage, type PortalAccess, type StudentCounts, type StudentRow } from "@/pages/admin/lib/businessData";
 import EditStudentDialog from "@/pages/admin/components/EditStudentDialog";
 import { StatusBadge } from "@/pages/agency/components/PortalUI";
-import TakeActionMenu from "@/components/shared/application-status/TakeActionMenu";
-import ActivateInIntakeDialog from "@/components/shared/application-status/ActivateInIntakeDialog";
-import { getAllowedActions, statusInfo, useApplicationStatuses, type StatusAction } from "@/lib/applicationStatuses";
-import { changeApplicationStatus } from "@/pages/agency/lib/portalApplications";
+import { statusInfo, useApplicationStatuses } from "@/lib/applicationStatuses";
 import { formatPhone } from "../../../../supabase/functions/_shared/validation/identifiers";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
@@ -75,7 +72,6 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
   const [busyId, setBusyId] = useState("");
   // ONE-STATUS (owner, 2026-11-23): Student status, Enrolment and the main application's status are one Status dropdown.
   const workflow = useApplicationStatuses();
-  const [move, setMove] = useState<{ row: StudentRow; applicationId: string; action: StatusAction } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -140,29 +136,6 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
     const apps = (row.applicationRows ?? []).filter((a) => a.status !== "draft");
     return apps.find((a) => a.id === row.enrolment?.applicationId) ?? apps[0] ?? null;
   };
-  /** "Change status to" moves the signed-in user may make from this status (set_*, Admins; the database checks again). */
-  const movesFrom = (status: string) => getAllowedActions(workflow, status).filter((a) => a.action.startsWith("set_") && a.to);
-  const pickStatus = (row: StudentRow, value: string) => {
-    if (value === "__inactive") { setConfirmDisable(row); return; }
-    if (value === "__enable") { void changeStudentStatus(row, "Active"); return; }
-    const app = mainApplication(row);
-    const action = app ? movesFrom(app.status).find((a) => a.to === value) : undefined;
-    if (app && action) setMove({ row, applicationId: app.id, action });
-  };
-  const runMove = async () => {
-    if (!move) return;
-    setBusyId(move.row.id);
-    try {
-      const result = await changeApplicationStatus(move.applicationId, move.action.action, { note: "Changed on the Students list" });
-      push(`${move.row.name || move.row.email} is now ${result.label}.`);
-      setReload((n) => n + 1);
-    } catch (e) {
-      push(e instanceof Error ? e.message : "We could not change the status.", "error");
-    } finally {
-      setBusyId(""); setMove(null);
-    }
-  };
-
   // Deleting a student deletes all of their applications too (owner 2026-11-26): the database deletes every application with
   // its records and documents, then the student (admin_student_delete_all); portal-application-delete then removes the files.
   const submittedCount = (row: StudentRow) => (row.applicationRows ?? []).filter((application) => application.status !== "draft").length;
@@ -282,28 +255,21 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
                       {businessId ? null : <td><Link to={`/admin/businesses/${row.businessId}`} className="text-foreground-800 hover:text-primary-700">{row.businessName}</Link>{inactiveBusiness(row) ? <p className="text-xs font-medium text-foreground-600">Business inactive</p> : null}</td>}
                       <td>{row.agentId ? <Link to={`/admin/agents/${row.agentId}`} className="text-foreground-800 hover:text-primary-700">{row.agentName}</Link> : <span className="text-xs text-foreground-500">Not assigned</span>}</td>
                       <td data-testid={`student-status-cell-${row.id}`}>
+                        {/* STATUS-IN-APPLICATIONS (owner 2026-11-27): the application status is shown here, changed only in Applications
+                            (Take action); the student's own switch-off / switch-on stays. */}
                         {(() => {
                           const app = disabled ? null : mainApplication(row);
-                          const moves = app ? movesFrom(app.status) : [];
-                          const current = disabled ? "__inactive" : app?.status ?? "";
-                          const tone = disabled ? ENROLMENT_TONE.none : ENROLMENT_TONE[row.enrolment?.stage ?? "none"] ?? ENROLMENT_TONE.none;
                           return <div className="flex flex-col items-start gap-1 text-xs">
-                            <label className="sr-only" htmlFor={`student-status-${row.id}`}>Status for {row.name || row.email}</label>
-                            <SearchableSelect id={`student-status-${row.id}`} value={current} disabled={busyId === row.id || row.status === undefined}
-                              onChange={(e) => pickStatus(row, e.target.value)}
-                              className={`max-w-full cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium outline-none focus:ring-2 focus:ring-primary-100 disabled:opacity-60 ${tone}`}>
-                              {disabled ? <>
-                                <option value="__inactive">Inactive (switched off)</option>
-                                <option value="__enable">Switch back on</option>
-                              </> : <>
-                                {app ? <option value={app.status}>{busyId === row.id ? "Saving…" : statusInfo(workflow, app.status).label}</option> : <option value="">No submitted application</option>}
-                                {moves.map((a) => <option key={a.action} value={a.to ?? ""}>{a.to === "active" ? "Active (choose intake)" : statusInfo(workflow, a.to ?? "").label}</option>)}
-                                <option value="__inactive">Inactive (switch off student)</option>
-                              </>}
-                            </SearchableSelect>
+                            {disabled ? <span className={`rounded-full border px-2.5 py-1 font-medium ${ENROLMENT_TONE.none}`}>Inactive (switched off)</span>
+                              : app ? <StatusBadge status={app.status} /> : <span className="text-foreground-500">No submitted application</span>}
                             {!disabled && row.enrolment?.stage === "deposit_paid" ? <span className="font-medium text-teal-800">Deposit paid</span> : null}
                             {app ? <Link to={`/admin/applications/${app.id}`} className="text-foreground-700 hover:text-primary-700">
                               {[app.course, app.reference].filter(Boolean).join(" · ") || "Application"}</Link> : null}
+                            {row.status === undefined ? null : disabled
+                              ? <button type="button" disabled={busyId === row.id} onClick={() => void changeStudentStatus(row, "Active")}
+                                  className="font-semibold text-primary-700 hover:underline disabled:opacity-60" data-testid={`student-enable-${row.id}`}>{busyId === row.id ? "Saving…" : "Switch back on"}</button>
+                              : <button type="button" disabled={busyId === row.id} onClick={() => setConfirmDisable(row)}
+                                  className="font-medium text-foreground-600 hover:text-red-700 hover:underline disabled:opacity-60" data-testid={`student-disable-${row.id}`}>Switch off student</button>}
                             {/* Portal access as plain text (not a second status pill), with Invite when it is needed. */}
                             {(() => {
                               const access = disabled ? "disabled" : row.portalAccess ?? "not_invited";
@@ -333,15 +299,8 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
                                     {!disabled && application.status === "draft" ? <Link to={`/admin/applications/${application.id}`} className="font-semibold text-primary-700 hover:underline"><i className="ri-magic-line" aria-hidden="true" /> Finish Application</Link> : null}
                                   </span>
                                   <span className="inline-flex flex-col items-end gap-0.5">
-                                    {/* STUDENT-STATUS-MENU (owner, 2026-11-23): the application status (and so Enrolment) can be changed here by hand
-                                        when automation did not move it: the same Take action menu as the Applications list ("Change status to", Admins). */}
-                                    {/* ONE-STATUS: the main application's status is the Status dropdown; only the others show a badge here. */}
-                                    {application.id !== mainApplication(row)?.id ? <StatusBadge status={application.status} /> : null}
-                                    {!disabled && application.status !== "draft" && application.id !== mainApplication(row)?.id ? <TakeActionMenu
-                                      application={{ id: application.id, status: application.status, reference: application.reference, studentName: row.name ?? "", studentId: row.id,
-                                        course: application.course ? { title: application.course, code: application.course } : null, intake: application.intake }}
-                                      onDone={() => setReload((n) => n + 1)}
-                                      onResult={(message, ok) => push(message, ok ? undefined : "error")} /> : null}
+                                    {/* STATUS-IN-APPLICATIONS (owner 2026-11-27): status shown only; it is changed in Applications (Take action). */}
+                                    <StatusBadge status={application.status} />
                                     {disabled ? <span className="text-2xs font-medium text-foreground-500"><i className="ri-lock-line" aria-hidden="true" /> Locked</span> : null}
                                   </span>
                                 </li>
@@ -367,19 +326,6 @@ export default function StudentsTable({ businessId, agentId, emptyText, refreshK
 
       <EditStudentDialog student={editing} onClose={() => setEditing(null)} onSaved={() => setReload((n) => n + 1)} />
 
-      {move && move.action.to === "active" ? (
-        <ActivateInIntakeDialog application={{ id: move.applicationId, studentName: move.row.name ?? "" }} action={move.action}
-          onClose={() => setMove(null)}
-          onDone={(result) => { push(`${move.row.name || move.row.email} is now ${result.label}.`); setMove(null); setReload((n) => n + 1); }} />
-      ) : null}
-      <ConfirmDialog
-        open={Boolean(move) && move?.action.to !== "active"}
-        title={`Change ${move?.row.name || move?.row.email || "this student"} to ${move?.action.to ? statusInfo(workflow, move.action.to).label : ""}?`}
-        message="This moves the status by hand. To issue an offer letter or CoE / VoE, use Take action under Applications instead."
-        confirmLabel={busyId ? "Saving…" : "Change status"}
-        onConfirm={() => { if (!busyId) void runMove(); }}
-        onCancel={() => { if (!busyId) setMove(null); }}
-      />
       <DangerDialog open={Boolean(deleteAsk)} title={`Delete ${deleteAsk?.row.name || deleteAsk?.row.email || "this student"}?`}
         intro={`Are you sure? This deletes the student, their ${deleteAsk?.applications ?? 0} application${deleteAsk?.applications === 1 ? "" : "s"} and every application document and file below.`}
         items={deleteAsk?.items ?? []} confirmLabel="Yes, delete" busy={Boolean(busyId)} error={deleteError}

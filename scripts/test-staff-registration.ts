@@ -5310,3 +5310,11 @@ test("Previous-data review (owner 2026-11-27): a student applying again checks t
   assert.ok(ws.includes('label: "Everything is correct, continue"') && ws.includes("onePageView.kind === \"grid\" && onReviewDone"), "no sign step inside the popup");
   assert.ok(ws.includes("setOnePageView({ kind: \"sign\" });"), "the page opens on the signature after the check");
 });
+
+test("Status in Applications (owner 2026-11-27): the Students list shows the application status but changes it only in Applications", () => {
+  const table = read("src/pages/admin/components/StudentsTable.tsx");
+  assert.ok(!table.includes("TakeActionMenu") && !table.includes("changeApplicationStatus") && !table.includes("ActivateInIntakeDialog"), "no status change on the Students list");
+  assert.ok(table.includes("<StatusBadge status={application.status} />") && table.includes("<StatusBadge status={app.status} />"), "statuses shown");
+  assert.ok(table.includes("Switch off student") && table.includes("Switch back on"), "the student's own switch-off stays");
+  assert.ok(read("src/pages/agency/components/ApplicationsTable.tsx").includes("<TakeActionMenu"), "Applications keeps Take action");
+});

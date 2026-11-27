@@ -1235,3 +1235,24 @@ OSHC, offer, fees / payment / deposit, `hear_about`, internal `_*` keys. `is_stu
 - AVETMISS: trigger `student_details_avetmiss_sync` on `enrollment_students` copies English proficiency, school year, prior education rows
   and disability types from the details (replaces `avetmiss_answers_to_student`; `zzy_application_prior_education_fill` dropped).
 - Documents stay per application in this stage (DOCUMENT-CARRY copies them to a student's next application).
+
+## Student documents shared by their applications (STUDENT-DOCUMENTS, 2026-11-27)
+Migration `20261127150517_student_documents` (stage 2 of STUDENT-OWNS-ANSWERS); Edge Functions `portal-document-delete`,
+`portal-document-extract`, `portal-application-delete` (`_shared/draft-delete.ts`).
+- A personal document (`student_document_category`: Passport, Visa, English / English Test / English Certificate / PTE, Academic, Driving
+  Licence) gets `enrollment_application_documents.student_id` (trigger `a_document_student`); it is stored once and used by every application
+  of the student. Consent, Offer, CoE, Credit Evidence, Health Insurance and other documents stay with their application (`student_id` null).
+  `application_id` stays the application the file was uploaded in (its storage folder). Documents are still collected during an application.
+- `public.application_document_ids(app)` = the application's own documents + its student's documents; used by `current_upload_passport`,
+  `hr.require_validated_document_category`, `application_completion`, `skyline_private.wizard_application_progress`, `portal_validate_submission`,
+  `portal_save_document_review`, `portal_registration_add_evidence`, `notification_delivery_submission`. Screens list them through
+  `portal_application_document_ids(app)` (access-checked) and read the rows / files through policies `student_documents_read` and
+  `portal_docs_obj_student_read` (anyone who can open one of the student's applications).
+- One current document per student and category (Academic may have several): trigger `z_document_retire_previous` retires the earlier one
+  (`is_current = false`, file kept). Removing a student document (`portal-document-delete` -> `portal_student_document_removal`) retires it when
+  the student has an application past draft, else deletes it as before.
+- Deleting a draft: `application_delete_document_ids(app)` lists what is removed (its application documents, and student documents only when
+  the student has no other application); trigger `a_rehome_student_documents` moves the rest to the student's latest other application (the
+  file keeps its folder; `portal_guard_document_locator` allows only that move, under `portal.document_rehome`).
+- Submit: trigger `a_version_documents` adds `documentVersions` (id, category, filename, path, sha256) to `enrollment_application_versions.snapshot`.
+- DOCUMENT-CARRY copying is off: `application_document_carry_dispatch` dropped, `application_document_carry_pending` answers false.

@@ -445,12 +445,22 @@ export async function listStatusHistory(applicationId: string): Promise<StatusHi
   });
 }
 
+/** STUDENT-DOCUMENTS (20261127150517): an application's documents are its own (consent, offer, ...) plus its student's personal
+ *  documents, which every application of the student shares. */
+async function applicationDocumentIds(applicationId: string): Promise<string[]> {
+  const { data, error } = await supabase.rpc("portal_application_document_ids", { p_application: applicationId });
+  if (error) throw new Error(error.message);
+  return Array.isArray(data) ? (data as unknown[]).map(String) : [];
+}
+
 export async function listApplicationDocuments(applicationId: string): Promise<DocumentRow[]> {
   countPortalMetric("documents.metadata");
+  const ids = await applicationDocumentIds(applicationId).catch(() => null);
+  if (!ids || ids.length === 0) return [];
   const { data, error } = await supabase
     .from("enrollment_application_documents")
     .select("id, category, filename, mime_type, file_size, review_state, is_current, created_at, storage_path, metadata")
-    .eq("application_id", applicationId)
+    .in("id", ids)
     .order("created_at", { ascending: false });
   if (error) return [];
   return (data ?? []).map((row) => {
@@ -1009,9 +1019,10 @@ export async function uploadApplicationDocument(input: UploadDocumentInput): Pro
   // A retry after a lost response must return the original document, rather than
   // creating another private object and another qualification.
   const protectedCategory = checkedDocumentCategory(category);
+  const documentIds = await applicationDocumentIds(applicationId);
   const { data: duplicate, error: duplicateError } = await supabase.from("enrollment_application_documents")
-    .select("id, storage_path, category, filename")
-    .eq("application_id", applicationId)
+    .select("id, application_id, storage_path, category, filename")
+    .in("id", documentIds.length ? documentIds : ["00000000-0000-0000-0000-000000000000"])
     .eq("category", category)
     .eq("is_current", true)
     .eq("metadata->>contentSha256", contentSha256)
@@ -1020,8 +1031,9 @@ export async function uploadApplicationDocument(input: UploadDocumentInput): Pro
   if (duplicate) {
     const id = String(duplicate.id);
     const path = String(duplicate.storage_path);
-    if (protectedCategory) {
-      // Check retries against the current passport before returning the saved file.
+    // Check retries against the current passport before returning the saved file. The same file the student already gave in another
+    // application (STUDENT-DOCUMENTS) is simply theirs already: nothing to upload or check again.
+    if (protectedCategory && String(duplicate.application_id) === applicationId) {
       await uploadValidatedDocument("enrollment", applicationId, category, file, id);
     }
     return { id, path, category: String(duplicate.category), filename: String(duplicate.filename) };

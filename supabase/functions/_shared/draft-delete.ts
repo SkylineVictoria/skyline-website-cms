@@ -22,11 +22,13 @@ export type DeleteOutcome =
   | { id: string; ok: true; reference: string; documents: number }
   | { id: string; ok: false; error: string; failedFiles?: string[] };
 
-/** Only objects under <applicationId>/ in the documents bucket may be removed through this flow. */
+/** Only objects under an application folder in the documents bucket may be removed through this flow: the application's own, or
+ *  (STUDENT-DOCUMENTS) the folder a student document was first uploaded in before it moved to this application. The list comes from
+ *  the database (application_delete_document_ids), never from the caller. */
 export function validStoragePath(applicationId: string, object: StoredObject): boolean {
   const segments = object.path.split("/");
   // eslint-disable-next-line no-control-regex -- storage paths must not contain control characters
-  return object.bucket === "enrollment-documents" && segments.length >= 2 && segments[0] === applicationId && !segments.some((s) => !s || s === "." || s === "..") && !/[\\%\u0000-\u001f]/.test(object.path);
+  return object.bucket === "enrollment-documents" && segments.length >= 2 && (segments[0] === applicationId || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segments[0])) && !segments.some((s) => !s || s === "." || s === "..") && !/[\\%\u0000-\u001f]/.test(object.path);
 }
 
 export async function deleteDraft(port: DeletePort, applicationId: string): Promise<DeleteOutcome> {

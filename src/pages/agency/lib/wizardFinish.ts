@@ -59,3 +59,18 @@ export function avetmissMissingScreen(item: string): string {
   if (/aboriginal|school|employment|disability|prior/.test(t)) return "identifier";
   return "";
 }
+
+/**
+ * The AVETMISS "year school level completed": 4 digits between 1920 and this year, or blank (owner 2026-11-27). The academic
+ * document can give a range ("2005–2009") or a date, which the database refuses; its last year is used, else the year already
+ * entered when that one is valid, else blank.
+ */
+export function avetmissYear(current: unknown, academic?: unknown): string {
+  const now = new Date().getFullYear();
+  const valid = (y: string) => /^\d{4}$/.test(y) && Number(y) >= 1920 && Number(y) <= now;
+  const fromAcademic = (String(academic ?? "").match(/\d{4}/g) ?? []).filter(valid).pop();
+  if (fromAcademic) return fromAcademic;
+  const entered = String(current ?? "").trim();
+  if (valid(entered)) return entered;
+  return (entered.match(/\d{4}/g) ?? []).filter(valid).pop() ?? "";
+}

@@ -5,6 +5,7 @@ import UsiPanel from "@/components/shared/application-form/UsiPanel";
 import AddressSearch from "@/components/shared/wizard/AddressSearch";
 import { useLocation, useNavigate } from "react-router-dom";
 import { openDeclarationKey } from "@/pages/agency/lib/wizardConfig";
+import { avetmissYear } from "@/pages/agency/lib/wizardFinish";
 import CourseSearchField from "@/pages/agency/components/CourseSearchField";
 import { formatStoredValue } from "../../../../supabase/functions/_shared/validation/identifiers";
 import type { AppField, AppSection } from "@/data/applicationForms";
@@ -549,7 +550,7 @@ export default function ApplicationWorkspace({
     // it is answered from the contact's phone number (an Australian +61 number means Yes).
     const ecPhone = String(collected.ec_phone ?? "").replace(/\s/g, "");
     if (ecPhone) collected.ec_in_au = ecPhone.startsWith("+61") || /^0[1-9]\d{8}$/.test(ecPhone) ? "Yes" : "No";
-    if (String(collected.academic_year ?? "").trim()) collected.year_completed = String(collected.academic_year);
+    collected.year_completed = avetmissYear(collected.year_completed, collected.academic_year);
     const coursesRaw = (collected[COURSE_FIELD] as string[] | undefined) ?? [];
     return { values: collected, courses: coursesRaw };
   }, []);

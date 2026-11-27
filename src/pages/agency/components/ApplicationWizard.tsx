@@ -26,7 +26,7 @@ import WizardFinishSteps from "@/pages/agency/components/WizardFinishSteps";
 import { ResidencyQuestions } from "@/pages/agency/components/WizardResidency";
 import { PR_ANSWER, isDomesticPassport, notPermanentSubclass, residencyAnswered, studentKind, visaNeed, type VisaNeed } from "@/pages/agency/lib/residency";
 import { carriedFromLabel } from "@/pages/agency/lib/documentAttachments";
-import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingField, avetmissMissingScreen, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
+import { AVETMISS_EXTRA_FIELDS, AVETMISS_FIELD_SCREEN, CHECKLIST_OPTIONS, FINISH_SCREEN_FIELDS, OSHC_SELF_CONFIRM, avetmissMissingField, avetmissMissingScreen, avetmissYear, optionsOf, type FinishSummary } from "@/pages/agency/lib/wizardFinish";
 import { parseCodeList, parsePriorEducation, priorEducationProblem } from "@/pages/admin/components/avetmiss/avetmissValues";
 import { syncApplicationAvetmiss } from "@/pages/admin/components/avetmiss/avetmissSync";
 import { academicPrefill } from "@/pages/agency/lib/educationLevels";
@@ -1068,7 +1068,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       // AVETMISS-SUBMIT-FIX: the year the highest school level was completed (4 digits, after age 5, not in the future).
       const schoolLevel = filled("school_level");
       if (schoolLevel && !/ - 02$/.test(schoolLevel)) {
-        const year = filled("year_completed"); const born = Number(String(answers.dob ?? "").slice(0, 4)); const now = new Date().getFullYear();
+        const year = avetmissYear(filled("year_completed")) || filled("year_completed"); const born = Number(String(answers.dob ?? "").slice(0, 4)); const now = new Date().getFullYear();
         if (!/^\d{4}$/.test(year)) errors.year_completed = "Enter the year (4 digits).";
         else if (Number(year) > now || (born && Number(year) < born + 5)) errors.year_completed = `Enter a year between ${born ? born + 5 : 1900} and ${now}.`;
         values.year_completed = year;

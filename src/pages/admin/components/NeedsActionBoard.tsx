@@ -18,6 +18,8 @@ const AREAS: { key: string; label: string; icon: string; to: string; tone: strin
   { key: "tickets", label: "Open support tickets", icon: "ri-customer-service-2-line", to: "/admin/tickets", tone: "text-sky-700 bg-sky-50", empty: "No open tickets." },
   // QUALIFICATION: PRISMS reports, refund checks and students to place by hand (qualification_tasks_open).
   { key: "qualificationTasks", label: "Qualification tasks", icon: "ri-graduation-cap-line", to: "/admin/qualifications", tone: "text-amber-700 bg-amber-50", empty: "No Qualification task is open." },
+  // APPLICATION-FINISH: applications and Qualifications out of step (qualification_consistency, read-only).
+  { key: "outOfStep", label: "Applications out of step", icon: "ri-link-unlink", to: "/admin/qualifications", tone: "text-red-700 bg-red-50", empty: "Every application is in step with its Qualification." },
   { key: "certificatesReady", label: "Ready for a certificate", icon: "ri-award-line", to: "/admin/lms/completion", tone: "text-green-700 bg-green-50", empty: "No one ready yet." },
   { key: "batchesWithoutClasses", label: "Intakes with no class dates", icon: "ri-calendar-close-line", to: "/admin/lms/intakes", tone: "text-red-700 bg-red-50", empty: "Every intake with students has classes." },
   { key: "classesToday", label: "Classes today", icon: "ri-calendar-2-line", to: "/admin/lms/timetable", tone: "text-foreground-700 bg-background-100", empty: "No classes today." },
@@ -35,11 +37,12 @@ export default function NeedsActionBoard() {
   const [data, setData] = useState<Today | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    Promise.all([supabase.rpc("admin_today"), supabase.rpc("lms_batches_without_classes"), supabase.rpc("qualification_tasks_open")]).then(([today, extra, tasks]) => {
+    Promise.all([supabase.rpc("admin_today"), supabase.rpc("lms_batches_without_classes"), supabase.rpc("qualification_tasks_open"), supabase.rpc("qualification_consistency")]).then(([today, extra, tasks, outOfStep]) => {
       if (!live) return;
       if (today.error) { setData(null); return; }
       setData({ ...(today.data as Today), ...(extra.error || !extra.data ? {} : { batchesWithoutClasses: extra.data as Area }),
-        ...(tasks.error || !tasks.data ? {} : { qualificationTasks: tasks.data as Area }) });
+        ...(tasks.error || !tasks.data ? {} : { qualificationTasks: tasks.data as Area }),
+        ...(outOfStep.error || !outOfStep.data ? {} : { outOfStep: outOfStep.data as Area }) });
     });
     return () => { live = false; };
   }, []);

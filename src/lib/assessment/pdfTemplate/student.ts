@@ -70,6 +70,7 @@ export interface Missing { code: "unanswered" | "required" | "table" | "declarat
  */
 export function missingItems(t: PdfTemplate, a: PdfAnswers, signed: readonly string[]): Missing[] {
   const out: Missing[] = [];
+  // rule-policy: technical asm-student-date-mirror Mirrors asm_template_missing: a date field is filled by the system, so it is never asked for.
   const mine = studentFields(t).filter((f) => f.role === "student" && f.kind !== "date" && !onEvaluation(t, f));
   for (const q of t.questions) {
     const own = mine.filter((f) => f.questionKey === q.key && f.kind !== "signature");

@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- AVETMISS-NAT (20261127060517): the NAT files build from the database's own data and a valid set passes the checker; every kind of
 -- break (code, required field, cross-file link, outcome date) is reported. Rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(16);
+select plan(18);
 
 -- The NAT files build from this database (every file present, JSON arrays).
 select ok((select bool_and(public.avetmiss_nat_build() ? f) from unnest(array['NAT00010','NAT00020','NAT00030','NAT00060','NAT00080',
@@ -44,5 +44,8 @@ select ok(pg_temp.probs(jsonb_set((select n from v), '{NAT00030,0,level}', 'null
 select ok(pg_temp.probs(jsonb_set((select n from v), '{NAT00080,0,missing}', '["USI"]')) like '%NAT00080: USI missing%', 'a client record missing its USI');
 select ok(pg_temp.probs(jsonb_set((select n from v), '{NAT00130,0,client_id}', '"S9999"')) like '%NAT00130: client not in NAT00080%', 'a completion for a client not in NAT00080');
 
+-- QUALIFICATION (2026-11-27): a Cancelled Qualification closes its started units as withdrawn (40) on the withdrawal date
+select is(pg_temp.probs(pg_temp.with120('outcome', '"40"')), '', 'a unit withdrawn with its Qualification (40) reports the withdrawal date as its actual end');
+select ok(pg_temp.probs(pg_temp.with120('outcome', '"40"') #- '{NAT00120,0,actual_end}') like '%final outcome 40 needs its actual end date%', 'a withdrawn unit (40) without the withdrawal date is a problem');
 select * from finish();
 rollback;

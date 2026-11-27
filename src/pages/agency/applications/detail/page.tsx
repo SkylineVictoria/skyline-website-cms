@@ -6,6 +6,7 @@ import StudentPortalInvite from "@/pages/agency/components/StudentPortalInvite";
 import StudentWithdraw from "@/pages/agency/components/StudentWithdraw";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
+import { Modal } from "@/pages/admin/components/ui";
 import SignedApplicationCard from "@/pages/agency/components/SignedApplicationCard";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -233,6 +234,34 @@ export default function ApplicationDetailPage() {
     return () => { live = false; };
   }, [studentBlank, id]);
 
+  // PREVIOUS-DATA-REVIEW (owner 2026-11-27): a student applying again opens their new application in a popup "We have your details from
+  // your previous application" with the one-page cards (Edit on each); the signature comes after they confirm the details. Once per
+  // application on this browser (the popup also closes for good when they continue).
+  const reviewKey = `slit-previous-data-review:${portalScopeCacheKey()}:${id}`;
+  // undefined while the student's other applications are being read; null when this is their first.
+  const [previousRef, setPreviousRef] = useState<string | null | undefined>(undefined);
+  const [reviewDone, setReviewDone] = useState(() => { try { return window.localStorage.getItem(reviewKey) === "1"; } catch { return false; } });
+  const [signAfterReview, setSignAfterReview] = useState(false);
+  const draftForStudent = role === "student" && !!application && application.status === "draft";
+  useEffect(() => {
+    if (!draftForStudent || reviewDone) return;
+    let live = true;
+    listApplications()
+      .then((rows) => {
+        const earlier = rows.filter((row) => row.id !== id && (!!row.submittedAt || (row.status ?? "draft") !== "draft"))
+          .sort((a, b) => (b.submittedAt ?? b.updatedAt).localeCompare(a.submittedAt ?? a.updatedAt));
+        if (live) setPreviousRef(earlier[0] ? earlier[0].reference || "your previous application" : null);
+      })
+      .catch(() => { if (live) setPreviousRef(null); });
+    return () => { live = false; };
+  }, [draftForStudent, reviewDone, id]);
+  const finishReview = () => {
+    try { window.localStorage.setItem(reviewKey, "1"); } catch { /* per-browser convenience only */ }
+    setReviewDone(true);
+    setSignAfterReview(true);
+    setWorkspaceKey((key) => key + 1);
+  };
+
   // Do not unmount an open wizard during a background detail refresh. Its
   // document and form state are independently persisted by the wizard/RPCs.
   // Administrators of the main site manage applications inside the CMS (this also covers links from emails).
@@ -297,6 +326,10 @@ export default function ApplicationDetailPage() {
   // The same two statuses portal_lock_draft lets SLIT admins save (migration 20261127010517).
   const adminEdits = isSlit && (application.status === "submitted" || application.status === "under_review");
   const readOnly = (!isEditableStatus(workflow, application.status) && !adminEdits) || handoffBlocks;
+  const workspaceAgentEmail = application.agentEmail || (role === "agent" ? profile?.email ?? "" : "");
+  const workspaceAgentPhone = application.agentPhone || (role === "agent" ? profile?.phone ?? "" : "");
+  const reviewOpen = draftForStudent && !readOnly && !reviewDone && typeof previousRef === "string";
+  const reviewPending = draftForStudent && !readOnly && !reviewDone && previousRef === undefined;
   const nextHint = statusInfo(workflow, application.status).hint;
   const agentName = application.agentName || profile?.fullName || "";
   const agencyName = application.agencyName || agency?.name || "";
@@ -432,16 +465,51 @@ export default function ApplicationDetailPage() {
       ) : null}
 
       <div className="mt-5">
-        {tab === "form" ? (
+        {tab === "form" && reviewOpen ? (
+          <Modal open keepOpen width="max-w-6xl" title="We have your details from your previous application"
+            onClose={finishReview}>
+            <div className="space-y-4" data-testid="previous-data-review">
+              <p className="rounded-md border border-primary-200 bg-primary-50 px-3 py-2 text-sm text-foreground-800">
+                We filled this application in with your details and documents from <b>{previousRef}</b>. Check each section below and
+                press <b>Edit</b> to change anything. When everything is correct, continue to sign.
+              </p>
+            <ApplicationWorkspace
+              key={`${workspaceKey}:${reviewOpen ? "review" : "page"}`}
+              application={application}
+              agentName={agentName}
+              agentEmail={workspaceAgentEmail}
+              agentPhone={workspaceAgentPhone}
+              agencyName={agencyName}
+              readOnly={readOnly}
+              onePage
+              onReviewDone={reviewOpen ? finishReview : undefined}
+              startOnSign={!reviewOpen && signAfterReview}
+              initialEdit={searchParams.get("edit") === "course" ? "courses_of_interest" : undefined}
+              sentToStudent={handoff?.state === "with_student"}
+              auditAccess={isSlit}
+              reviewBar={isSlit ? (issues: number) => <ReviewIssuesReporter count={issues} onCount={setReviewIssues} /> : undefined}
+              onSaved={refreshAfterSave}
+              onSentToStudent={() => { void reloadHandoff(); void load(); setWorkspaceKey((key) => key + 1);
+                toast.show(role === "student" ? "Signed. Your parent or guardian signs next." : "Sent to the student to review and sign."); }}
+              onSubmitted={(reference, studentName) =>
+                navigate(isSlit && paths.area === "portal" ? "/agency/all-applications" : paths.list, { state: { submittedReference: reference, submittedName: studentName, submittedPath: paths.detail(application.id) } })}
+            />
+            </div>
+          </Modal>
+        ) : tab === "form" && reviewPending ? (
+          <PortalLoading label="Loading application…" />
+        ) : tab === "form" ? (
           <ApplicationWorkspace
-            key={workspaceKey}
+            key={`${workspaceKey}:${reviewOpen ? "review" : "page"}`}
             application={application}
             agentName={agentName}
-            agentEmail={application.agentEmail || (role === "agent" ? profile?.email ?? "" : "")}
-            agentPhone={application.agentPhone || (role === "agent" ? profile?.phone ?? "" : "")}
+            agentEmail={workspaceAgentEmail}
+            agentPhone={workspaceAgentPhone}
             agencyName={agencyName}
             readOnly={readOnly}
             onePage
+            onReviewDone={reviewOpen ? finishReview : undefined}
+            startOnSign={!reviewOpen && signAfterReview}
             initialEdit={searchParams.get("edit") === "course" ? "courses_of_interest" : undefined}
             sentToStudent={handoff?.state === "with_student"}
             auditAccess={isSlit}

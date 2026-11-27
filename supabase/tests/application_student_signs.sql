@@ -335,8 +335,9 @@ reset role;
 
 -- SUBMITTED-NEEDS-SIGNATURE (20261127180517): only a student-signed application becomes Submitted, whoever asks.
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
-select lives_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'under_review', 'Checking')$$, 'staff move the signed application on to Under review');
-select lives_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'submitted', 'Back')$$, 'and back to Submitted: what is Submitted is still what the student signed');
+-- STATUS-OVERRIDES (20261128012517): Under review is legacy and no longer a target.
+select throws_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'under_review', 'Checking')$$, null, null, 'staff can no longer move the signed application to Under review (legacy)');
+select ok((select status from public.enrollment_applications where id = 'e5100000-0000-0000-0000-000000000002') <> 'under_review', 'the refused move changes nothing (the application never reaches Under review)');
 select lives_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'action_required', 'Please fix the passport')$$, 'staff send it back for a correction');
 select throws_ok($$select public.portal_set_application_status('e5100000-0000-0000-0000-000000000002', 'submitted', 'Set by staff')$$, '42501',
   'Only the student can submit this application, by signing it (under 18: with their parent or guardian). Send it to the student to sign.', 'a SLIT admin cannot Set to Submitted after a correction: the student signs again');

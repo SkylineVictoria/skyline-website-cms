@@ -184,7 +184,7 @@ language sql stable security definer set search_path to 'public' as $$
     from apps a where a.status = 'active' and not exists (select 1 from public.intake_enrolments e where e.application_id = a.id and e.status in ('active', 'deferred', 'suspended'))
   union all
   select 'APP-ENROLLED-STARTED', 'Application Enrolled but its Qualification has started', coalesce(a.reference, 'Application'), a.id, e.id, a.student_id, a.status_at
-    from apps a join public.intake_enrolments e on e.application_id = a.id and e.status in ('active', 'deferred', 'suspended') where a.status = 'enrolled'
+    from apps a join public.intake_enrolments e on e.application_id = a.id and e.status = 'active' where a.status = 'enrolled'
   union all
   -- rule-policy: technical consistency-enrolled-days An application Enrolled for 3 days with nothing placed is flagged (owner 2026-11-27).
   select 'APP-ENROLLED-NOT-PLACED', 'Application Enrolled for 3+ days with no Qualification', coalesce(a.reference, 'Application'), a.id, null, a.student_id, a.status_at

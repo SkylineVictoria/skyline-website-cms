@@ -11,6 +11,7 @@ import { questionName, type PdfTemplate, type TemplateField, type TemplateQuesti
 import QuestionView from "@/components/assessment/pdf/QuestionView";
 import AnswerReadOnly from "@/components/assessment/pdf/AnswerReadOnly";
 import { usePdf, type PdfHandle } from "@/components/assessment/pdf/pdfDoc";
+import { CARD, EYEBROW, FOCUS, SOFT_CARD, STEP_IN, StickySlot, useHeight } from "@/components/assessment/pdf/ui";
 import { answered, markingMissing, stampValues, type BundleAttempt, type PdfBundle, type StampValue } from "@/lib/assessment/pdfTemplate/output";
 import { reviewName } from "@/lib/assessment/pdfTemplate/student";
 
@@ -25,6 +26,9 @@ import { reviewName } from "@/lib/assessment/pdfTemplate/student";
  * ASM-QUESTION-TEXT (owner 2026-11-27): the Questions view (the default) marks one question at a time, shown as in the student's
  * wizard (its text read from the PDF, pictures, See on page), the student's answer under it, Satisfactory Yes / No as large toggles,
  * a comment, Next unmarked. The Workbook pages view is the workbook with the answers in place (checklists, Appendix A, office use).
+ * ASM-QUESTION-POLISH (owner 2026-11-27): one scroll: the page scrolls as one, the header sticks, the side panel sticks beside it and
+ * scrolls on its own only when taller than the screen; the question stays in view while the answer scrolls (Workbook / Text, as the
+ * student's wizard); the same soft cards; "All questions marked" leads to the overall result.
  */
 type Mark = { outcome: "S" | "NYS" | null; feedback: string };
 const BTN = "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50";
@@ -96,7 +100,13 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
     void ensureAcknowledgedCopy(bundle).then((stored) => { if (stored && !off) void reload(); }).catch(() => undefined);
     return () => { off = true; };
   }, [bundle]); // eslint-disable-line react-hooks/exhaustive-deps
-  const goPage = (page: number) => document.querySelector(`[data-pdf-page="${page}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const [head, setHead] = useState<HTMLElement | null>(null);
+  const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
+  const headH = useHeight(head);
+  // the page scrolls (one scroll bar): a page of the workbook is brought just under the sticky header
+  const scrollToEl = (el: Element | null) => { if (el) window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - (head && getComputedStyle(head).position === "sticky" ? headH : 0) - 12, behavior: "smooth" }); };
+  const goPage = (page: number) => scrollToEl(document.querySelector(`[data-pdf-page="${page}"]`));
+  const goOverall = () => scrollToEl(document.querySelector("[data-testid=marking-overall]"));
   // what the release needs (the same rules as the database's asm_template_marking_missing): every question marked, every checklist row the trainer ticks
   const missing = useMemo(() => markingMissing(t, Object.entries(marks).map(([questionId, m]) => ({ questionId, outcome: m.outcome })), assessor.pdfChoice), [t, marks, assessor.pdfChoice]);
   const earlier = bundle.attempts.filter((a) => a.attemptNo < cur.attemptNo);
@@ -130,28 +140,30 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
   };
 
   const tasks = t.tasks;
-  return <div className="flex min-h-screen flex-col bg-background-100 lg:h-screen lg:overflow-hidden" data-testid="pdf-marking">
-    <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b border-background-200 bg-white px-4 py-3">
+  return <StickySlot.Provider value={{ el: slotEl, top: headH }}><div className="min-h-screen bg-background-100" data-testid="pdf-marking">
+    <header ref={setHead} className="top-0 z-30 flex flex-wrap md:sticky items-center justify-between gap-3 border-b border-background-200/80 bg-white/90 px-4 py-3 shadow-[0_4px_16px_-12px_rgba(16,24,40,0.25)] backdrop-blur-md">
       <div className="min-w-0"><Link to="/staff/assessments" className="text-xs text-foreground-500 underline">Assessments</Link>
-        <p className="truncate font-heading text-lg font-bold text-foreground-950">{cur.snapshot?.record.studentName ?? "Student"} · attempt {cur.attemptNo}</p>
+        <p className="truncate font-heading text-lg font-bold tracking-tight text-foreground-950">{cur.snapshot?.record.studentName ?? "Student"} · attempt {cur.attemptNo}</p>
         <p className="truncate text-xs text-foreground-500">{cur.snapshot?.record.unitCode} {cur.snapshot?.record.unitName} · snapshot {cur.snapshot?.hash.slice(0, 12)}…</p>
         {earlier.length ? <p className="text-xs text-foreground-600" data-testid="earlier-attempts">Earlier attempts (their own answers, marks and checklists): {earlier.map((a) => <Link key={a.id} to={`/staff/assessments/attempts/${a.id}`} className="mr-2 font-semibold text-primary-700 underline">Attempt {a.attemptNo}</Link>)}</p> : null}</div>
       <UnsavedGuard when={editable && autosave.pending} message="Your latest marks are not saved yet. Stay to let them save." />
       <div className="flex items-center gap-3"><span className={`text-sm font-semibold ${saveTone(autosave.status)}`} role="status" data-testid="marking-saved">{autosave.status.state === "idle" ? "" : saveLabel(autosave.status, "")}</span>
-        <div className="inline-flex rounded-lg border border-background-300 bg-background-50 p-0.5" role="tablist" aria-label="View" data-testid="marking-view">
+        <div className="inline-flex rounded-xl bg-background-100 p-1 ring-1 ring-inset ring-foreground-950/[0.06]" role="tablist" aria-label="View" data-testid="marking-view">
           {(["questions", "pages"] as const).map((v) => <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} data-testid={`marking-view-${v}`}
-            className={`min-h-[40px] rounded-md px-3 text-sm font-semibold ${view === v ? "bg-white text-foreground-950 shadow-sm" : "text-foreground-600 hover:text-foreground-900"}`}>{v === "questions" ? "Questions" : "Workbook pages"}</button>)}
+            className={`min-h-[36px] cursor-pointer whitespace-nowrap rounded-lg px-3 text-sm font-semibold transition-[background-color,color,box-shadow] ${FOCUS} ${view === v ? "bg-white text-foreground-950 shadow-[0_1px_3px_rgba(16,24,40,0.12)]" : "text-foreground-600 hover:text-foreground-900"}`}>{v === "questions" ? "Questions" : "Workbook pages"}</button>)}
         </div>
-        <button type="button" className={SECONDARY} onClick={() => void openStamped()} data-testid="open-stamped">Open stamped PDF</button></div>
+        <button type="button" className={`${SECONDARY} whitespace-nowrap`} onClick={() => void openStamped()} data-testid="open-stamped">Open stamped PDF</button></div>
     </header>
+    {/* on a phone the header scrolls away (it is tall there); the question's compact bar (QuestionView) sticks at the top instead */}
+    <div className="sticky top-0 z-30 h-0 md:hidden"><div ref={setSlotEl} className="absolute inset-x-0 top-0" /></div>
     {error ? <p role="alert" className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
-    <div className="grid flex-1 gap-4 p-4 lg:h-[calc(100vh-5.5rem)] lg:grid-cols-[minmax(0,1fr)_380px] lg:overflow-hidden">
-      {view === "questions" ? <main className="min-w-0 lg:overflow-y-auto" data-testid="marking-questions">
+    <div className="grid gap-4 p-4 sm:gap-6 sm:p-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
+      {view === "questions" ? <main className="min-w-0" data-testid="marking-questions">
         {origPdf && t.questions.find((q) => q.key === current) ? <QuestionMarker pdf={origPdf} t={t} q={t.questions.find((q) => q.key === current)!} answers={cur.snapshot?.answers ?? {}}
-          mark={marks[current]} editable={editable} onMark={(p) => mark(current, p)} marks={marks} onGo={setCurrent} />
-          : <p role="status" className="rounded-xl bg-white p-6 text-base text-foreground-600">{origError || "Opening the workbook…"}</p>}
+          mark={marks[current]} editable={editable} onMark={(p) => mark(current, p)} marks={marks} onGo={setCurrent} onOverall={goOverall} />
+          : <p role="status" className={`${CARD} text-base text-foreground-600`}>{origError || "Opening the workbook…"}</p>}
       </main> : null}
-      <main className={`min-w-0 rounded-xl bg-background-200 p-3 lg:overflow-y-auto ${view === "questions" ? "hidden" : ""}`} data-testid="marking-pdf">
+      <main className={`min-w-0 rounded-2xl bg-background-200/70 p-3 ${view === "questions" ? "hidden" : ""}`} data-testid="marking-pdf">
         {base ? <PdfPages source={base} maxWidth={860} lazy overlay={(page) => <PageOverlay page={page} fields={t.fields.filter((f) => f.page === page && f.role === "trainer")} values={values} editable={editable}
           derived={(f) => derived(f, t.pages[f.page - 1]?.kind)} onToggle={(f) => {
             if ((f.kind === "yes_no" || f.kind === "rating") && f.group) { const as = { ...assessor, pdfChoice: { ...assessor.pdfChoice, [f.group]: f.option ?? "" } }; setAssessor(as); queue(marks, taskFeedback, as); }
@@ -160,11 +172,11 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
           }} editing={editing} onText={(f, v) => { const as = { ...assessor, pdf: { ...assessor.pdf, [f.id]: v } }; setAssessor(as); queue(marks, taskFeedback, as); }} onDone={() => setEditing(null)} assessor={assessor} />} />
           : <p role="status" className="p-6 text-sm text-foreground-600">Drawing the workbook with the student's answers…</p>}
       </main>
-      <aside className="space-y-4 lg:overflow-y-auto lg:pr-1" data-testid="marking-panel">
+      <aside className="space-y-4 overscroll-contain lg:sticky lg:max-h-[var(--side-max)] lg:overflow-y-auto lg:pb-2 lg:pr-1" style={{ top: headH + 24, ["--side-max" as string]: `calc(100vh - ${headH + 40}px)` }} data-testid="marking-panel">
         {tasks.map((tk) => {
           const qs = t.questions.filter((q) => String(q.task) === tk.number);
           const out = taskOutcome(tk.number);
-          return <section key={tk.number} className="rounded-xl border border-background-200 bg-white p-3" data-testid="marking-task">
+          return <section key={tk.number} className={`${SOFT_CARD} p-4`} data-testid="marking-task">
             <div className="flex items-start justify-between gap-2"><h2 className="text-sm font-semibold text-foreground-950">Task {tk.number} · {tk.title}</h2>
               <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${out === "S" ? "bg-green-100 text-green-800" : out === "NYS" ? "bg-amber-100 text-amber-900" : "bg-background-100 text-foreground-500"}`} data-testid="task-auto">{out === "S" ? "Satisfactory" : out === "NYS" ? "Not satisfactory" : "Not marked yet"}</span></div>
             <ul className="mt-2 divide-y divide-background-100">
@@ -184,7 +196,7 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
               <textarea className={`${INPUT} mt-1`} rows={2} value={taskFeedback[tk.number] ?? ""} disabled={!editable} onChange={(e) => { const tf = { ...taskFeedback, [tk.number]: e.target.value }; setTaskFeedback(tf); queue(marks, tf); }} data-testid="task-feedback" /></label>
           </section>;
         })}
-        <section className="space-y-3 rounded-xl border border-background-200 bg-white p-3" data-testid="marking-overall">
+        <section className={`${SOFT_CARD} space-y-3 p-4`} data-testid="marking-overall">
           <h2 className="text-sm font-semibold text-foreground-950">Overall result · attempt {cur.attemptNo}</h2>
           <div className="flex gap-2">{(["S", "NYS"] as const).map((o) => <button key={o} type="button" disabled={!editable} onClick={() => setOverall(o)} aria-pressed={overall === o} data-testid={`overall-${o}`}
             className={`flex-1 rounded-lg border px-3 py-2 text-sm font-semibold ${overall === o ? (o === "S" ? "border-green-600 bg-green-600 text-white" : "border-amber-600 bg-amber-500 text-white") : "border-background-300 bg-white"}`}>{o === "S" ? "Competent" : "Not Yet Competent"}</button>)}</div>
@@ -193,7 +205,7 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
           {open ? <>
             {missing.length ? <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900" data-testid="marking-missing">
               <p className="font-semibold">Before the result can be released ({missing.length}):</p>
-              <ul className="mt-1 max-h-40 list-disc space-y-0.5 overflow-y-auto pl-4">{missing.map((m) => <li key={m}>{m}</li>)}</ul></div> : null}
+              <MissingList items={missing} /></div> : null}
             {!signoff ? <p className="text-xs text-amber-800">Sign off as the assessor first.</p> : null}
             <button type="button" className={`${PRIMARY} w-full`} disabled={!editable || !overall || missing.length > 0 || !signoff || !!busy} onClick={() => void decide()} data-testid="decide">
               {busy || (overall === "NYS" ? "Return for resubmission" : "Release result")}</button>
@@ -203,29 +215,37 @@ export default function PdfMarking({ attemptId, initial }: { attemptId: string; 
         {cur.state === "final" && bundle.canAssess && bundle.unitId && bundle.studentId ? <UnitOutcome studentId={bundle.studentId} unitId={bundle.unitId} attemptId={cur.id} suggested={cur.outcome === "S" ? "C" : "NYC"} /> : null}
       </aside>
     </div>
-  </div>;
+  </div></StickySlot.Provider>;
 }
 
 /** One question to mark: as the student saw it, their answer, Satisfactory Yes / No, a comment, and the way to the next one. */
-function QuestionMarker({ pdf, t, q, answers, mark, marks, editable, onMark, onGo }: { pdf: PdfHandle; t: PdfTemplate; q: TemplateQuestion; answers: { pdf?: Record<string, string>; pdfChoice?: Record<string, string> };
-  mark: Mark | undefined; marks: Record<string, Mark>; editable: boolean; onMark: (p: Partial<Mark>) => void; onGo: (key: string) => void }) {
+function QuestionMarker({ pdf, t, q, answers, mark, marks, editable, onMark, onGo, onOverall }: { pdf: PdfHandle; t: PdfTemplate; q: TemplateQuestion; answers: { pdf?: Record<string, string>; pdfChoice?: Record<string, string> };
+  mark: Mark | undefined; marks: Record<string, Mark>; editable: boolean; onMark: (p: Partial<Mark>) => void; onGo: (key: string) => void; onOverall: () => void }) {
   const i = t.questions.findIndex((x) => x.key === q.key);
   const n = t.questions.length;
   const unmarked = (from: number) => { for (let k = 1; k <= n; k++) { const x = t.questions[(from + k) % n]; if (!marks[x.key]?.outcome) return x.key; } return null; };
   const nextUnmarked = unmarked(i);
-  const go = (key: string) => { onGo(key); document.querySelector("[data-testid=marking-questions]")?.scrollTo({ top: 0 }); window.scrollTo({ top: 0 }); };
+  const go = (key: string) => { onGo(key); window.scrollTo({ top: 0 }); };
   const task = t.tasks.find((x) => Number(x.number) === q.task);
   const left = t.questions.filter((x) => !marks[x.key]?.outcome).length;
   const TOGGLE = "flex min-h-[56px] flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border-2 px-4 text-base font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2";
-  return <div className="mx-auto max-w-3xl space-y-5 rounded-2xl border border-background-200 bg-white p-4 sm:p-6" data-testid="question-marker" data-key={q.key}>
-    <QuestionView pdf={pdf} template={t} question={q} level={2}
-      eyebrow={<p className="mb-1 text-sm font-medium text-foreground-600">{task ? `Task ${task.number} · ${task.title} · ` : ""}question {i + 1} of {n}</p>} />
-    <section className="space-y-2 border-t border-background-200 pt-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-foreground-600">Student's answer</h3>
+  const chip = mark?.outcome === "S" ? ["bg-green-50 text-green-800 ring-green-200", "ri-check-line", "Satisfactory"] : mark?.outcome === "NYS" ? ["bg-amber-50 text-amber-900 ring-amber-200", "ri-close-line", "Not yet satisfactory"] : ["bg-background-100 text-foreground-600 ring-foreground-950/[0.06]", "ri-circle-line", "Not marked"];
+  return <div key={q.key} className={`mx-auto max-w-3xl space-y-4 ${STEP_IN}`} data-testid="question-marker" data-key={q.key}>
+    {!left ? <div className={`${SOFT_CARD} flex flex-wrap items-center gap-3 p-4`} data-testid="all-marked">
+      <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-green-100 text-2xl text-green-700 ring-4 ring-green-50"><i className="ri-check-double-line" aria-hidden="true" /></span>
+      <div className="min-w-0 flex-1"><p className="font-heading text-lg font-semibold text-foreground-950">All questions marked</p><p className="text-sm text-foreground-600">Choose the overall result, sign off and release it.</p></div>
+      <button type="button" className={`${PRIMARY} min-h-[44px]`} onClick={onOverall} data-testid="go-overall">Overall result<i className="ri-arrow-right-line" aria-hidden="true" /></button>
+    </div> : null}
+    <QuestionView pdf={pdf} template={t} question={q} level={2} who="trainer"
+      eyebrow={<p className={EYEBROW}>{task ? `Task ${task.number} · ` : ""}Question {i + 1} of {n}</p>}
+      status={<span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${chip[0]}`} data-testid="question-status"><i className={chip[1]} aria-hidden="true" />{chip[2]}</span>} />
+    <div className={`${CARD} space-y-5`}>
+    <section className="space-y-2">
+      <h3 className={EYEBROW}>Student's answer</h3>
       <AnswerReadOnly template={t} questionKey={q.key} answers={answers} />
     </section>
-    <section className="space-y-3 border-t border-background-200 pt-4">
-      <h3 className="text-sm font-semibold uppercase tracking-wide text-foreground-600" id={`sat-${q.key}`}>Satisfactory response?</h3>
+    <section className="space-y-3 border-t border-background-100 pt-5">
+      <h3 className={EYEBROW} id={`sat-${q.key}`}>Satisfactory response?</h3>
       <div className="flex gap-3" role="group" aria-labelledby={`sat-${q.key}`}>
         <button type="button" disabled={!editable} aria-pressed={mark?.outcome === "S"} onClick={() => onMark({ outcome: "S" })} data-testid="q-mark-S"
           className={`${TOGGLE} ${mark?.outcome === "S" ? "border-green-600 bg-green-600 text-white" : "border-background-300 bg-white text-foreground-800 hover:border-green-500"}`}><i className="ri-check-line text-xl" aria-hidden="true" />Yes</button>
@@ -236,13 +256,23 @@ function QuestionMarker({ pdf, t, q, answers, mark, marks, editable, onMark, onG
       <textarea id={`c-${q.key}`} rows={3} className="w-full rounded-lg border border-background-300 bg-white px-3 py-2.5 text-base leading-7 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-200 disabled:bg-background-50"
         value={mark?.feedback ?? ""} disabled={!editable} onChange={(e) => onMark({ feedback: e.target.value })} data-testid="q-comment" />
     </section>
-    <div className="flex flex-wrap items-center gap-2 border-t border-background-200 pt-4">
+    <div className="flex flex-wrap items-center gap-2 border-t border-background-100 pt-4">
       <button type="button" className={`${SECONDARY} min-h-[44px]`} disabled={i === 0} onClick={() => go(t.questions[i - 1].key)} data-testid="q-prev">← Previous</button>
       <button type="button" className={`${SECONDARY} min-h-[44px]`} disabled={i === n - 1} onClick={() => go(t.questions[i + 1].key)} data-testid="q-next">Next →</button>
       <span className="ml-auto text-sm text-foreground-600" data-testid="q-left">{left ? `${left} not marked` : "All questions marked"}</span>
       <button type="button" className={`${PRIMARY} min-h-[44px]`} disabled={!nextUnmarked || nextUnmarked === q.key} onClick={() => nextUnmarked && go(nextUnmarked)} data-testid="q-next-unmarked">Next unmarked →</button>
     </div>
+    </div>
   </div>;
+}
+
+/** What the release still needs: the first few, the rest behind "Show all" (one scroll: no list scrolling inside the panel). */
+function MissingList({ items }: { items: string[] }) {
+  const [all, setAll] = useState(false);
+  return <>
+    <ul className="mt-1 list-disc space-y-0.5 pl-4">{items.map((m, i) => <li key={m} className={!all && i >= 6 ? "hidden" : undefined}>{m}</li>)}</ul>
+    {items.length > 6 ? <button type="button" className="mt-1 cursor-pointer font-semibold underline underline-offset-2" onClick={() => setAll((a) => !a)} data-testid="marking-missing-more">{all ? "Show fewer" : `Show all ${items.length}`}</button> : null}
+  </>;
 }
 
 /** Marks that fill themselves (from the question marks and the task results): shown, never clicked. */

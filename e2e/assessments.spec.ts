@@ -838,7 +838,9 @@ test("PDF-WORKBOOK preview as learner: the admin walks the student wizard of the
   await expect(dlg.getByTestId("step-question")).toBeVisible({ timeout: 30_000 });
   await dlg.getByTestId("answer-text").first().fill("Preview answer, never saved");
   await dlg.getByTestId("wizard-back").click();
+  await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 2 of 36");
   await dlg.getByTestId("wizard-next").click();
+  await expect(dlg.getByTestId("wizard-step-count")).toHaveText("Step 3 of 36");
   await expect(dlg.getByTestId("answer-text").first()).toHaveValue("Preview answer, never saved"); // kept while the preview is open
   await dlg.getByTestId("wizard-steps").getByRole("button").last().click();
   await expect(dlg.getByTestId("review-missing")).toContainText("Sign the student declaration (page 7).");

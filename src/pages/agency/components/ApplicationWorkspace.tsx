@@ -1765,7 +1765,8 @@ export default function ApplicationWorkspace({
         ) : field.name === "preferred_intake" ? (
           <WorkspaceIntakeField formId={FORM_ID} courseField={COURSE_FIELD} disabled={locked} className={baseFieldClass}
             courseIdOf={(label) => { try { return resolveCourse(label).courseId || null; } catch { return null; } }}
-            initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} initialJoinDate={String(mergedInitial.intake_join_date ?? "")} />
+            initialIntakeId={application.courses?.[0]?.intakeId ?? ""} initialLabel={String(mergedInitial.preferred_intake ?? "")} initialJoinDate={String(mergedInitial.intake_join_date ?? "")}
+            onPicked={() => { window.requestAnimationFrame(() => computeProgress()); scheduleSave(true); }} />
         ) : field.name === "birth_country" ? (
           <FormCountrySearch id={`${FORM_ID}-${field.name}`} name={field.name} defaultValue={String(mergedInitial.birth_country ?? "")} required={field.required} locked={locked}
             className={`${baseFieldClass}${locked ? " bg-background-100 text-foreground-600" : ""}`}

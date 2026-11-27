@@ -56,3 +56,7 @@ Status: DONE = enforced in the database and tested; PARTIAL = enforced but not a
 - 2026-11-27 STUDENT-PICKER (20261127160517): New application picks a student on record or adds one (name, email, mobile, date of
   birth) through portal_student_save, so the NAT00080 client fields are written by the existing student-record guards; the search itself
   is read-only. No new AVETMISS column. Status: DONE.
+- 2026-11-27 MIGRATION-SYNC: hosted-only 20261125113726 (enrollment_students address_building / _flat / _street_number /
+  _street_name / _needs_review, split from the street by avetmiss_split_street, length checks) and 20261125123147 (residency_status from
+  the passport, check of the four kinds, intake enrolment type from it) restored into the repo byte for byte; no change on hosted.
+  Cases in avetmiss_no_junk.sql (18/18). Status: DONE.

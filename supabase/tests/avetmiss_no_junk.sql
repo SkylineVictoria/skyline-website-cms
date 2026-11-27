@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- AVETMISS-NO-JUNK (20261127050517): application answers are checked on every write (changed answers only, blanks pass, old answers
 -- kept), and every AVETMISS column has a guard. The installed trigger function is exercised on a scratch copy of the table, so no real
 -- application is touched. Rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(13);
+select plan(18);
 
 -- Every AVETMISS code column has a foreign key, a check or a validating trigger: a new column added without one fails here.
 select is((select count(*)::int from public.avetmiss_guard_gaps()), 0, 'no AVETMISS column without a guard');
@@ -43,5 +43,11 @@ select ok(cardinality(public.avetmiss_answers_missing('{}'::jsonb)) >= 12, 'an e
 select ok('year highest school level completed' = any(public.avetmiss_answers_missing('{"school_level": "Year 12 or equivalent - 12"}'::jsonb)),
   'a school level without the year completed is reported');
 
+-- MIGRATION-SYNC (2026-11-27): the street address split (20261125113726) and residency (20261125123147), restored from hosted.
+select is((select row(flat, street_number, street_name)::text from public.avetmiss_split_street('Unit 4/12-14 Smith Street')), '(4,12-14,"Smith Street")', 'a unit / number / street address is split into the NAT00080 parts');
+select is((select needs_review from public.avetmiss_split_street('PO Box 99')), true, 'a PO box is flagged for staff review (no street number)');
+select ok(exists (select 1 from pg_constraint where conrelid = 'public.enrollment_students'::regclass and conname = 'enrollment_students_address_street_number_check'), 'the street number is length-checked (AVETMISS 15)');
+select ok(pg_get_constraintdef((select oid from pg_constraint where conrelid = 'public.enrollment_students'::regclass and conname = 'enrollment_students_residency_status_check')) like '%permanent_resident%', 'residency status accepts only the four kinds');
+select ok(exists (select 1 from pg_trigger where tgrelid = 'public.enrollment_students'::regclass and tgname in ('avetmiss_address_split', 'avetmiss_residency') having count(*) = 2), 'address split and residency triggers are on enrollment_students');
 select * from finish();
 rollback;

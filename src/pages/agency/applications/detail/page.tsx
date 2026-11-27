@@ -222,8 +222,9 @@ export default function ApplicationDetailPage() {
   // AGENT-FILLED-ONE-PAGE (owner 2026-11-26, replaces FIRST-APPLICATION-WIZARD): an application the agent filled and sent to the
   // student (any handoff state) opens as the one page of cards, where the student checks, edits and signs; the wizard is only for
   // an application the student started themselves.
+  // Only while blank (no details read from the passport yet): once the details are on it, the student gets the card view.
   const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded
-    && !handoff?.state;
+    && !handoff?.state && !String((application.data?.values as Record<string, unknown> | undefined)?.first_name ?? "").trim();
 
   // PREVIOUS-DATA-REVIEW (owner 2026-11-27): a student applying again opens their new application in a popup "We have your details from
   // your previous application" with the one-page cards (Edit on each); the signature comes after they confirm the details. Once per

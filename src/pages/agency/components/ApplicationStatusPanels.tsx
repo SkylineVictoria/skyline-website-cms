@@ -10,6 +10,7 @@ import { depositReminderText, portalOfferAcceptAllowed } from "@/pages/agency/li
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import type { ToastAction } from "@/components/shared/application-form/useToast";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import { STUDENT_WITHDRAWABLE } from "@/pages/agency/components/StudentWithdraw";
 
 /** The reason the latest Action required was sent with (from the status history). */
 const actionRequiredNote = (history: StatusHistoryRow[]) => history.find((row) => row.newStatus === "action_required")?.note ?? "";
@@ -51,17 +52,18 @@ export function StaffReviewBar({ application, history, onDone, onResult, reviewI
 
 /**
  * The student or agent: an issued offer letter to view and accept (a confirmation, no signature), or an Action required to fix
- * and resubmit, with what was asked. Nothing for other statuses.
+ * and resubmit, with what was asked; for every other status the current status and only what this person may do now.
  */
 export function ApplicantStatusBanner({ application, history, onChanged }: { application: ApplicationDetail; history: StatusHistoryRow[]; onChanged: () => void }) {
   const navigate = useNavigate();
   const workflow = useApplicationStatuses();
-  const actions = actionsFor(workflow, application.status, "applicant");
+  const { role } = usePortalAuth();
+  // STATUS-PER-PERSON (owner 2026-11-27): only the moves this person's role may take (application_status_transitions.allowed_roles).
+  const actions = actionsFor(workflow, application.status, "applicant").filter((x) => !x.roles || (role ? x.roles.includes(role) : false));
   const accept = actions.find((x) => x.kind === "accept_offer");
   const resubmit = actions.find((x) => x.kind === "resubmit");
   // Business Rules admissions.offer_accept_in_portal / admissions.offer_accept_portal_roles: whether this person may press
   // Accept offer here (the database checks it again). Without it the letter is still shown; it is accepted by signing it.
-  const { role } = usePortalAuth();
   const mayAccept = portalOfferAcceptAllowed(role);
   const [letter, setLetter] = useState<OfferLetter | null>(null);
   const [confirming, setConfirming] = useState<"accept" | "resubmit" | null>(null);
@@ -71,7 +73,34 @@ export function ApplicantStatusBanner({ application, history, onChanged }: { app
     if (!accept) return;
     void currentOfferLetter(application.id).then(setLetter, () => setLetter(null));
   }, [accept, application.id]);
-  if (!accept && !resubmit) return null;
+  if (!accept && !resubmit) {
+    // Every other status: the current status, what it means, and what THIS person can do now (nothing they cannot use).
+    const info = statusInfo(workflow, application.status);
+    const submit = actions.find((x) => x.kind === "submit");
+    const canWithdraw = role === "student" && STUDENT_WITHDRAWABLE.has(application.status) && !(application.status === "draft" && !application.submittedAt);
+    const yours = [
+      submit ? (role === "student" ? "Finish the form, then sign and submit it from Review." : "Finish the form, then send it to the student to sign from Review.") : "",
+      canWithdraw ? "Withdraw the application (Withdraw, at the top)." : "",
+    ].filter(Boolean);
+    return (
+      <div className="mt-4 rounded-xl border border-background-200 bg-background-50 p-4" data-testid="status-now">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-foreground-600">Current status</span>
+          <StatusBadge status={application.status} size="sm" />
+          {info.hint ? <span className="text-xs text-foreground-600" data-testid="status-now-hint">{info.hint}</span> : null}
+        </div>
+        {yours.length ? (
+          <ul className="mt-2 list-disc space-y-0.5 pl-5 text-sm text-foreground-800" data-testid="status-now-actions">
+            {yours.map((line) => <li key={line}>{line}</li>)}
+          </ul>
+        ) : (
+          <p className="mt-2 text-sm text-foreground-700" data-testid="status-now-none">
+            {info.final ? "This application is finished; nothing more to do here." : "Nothing for you to do right now. SLIT admissions takes the next step and you will be told when it changes."}
+          </p>
+        )}
+      </div>
+    );
+  }
 
   const run = async () => {
     setBusy(true); setError("");

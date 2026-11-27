@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { E2E_API_URL, E2E_ANON_KEY, E2E_MAIL_URL, E2E_PORT, E2E_SERVICE_KEY } from "./env";
-import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, hrMails, latestLink, linkToken, markStudentDocumentRead, offerPdf, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signedInClient, sql, choose, selectOf } from "./support";
+import { PASSWORD, PDF, createAdmin, createAuthUser, createStudentLogin, domSnapshot, hrMails, latestLink, linkToken, markStudentDocumentRead, offerPdf, pdfFor, person, resetRateLimits, shot, signInThroughTheForm, signOutEverywhere, signedInClient, sql, choose, selectOf } from "./support";
 import { courses } from "../src/data/courses";
 
 // Existing flows must behave exactly as before: student registration, agent registration, and the admin staff invitation.
@@ -738,6 +738,37 @@ test("status flow: Submitted → Issue offer letter → accepted → Issue CoE /
   await expect(row(`Flow${tag} Other`).getByTestId("status-badge")).toHaveText(wfStatusLabel("withdrawn"));
   await expect(row(`Flow${tag} Other`).getByTestId("final-badge")).toBeVisible();
   expect(sql(`select h.reason || '|' || (select count(*) from public.admission_event_outbox o where o.application_id = h.application_id) from public.enrollment_application_status_history h where h.application_id = '${other}' and h.new_status = 'withdrawn'`)).toBe("Student request|0");
+});
+
+// STATUS-PER-PERSON (owner 2026-11-27): each person sees the current status and only the actions their role may take.
+test("status per person: agent and student see the current status and only their own actions; no staff menu", async ({ page }) => {
+  const agency = wfAgency("per-person");
+  sql(`insert into public.business_documents(business_id, kind, file_name, storage_path) values ('${agency}', 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/${agency}/agreement.pdf')`);
+  const agent = await wfPortalUser("pp-agent", agency, "agent");
+  // fixtures: drafts moved straight to the status (the submit checks are tested elsewhere)
+  const moveTo = (app: string, status: string) => sql(`begin; set local session_replication_role = replica; update public.enrollment_applications set status = '${status}', submitted_at = now() where id = '${app}'; commit;`);
+  const id = wfApplication(agency, "draft", `Pp${agent.local.slice(-6)} Student`, { created_by: agent.profile, assigned_agent_id: agent.profile });
+  moveTo(id, "under_review");
+  await signInThroughTheForm(page, agent.email);
+  await expect(page).toHaveURL(/\/agency/, { timeout: 30_000 });
+  await page.goto(`/agency/applications/${id}`);
+  const panel = page.getByTestId("status-now");
+  await expect(panel.getByTestId("status-badge")).toHaveText(wfStatusLabel("under_review"));
+  await expect(panel.getByTestId("status-now-none")).toBeVisible();
+  await expect(page.getByTestId("take-action")).toHaveCount(0);
+  await expect(page.getByTestId("offer-banner")).toHaveCount(0);
+  await signOutEverywhere(page);
+
+  const student = await createStudentLogin("pp-student");
+  const own = wfApplication(student.agency, "draft", "Pp Own Student", { student_id: student.student });
+  moveTo(own, "submitted");
+  await signInThroughTheForm(page, student.email);
+  await expect(page).toHaveURL(/\/(agency|portal)/, { timeout: 30_000 });
+  await page.goto(`/agency/applications/${own}`);
+  const mine = page.getByTestId("status-now");
+  await expect(mine.getByTestId("status-badge")).toHaveText(wfStatusLabel("submitted"));
+  await expect(mine.getByTestId("status-now-actions")).toContainText("Withdraw");
+  await expect(page.getByTestId("take-action")).toHaveCount(0);
 });
 
 test("Action required: the agent and staff get Resubmit application on Review (checked like Submit, the declaration confirmed again and recorded)", async ({ page }) => {

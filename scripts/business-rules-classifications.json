@@ -1171,5 +1171,20 @@
       "fbf7724763c9ec94ec34a4ac748a1f1e42e8e2ca9f591c6039dff50c6f7f57c8",
       "ffebe90e56f8ee9ec31c2662f90df09f03ad923570fd76c8a1b18c2c8fb69a28"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "status-per-person",
+    "reason": "2026-11-27 owner (STATUS-PER-PERSON): the application page shows the student or agent the current status and only the moves their role may take (application_status_transitions.allowed_roles and the existing student-withdraw rule); presentation of the database rules, not business settings.",
+    "fingerprints": [
+      "104274d0063c36b04953d4ffe71e800b53d1de3672bb7b34cf2e9d878ed578ae",
+      "3acb9c2d0910daabee0518c9f5d052e251780b5ca6b6c0500a4a9eb469df2215",
+      "4e43ed08a4a7aebf2ec229c6f5daa4d12609f7b044c58da918180f0bb775034e",
+      "6eabdfaf4c1ea656b4ecfbce45e978b139767fed6036d3699d2722112c00244d",
+      "7dd787cd065b635cdf59fbfb1c5af63b0579257d196c935737dbeb3f0064c57c",
+      "ae7f349422eb77edf766933ade411438bed282bfc5bd93f1e4db86679b4027b3",
+      "b5eae573b603d45c2f4886845521d3690774ec23c3443f369a554f541dd275f3",
+      "db25ffa39649143a4c297819b738eabb6ca005bbc846cbcd011757b195d4a5f8"
+    ]
   }
 ]

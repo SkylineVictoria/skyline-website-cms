@@ -53,3 +53,6 @@ Status: DONE = enforced in the database and tested; PARTIAL = enforced but not a
   routed on insert and every save); English proficiency, school year, prior education rows and disability types reach the AVETMISS
   columns / tables from the student's details (trigger student_details_avetmiss_sync, replacing avetmiss_answers_to_student). The NAT
   source (student record) is unchanged; the submit check reads it as before. Status: DONE locally.
+- 2026-11-27 STUDENT-PICKER (20261127160517): New application picks a student on record or adds one (name, email, mobile, date of
+  birth) through portal_student_save, so the NAT00080 client fields are written by the existing student-record guards; the search itself
+  is read-only. No new AVETMISS column. Status: DONE.

@@ -2,7 +2,7 @@
 begin;
 -- Hosted guard: test suites run on a local stack only (set skyline.allow_hosted = on in the session to override; see scripts/lab/hosted-guard.mjs).
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
-select plan(1016);
+select plan(1022);
 insert into public.agencies(id,name,code) values ('13000000-0000-0000-0000-000000000001','Positive A','P2-POS-A'),('13000000-0000-0000-0000-000000000002','Positive B','P2-POS-B');
 -- fixture (migration 20261117220000): an uploaded signed agreement makes the Active fixture businesses operational
 insert into public.business_documents(business_id, kind, file_name, storage_path) select a.id, 'agent_agreement', 'fixture-agreement.pdf', 'fixtures/' || a.id::text || '/agreement.pdf' from public.agencies a where a.status = 'Active' and not coalesce(a.is_direct, false) and a.agreement_status = 'none' and not exists (select 1 from public.business_documents d where d.business_id = a.id);
@@ -1954,5 +1954,23 @@ select is((select count(*)::int from public.enrollment_application_documents whe
 select ok(not has_function_privilege('anon', 'public.portal_application_document_ids(uuid)', 'execute') and not has_function_privilege('authenticated', 'public.application_document_ids(uuid)', 'execute'),
   'only the checked function lists an application''s documents for signed-in users');
 select throws_ok($$select public.portal_student_document_removal('c8200000-0000-0000-0000-000000000001')$$, '42501', null, 'removing a student document needs a signed-in editor');
+-- STUDENT-PICKER (20261127160517): the New application student search; agency users find their own agency's students only.
+reset role;
+insert into public.enrollment_students(id, agency_id, agent_id, full_name, email, phone, passport_number, status) values
+ ('c9000000-0000-0000-0000-000000000001', '13000000-0000-0000-0000-000000000001',
+  (select id from public.agents where profile_id = '23000000-0000-0000-0000-000000000001'), 'Pickme Mine', 'pickme.mine@example.test', '+61412000111', 'PK1234567', 'Active'),
+ ('c9000000-0000-0000-0000-000000000002', '13000000-0000-0000-0000-000000000001', null, 'Pickme Colleague', 'pickme.colleague@example.test', '+61412000222', '', 'Active'),
+ ('c9000000-0000-0000-0000-000000000003', '13000000-0000-0000-0000-000000000002', null, 'Pickme Elsewhere', 'pickme.elsewhere@example.test', '+61412000333', '', 'Active');
+select ok(not has_function_privilege('anon', 'public.portal_student_search(text, integer)', 'execute'), 'anon cannot search students');
+set local role authenticated;
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000001';
+select is((select string_agg((x->>'name') || ':' || (x->>'canStart'), ',' order by x->>'name') from jsonb_array_elements(public.portal_student_search('pickme')) x),
+  'Pickme Colleague:false,Pickme Mine:true', 'an agent finds their agency''s students and may start only for their own');
+select is(jsonb_array_length(public.portal_student_search('pickme.elsewhere@example.test')), 0, 'an agent cannot find another agency''s student');
+select is((select string_agg(x->>'name', ',') from jsonb_array_elements(public.portal_student_search('0412 000 111')) x), 'Pickme Mine', 'search by mobile in local format');
+select is(jsonb_array_length(public.portal_student_search('p')), 0, 'one character searches nothing');
+set local request.jwt.claim.sub='33000000-0000-0000-0000-000000000002';
+select is((select count(*)::int from jsonb_array_elements(public.portal_student_search('pickme')) x), 3, 'a SLIT admin finds students of every agency');
+reset role;
 select * from finish();
 rollback;

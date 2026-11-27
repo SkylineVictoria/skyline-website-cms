@@ -508,6 +508,31 @@ export async function findStudents(email: string, mobileE164: string, passport =
   }));
 }
 
+/** STUDENT-PICKER: one student in the New application search (portal_student_search; scope enforced in the database). */
+export interface StudentPick {
+  id: string; name: string; email: string; studentNumber: string; phone: string; dateOfBirth: string | null;
+  businessId: string; businessName: string; agentId: string | null; agentName: string; applications: number;
+  /** The caller may start an application for this student (an agent: only the students they look after). */
+  canStart: boolean;
+}
+
+function toStudentPick(r: Record<string, unknown>): StudentPick {
+  return {
+    id: str(r.id), name: str(r.name), email: str(r.email), studentNumber: str(r.studentNumber), phone: str(r.phone),
+    dateOfBirth: r.dateOfBirth ? str(r.dateOfBirth) : null, businessId: str(r.businessId), businessName: str(r.businessName),
+    agentId: r.agentId ? str(r.agentId) : null, agentName: str(r.agentName), applications: Number(r.applications ?? 0),
+    canStart: r.canStart === true,
+  };
+}
+
+/** Students matching a name, email, student ID, mobile or passport number (2+ characters). SLIT staff: every student; agency users: their agency's. */
+export async function searchStudents(query: string, limit = 12): Promise<StudentPick[]> {
+  if (query.trim().length < 2) return [];
+  const { data, error } = await supabase.rpc("portal_student_search", { p_query: query.trim(), p_limit: limit });
+  if (error) throw new Error(error.message, { cause: error });
+  return ((data ?? []) as Array<Record<string, unknown>>).map(toStudentPick);
+}
+
 /**
  * The application email step (20261113230000): free = a new student; student = one the caller may start an application for
  * (reuse it, never a second one); taken = another student the caller cannot see (only the generic message is shown).

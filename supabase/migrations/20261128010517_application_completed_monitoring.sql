@@ -14,14 +14,14 @@ values ('completed', 'Completed', 75, 'success', 'Finished: the Qualification is
 on conflict (value) do nothing;
 
 -- Enrolled may be restored by the Qualification (undo of a cancelled Tentative Qualification).
-create or replace function pg_temp.q_patch(p_fn text, p_from text, p_to text) returns void language plpgsql as $$
+create or replace function pg_temp.q_patch_finish(p_fn text, p_from text, p_to text) returns void language plpgsql as $$
 declare v_def text;
 begin
   select pg_get_functiondef(p.oid) into v_def from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = p_fn;
   if position(p_from in coalesce(v_def, '')) = 0 then raise exception 'APPLICATION-FINISH patch: % does not contain %', p_fn, p_from; end if;
   execute overlay(v_def placing p_to from position(p_from in v_def) for char_length(p_from));
 end $$;
-select pg_temp.q_patch('application_enrolled_guard', ' if new.status is distinct from ''enrolled'' then return new; end if;',
+select pg_temp.q_patch_finish('application_enrolled_guard', ' if new.status is distinct from ''enrolled'' then return new; end if;',
   ' if new.status is distinct from ''enrolled'' or coalesce(current_setting(''qualification.sync'', true), '''') = ''on'' then return new; end if;');
 
 -- Moves of the application made by its Qualification (sync), with the note the application history shows.

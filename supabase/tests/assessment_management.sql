@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- Assessment Management (ASM-01): tenant isolation, student ownership, trainer scope, publication permission, evidence policy,
 -- assessor-key leakage, locked attempts, history preservation, sign-off authority, audit, concurrency, tampered ids, versioning,
 -- validation, auto-check suggestions, calendar and batch reassignment. Fixtures only; rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(538);
+select plan(541);
 
 -- ---------------------------------------------------------------- fixtures
 create temp table t(k text primary key, v text);
@@ -179,8 +179,8 @@ select is((select count(*)::int from public.asm_assessments), 0, 'before any ass
 
 -- ---------------------------------------------------------------- assignment to a batch (brief section 7)
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select throws_ok(format($$select public.asm_admin('assignment_create', '{"assessmentId": "%s", "batchIds": ["f5000000-0000-0000-0000-00000000ffff"], "dueAt": "2026-12-01T06:00:00Z"}')$$, pg_temp.v('assessment')), '23503', null, 'a batch that is not on the course is refused');
-select pg_temp.put('assign', (public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'batchIds', '["f5000000-0000-0000-0000-000000000011"]'::jsonb, 'dueAt', (now() + interval '10 days')::text,
+select throws_ok(format($$select public.asm_admin('assignment_create', '{"assessmentId": "%s", "batchIds": ["f5000000-0000-0000-0000-00000000ffff"], "dueAt": "2026-12-01T06:00:00Z", "lateUntil": "2026-12-08T06:00:00Z"}')$$, pg_temp.v('assessment')), '23503', null, 'a batch that is not on the course is refused');
+select pg_temp.put('assign', (public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'batchIds', '["f5000000-0000-0000-0000-000000000011"]'::jsonb, 'dueAt', (now() + interval '10 days')::text, 'lateUntil', (now() + interval '20 days')::text,
   'events', jsonb_build_array(jsonb_build_object('kind', 'practical', 'title', 'Workshop observation', 'startsAt', (now() + interval '5 days')::text, 'endsAt', (now() + interval '5 days 2 hours')::text)))))::text);
 select is((pg_temp.s('assign')::jsonb->>'created')::int, 1, 'the published version is assigned to batch G1');
 select pg_temp.put('assignment', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and intake_id = 'f5000000-0000-0000-0000-000000000011'));
@@ -489,7 +489,7 @@ select throws_ok(format($$select public.asm_admin('assignment_update', '{"id":"%
 select throws_ok(format($$select public.asm_admin('attempt_get', '{"id":"%s"}')$$, pg_temp.v('attempt2')), 'P0002', null, 'T2 tenant 2 admin cannot read a tenant 1 attempt');
 select throws_ok(format($$select public.asm_admin('attempt_void', '{"id":"%s"}')$$, pg_temp.v('draftA')), 'P0002', null, 'T2 tenant 2 admin cannot void a tenant 1 attempt');
 select throws_ok(format($$select public.asm_admin('attempt_reopen', '{"id":"%s"}')$$, pg_temp.v('attempt2')), 'P0002', null, 'T2 tenant 2 admin cannot reopen a tenant 1 attempt');
-select throws_ok(format($$select public.asm_admin('assignment_create', '{"assessmentId":"%s","dueAt":"2030-01-01T00:00:00Z","batchIds":["f5000000-0000-0000-0000-000000000012"]}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot assign a tenant 1 assessment');
+select throws_ok(format($$select public.asm_admin('assignment_create', '{"assessmentId":"%s","dueAt":"2030-01-01T00:00:00Z","lateUntil":"2030-01-08T00:00:00Z","batchIds":["f5000000-0000-0000-0000-000000000012"]}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot assign a tenant 1 assessment');
 select throws_ok($$select public.asm_admin('assessment_create', '{"courseId":"course-asm-test","title":"Cross"}')$$, 'P0002', null, 'T2 tenant 2 admin cannot create on a tenant 1 course');
 select throws_ok(format($$select public.asm_admin('assessment_create', '{"courseId":"course-asm-other","title":"Clone","fromAssessmentId":"%s"}')$$, pg_temp.v('assessment')), 'P0002', null, 'T2 tenant 2 admin cannot clone a tenant 1 assessment');
 select throws_ok($$select public.asm_admin('unit_elements_list', '{"unitId":"unit-asm-1"}')$$, 'P0002', null, 'T2 tenant 2 admin cannot read tenant 1 unit elements');
@@ -525,7 +525,7 @@ select pg_temp.as_postgres();
 select pg_temp.as_postgres();
 select is((select require_trainer_role from public.asm_settings where tenant_id is null), true, 'T3 require_trainer_role defaults to true');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select is((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'), 'batchIds', jsonb_build_array('f5000000-0000-0000-0000-000000000012'), 'dueAt', now() + interval '14 days')))->>'created', '1', 'T3 version 1 is assigned to batch G2');
+select is((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'versionId', pg_temp.v('v1'), 'batchIds', jsonb_build_array('f5000000-0000-0000-0000-000000000012'), 'dueAt', now() + interval '14 days', 'lateUntil', now() + interval '21 days')))->>'created', '1', 'T3 version 1 is assigned to batch G2');
 select pg_temp.put('assignment2', (select id::text from public.asm_assignments where version_id = pg_temp.v('v1') and intake_id = 'f5000000-0000-0000-0000-000000000012'));
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
 select pg_temp.put('attemptB', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', pg_temp.v('assignment2'))))->'attempt'->>'id');
@@ -620,8 +620,9 @@ select lives_ok(format($$select public.asm_admin('assignment_student_set', '{"id
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
 select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->'errors'->0->>'code', 'late', 'T4 after late_until nothing is accepted, even in allow mode');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "lateUntil": null}')$$, pg_temp.v('assignment')), 'T4 fixture: no late_until');
+select throws_like(format($$select public.asm_admin('assignment_update', '{"id": "%s", "lateUntil": null}')$$, pg_temp.v('assignment')), '%set "Late until"%', 'LATE late work allowed: "late until" cannot be cleared');
 select is((public.asm_admin('settings_save', '{"lateSubmission": "block"}'))->>'late_submission', 'block', 'T4 fixture: late submissions blocked');
+select lives_ok(format($$select public.asm_admin('assignment_update', '{"id": "%s", "lateUntil": null}')$$, pg_temp.v('assignment')), 'T4 fixture: no late_until (late work blocked: allowed)');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000013');
 select is((public.asm_student('submit', jsonb_build_object('attemptId', pg_temp.v('s3a'), 'responses', pg_temp.responses(), 'declaration', '{"signature": "Sid Student", "agreed": true}'::jsonb)))->'errors'->0->>'code', 'late', 'T4 block mode refuses after the due date');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
@@ -634,6 +635,8 @@ select pg_temp.as_postgres();
 select throws_ok(format($$update public.asm_attempts set responses = '{}' where id = '%s'$$, pg_temp.v('s3a')), '42501', null, 'T4 a submitted attempt is immutable even for the owner role');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
 select lives_ok($$select public.asm_admin('settings_save', '{"lateSubmission": "allow"}')$$, 'T4 fixture: back to allow');
+select throws_like(format($$select public.asm_admin('assignment_create', '{"assessmentId": "%s", "batchIds": ["f5000000-0000-0000-0000-000000000012"], "dueAt": "%s"}')$$, pg_temp.v('assessment'), now() + interval '9 days'), '%set "Late until"%', 'LATE late work allowed: a new assignment without "late until" is refused');
+select ok(public.asm_late_allowed(pg_temp.v('assessment')), 'LATE the assignment form is told that late work is allowed (late until required)');
 -- max_attempts: NYS decisions open attempts only under the limit (institution 3, voids not counted); the assessor cannot reopen beyond it, the admin only with overrideLimit
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000003');
 select is((public.asm_trainer('mark_save', jsonb_build_object('id', pg_temp.v('s3a'), 'results', pg_temp.all_marks('NYS'), 'taskResults', '[{"taskId":"1","outcome":"NYS"},{"taskId":"2","outcome":"S"}]'::jsonb)))->>'state', 'marking', 'T4 the trainer marks attempt 2');
@@ -906,7 +909,7 @@ select ok(not has_function_privilege('anon', 'public.asm_template_save(uuid,json
 
 -- ASM-PDF-TEMPLATE phase 2: the student answers on the workbook: the published template version assigned to G2, opened by its student
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000001');
-select is(((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'batchIds', '["f5000000-0000-0000-0000-000000000012"]'::jsonb, 'dueAt', (now() + interval '10 days')::text)))->>'created')::int, 1, 'PDF the workbook version is assigned to G2');
+select is(((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('assessment'), 'batchIds', '["f5000000-0000-0000-0000-000000000012"]'::jsonb, 'dueAt', (now() + interval '10 days')::text, 'lateUntil', (now() + interval '20 days')::text)))->>'created')::int, 1, 'PDF the workbook version is assigned to G2');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
 select pg_temp.put('pdf_attempt', (select (public.asm_student('assessment_open', jsonb_build_object('assignmentId', a.id)))->'attempt'->>'id' from public.asm_assignments a where a.assessment_id = pg_temp.v('assessment')::uuid and a.intake_id = 'f5000000-0000-0000-0000-000000000012' and a.version_id = (select current_version_id from public.asm_assessments where id = pg_temp.v('assessment')::uuid) limit 1));
 select is((select string_agg(f->>'role' || ':' || (f->>'kind'), ',' order by f->>'id') from jsonb_array_elements(public.asm_student_template(pg_temp.v('pdf_attempt'))->'fields') f), 'auto:auto,student:text', 'PDF the student sees their own and the record''s fields, never the trainer''s');
@@ -1002,7 +1005,7 @@ select pg_temp.put('cpc', (public.asm_admin('assessment_create', jsonb_build_obj
 select lives_ok(format($$insert into storage.objects(bucket_id, name) values ('assessment-templates', '%s/%s.pdf')$$, pg_temp.v('cpc'), repeat('b', 64)), 'REAL the workbook PDF is uploaded');
 select is((public.asm_template_save(pg_temp.v('cpc')::uuid, pg_temp.tpl2(pg_temp.s('cpc') || '/' || repeat('b', 64) || '.pdf')))->>'ok', 'true', 'REAL its template is saved');
 select is((public.asm_admin('version_publish', jsonb_build_object('assessmentId', pg_temp.v('cpc'))))->>'ok', 'true', 'REAL a workbook version publishes on its template');
-select is(((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('cpc'), 'batchIds', '["f5000000-0000-0000-0000-000000000012"]'::jsonb, 'dueAt', (now() + interval '10 days')::text)))->>'created')::int, 1, 'REAL assigned to G2');
+select is(((public.asm_admin('assignment_create', jsonb_build_object('assessmentId', pg_temp.v('cpc'), 'batchIds', '["f5000000-0000-0000-0000-000000000012"]'::jsonb, 'dueAt', (now() + interval '10 days')::text, 'lateUntil', (now() + interval '20 days')::text)))->>'created')::int, 1, 'REAL assigned to G2');
 select pg_temp.as_user('a5000000-0000-0000-0000-000000000012');
 select pg_temp.put('r1', (public.asm_student('assessment_open', jsonb_build_object('assignmentId', (select id from public.asm_assignments where assessment_id = pg_temp.v('cpc')::uuid))))->'attempt'->>'id');
 select is((public.asm_student('draft_save', jsonb_build_object('attemptId', pg_temp.v('r1'), 'responses', '{"pdf":{"a1":"Holds paint","t23":"Rollers for walls","b1":"Roller","b2":"Yes","c1":"Rags","c2":"Bin","c3":"","c4":""}}'::jsonb)))->>'ok', 'true', 'REAL the answers are saved');

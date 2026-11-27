@@ -9,10 +9,12 @@
 --     chosen in the marking view (mark_save / mark_return markedOn), set to the release day when none was chosen, fixed once the
 --     result is released; every trainer date field prints it;
 --  4. attempts 2 and 3: a resubmission is submitted on or after the day the previous attempt was marked;
---  5. the student's acknowledgement is dated when it is made, on or after the marking date.
+--  5. the student's acknowledgement is dated when it is made, on or after the marking date;
+--  6. when late work is allowed for the assessment (late_submission = allow), an assignment needs late_until: required on a new
+--     assignment and when it is cleared (asm_assignments_late_until); asm_late_allowed(assessment) tells the assignment form.
 -- Past rows are never re-checked: the trigger checks only values written from now on. Refusals are check_violation (23514).
--- Down: drop trigger asm_attempts_dates on asm_attempts, asm_attempt_signatures_ack_date on asm_attempt_signatures and their
---       functions; re-run asm_student / asm_trainer / asm_pdf_snapshot_take / asm_template_missing / asm_attempt_json /
+-- Down: drop trigger asm_attempts_dates on asm_attempts, asm_attempt_signatures_ack_date on asm_attempt_signatures,
+--       asm_assignments_late_until on asm_assignments and their functions, drop function asm_late_allowed(uuid); re-run asm_student / asm_trainer / asm_pdf_snapshot_take / asm_template_missing / asm_attempt_json /
 --       asm_attempt_marking from their previous migrations; drop column asm_attempts.marked_on.
 
 alter table public.asm_attempts add column if not exists marked_on date;
@@ -139,3 +141,26 @@ select pg_temp.asm_patch('public.asm_attempt_marking(uuid)'::regprocedure,
  $a$'outcome', t.outcome, 'overallFeedback', t.overall_feedback,$a$,
  $b$'markedOn', t.marked_on, 'outcome', t.outcome, 'overallFeedback', t.overall_feedback,$b$,
  'asm_attempt_marking markedOn');
+
+-- 6. late submissions: "allowed" means a last moment for late work (late_until) is set on the assignment
+create or replace function public.asm_late_allowed(p_assessment uuid) returns boolean
+language sql stable security definer set search_path = '' as $$
+ select exists (select 1 from public.asm_assessments a where a.id = p_assessment and public.tenant_scope(a.tenant_id))
+   and coalesce(public.asm_effective_settings(p_assessment)->>'late_submission', 'block') = 'allow';
+$$;
+revoke all on function public.asm_late_allowed(uuid) from public, anon;
+grant execute on function public.asm_late_allowed(uuid) to authenticated;
+
+create or replace function public.asm_assignments_late_until() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+ -- a new assignment, or late_until cleared (past rows are never re-checked)
+ if new.late_until is null and (tg_op = 'INSERT' or old.late_until is not null)
+    and coalesce(public.asm_effective_settings(new.assessment_id)->>'late_submission', 'block') = 'allow' then
+  raise exception 'Late submissions are allowed for this assessment: set "Late until", the last moment late work is accepted.' using errcode = '23514';
+ end if;
+ return new;
+end $$;
+drop trigger if exists asm_assignments_late_until on public.asm_assignments;
+create trigger asm_assignments_late_until before insert or update of late_until on public.asm_assignments for each row execute function public.asm_assignments_late_until();
+revoke all on function public.asm_assignments_late_until() from public, anon, authenticated;

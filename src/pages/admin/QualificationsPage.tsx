@@ -27,6 +27,7 @@ export default function QualificationsPage() {
   }, []);
   const taskIds = task ? new Set((tasks[task] ?? []).map((x) => x.enrolmentId).filter(Boolean)) : null;
   const shown = rows && taskIds ? rows.filter((r) => taskIds.has(r.id)) : rows;
+  // rule-policy: technical qualification-filters Display only: the list filters read the open tasks the database raised; no rule is decided here.
   const waiting = task === "place" ? (tasks.place ?? []).filter((x) => !x.enrolmentId) : [];
   const setTask = (t: TaskFilter) => { const p = new URLSearchParams(params); if (task === t) p.delete("task"); else p.set("task", t); setParams(p, { replace: true }); };
 
@@ -76,11 +77,13 @@ export default function QualificationsPage() {
       </div>
       {waiting.length ? <Card className="mb-4">
         <div className="border-b border-background-200 px-4 py-3"><h2 className="font-heading text-base font-semibold text-foreground-900">Waiting for placement <span className="font-normal text-foreground-500">{waiting.length}</span></h2>
+          {/* // rule-policy: technical qualification-filters Display only: the list filters read the open tasks the database raised; no rule is decided here. */}
           <p className="text-xs text-foreground-600">Enrolled, but the placement in the intake did not go through, so there is no Qualification yet. Place the student by hand from their page.</p></div>
         <ul className="divide-y divide-background-100" data-testid="waiting-placement">{waiting.map((x) => <li key={x.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm" data-testid="waiting-placement-item">
           <span className="min-w-0">{x.studentId ? <Link className="font-medium text-foreground-900 hover:text-primary-700" to={`/admin/students/${x.studentId}`}>{x.studentName ?? "Student"}</Link> : <span className="font-medium">{x.studentName ?? "Student"}</span>}
             {x.applicationId ? <> · <Link className="text-primary-700 hover:underline" to={`/admin/applications/${x.applicationId}`}>{x.applicationReference ?? "Application"}</Link></> : null}
             {x.detail ? <span className="block text-xs text-foreground-600">{x.detail}</span> : null}</span>
+          {/* // rule-policy: technical qualification-filters Display only: the list filters read the open tasks the database raised; no rule is decided here. */}
           {x.dueOn ? <span className="text-xs text-foreground-500">Due {formatQualificationDate(x.dueOn)}</span> : null}</li>)}</ul>
       </Card> : null}
       <Card>

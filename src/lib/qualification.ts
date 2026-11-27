@@ -130,6 +130,7 @@ export async function openQualificationTasks(kind: OpenQualificationTask["kind"]
     .select("id, kind, title, detail, due_on, enrolment_id, application_id, student_id, student:enrollment_students(full_name), application:enrollment_applications(reference)")
     .eq("status", "open").eq("kind", kind).order("due_on", { ascending: true, nullsFirst: false });
   if (error) throw new Error(error.message);
+  // rule-policy: technical qualification-filters Display only: the list filters read the open tasks the database raised; no rule is decided here.
   type Row = { id: string; kind: OpenQualificationTask["kind"]; title: string; detail: string | null; due_on: string | null; enrolment_id: string | null; application_id: string | null;
     student_id: string | null; student: { full_name: string | null } | { full_name: string | null }[] | null; application: { reference: string | null } | { reference: string | null }[] | null };
   const one = <T,>(v: T | T[] | null): T | null => (Array.isArray(v) ? v[0] ?? null : v);

@@ -39,6 +39,9 @@ insert into public.course_intakes(id, course_id, start_date, end_date, label) va
 insert into public.intake_units(intake_id, unit_id, start_date, end_date) values
  ('f6000000-0000-0000-0000-000000000001', 'unit-q-1', current_date - 30, current_date + 100), ('f6000000-0000-0000-0000-000000000001', 'unit-q-2', current_date + 101, current_date + 300),
  ('f6000000-0000-0000-0000-000000000002', 'unit-q-1', current_date + 60, current_date + 200), ('f6000000-0000-0000-0000-000000000002', 'unit-q-2', current_date + 201, current_date + 400);
+-- an intake is a class group once it has a classroom or class times (intake_has_group): use any existing classroom when there is one
+update public.course_intakes set classroom_id = (select x.classroom_id from public.course_intakes x where x.classroom_id is not null limit 1)
+ where id in ('f6000000-0000-0000-0000-000000000001', 'f6000000-0000-0000-0000-000000000002') and exists (select 1 from public.course_intakes x where x.classroom_id is not null);
 update public.cms_courses set status = 'Published' where id = 'course-q-test';
 insert into public.enrollment_applications(id, agency_id, student_id, student_name, student_email, status, data, reference)
 values ('a7000000-0000-0000-0000-000000000001', 'c6000000-0000-0000-0000-000000000001', 'e6000000-0000-0000-0000-000000000011', 'Zz Quinn', 'q.student1@example.test', 'draft',

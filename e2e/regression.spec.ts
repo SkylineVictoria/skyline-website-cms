@@ -438,7 +438,7 @@ test("student picker: an admin searches, selects an existing student (mobile pre
   await expect(page.locator("#student-mobile")).not.toHaveValue("");
   await page.getByRole("radio", { name: "No" }).check();
   await page.getByTestId("student-continue").click();
-  await expect(page.getByText("Add New Form — document wizard")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("heading", { name: "New application", level: 2 })).toBeVisible({ timeout: 30_000 });
   expect(sql(`select count(*) from public.enrollment_students where lower(email) = '${who.email}'`)).toBe("1");
   expect(sql(`select count(*) from public.enrollment_applications where student_id = '${student}'`)).toBe("1");
 });

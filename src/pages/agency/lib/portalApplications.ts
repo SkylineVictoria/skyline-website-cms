@@ -1172,3 +1172,12 @@ export function studentPortalLabel(status: StudentPortalStatus): { label: string
     default: return { label: "Portal: Not invited", action: "invite" };
   }
 }
+
+/** Delete one draft application with its documents (portal-application-delete: drafts only, the caller must be able to edit it). */
+export async function deleteDraftApplication(id: string): Promise<void> {
+  const { data, error } = await supabase.functions.invoke("portal-application-delete", { body: { applicationIds: [id] } });
+  const result = data as { ok?: boolean; error?: string; results?: Array<{ ok: boolean; error?: string }> } | null;
+  if (error || !result?.ok) throw new Error(result?.error || "The application could not be deleted.");
+  const outcome = result.results?.[0];
+  if (!outcome?.ok) throw new Error(outcome?.error || "The application could not be deleted.");
+}

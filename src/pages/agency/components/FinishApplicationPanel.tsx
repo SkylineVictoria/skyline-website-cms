@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/pages/admin/components/ui";
-import { getWizardSummary, INVITE_SMS_LABEL, sendApplicationInvitation, type WizardSummary } from "@/pages/agency/lib/portalApplications";
+import { deleteDraftApplication, getWizardSummary, INVITE_SMS_LABEL, sendApplicationInvitation, type WizardSummary } from "@/pages/agency/lib/portalApplications";
 import { WIZARD_STEPS, WIZARD_QUESTIONS } from "@/pages/agency/lib/wizardConfig";
 import { validateEmail } from "@/pages/agency/lib/userValidation";
 import { AgentHandoffPanel, StudentHandoffNotice } from "@/pages/agency/components/ApplicationHandoff";
 import { useHandoff } from "@/pages/agency/lib/handoff";
 
-export default function FinishApplicationPanel({ id, email, onContinue, canInvite }: {
+export default function FinishApplicationPanel({ id, email, onContinue, canInvite, onDeleted }: {
   id: string;
   email: string;
   onContinue: () => void;
   canInvite: boolean;
+  /** The draft was deleted (agents and SLIT admins; drafts only). */
+  onDeleted?: (message: string) => void;
 }) {
   const [summary, setSummary] = useState<WizardSummary | null>(null);
   const [open, setOpen] = useState(false);
@@ -21,6 +23,14 @@ export default function FinishApplicationPanel({ id, email, onContinue, canInvit
   // INVITE-SMS: the link also goes by text message to the student's mobile (ClickSend), unless unticked.
   const [alsoText, setAlsoText] = useState(true);
   const [sentNote, setSentNote] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const removeDraft = async () => {
+    setDeleting(true); setError("");
+    try { await deleteDraftApplication(id); onDeleted?.("Application deleted."); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "The application could not be deleted."); setConfirmDelete(false); }
+    finally { setDeleting(false); }
+  };
   // APPLICATION-STUDENT-SIGNS: the agent fills, then sends it to the student to review and sign (only the student signs).
   const { handoff, reload: reloadHandoff } = useHandoff(id);
   const refresh = useCallback(async () => { setSummary(await getWizardSummary(id)); await reloadHandoff(); }, [id, reloadHandoff]);
@@ -82,8 +92,22 @@ export default function FinishApplicationPanel({ id, email, onContinue, canInvit
       {sentNote ? <p role="status" className="text-sm text-emerald-800" data-testid="invite-sent-note">{sentNote}</p> : null}
       {canInvite && handoff?.state === "change_requested" ? <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="handoff-change-note">
         The student asked for a change: “{handoff.changeNote}”. Make the change, then send it to the student again.</p> : null}
+      {canInvite && onDeleted ? (confirmDelete ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="delete-draft-confirm">
+          <span>Delete this application and its documents? This cannot be undone.</span>
+          <Button variant="outline" disabled={deleting} onClick={() => setConfirmDelete(false)}>Keep it</Button>
+          <button type="button" disabled={deleting} onClick={() => void removeDraft()}
+            className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-60">{deleting ? "Deleting…" : "Delete application"}</button>
+        </div>
+      ) : null) : null}
       {!open ? (
+        <div className="flex flex-wrap items-center gap-3">
         <Button onClick={() => { if (canInvite) setOpen(true); else onContinue(); }}>{canInvite ? "Continue or send to student" : handoff?.state === "with_student" ? "Review and sign" : "Continue application"}</Button>
+        {canInvite && onDeleted && !confirmDelete ? (
+          <button type="button" onClick={() => setConfirmDelete(true)} data-testid="delete-draft"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-red-700 hover:underline"><i className="ri-delete-bin-line" aria-hidden="true" /> Delete application</button>
+        ) : null}
+        </div>
       ) : (
         <div className="space-y-3">
           {correcting || validateEmail(recipient) ? <label className="block space-y-1 text-sm">

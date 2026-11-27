@@ -161,7 +161,6 @@ function NewStudentSheet({ open, typed, role, agency, profileId, onClose, onSave
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
-  const [dob, setDob] = useState("");
   const [business, setBusiness] = useState<Business | null>(null);
   const [agent, setAgent] = useState<BusinessAgentOption | null>(null);
   const [recordDialogMode, setRecordDialogMode] = useState<"business" | "agent" | null>(null);
@@ -176,7 +175,7 @@ function NewStudentSheet({ open, typed, role, agency, profileId, onClose, onSave
     if (!open) return;
     const p = prefillFromSearch(typed);
     setFirstName(p.firstName); setLastName(p.lastName); setEmail(p.email);
-    setMobile(""); setDob("");
+    setMobile("");
     setProblem(""); setField({}); setInUse(null); setRecordDialogMode(null);
     setBusiness(role === "slit_admin" ? null : agency ? { id: agency.id, name: agency.name, status: "Active" } : null);
     setAgent(null);
@@ -221,8 +220,6 @@ function NewStudentSheet({ open, typed, role, agency, profileId, onClose, onSave
     const emailIssue = validateEmail(address);
     if (emailIssue) errors.email = emailIssue;
     if (!textableMobile(mobile)) errors.mobile = "Enter the mobile with its country code.";
-    if (!dob) errors.dob = "Enter the date of birth.";
-    else if (dob > new Date().toISOString().slice(0, 10)) errors.dob = "The date of birth cannot be in the future.";
     if (!agent) errors.agent = role === "slit_admin" ? "Choose the business and the agent who looks after the student." : "Choose the agent who looks after the student.";
     setField(errors);
     setInUse(null);
@@ -236,11 +233,11 @@ function NewStudentSheet({ open, typed, role, agency, profileId, onClose, onSave
       if (business && agent!.status === "Inactive") await activateAgent({ agentId: agent!.id, businessId: business.id, name: agent!.name, email: agent!.email, role: agent!.role });
       const saved = await saveStudent({
         agentId: agent!.id, fullName: `${firstName.trim()} ${lastName.trim()}`, firstName: firstName.trim(), lastName: lastName.trim(),
-        email: address, mobile, dateOfBirth: dob,
+        email: address, mobile,
       });
       const [row] = await searchStudents(saved.email || address, 5).then((found) => found.filter((r) => r.id === saved.id)).catch(() => []);
       onSaved(row ?? {
-        id: saved.id, name: saved.name, email: saved.email || address, studentNumber: "", phone: saved.phone || mobile, dateOfBirth: dob,
+        id: saved.id, name: saved.name, email: saved.email || address, studentNumber: "", phone: saved.phone || mobile, dateOfBirth: "",
         businessId: saved.businessId, businessName: business?.name ?? "", agentId: saved.agentId, agentName: agent!.name, applications: 0, canStart: true,
       });
     } catch (e) {
@@ -312,12 +309,6 @@ function NewStudentSheet({ open, typed, role, agency, profileId, onClose, onSave
             <PhoneInput id="new-student-mobile" name="new_student_mobile" value={mobile} required locked={busy} placeholder="041 234 5678"
               onValueChange={(v) => { setMobile(v); setField((f) => ({ ...f, mobile: "" })); }} invalid={Boolean(field.mobile)} />
             {err("mobile")}
-          </div>
-          <div>
-            <label htmlFor="new-student-dob" className="mb-1.5 block text-sm font-medium">Date of birth <span className="text-primary-600">*</span></label>
-            <input id="new-student-dob" type="date" value={dob} max={new Date().toISOString().slice(0, 10)} className={input(Boolean(field.dob))}
-              onChange={(e) => { setDob(e.target.value); setField((f) => ({ ...f, dob: "" })); }} />
-            {err("dob")}
           </div>
           {role === "agent" ? null : (
             <div className="space-y-3 border-t border-background-200 pt-4">

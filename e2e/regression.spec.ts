@@ -457,7 +457,6 @@ test("student picker: an agent adds a new student from the popup (search text pr
   await expect(form.locator("#new-student-last")).toHaveValue(`Student${tag}`);
   await form.locator("#new-student-email").fill(fresh.email);
   await form.locator("#new-student-mobile").fill(fresh.local);
-  await form.locator("#new-student-dob").fill("2001-04-15");
   await shot(page, "student-picker-new-student");
   await page.getByTestId("new-student-save").click();
   await expect(page.getByTestId("student-picked")).toContainText(`Newbie Student${tag}`);
@@ -481,7 +480,6 @@ test("student picker: a duplicate email in the popup says it is in use and offer
   await form.locator("#new-student-first").fill("Second");
   await form.locator("#new-student-last").fill("Copy");
   await form.locator("#new-student-mobile").fill(person("pick-dup-mobile").local);
-  await form.locator("#new-student-dob").fill("2000-01-01");
   await page.getByTestId("new-student-save").click();
   await expect(form).toContainText("Email already in use.");
   await expect(page.getByTestId("new-student-in-use")).toContainText("Already Here");

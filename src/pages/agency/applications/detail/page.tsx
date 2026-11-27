@@ -299,7 +299,8 @@ export default function ApplicationDetailPage() {
           {application.studentId ? <StudentPortalInvite studentId={application.studentId} studentName={application.studentName} onMessage={(m) => toast.show(m)} /> : null}
         </div>
         <FinishApplicationPanel key={application.id} id={application.id} email={application.studentEmail}
-          canInvite={role === "slit_admin" || role === "agency_admin" || role === "agent"} onContinue={openWizard} />
+          canInvite={role === "slit_admin" || role === "agency_admin" || role === "agent"} onContinue={openWizard}
+          onDeleted={(message) => { closeWizard(); toast.show(message); navigate(paths.list, { replace: true }); }} />
         {wizardOpen ? <ApplicationWizard key={`${application.id}:${carryKey}`} applicationId={application.id}
           agencyName={application.agencyName || agency?.name || ""}
           onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); void load(); }} /> : null}

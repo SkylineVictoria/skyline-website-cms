@@ -200,9 +200,9 @@ export default function BusinessDetailPage() {
       {tab === "agents" ? <AgentsSection business={{ id: business.id, name: business.name, status: business.status, operational, gateReason: business.gateReason ?? null, holding: !operational && business.status === "Onboarding" && stage !== "declined" }} onChanged={load} /> : null}
       {/* Owner 2026-11-24: add a student (with their first application) for this business from its own page. */}
       {tab === "students" || tab === "applications" ? <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-card border border-background-200 bg-white px-4 py-3">
-        <p className="text-sm text-foreground-600">{tab === "students" ? "Add a student for one of this business’s agents; their first application opens straight after." : "A new application starts with the student: pick the agent and the student, then the application opens."}</p>
+        <p className="text-sm text-foreground-600">{tab === "students" ? "Add a student for one of this business’s agents; you are then asked whether to add an application too." : "A new application starts in Applications: pick the student, the business and the agent, then the application opens."}</p>
         <Button size="sm" icon={tab === "students" ? "ri-user-add-line" : "ri-file-add-line"} disabled={business.status !== "Active"} title={business.status !== "Active" ? "The business must be Active" : undefined}
-          onClick={() => setAddingStudent(true)} data-testid="business-add-student">{tab === "students" ? "Add student" : "New application"}</Button>
+          onClick={() => { if (tab === "students") setAddingStudent(true); else navigate("/admin/applications/new"); }} data-testid="business-add-student">{tab === "students" ? "Add student" : "New application"}</Button>
       </div> : null}
       <AddStudentDialog open={addingStudent} onClose={() => setAddingStudent(false)} onAdded={() => { setAddedCount((n) => n + 1); void load(); }}
         presetBusiness={addingStudent ? presetBusiness : undefined} />

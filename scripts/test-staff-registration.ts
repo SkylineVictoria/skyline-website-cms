@@ -5284,3 +5284,19 @@ test("new applications track their draft version on creation, so the first save 
   assert.ok(lib.includes('if (!draftVersions.has(id)) throw new Error("Reload the application before editing.");'));
   assert.ok(lib.includes("p_expected_version: draftVersions.get(id)"));
 });
+
+test("Student-only add (owner 2026-11-27): CMS Add student saves only the student, then asks whether to add an application; applications start in Applications", () => {
+  const dialog = read("src/pages/admin/components/AddStudentDialog.tsx");
+  assert.ok(dialog.includes("await saveStudent({ agentId: agent.id"), "the student is saved on their own (portal_student_save)");
+  assert.ok(!dialog.includes("createStudentDraft(") && !dialog.includes("sendApplicationInvitation("), "no draft or invitation when the student is added");
+  assert.ok(dialog.includes('title="Add an application too?"'), "asks whether to add an application");
+  assert.ok(dialog.includes("navigate(`/admin/applications/${id}?wizard=1`)"), "Yes continues in the wizard");
+  assert.ok(dialog.includes("navigate(`/admin/students/${saved.id}`)"), "No keeps the student only");
+  const table = read("src/pages/admin/components/StudentsTable.tsx");
+  assert.ok(!table.includes("startApplication") && table.includes('to="/admin/applications/new"'), "the student list sends new applications to Applications");
+  const page = read("src/pages/admin/StudentDetailPage.tsx");
+  assert.ok(!page.includes("FinishApplicationPanel") && page.includes("Open in Applications"), "unfinished applications are finished in Applications");
+  assert.ok(read("src/pages/admin/BusinessDetailPage.tsx").includes('navigate("/admin/applications/new")'), "business page New application opens Applications");
+  // Agents and students keep their own flows.
+  assert.ok(read("src/pages/agency/applications/new/page.tsx").includes("StudentDetailsStep"), "agent / student New application unchanged");
+});

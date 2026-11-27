@@ -24,7 +24,7 @@ const studentStatusOf = (row: StudentRow) => row.status ?? "Active";
 const inactiveBusiness = (row: StudentRow) => Boolean(row.businessStatus) && row.businessStatus !== "Active";
 /** Plain names for the tables a student can be linked to (delete confirmation). */
 const LINK_LABELS: Record<string, string> = {
-  intake_enrolments: "intake enrolments", lms_intake_students: "intake places", lms_unit_students: "unit enrolments and results",
+  intake_enrolments: "Qualifications", lms_intake_students: "intake places", lms_unit_students: "unit enrolments and results",
   lms_attendance_marks: "attendance marks", batch_students: "class batch places", course_completions: "certificates",
   enrollment_student_disabilities: "disability records", enrollment_student_prior_education: "prior education records",
   student_office365_accounts: "Microsoft 365 mailbox records", comm_conversations: "conversations", sign_requests: "signing requests",

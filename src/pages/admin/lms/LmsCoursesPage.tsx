@@ -74,7 +74,7 @@ async function fillCricos(courseId: string, r: SyncResult): Promise<string> {
 type PurgeCounts = Record<string, { deleted?: number; cleared?: number }>;
 /** Plain names for the tables a course delete touches; others are shown by their table name. */
 const PURGE_LABELS: Record<string, string> = {
-  "cms_courses": "course", "cms_course_units": "unit", "course_intakes": "intake", "class_sessions": "class", "intake_enrolments": "student placement",
+  "cms_courses": "course", "cms_course_units": "unit", "course_intakes": "intake", "class_sessions": "class", "intake_enrolments": "Qualification",
   "intake_enrolment_units": "student unit placement", "intake_units": "intake unit", "intake_class_times": "weekly class time", "intake_trainers": "intake trainer",
   "unit_contents": "learning content item", "lms_unit_resources": "unit resource", "asm_assessments": "assessment", "asm_submissions": "submission",
   "asm_unit_outcomes": "unit result", "course_completions": "certificate / statement", "class_attendance": "attendance mark", "attendance_marks": "attendance mark",

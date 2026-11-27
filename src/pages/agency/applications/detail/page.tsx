@@ -8,6 +8,7 @@ import DeleteDraftButton from "@/pages/agency/components/DeleteDraftButton";
 import ResponsiveTable from "@/components/ui/ResponsiveTable";
 import DocumentPreviewModal from "@/pages/agency/components/DocumentPreviewModal";
 import { Modal } from "@/pages/admin/components/ui";
+import QualificationCard from "@/components/shared/qualification/QualificationCard";
 import SignedApplicationCard from "@/pages/agency/components/SignedApplicationCard";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -412,6 +413,8 @@ export default function ApplicationDetailPage() {
       {!isSlit ? <ApplicantStatusBanner application={application} history={history} onChanged={() => { void load(); setWorkspaceKey((key) => key + 1); }} /> : null}
       {/* OFFER-DEPOSIT: acceptance and deposit at a glance; staff and the agent remind, staff set the automatic reminders. */}
       <OfferDepositCard applicationId={application.id} canRemind={isSlit || role === "agent" || role === "agency_admin"} canConfigure={isSlit} refreshKey={application.status} />
+      {/* QUALIFICATION: once the application is Enrolled, its Qualification (status, dates, documents; staff open the full record). */}
+      <QualificationCard applicationId={application.id} staffLink={paths.area === "cms"} refreshKey={application.status} />
 
       <nav className="mt-6 flex flex-wrap gap-1.5 border-b border-background-200 pb-px">
         {[...TABS.slice(0, 1), ...(handoff?.state ? [{ id: "signing" as Tab, label: "Review & signature", icon: "ri-quill-pen-line" }] : []), ...TABS.slice(1),

@@ -4,7 +4,8 @@ import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import PersonMessageIcon from "@/pages/admin/components/PersonMessageIcon";
 import SubjectSigningPanel from "./components/signing/SubjectSigningPanel";
-import { Button, Card, PageHeader } from "@/pages/admin/components/ui";
+import { Button, Card, PageHeader, SectionTabs } from "@/pages/admin/components/ui";
+import StudentQualifications from "@/pages/admin/components/StudentQualifications";
 import { useToast } from "@/pages/admin/components/toastContext";
 import StudentLoginCell from "@/pages/admin/components/StudentLoginCell";
 import StudentTimelinePanel from "@/pages/admin/components/StudentTimelinePanel";
@@ -34,6 +35,8 @@ export default function StudentDetailPage() {
   const [reload, setReload] = useState(0);
   // AVETMISS-UI: the permanent student number (assigned once by the database, never editable) next to the name.
   const [studentNumber, setStudentNumber] = useState("");
+  // QUALIFICATION: the student page has an Overview and a Qualification tab.
+  const [tab, setTab] = useState("overview");
   useEffect(() => {
     let active = true;
     void supabase.from("enrollment_students").select("student_number").eq("id", id).maybeSingle()
@@ -102,6 +105,8 @@ export default function StudentDetailPage() {
         </div>
       ))}</div> : null}
 
+      <SectionTabs tabs={[{ id: "overview", label: "Overview", icon: "ri-user-line" }, { id: "qualification", label: "Qualification", icon: "ri-graduation-cap-line" }]} active={tab} onChange={setTab} />
+      {tab === "qualification" ? <StudentQualifications studentId={id} /> : <>
       <div className="flex flex-wrap items-start gap-5">
         <Card className="min-w-0 flex-[999_1_560px]">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-background-200 px-4 py-3">
@@ -138,6 +143,7 @@ export default function StudentDetailPage() {
       <div className="mt-4"><StudentProgressPanel studentId={id} /></div>
       <div className="mt-4"><StudentOffice365Panel studentId={id} personalEmail={student.email} /></div>
       <div className="mt-4"><SubjectSigningPanel type="student" id={id} name={student.name} /></div>
+      </>}
     </div>
   );
 }

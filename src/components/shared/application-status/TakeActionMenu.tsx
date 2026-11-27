@@ -58,7 +58,9 @@ export default function TakeActionMenu({ application, onStatus, onDone, onResult
   const [ccOn, setCcOn] = useState(true);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const actions = getAllowedActions(workflow, application.status);
+  // QUALIFICATION (owner 2026-11-27): an application becomes Active by itself when its Qualification moves to In Progress, so no
+  // action moves it to Active by hand (the database refuses it too: application_active_guard).
+  const actions = getAllowedActions(workflow, application.status).filter((a) => a.to !== "active");
   const primary = variant === "row" ? actions.find((a) => a.primary) : undefined;
   // "Set to <status>" moves (20261123151517, Admins): any status by hand, listed apart under "Change status to".
   const isManual = (a: StatusAction) => a.action.startsWith("set_");

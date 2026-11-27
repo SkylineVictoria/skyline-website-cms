@@ -16,6 +16,8 @@ const AREAS: { key: string; label: string; icon: string; to: string; tone: strin
   { key: "lowAttendance", get label() { return `Attendance below ${ruleNumber("lms.attendance_alert_threshold", 80)}%`; }, icon: "ri-error-warning-line", to: "/admin/lms/attendance", tone: "text-red-700 bg-red-50", get empty() { return `No one below ${ruleNumber("lms.attendance_alert_threshold", 80)}%.`; } },
   { key: "marking", label: "Assessments to mark", icon: "ri-edit-box-line", to: "/admin/lms/assessments", tone: "text-indigo-700 bg-indigo-50", empty: "Nothing waiting for marking." },
   { key: "tickets", label: "Open support tickets", icon: "ri-customer-service-2-line", to: "/admin/tickets", tone: "text-sky-700 bg-sky-50", empty: "No open tickets." },
+  // QUALIFICATION: PRISMS reports, refund checks and students to place by hand (qualification_tasks_open).
+  { key: "qualificationTasks", label: "Qualification tasks", icon: "ri-graduation-cap-line", to: "/admin/qualifications", tone: "text-amber-700 bg-amber-50", empty: "No Qualification task is open." },
   { key: "certificatesReady", label: "Ready for a certificate", icon: "ri-award-line", to: "/admin/lms/completion", tone: "text-green-700 bg-green-50", empty: "No one ready yet." },
   { key: "batchesWithoutClasses", label: "Intakes with no class dates", icon: "ri-calendar-close-line", to: "/admin/lms/intakes", tone: "text-red-700 bg-red-50", empty: "Every intake with students has classes." },
   { key: "classesToday", label: "Classes today", icon: "ri-calendar-2-line", to: "/admin/lms/timetable", tone: "text-foreground-700 bg-background-100", empty: "No classes today." },
@@ -33,10 +35,11 @@ export default function NeedsActionBoard() {
   const [data, setData] = useState<Today | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    Promise.all([supabase.rpc("admin_today"), supabase.rpc("lms_batches_without_classes")]).then(([today, extra]) => {
+    Promise.all([supabase.rpc("admin_today"), supabase.rpc("lms_batches_without_classes"), supabase.rpc("qualification_tasks_open")]).then(([today, extra, tasks]) => {
       if (!live) return;
       if (today.error) { setData(null); return; }
-      setData({ ...(today.data as Today), ...(extra.error || !extra.data ? {} : { batchesWithoutClasses: extra.data as Area }) });
+      setData({ ...(today.data as Today), ...(extra.error || !extra.data ? {} : { batchesWithoutClasses: extra.data as Area }),
+        ...(tasks.error || !tasks.data ? {} : { qualificationTasks: tasks.data as Area }) });
     });
     return () => { live = false; };
   }, []);

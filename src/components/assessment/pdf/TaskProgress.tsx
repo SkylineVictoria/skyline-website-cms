@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, useState } from "react";
  * continuous bar (6 px, rounded) filled by the overall progress (step X of Y), a small tick where each task starts and, when they fit,
  * the task labels under it at those places ("Task 1", "Task 2"…; the current task in SLIT orange, a finished task with ✓). Any number
  * of tasks: when the labels do not fit side by side (many tasks, a phone), only the ticks stay on the bar and the current task's
- * name shows above it ("Task 2 of 3 · Practical"); labels never overlap and are never cut. No segments for the steps outside the
+ * name shows above it ("Task 2 of 3 · Practical"), always on a phone; labels never overlap and are never cut. No segments for the steps outside the
  * tasks (your details, review & submit).
  */
 export interface ProgressTask {
@@ -17,6 +17,8 @@ export interface ProgressTask {
 }
 
 const GAP = 10;
+/** narrower than this (a phone): the current task's name above the bar instead of the labels, so the title is never cut */
+const LABELS_MIN_WIDTH = 480;
 
 export default function TaskProgress({ tasks, index, total, currentTask, outside, label = "Progress", onCompact }: {
   tasks: ProgressTask[];
@@ -44,7 +46,7 @@ export default function TaskProgress({ tasks, index, total, currentTask, outside
       const W = el.clientWidth;
       const widths = [...m.children].map((c) => Math.ceil((c as HTMLElement).getBoundingClientRect().width));
       const lefts: number[] = [];
-      let fits = W > 0 && widths.length === tasks.length;
+      let fits = W >= LABELS_MIN_WIDTH && widths.length === tasks.length;
       tasks.forEach((t, i) => {
         // under its tick; pulled back only as far as needed to stay inside the bar's width
         const left = Math.max(0, Math.min(at(t.start) * W, W - (widths[i] ?? 0)));

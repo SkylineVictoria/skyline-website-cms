@@ -11,7 +11,7 @@ import { questionName, type PdfTemplate, type TemplateField, type TemplateQuesti
 import QuestionView from "@/components/assessment/pdf/QuestionView";
 import AnswerReadOnly from "@/components/assessment/pdf/AnswerReadOnly";
 import { usePdf, type PdfHandle } from "@/components/assessment/pdf/pdfDoc";
-import { CARD, EYEBROW, FOCUS, SOFT_CARD, STEP_IN, StickySlot, useHeight } from "@/components/assessment/pdf/ui";
+import { CARD, EYEBROW, FOCUS, SOFT_CARD, STEP_IN, StickySlot, useHeight } from "@/components/assessment/pdf/ui";
 import TaskProgress, { type ProgressTask } from "@/components/assessment/pdf/TaskProgress";
 import { answered, markingMissing, stampValues, type BundleAttempt, type PdfBundle, type StampValue } from "@/lib/assessment/pdfTemplate/output";
 import { reviewName } from "@/lib/assessment/pdfTemplate/student";

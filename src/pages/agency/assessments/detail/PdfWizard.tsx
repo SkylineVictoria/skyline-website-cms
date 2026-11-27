@@ -4,7 +4,7 @@ import SignatureField, { SignatureImage, type SignatureValue } from "@/component
 import { FitHint, PdfCrop, PdfPageImage } from "@/components/assessment/pdf/PdfView";
 import QuestionView from "@/components/assessment/pdf/QuestionView";
 import { usePdf, type PdfHandle } from "@/components/assessment/pdf/pdfDoc";
-import { CARD, EYEBROW, FOCUS, PRIMARY, SECONDARY, STEP_IN, StickySlot, useAppHeaderOffset, useHeight } from "@/components/assessment/pdf/ui";
+import { CARD, EYEBROW, FOCUS, PRIMARY, SECONDARY, STEP_IN, StickySlot, useAppHeaderOffset, useHeight } from "@/components/assessment/pdf/ui";
 import TaskProgress, { type ProgressTask } from "@/components/assessment/pdf/TaskProgress";
 import { questionName, type AutoKey, type PdfTemplate, type TemplateField } from "@/lib/assessment/pdfTemplate/model";
 import { fieldValue, missingItems, questionInputs, studentFields, wizardSteps, type FitBox, type Missing, type PdfAnswers, type Table, type WizardStep } from "@/lib/assessment/pdfTemplate/student";

@@ -900,8 +900,7 @@ test("PDF-WORKBOOK progress bar: one bar with task ticks and labels for 1, 2, 3 
       const track = (await dlg.getByTestId("progress-track").boundingBox())!;
       expect(Math.round(track.height), `${n} tasks ${name}: the bar is 6 px`).toBe(6);
       const mode = await bar.getAttribute("data-mode");
-      if (name === "desktop" && n <= 3) expect(mode, `${n} tasks on a desktop: the labels fit`).toBe("labels");
-      if (name === "phone" && n === 5) expect(mode, "5 tasks on a phone: only the ticks and the current task's name").toBe("compact");
+      expect(mode, name === "desktop" ? `${n} tasks on a desktop: the labels fit` : `${n} tasks on a phone: only the ticks and the current task's name`).toBe(name === "desktop" ? "labels" : "compact");
       if (mode === "labels") {
         const boxes = (await Promise.all((await dlg.getByTestId("progress-label").all()).map((l) => l.boundingBox()))).map((b) => b!);
         expect(boxes).toHaveLength(n);

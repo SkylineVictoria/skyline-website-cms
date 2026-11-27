@@ -1987,6 +1987,8 @@ export default function ApplicationWorkspace({
   // Per step: applies, complete (by the Submit rules), and its one-line summary; per stage: done, needs details, current.
   const issuesBySection = sections.map((_, index) => (sectionShown(index) ? sectionIssues(index) : []));
   issuesRef.current = issuesBySection;
+  const courseStepIndex = sections.findIndex((section) => section.fields.some((field) => field.name === COURSE_FIELD));
+  const courseStepOpen = courseStepIndex >= 0 && (issuesBySection[courseStepIndex]?.length ?? 0) > 0;
   const snapshot: DraftValues = formRef.current ? collectFormValues(formRef.current) : {};
   const shownValue = (name: string) => {
     const raw = snapshot[name];
@@ -2065,6 +2067,8 @@ export default function ApplicationWorkspace({
         primary={
           one && onePageView.kind === "edit" ? { label: "Done", icon: "ri-check-line", testId: "section-done", onClick: () => showOnePage("grid") }
           : one && onePageView.kind === "grid" && onReviewDone ? { label: "Everything is correct, continue", icon: "ri-arrow-right-line", testId: "previous-data-continue",
+            // Not until the course and start date are chosen (owner 2026-11-27): Edit on Course Information first.
+            disabled: courseStepOpen,
             onClick: () => { void flushSave().catch(() => undefined).then(() => onReviewDone()); } }
           : one && onePageView.kind === "grid" ? (canSubmitHere && !readOnly && (studentSigns || !sentToStudent) ? { label: studentSigns ? "Next: sign" : "Next: send to the student", icon: "ri-arrow-right-line", testId: "one-page-next", onClick: () => showOnePage("sign") } : null)
           : isReview

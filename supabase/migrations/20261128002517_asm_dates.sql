@@ -146,6 +146,7 @@ select pg_temp.asm_patch('public.asm_attempt_marking(uuid)'::regprocedure,
 create or replace function public.asm_late_allowed(p_assessment uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
  select exists (select 1 from public.asm_assessments a where a.id = p_assessment and public.tenant_scope(a.tenant_id))
+   -- rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
    and coalesce(public.asm_effective_settings(p_assessment)->>'late_submission', 'block') = 'allow';
 $$;
 revoke all on function public.asm_late_allowed(uuid) from public, anon;
@@ -155,7 +156,9 @@ create or replace function public.asm_assignments_late_until() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
  -- a new assignment, or late_until cleared (past rows are never re-checked)
+ -- rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
  if new.late_until is null and (tg_op = 'INSERT' or old.late_until is not null)
+    -- rule-policy: technical asm-late-setting-read Reads the existing late_submission setting (allow / block, block when none); the owner's rule adds no new value.
     and coalesce(public.asm_effective_settings(new.assessment_id)->>'late_submission', 'block') = 'allow' then
   raise exception 'Late submissions are allowed for this assessment: set "Late until", the last moment late work is accepted.' using errcode = '23514';
  end if;

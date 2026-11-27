@@ -8,6 +8,9 @@ import { detectTemplate } from "./detect";
 import { pageModel, type PageModel, type PdfJsLike } from "./pageModel";
 import type { PdfTemplate } from "./model";
 import type { PdfBundle } from "./output";
+import { textRows, type Candidate } from "./candidates";
+import { applyClassification, detectAny, type AiAnswer, type GenericResult } from "./generic";
+import { applyProfile, correctionsFrom, layoutChrome, layoutSignature, type Correction } from "./profile";
 
 export const TEMPLATE_BUCKET = "assessment-templates";
 export const MAX_PDF_BYTES = 50 * 1024 * 1024;
@@ -197,4 +200,93 @@ export async function detectWorkbook(bytes: Uint8Array, pdfInfo: { path: string;
   } finally {
     void (doc as unknown as { destroy?: () => Promise<void> }).destroy?.();
   }
+}
+
+// ---------- ASM-ANY-LAYOUT: any workbook layout (rules, layout profile, then the AI only for what is left) ----------
+export interface AnyLayoutRun {
+  template: PdfTemplate;
+  path: "slit" | "generic";
+  /** The generic detection (candidates, what is left); null on the SLIT fast path. */
+  result: GenericResult | null;
+  profile: { signature: string; chrome: string[]; applied: number } | null;
+  ai: { pages: number; asked: number; added: number; notFields: number; refused: number; costUsd: number; spentUsd: number; model: string | null; stopped: string | null };
+}
+
+/** A page image with each candidate outlined and numbered (what the classifier sees), as a JPEG data URL. */
+async function candidateImage(page: unknown, cands: Candidate[]): Promise<{ dataUrl: string; width: number; height: number }> {
+  const p = page as { getViewport: (o: { scale: number }) => { width: number; height: number }; render: (o: unknown) => { promise: Promise<void> } };
+  const base = p.getViewport({ scale: 1 });
+  const scale = Math.min(2, 1100 / base.width);
+  const vp = p.getViewport({ scale });
+  const canvas = document.createElement("canvas"); canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await p.render({ canvasContext: ctx, viewport: vp }).promise;
+  for (const c of cands) {
+    ctx.strokeStyle = "#e11d48"; ctx.lineWidth = 2; ctx.strokeRect(c.box.x * scale, c.box.y * scale, c.box.w * scale, c.box.h * scale);
+    const label = String(c.n); ctx.font = "bold 13px sans-serif"; const w = ctx.measureText(label).width + 6;
+    ctx.fillStyle = "#e11d48"; ctx.fillRect(c.box.x * scale, c.box.y * scale - 15, w, 15);
+    ctx.fillStyle = "#fff"; ctx.fillText(label, c.box.x * scale + 3, c.box.y * scale - 3);
+  }
+  return { dataUrl: canvas.toDataURL("image/jpeg", 0.8), width: canvas.width, height: canvas.height };
+}
+
+export async function detectWorkbookAny(bytes: Uint8Array, pdfInfo: { path: string; sha256: string; fileName?: string | null }, assessmentId: string,
+  onProgress?: (message: string) => void): Promise<AnyLayoutRun> {
+  const pdf = await pdfjs();
+  const doc = await pdf.getDocument({ data: bytes.slice() }).promise;
+  const ai: AnyLayoutRun["ai"] = { pages: 0, asked: 0, added: 0, notFields: 0, refused: 0, costUsd: 0, spentUsd: 0, model: null, stopped: null };
+  try {
+    const models: PageModel[] = [];
+    for (let n = 1; n <= doc.numPages; n++) { onProgress?.(`Reading page ${n} of ${doc.numPages}…`); models.push(await pageModel(pdf as unknown as PdfJsLike, await doc.getPage(n) as never, n)); }
+    const first = detectAny(models, pdfInfo);
+    if (first.path === "slit") return { template: first.template, path: "slit", result: null, profile: null, ai };
+    const result: GenericResult = first;
+    // the layout's saved corrections first (no AI for them)
+    const chrome = layoutChrome(models); const signature = await layoutSignature(chrome);
+    let applied = 0;
+    const { data: saved } = await supabase.rpc("asm_layout_profile_get", { p_signature: signature });
+    if (saved && typeof saved === "object") applied = applyProfile(result, { signature, chrome, corrections: (saved as { corrections?: Correction[] }).corrections ?? [] });
+    // then the classifier, one page at a time, only for pages that still have open areas
+    const answers: Record<number, AiAnswer[]> = {};
+    const pagesLeft = [...new Set(result.unresolved.map((c) => c.page))].sort((a, b) => a - b);
+    for (const n of pagesLeft) {
+      onProgress?.(`Asking the AI about page ${n} (${pagesLeft.indexOf(n) + 1} of ${pagesLeft.length})…`);
+      const cands = result.unresolved.filter((c) => c.page === n);
+      const img = await candidateImage(await doc.getPage(n), cands);
+      const pageText = textRows(models[n - 1].texts).map((r) => r.s).join("\n").slice(0, 3000);
+      const { data, error } = await supabase.functions.invoke("asm-import", { body: { action: "classify_fields", assessmentId, pdfSha256: pdfInfo.sha256,
+        page: { page: n, imageDataUrl: img.dataUrl, imageWidth: img.width, imageHeight: img.height, pageText,
+          candidates: cands.map((c) => ({ n: c.n, shape: c.shape, left: c.left, column: c.column, above: c.above, tickLabel: c.tickLabel, placeholder: c.placeholder, table: c.table ? `${c.table.id} row ${c.table.row + 1} col ${c.table.col + 1}` : null })) } } });
+      if (error) {
+        const body = await (error as { context?: Response }).context?.json?.().catch(() => null) as { error?: string; code?: string; spentUsd?: number } | null;
+        ai.stopped = body?.error ?? error.message;
+        if (body?.spentUsd != null) ai.spentUsd = body.spentUsd;
+        break;
+      }
+      const r = data as { fields: AiAnswer[]; refused: number; costUsd: number; spentUsd: number; model: string };
+      answers[n] = r.fields; ai.pages++; ai.asked += cands.length; ai.refused += r.refused; ai.costUsd += r.costUsd; ai.spentUsd = r.spentUsd; ai.model = r.model;
+    }
+    const merged = applyClassification(result, answers);
+    ai.added = merged.added; ai.notFields = merged.notFields;
+    result.template = merged.template;
+    return { template: merged.template, path: "generic", result, profile: { signature, chrome, applied }, ai };
+  } finally {
+    void (doc as unknown as { destroy?: () => Promise<void> }).destroy?.();
+  }
+}
+
+/** Saves what the admin decided on a generic workbook as its layout's profile (used by later workbooks of the same layout). */
+export async function saveLayoutProfile(run: AnyLayoutRun, saved: PdfTemplate, assessmentId: string): Promise<number> {
+  if (run.path !== "generic" || !run.result || !run.profile) return 0;
+  const corrections = correctionsFrom(run.result, saved);
+  if (!corrections.length) return 0;
+  const { error } = await supabase.rpc("asm_layout_profile_save", { p_signature: run.profile.signature, p_chrome: run.profile.chrome, p_corrections: corrections, p_assessment: assessmentId });
+  if (error) throw new Error(error.message);
+  return corrections.length;
+}
+
+export async function aiUsageSummary(assessmentId: string): Promise<{ calls: number; costUsd: number; inputTokens: number; outputTokens: number; models: string[]; limitUsd: number } | null> {
+  const { data, error } = await supabase.rpc("asm_ai_usage_summary", { p_assessment: assessmentId });
+  return error ? null : data as never;
 }

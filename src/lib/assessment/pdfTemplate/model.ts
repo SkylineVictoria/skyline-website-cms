@@ -92,6 +92,13 @@ export interface TemplateField extends Rect {
    * (questionKey), "written" ticked Yes when the student answered its question (questionKey), the trainer can change it.
    */
   checklist?: "evidence" | "performance" | "written" | null;
+  /**
+   * ASM-ANY-LAYOUT: how the field was found: "rules" (code), "ai" (the classifier, for areas the rules could not settle), "profile" (a
+   * saved layout profile's correction), "admin" (added by hand). The SLIT design's detector leaves it out.
+   */
+  origin?: "rules" | "ai" | "profile" | "admin" | null;
+  /** An AI-set field waits for the admin's Accept (or Reject, which removes it). */
+  review?: "pending" | "accepted" | null;
 }
 export const SIGNATURE_SLOT = /^(decl:\d{1,2}|pack|ack|signoff)$/;
 

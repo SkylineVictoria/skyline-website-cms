@@ -330,6 +330,95 @@ void writeFileSync;
   }
 }
 
+// ASM-ANY-LAYOUT (owner 2026-11-27): workbooks of any layout: candidates and rules (no AI), the classifier's answers checked against
+// the real candidates, layout profiles, answer pages for small expanding boxes; the SLIT design keeps its detector unchanged.
+{
+  const { detectAny, applyClassification, questionLabel } = await import("../src/lib/assessment/pdfTemplate/generic");
+  const { validateClassification, classifyRequest, estimateInputTokens } = await import("../supabase/functions/_shared/asm-import/classify.ts");
+  const { correctionsFrom, applyProfile, areaKey } = await import("../src/lib/assessment/pdfTemplate/profile");
+  const { detectTemplate } = await import("../src/lib/assessment/pdfTemplate/detect");
+  const { pageModel } = await import("../src/lib/assessment/pdfTemplate/pageModel");
+  const { templateProblems } = await import("../src/lib/assessment/pdfTemplate/model");
+  const { stampPdf } = await import("../src/lib/assessment/pdfTemplate/stamp");
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const modelsOf = async (file: string) => {
+    const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), verbosity: 0 }).promise;
+    const out = [];
+    for (let n = 1; n <= doc.numPages; n++) out.push(await pageModel(pdfjs as never, await doc.getPage(n) as never, n));
+    return out;
+  };
+  const AT = "2026-11-27T00:00:00Z";
+  check("ANY labels: Question 1 / Q1 / 1. / 1.1 / Task 1 Question 2 / a) are question labels; plain text is not",
+    ["Question 1", "Q1 Describe", "1. Describe", "1.1 Explain", "Task 1 Question 2", "a) Name it"].map((s) => questionLabel(s)?.num).join() === "1,1,1,1.1,1.2,a" && questionLabel("Describe the process") === null);
+  // the SLIT design: the fast path returns exactly what its detector finds (no AI, nothing else)
+  for (const file of [workbookPath, [process.env.ASM_WORKBOOK_2, "CPC30620_CPCCPD2012_Use painting and decorating tools and equipment.pdf"].find((p) => p && existsSync(p))]) {
+    if (!file) { console.log("SKIP - ANY fast path (SLIT workbook not found)"); continue; }
+    const ms = await modelsOf(file);
+    const any = detectAny(ms, { path: "x/y.pdf", sha256: "b".repeat(64) }, AT);
+    check(`ANY fast path: ${file.split(/[\\/]/).pop()!.slice(0, 24)} is read by the SLIT detector, unchanged`, any.path === "slit" && JSON.stringify(any.template) === JSON.stringify(detectTemplate(ms, { path: "x/y.pdf", sha256: "b".repeat(64) }, AT)) && any.unresolved.length === 0);
+  }
+  const p3035 = [process.env.ASM_WORKBOOK_3, "CPCCPD3035_Student Assessment Pack.pdf", `${process.env.USERPROFILE ?? process.env.HOME}/Downloads/CPCCPD3035_Student Assessment Pack.pdf`].find((p) => p && existsSync(p));
+  if (!p3035) console.log("SKIP - ANY CPCCPD3035 (file not found; set ASM_WORKBOOK_3)");
+  else {
+    const ms = await modelsOf(p3035);
+    const run = detectAny(ms, { path: "x/y.pdf", sha256: "c".repeat(64) }, AT);
+    const t = run.template;
+    check("ANY CPCCPD3035: not the SLIT design, read by the generic rules; the template satisfies the database's rules", run.path === "generic" && templateProblems(t).length === 0, templateProblems(t).slice(0, 3));
+    const p5 = t.questions.filter((q) => q.header.page === 5);
+    const box = (k: string) => t.fields.filter((f) => f.questionKey === k && f.page === 5);
+    check("ANY CPCCPD3035 page 5: Questions 1-3 by rules alone, each with its drawn box (exact position, found from four lines)",
+      p5.map((q) => `${q.key}:${q.display}`).join() === "1.1:Question 1,1.2:Question 2,1.3:Question 3"
+      && ["1.1", "1.2", "1.3"].every((k, i) => box(k).length === 1 && box(k)[0].origin === "rules" && Math.abs(box(k)[0].y * ms[4].H - [554, 637, 741][i]) < 1.5 && Math.abs(box(k)[0].x * ms[4].W - 68.5) < 1.5),
+      p5.map((q) => [q.key, box(q.key).map((f) => Math.round(f.y * ms[4].H))]));
+    check("ANY CPCCPD3035: the numbered instructions (1.-3. on page 5) are not questions", !t.questions.some((q) => q.header.page === 5 && /^\d\.$/.test(q.display ?? "")));
+    check("ANY CPCCPD3035: Task 1 Questions 1-10 and Task 2's numbered templates 1-9", t.questions.filter((q) => q.task === 1).length === 10 && t.questions.filter((q) => q.task === 2).length >= 9, t.questions.map((q) => q.key));
+    const rec = t.fields.filter((f) => f.page === 1 && f.kind === "auto").map((f) => f.dataKey).join();
+    check("ANY CPCCPD3035 page 1: Student Name / Student Number / Date of Submission / Assessor Name are record fields", rec === "student_name,student_id,submission_date,trainer_name", rec);
+    const perf = t.fields.filter((f) => f.checklist === "performance" && f.option === "yes").map((f) => f.questionKey).join();
+    check("ANY CPCCPD3035 marking checklist: the Performance rows on page 34 follow Questions 1-4 (no Satisfactory column on the questions)", perf.startsWith("1.1,1.2,1.3,1.4"), perf);
+    check("ANY CPCCPD3035 evaluation form: rating rows of five (1-5) by rules", t.fields.filter((f) => f.kind === "rating" && f.page === 30).length === 35 && t.fields.filter((f) => f.kind === "rating" && f.page === 31).length === 75);
+    check("ANY CPCCPD3035: Office Use Only pages 33-37 are the trainer's", t.pages.filter((p) => p.page >= 33).every((p) => p.audience === "trainer") && t.pages.filter((p) => p.page < 33).every((p) => p.audience === "student"));
+    const asked = [...new Set(run.unresolved.map((c) => c.page))];
+    check("ANY CPCCPD3035: covers, instructions and text pages are never sent to the AI (only pages with open areas)", asked.every((p) => run.candidates.some((c) => c.page === p)) && ![2, 3, 9, 10, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 33].some((p) => asked.includes(p)), asked);
+    // the classifier's answer: only real candidate numbers, each once
+    const page = asked[0]; const open = run.unresolved.filter((c) => c.page === page);
+    const v = validateClassification({ fields: [{ n: open[0].n, class: "trainer_field", question: null, kind: "text", record: null }, { n: open[0].n, class: "student_answer", question: null, kind: "text", record: null }, { n: 999, class: "student_answer", question: null, kind: "text", record: null }, { n: open[0].n + 0.5, class: "x", question: null, kind: "text", record: null }] }, open.map((c) => c.n));
+    check("ANY classifier: an invented number, a repeat and a wrong class are refused; only real candidates are kept", v.fields.length === 1 && v.refused === 3);
+    const req = classifyRequest({ page, imageDataUrl: "data:image/jpeg;base64,AAAA", imageWidth: 1100, imageHeight: 1556, candidates: open.map((c) => ({ n: c.n, shape: c.shape, left: c.left })) });
+    check("ANY classifier: one page image + its numbered list; the schema allows the four classes only", req.input.length === 2 && JSON.stringify(req.schema).includes("not_a_field") && estimateInputTokens({ page, imageDataUrl: "", imageWidth: 1100, imageHeight: 1556, candidates: [] }) < 4000);
+    // the answers: AI fields wait for Accept / Reject; not-a-field adds nothing
+    const answers: Record<number, { n: number; class: "student_answer" | "trainer_field" | "record_field" | "not_a_field"; question: string | null; kind: "text" | "table_cell" | "yes_no" | "tick" | "signature" | "date"; record: string | null }[]> = {};
+    for (const c of run.unresolved) (answers[c.page] ??= []).push({ n: c.n, class: c.page >= 33 ? "trainer_field" : c.page === 4 ? "not_a_field" : "student_answer", question: null, kind: c.shape === "tick" ? "tick" : "text", record: null });
+    const merged = applyClassification(structuredClone(run), answers);
+    const ai = merged.template.fields.filter((f) => f.origin === "ai");
+    check("ANY classifier answers: added as AI fields waiting for review; 'not a field' adds nothing; the template stays valid",
+      ai.length === merged.added && ai.every((f) => f.review === "pending") && merged.notFields === run.unresolved.filter((c) => c.page === 4).length && templateProblems(merged.template).length === 0, templateProblems(merged.template).slice(0, 2));
+    // a layout profile: the admin's decisions (AI accepted, one rejected) are applied by themselves to the next workbook of this layout
+    const final = structuredClone(merged.template);
+    for (const f of final.fields) if (f.origin === "ai") f.review = "accepted";
+    const rejected = final.fields.find((f) => f.origin === "ai" && f.page >= 33)!;
+    final.fields = final.fields.filter((f) => f !== rejected);
+    const runForProfile = { ...run, template: merged.template, settledBy: { ...run.settledBy } };
+    const corrections = correctionsFrom(runForProfile, final);
+    const next = detectAny(ms, { path: "x/y.pdf", sha256: "c".repeat(64) }, AT);
+    const settled = applyProfile(next as never, { signature: "x", chrome: [], corrections });
+    check("ANY layout profile: the saved decisions settle the same areas next time with no AI (a rejected one stays rejected)",
+      settled > 0 && next.unresolved.length === 0 && !next.template.fields.some((f) => f.page === rejected.page && Math.abs(f.y - rejected.y) < 0.002 && Math.abs(f.x - rejected.x) < 0.002) && next.template.fields.some((f) => f.origin === "profile"),
+      { settled, left: next.unresolved.length, keys: corrections.slice(0, 2).map((c) => c.key) });
+    void areaKey;
+    // small expanding boxes: an answer that does not fit at 8 pt points to an answer page added after its task
+    const long = "Wear a P2 respirator and safety glasses when sanding. ".repeat(40);
+    const field = t.fields.find((f) => f.questionKey === "1.1")!;
+    const stamped = await stampPdf(new Uint8Array(readFileSync(p3035)), t, new Map([[field.id, { kind: "text", text: long, by: "student" } as const]]));
+    const sdoc = await pdfjs.getDocument({ data: stamped.bytes.slice() }).promise;
+    const text = async (n: number) => ((await (await sdoc.getPage(n)).getTextContent()).items as { str: string }[]).map((i) => i.str).join(" ");
+    const p5t = await text(5); const added = await text(9);
+    check("ANY answer pages: the box says 'See answer page 9'; page 9 (after Task 1's last page, 8) starts with the question and holds the whole answer",
+      sdoc.numPages === ms.length + 1 && /See answer page 9/.test(p5t) && /Answers \(continued from page 8\)/.test(added) && /Question 1/.test(added) && /safety requirements/.test(added) && (added.match(/P2 respirator/g) ?? []).length >= 30,
+      { pages: sdoc.numPages, p5: p5t.slice(-60), p9: added.slice(0, 120) });
+  }
+}
+
 // autosave with retry: a failed save never shows "Saved", is retried with the newest value, and submit knows it is not saved
 {
   const { AutosaveQueue, saveLabel, retryDelay, classifySaveError } = await import("../src/lib/assessment/autosave");

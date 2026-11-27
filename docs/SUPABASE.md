@@ -1294,3 +1294,25 @@ Migration `20261127160517_student_picker_search`; no Edge Function.
   shows "Email already in use." and offers that student when the caller may see them. The application is then made by
   `portal_create_student_application`; the separate business / agent step is gone.
 - Tests: `phase4_authorization_positive.sql` (agent cannot find another agency's student), `e2e/regression.spec.ts` "student picker: …" (4).
+
+## Workbooks of any layout (ASM-ANY-LAYOUT, 2026-11-27, branch, NOT deployed)
+Migration `20261127170517_asm_any_layout` (LOCAL ONLY); Edge Function `asm-import` action `classify_fields` (NOT deployed); frontend on the
+branch only. The SLIT design keeps its detector (`detect.ts`) as the fast path; any other layout is read by code first:
+- `pdfTemplate/candidates.ts`: every empty fillable area (closed boxes rebuilt from the drawn border segments, so Word boxes drawn as four
+  lines and table cells come out exact; "☐" tick glyphs; underscore / signature lines; "Click or tap to enter…" placeholders; a labelled
+  box's room under its label), each with its rectangle and the text around it; the running header / footer is ignored.
+- `pdfTemplate/generic.ts`: question labels in any style (Question 1, Q1, 1., 1.1, Task 1 Question 2, a)); empty areas are attached to the
+  nearest label above (a numbered instruction with no area under it is not a question); record fields, signatures, dates, Yes / No
+  pairs, rating rows, marking-checklist rows (performance rows matched to the task's questions); trainer pages from "Office Use Only".
+- What the rules cannot settle goes to the AI, one page at a time, only pages with open areas: the page image with the numbered areas
+  plus the list; it answers student answer / trainer field / record field / not a field, the printed question number and the kind;
+  only real numbers are kept (`_shared/asm-import/classify.ts`). Model `EF_ASM_CLASSIFY_MODEL` (default gpt-4.1-mini), prices
+  `EF_ASM_CLASSIFY_INPUT_USD_PER_MILLION` / `_OUTPUT_` (0.40 / 1.60), cap `EF_ASM_CLASSIFY_LIMIT_USD` (2) per workbook (sum of
+  `asm_ai_usage` for its sha256, checked before each page). The AI is never used while answering, marking or making the PDF.
+- AI fields carry `origin: ai, review: pending` (Accept / Reject / Accept all in the editor; Publish refused with `ai_pending` until
+  none is left); empty areas no field covers are outlined, one click adds a field sized to the area.
+- Layout profiles (`asm_layout_profiles`): on Save the admin's decisions are stored under the layout's header / footer signature and
+  applied first to later workbooks of that layout (no AI for them).
+- Answer pages: on a generic layout an answer that does not fit its box at 8 pt prints "See answer page N" and goes in full on pages
+  added after its task's last page (question number and text first); the SLIT design keeps its continued pages.
+- Release order: apply the migration, deploy `asm-import`, then the frontend; regression: CPCCPD2012 / RIICWD525E templates identical.

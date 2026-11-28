@@ -38,3 +38,20 @@ export interface InvoiceSave {
 export const financeInvoiceSave = (data: InvoiceSave) => rpc<string>("finance_invoice_save", { p_data: data });
 export const financeInvoicePayment = (invoiceId: string, data: { amountCents: number; paidAt: string; method?: string; reference?: string }) =>
   rpc<string>("finance_invoice_payment", { p_invoice: invoiceId, p_data: data });
+
+/** Finance › Invoices "By student" (finance_student_fees_list): each student's invoice status at a glance. */
+export type StudentFeesStatus = "overdue" | "owing" | "paid" | "credit";
+export interface StudentFeesRow {
+  studentId: string; studentName: string; studentNumber: string | null; email: string | null; courses: string[]; invoices: number;
+  totalCents: number; paidCents: number; balanceCents: number; overdueCents: number; overdueInvoices: number;
+  nextDueDate: string | null; nextDueCents: number | null; lastPaymentAt: string | null; status: StudentFeesStatus;
+}
+export interface StudentFeesPage {
+  rows: StudentFeesRow[]; total: number; page: number; pageSize: number;
+  summary: { students: number; overdue: number; owing: number; paid: number; credit: number; balanceCents: number; overdueCents: number };
+}
+export const financeStudentFees = (filters: { q?: string; status?: StudentFeesStatus; page?: number; pageSize?: number }) =>
+  rpc<StudentFeesPage>("finance_student_fees_list", { p_filters: filters });
+export const STUDENT_FEES_STATUS: Record<StudentFeesStatus, { label: string; tone: "success" | "warn" | "primary" | "muted" }> = {
+  overdue: { label: "Overdue", tone: "primary" }, owing: { label: "Owing", tone: "warn" }, paid: { label: "Paid up", tone: "success" }, credit: { label: "In credit", tone: "muted" },
+};

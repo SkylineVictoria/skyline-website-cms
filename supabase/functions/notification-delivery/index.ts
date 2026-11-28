@@ -1,4 +1,5 @@
 import type { SignedParts } from "../_shared/notification/signed-page.ts";
+import type { ApplicationFormTemplate } from "../_shared/notification/application-form.ts";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { backendConfiguration } from "../_shared/config.ts";
@@ -74,7 +75,9 @@ async function worker() {
         // SIGNED-APPLICATION: what was signed (no signing certificate details are returned) and whether the portal copy is still to be stored.
         signed: info.signed && typeof info.signed === "object" ? info.signed as SignedParts : null,
         studentName: typeof info.studentName === "string" ? info.studentName : "",
-        storeCopy: info.storeCopy === true };
+        storeCopy: info.storeCopy === true,
+        formTemplate: info.formTemplate && typeof info.formTemplate === "object" ? info.formTemplate as ApplicationFormTemplate : null,
+        institute: info.institute && typeof info.institute === "object" ? info.institute as Record<string, string> : null };
     },
     storeSignedCopy: async (d, contentBase64) => {
       const { error } = await admin.rpc("notification_store_signed_copy", { p_id: d.id, p_lease: d.leaseToken, p_content: contentBase64 });

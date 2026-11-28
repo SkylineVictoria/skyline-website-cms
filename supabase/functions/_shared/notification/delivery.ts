@@ -5,6 +5,7 @@
 // The PDF builder (pdf-lib and the embedded fonts) is loaded only when an application_submitted email actually attaches a PDF, so the
 // workers that share this module (HR mail, staff functions) boot without it.
 import { hasSignedParts, type SignedParts } from "./signed-page.ts";
+import type { ApplicationFormInstitute, ApplicationFormTemplate } from "./application-form.ts";
 import { MAX_ATTACHMENT_BYTES, attachmentFileName, toBase64 } from "./attachment.ts";
 import { loadLogo } from "./pdf-logo.ts";
 import type { PdfDocumentLink } from "./submission-pdf.ts";
@@ -217,6 +218,9 @@ export interface SubmissionInfo {
   studentName?: string;
   /** True while the portal has no stored signed copy of this submission yet: this send makes and stores it. */
   storeCopy?: boolean;
+  /** APPLICATION-FORM-TEMPLATES: the Application form template recorded for this submission, and the institute's details it prints. */
+  formTemplate?: ApplicationFormTemplate | null;
+  institute?: (Omit<ApplicationFormInstitute, "logo"> & { logoUrl?: string | null }) | null;
 }
 export const PDF_LINK_SECONDS = 7 * 24 * 60 * 60;
 /**
@@ -288,6 +292,16 @@ export async function composeBody(port: DeliveryPort, delivery: ClaimedDelivery)
     try { logo = info.branding?.logo ? await (port.fetchLogo ? port.fetchLogo(info.branding.logo, base) : loadLogo(info.branding.logo, base)) : null; } catch { logo = null; }
     // The form, then (when signed) the signature page: the same document for the email and the portal copy.
     const build = async (documents: PdfDocumentLink[], portalLink: string | undefined) => {
+      // The Application form template recorded at submission prints the whole document (form, declarations, signatures).
+      if (info!.formTemplate) {
+        const { buildApplicationFormPdf } = await import("./application-form.ts");
+        const logoData = logo ? `data:image/${logo.type === "jpg" ? "jpeg" : "png"};base64,${toBase64(logo.bytes)}` : null;
+        const { logoUrl: _logoUrl, ...details } = info!.institute ?? {};
+        return await buildApplicationFormPdf(info!.formTemplate, {
+          reference: info!.reference, submittedAt: info!.submittedAt, institution: info!.institution, timezone: timezone ?? null, snapshot: info!.snapshot,
+          signed, studentName: info!.studentName || "", institute: { ...details, name: details.name || info!.institution, logo: logoData },
+        });
+      }
       const form = await buildSubmissionPdf({
         reference: info!.reference, institution: info!.institution, version: info!.version, submittedAt: info!.submittedAt, snapshot: info!.snapshot,
         branding: { primary: info!.branding?.primaryColor, timezone, logo },

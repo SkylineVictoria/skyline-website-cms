@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(125);
+select plan(130);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -415,6 +415,17 @@ select is((public.notification_delivery_submission((select id from public.notifi
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
 select is(left(convert_from(decode(public.application_signed_copy_file('e5100000-0000-0000-0000-000000000002')->>'content', 'base64'), 'UTF8'), 5), '%PDF-', 'the agent opens the stored signed copy');
 select ok(public.application_signed_copy('e5100000-0000-0000-0000-000000000002')->'storedCopy' is not null, 'the card knows it is kept in the portal');
+reset role;
+-- APPLICATION-FORM-TEMPLATES (20261128016517): the default Application form is recorded for each submission; one default; staff choose it.
+reset role;
+select ok(exists (select 1 from hr.sign_templates where category = 'application_form' and is_default and deleted_at is null), 'a default Application form exists');
+select ok(exists (select 1 from public.application_form_used u where u.application_id = 'e5100000-0000-0000-0000-000000000002' and u.body_html like '%{{application.answers}}%'),
+  'each submission keeps a copy of the form it prints from');
+select throws_ok($$insert into hr.sign_templates(name, title, body_html, kind, audience, category, created_by, is_default, roles) values ('Second default', 'X', '<p>x</p>', 'text', 'student', 'application_form', gen_random_uuid(), true, '[]')$$,
+  '23505', null, 'only one Application form is the default');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.application_form_template_set_default((select id from hr.sign_templates where category = 'application_form' and is_default limit 1))$$, null, null, 'an agent cannot choose the default form');
+select ok(public.application_signed_copy('e5100000-0000-0000-0000-000000000002')->'formTemplate'->>'name' is not null, 'the signed copy names the form it prints from');
 reset role;
 select * from finish();
 rollback;

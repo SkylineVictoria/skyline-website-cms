@@ -481,23 +481,51 @@ test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs eve
 test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled students once each, changed-since windows, outcomes kept',async()=>{
  const {runImport,stagesFor,updatedWindows}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');
  assert.deepEqual(stagesFor(['students']),['student_list','students']);
+ // AXCELERATE-IMPORT-SCREENS: every entity on its own, and everything in dependency order.
+ assert.deepEqual(stagesFor(['locations']),['locations']);assert.deepEqual(stagesFor(['courses']),['courses']);assert.deepEqual(stagesFor(['agents']),['agents']);
+ assert.deepEqual(stagesFor(['locations','courses','trainers','classes','breaks','agents','students']),['locations','courses','classes','breaks','agents','student_list','students']);
  assert.deepEqual(stagesFor(['trainers','classes','breaks','students']).slice(-2),['student_list','students']);
  const gets:Array<[string,Record<string,unknown>]>=[];
  const enrol:Record<string,Record<string,unknown>[]>={C1:[{CONTACTID:'11'},{CONTACTID:'12'}],C2:[{CONTACTID:'12'},{CONTACTID:'13'}]};
  const client={get:async(p:string,q:Record<string,unknown>={})=>{gets.push([p,q]);
    if(p==='/contact/13')return{status:404,data:'missing'};
-   const id=p.split('/')[2];return{status:200,data:[{CONTACTID:id,GIVENNAME:'Zz',SURNAME:`S${id}`}]};},
+   if(p.startsWith('/contact/enrolments/'))return{status:200,data:p.endsWith('/11')?[{ID:'C1',NAME:'Graduate Diploma',STATUS:'In Progress',TYPE:'p',INSTANCEID:'I9',ENROLID:'E1'},{ID:'W1',NAME:'Workshop',TYPE:'w'}]:[]};
+   if(p==='/course/detail')return{status:200,data:{ID:'C1',CODE:'BSB80120',NAME:'Graduate Diploma'}};
+   if(p==='/course/instance/detail')return{status:200,data:{INSTANCEID:'I9',NAME:'Apr class',UNITS:[]}};
+   if(p==='/course/instance/attendance')return{status:200,data:[{DATE:'2026-05-04',STARTTIME:'09:00',FINISHTIME:'13:00',ENROLLEES:[{CONTACTID:'11'}]}]};
+   if(p==='/agent/900')return{status:200,data:{CONTACTID:'900',GIVENNAME:'Ann',SURNAME:'Agent',ORGID:'55'}};
+   if(p==='/contact/900')return{status:200,data:[{CONTACTID:'900',EMAILADDRESS:'ann@agency.example'}]};
+   if(p==='/organisation/55')return{status:200,data:{NAME:'Agency X'}};
+   const id=p.split('/')[2];return{status:200,data:[{CONTACTID:id,GIVENNAME:'Zz',SURNAME:`S${id}`,AGENTCONTACTID:'900'}]};},
   getAll:async(p:string,q:Record<string,unknown>={})=>{gets.push([p,q]);
    if(p==='/courses')return[{ID:'C1'},{ID:'C2'}];if(p==='/course/enrolments')return enrol[String(q.ID)]??[];return[];}};
  const outcomes:Record<string,string>={'11':'created','12':'duplicate'};
  const calls:Array<Record<string,unknown>>=[];
- const rpc=async(name:string,args:Record<string,unknown>)=>{if(name==='axcelerate_import_student'){calls.push(args);
+ const agentCalls:Array<Record<string,unknown>>=[];
+ const qualCalls:Array<[string,Record<string,unknown>]>=[];
+ const rpc=async(name:string,args:Record<string,unknown>)=>{
+  if(name==='axcelerate_import_agent'){agentCalls.push(args);return{data:{action:'created',id:'ag1',name:'Ann Agent',businessName:'Agency X'},error:null};}
+  if(name==='axcelerate_student_agent')return{data:'moved',error:null};
+  if(name==='axcelerate_import_course')return{data:{action:'created',id:'sk1'},error:null};
+  if(name==='axcelerate_import_class'){qualCalls.push(['class',args]);return{data:{action:'created',id:'cl1'},error:null};}
+  if(name==='axcelerate_import_qualification'){qualCalls.push(['qualification',args]);return{data:{action:'created',status:'active',warnings:[]},error:null};}
+  if(name==='axcelerate_import_student'){calls.push(args);
    const id=String((args.p_rec as {CONTACTID:string}).CONTACTID);return{data:{action:outcomes[id]??'unchanged',id:`s${id}`,name:`Zz S${id}`,warnings:id==='11'?['Sex "Q" is not an AVETMISS code; left empty.']:[]},error:null};}
   return{data:null,error:null};};
  // One student: only that contact is read; its outcome is kept for the page.
  let r=await runImport({client,rpc,connection:'c',run:'r',actor:'a',entities:['students'],cursor:{scope:'one',contactId:'11'},counts:{},deadline:Date.now()+60000,save:async()=>true});
- assert.equal(r.done,true);assert.deepEqual(gets.map(g=>g[0]),['/contact/11']);
+ assert.equal(r.done,true);assert.deepEqual(gets.map(g=>g[0]),['/contact/11','/contact/enrolments/11','/agent/900','/contact/900','/organisation/55','/course/detail','/course/deliveryLocations','/course/instance/detail','/course/instance/attendance']);
  assert.equal(r.cursor.results?.[0].action,'created');assert.equal(r.cursor.results?.[0].warnings?.length,1);
+ // AXCELERATE-AGENTS: the agent and their organisation are imported; the student's courses (not workshops) are kept on the record.
+ assert.deepEqual(r.cursor.results?.[0].agent,{name:'Ann Agent',business:'Agency X',action:'imported',student:'moved',message:undefined});
+ assert.deepEqual(r.cursor.results?.[0].courses,[{name:'Graduate Diploma',status:'In Progress'}]);
+ assert.equal(((calls[0].p_rec as {ENROLMENTS:unknown[]}).ENROLMENTS).length,1,'the enrolments travel with the contact to the import record');
+ assert.deepEqual(agentCalls[0].p_org,{NAME:'Agency X',ORGID:'55'});
+ // AXCELERATE-QUALIFICATIONS: the course enrolment brings its course, campuses and class first, then the Qualification in that class.
+ assert.deepEqual(r.cursor.results?.[0].qualifications,[{name:'Graduate Diploma',action:'created',status:'active',warnings:[]}]);
+ assert.deepEqual(qualCalls.map(q=>q[0]),['class','qualification']);
+ assert.equal(qualCalls[1][1].p_intake,'cl1');assert.equal(qualCalls[1][1].p_student,'s11');
+ assert.deepEqual((qualCalls[0][1].p_rec as {SESSIONS:unknown}).SESSIONS,[{DATE:'2026-05-04',STARTTIME:'09:00',FINISHTIME:'13:00'}],'the class keeps its sessions, without the attendees');
  // All: every course's enrolments, each contact once; a missing contact is an import error; only results needing attention are kept.
  gets.length=0;calls.length=0;
  r=await runImport({client,rpc,connection:'c',run:'r',actor:'a',entities:['students'],cursor:{scope:'all'},counts:{},deadline:Date.now()+60000,save:async()=>true});
@@ -505,6 +533,10 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
  assert.deepEqual(calls.map(c=>(c.p_rec as {CONTACTID:string}).CONTACTID),['11','12']);
  assert.deepEqual(r.counts.student,{created:1,duplicate:1,error:1});
  assert.deepEqual(r.cursor.results?.map(x=>`${x.contactId}:${x.action}`),['11:created','12:duplicate','13:error']);
+ assert.equal(agentCalls.length,2,'one agent shared by students is read once per run (once in the first run, once here)');
+ assert.equal(r.counts.agent?.created,1);
+ assert.equal(qualCalls.filter(q=>q[0]==='class').length,2,'a class is read once per run (once in each of the two runs)');
+ assert.equal(r.counts.qualification?.created,1);
  assert.ok(gets.filter(g=>g[0]==='/course/enrolments').every(g=>g[1].type==='p'&&!('lastUpdated_min' in g[1])));
  // Changed since: lastUpdated windows of at most 90 days, one day of overlap.
  const now=Date.parse('2026-11-28T10:00:00Z');

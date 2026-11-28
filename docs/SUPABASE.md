@@ -1388,6 +1388,23 @@ headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT f
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
 Importing into Skyline records is not built yet.
 
+## aXcelerate Qualifications and import screens (AXCELERATE-QUALIFICATIONS, 2026-11-28, LOCAL ONLY)
+Migration 20261128081517_axcelerate_qualifications: axcelerate_class_room (placeholder classroom per campus for an imported class without a group),
+axcelerate_import_qualification (application source 'axcelerate': draft -> submitted (portal.signed_submit, status_command) -> enrolled
+(qualification_move_application) -> the existing Qualification trigger; link entity 'qualification' keyed by ENROLID), axcelerate_record_badge
+(+ axcelerateId, entity). axcelerate-import: entities locations, courses, trainers, classes, breaks, agents, students (dependency order);
+actions search_courses / search_agents; start courses: {courseId} / agents: {contactId}; per student GET /course/detail,
+/course/deliveryLocations, /course/instance/detail for the classes of their enrolments. No new env names.
+
+## aXcelerate agents (AXCELERATE-AGENTS, 2026-11-28, LOCAL ONLY)
+Migration 20261128071517_axcelerate_agents: axcelerate_student_values (+ title, citizenship / nationality, holds_visa / visa_type, alternative_email,
+ec_name / ec_relationship / ec_phone, birth_city; USI in usi_number; English proficiency @ when missing for a non-English speaker),
+axcelerate_import_agency (business by link 'agency' org:<id> / agent:<id>, ABN or name; else created Active, agreement none, code AX<id>),
+axcelerate_import_agent (link 'agent', or email; else created Inactive), axcelerate_student_agent (moved | linked | unchanged | kept; moves only a
+student without applications, with skyline.student_move). Link entities agent / agency / qualification; axcelerate_link_touch on agents, agencies.
+axcelerate-import: per student GET /contact/enrolments/:id (kept as raw.ENROLMENTS), agent GET /agent/:id + /contact/:id + /organisation/:id
+once per run. No new env names.
+
 ## aXcelerate students (AXCELERATE-STUDENTS, 2026-11-28, RELEASED)
 Students page › Import from aXcelerate: one student (axcelerate-import action `search_students` = GET /contacts/search, max 20, filtered again
 on the words / digits typed; then start {entities: ['students'], students: {scope: 'one', contactId}}), or all (scope 'all': GET

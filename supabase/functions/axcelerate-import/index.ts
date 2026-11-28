@@ -5,7 +5,9 @@
 // Actions:
 //   start    {entities: ['trainers'|'classes'|'breaks'|'students'], mode: 'page'|'everything',
 //             students?: {scope: 'one', contactId} | {scope: 'all', changedOnly}}             -> starts a run and works on it
-//   search_students {query}                                                            -> up to 20 aXcelerate contacts (read only)
+//   search_students / search_agents {query}                                            -> up to 20 aXcelerate contacts (read only)
+//   search_courses {query}                                                             -> up to 20 aXcelerate courses (read only)
+//   start ... courses: {courseId} (one course with its classes) | agents: {contactId} (one agent)
 //   continue {runId}                                                                  -> works on a running run (the page calls it until done)
 //   retry    {runId}                                                                  -> a new run for the same entities as a failed / cancelled one
 //   survey   {}                                                                       -> record counts in aXcelerate (read only)
@@ -79,7 +81,19 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, survey });
     }
 
-    if (action === 'search_students') {
+    if (action === 'search_courses') {
+      // A course in aXcelerate by code or name (the courses page's "Import one course"). Read only.
+      const query = typeof body.query === 'string' ? body.query.trim().toLowerCase().slice(0, 100) : '';
+      if (query.length < 2) return json({ error: 'Type at least 2 letters.' }, 400);
+      const rows = await client.getAll('/courses', { type: 'p' }).catch(() => null);
+      if (!rows) return json({ error: 'aXcelerate could not be read. Check the connection.' }, 502);
+      const str = (r: Record<string, unknown>, k: string) => (r[k] === null || r[k] === undefined ? '' : String(r[k]).trim());
+      const results = rows.map((r) => ({ courseId: str(r, 'ID'), code: str(r, 'CODE'), name: str(r, 'NAME') }))
+        .filter((r) => r.courseId && `${r.code} ${r.name}`.toLowerCase().includes(query)).slice(0, 20);
+      return json({ ok: true, results });
+    }
+
+    if (action === 'search_students' || action === 'search_agents') {
       // AXCELERATE-STUDENTS: find one student in aXcelerate by name, email or mobile (at least 3 letters). Read only.
       const query = typeof body.query === 'string' ? body.query.trim().slice(0, 100) : '';
       if (query.length < 3) return json({ error: 'Type at least 3 letters.' }, 400);
@@ -96,7 +110,7 @@ Deno.serve(async (req: Request) => {
       })).filter((r) => r.contactId && (
         words.every((w) => `${r.name} ${r.email}`.toLowerCase().includes(w)) || (digits.length >= 3 && r.mobile.replace(/\D/g, '').includes(digits))
       )).slice(0, 20);
-      const linked = results.length ? await admin.rpc('axcelerate_students_linked', { p_connection: conn.id, p_ids: results.map((r) => r.contactId) }) : { data: {} };
+      const linked = results.length && action === 'search_students' ? await admin.rpc('axcelerate_students_linked', { p_connection: conn.id, p_ids: results.map((r) => r.contactId) }) : { data: {} };
       const map = (linked.data ?? {}) as Record<string, string>;
       return json({ ok: true, results: results.map((r) => ({ ...r, studentId: map[r.contactId] ?? null })) });
     }
@@ -123,6 +137,11 @@ Deno.serve(async (req: Request) => {
         entities = mode === 'everything' ? [...IMPORT_ENTITIES] : asked.filter((e): e is ImportEntity => (IMPORT_ENTITIES as readonly string[]).includes(e));
       }
       if (!entities.length) return json({ error: 'Choose what to import.' }, 400);
+      // One course (with its classes) or one agent, from the courses / agents pages.
+      const oneCourse = (body.courses as { courseId?: unknown } | undefined)?.courseId;
+      const oneAgent = (body.agents as { contactId?: unknown } | undefined)?.contactId;
+      if (oneCourse !== undefined && !/^[0-9]{1,12}$/.test(String(oneCourse))) return json({ error: 'Choose the course to import.' }, 400);
+      if (oneAgent !== undefined && !/^[0-9]{1,12}$/.test(String(oneAgent))) return json({ error: 'Choose the agent to import.' }, 400);
       if (entities.includes('students')) {
         // AXCELERATE-STUDENTS: one student, or all; "changed since the last import" reads only enrolments changed since then.
         const st = (action === 'retry' ? null : body.students) as { scope?: string; contactId?: unknown; changedOnly?: unknown } | null;
@@ -142,6 +161,8 @@ Deno.serve(async (req: Request) => {
           }
         }
       }
+      if (oneCourse !== undefined) cursor.onlyCourse = String(oneCourse);
+      if (oneAgent !== undefined) cursor.agentId = String(oneAgent);
       const r = await admin.rpc('axcelerate_run_start', { p_connection: conn.id, p_actor: who.user.id, p_mode: mode, p_entities: entities, p_retry_of: retryOf, p_ip: ip });
       if (r.error) return json({ error: r.error.message ?? 'The import could not start.' }, 409);
       runId = r.data as string;

@@ -29,3 +29,12 @@ export const INVOICE_STATUS: Record<InvoiceStatus, { label: string; tone: "succe
   paid: { label: "Paid", tone: "success" }, part_paid: { label: "Part paid", tone: "warn" }, unpaid: { label: "Unpaid", tone: "warn" },
   overdue: { label: "Overdue", tone: "primary" }, void: { label: "Void", tone: "muted" },
 };
+
+/** FEES-MANUAL: create or edit a Skyline invoice (aXcelerate invoices are read only), void it, record a payment against it. */
+export interface InvoiceSave {
+  id?: string; studentId?: string; courseId?: string | null; number?: string | null; date?: string; dueDate?: string | null; description?: string | null; void?: boolean;
+  items?: Array<{ description: string; feeType: FeeType; quantity: number; unitCents: number }>;
+}
+export const financeInvoiceSave = (data: InvoiceSave) => rpc<string>("finance_invoice_save", { p_data: data });
+export const financeInvoicePayment = (invoiceId: string, data: { amountCents: number; paidAt: string; method?: string; reference?: string }) =>
+  rpc<string>("finance_invoice_payment", { p_invoice: invoiceId, p_data: data });

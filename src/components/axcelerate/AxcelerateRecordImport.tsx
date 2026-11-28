@@ -72,6 +72,7 @@ export function StudentOutcome({ r }: { r: StudentResult }) {
       {r.qualifications!.map((q, n) => <li key={`${q.name}-${n}`} className={q.action === 'error' ? 'text-red-700' : 'text-foreground-700'}>
         Qualification {q.name}: {QUAL_LABEL[q.action] ?? q.action}{q.status && q.action !== 'error' ? ` (${q.status === 'active' ? 'In Progress' : q.status})` : ''}{q.message ? `: ${q.message}` : ''}
         {(q.warnings ?? []).map((w) => <span key={w} className="block text-foreground-600">{w}</span>)}
+        {q.attendance && <span className="block text-foreground-600" data-testid="axcelerate-attendance">Attendance: {q.attendance.marked} class day{q.attendance.marked === 1 ? '' : 's'} imported{q.attendance.kept ? `, ${q.attendance.kept} kept as marked in Skyline` : ''}{q.attendance.skipped ? `, ${q.attendance.skipped} not readable` : ''}</span>}
         {(q.units ?? []).length > 0 && <span className="block text-foreground-600" data-testid="axcelerate-unit-results">
           Unit results: {q.units!.map((u) => `${u.code}${u.outcome ? ` ${OUTCOME_LABEL[u.outcome] ?? u.outcome}` : ''} (${UNIT_ACTION[u.action] ?? u.action}${u.message ? `: ${u.message}` : ''})`).join('; ')}
         </span>}

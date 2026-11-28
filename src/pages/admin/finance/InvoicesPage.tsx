@@ -5,6 +5,7 @@ import { downloadCsv } from "@/pages/admin/lib/assessments";
 import { formatMoney } from "@/lib/signingApi";
 import { INVOICE_STATUS, financeInvoices, type Invoice, type InvoicePage, type InvoiceStatus } from "@/pages/admin/lib/invoices";
 import { InvoiceCard } from "@/components/finance/StudentFeesPanel";
+import { InvoiceEditorModal } from "@/components/finance/InvoiceEditor";
 
 const PAGE_SIZE = 25;
 const day = (value: string | null) => (value ? new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString("en-AU", { dateStyle: "medium" }) : "—");
@@ -16,7 +17,7 @@ export default function InvoicesPage() {
   const [page, setPage] = useState(1);
   const [data, setData] = useState<InvoicePage | null>(null);
   const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState<Invoice | null>(null);
+  const [open, setOpen] = useState<Invoice | null>(null); const [adding, setAdding] = useState(false);
   const load = useCallback(async () => {
     setBusy(true); setError("");
     try { setData(await financeInvoices({ status: status || undefined, q: q || undefined, page, pageSize: PAGE_SIZE })); }
@@ -42,7 +43,9 @@ export default function InvoicesPage() {
   const s = data?.summary;
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;
   return <div className="space-y-5" data-testid="finance-invoices">
-    <PageHeader title="Invoices" description="Student invoices with their items and payments, and what is still owing. Invoices from aXcelerate are kept equal to aXcelerate by Refresh from aXcelerate." />
+    <PageHeader title="Invoices" description="Student invoices with their items and payments, and what is still owing. Add invoices here; invoices from aXcelerate are kept equal to aXcelerate by Refresh from aXcelerate."
+      actions={<Button icon="ri-add-line" onClick={() => setAdding(true)} data-testid="invoices-new">New invoice</Button>} />
+    <InvoiceEditorModal open={adding} onClose={() => setAdding(false)} onSaved={() => void load()} />
     {error ? <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p> : null}
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {[["Invoiced", s ? formatMoney(s.totalCents, "AUD") : "…", `${s?.invoices ?? "…"} invoices`], ["Paid", s ? formatMoney(s.paidCents, "AUD") : "…", "received"],
@@ -72,7 +75,7 @@ export default function InvoicesPage() {
     {data && data.total > data.pageSize ? <div className="flex items-center justify-between text-sm"><span>{data.total} invoices · page {data.page} of {pages}</span>
       <div className="flex gap-2"><Button size="sm" variant="outline" disabled={busy || page <= 1} onClick={() => setPage((p) => p - 1)}>Previous</Button><Button size="sm" variant="outline" disabled={busy || page >= pages} onClick={() => setPage((p) => p + 1)}>Next</Button></div></div> : null}
     <Drawer open={Boolean(open)} title={open ? `Invoice ${open.number ?? ""}` : "Invoice"} onClose={() => setOpen(null)}>
-      {open ? <InvoiceCard invoice={open} showStudent /> : null}
+      {open ? <InvoiceCard key={`${open.id}:${open.paidCents}:${open.status}`} invoice={open} showStudent onChanged={() => { void load().then(() => setOpen(null)); }} /> : null}
     </Drawer>
   </div>;
 }

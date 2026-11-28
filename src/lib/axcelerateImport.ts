@@ -10,14 +10,16 @@ export type ImportEntity = 'locations' | 'courses' | 'trainers' | 'classes' | 'b
 export const ALL_ENTITIES: ImportEntity[] = ['locations', 'courses', 'trainers', 'classes', 'breaks', 'agents', 'students'];
 export const ENTITY_LABEL: Record<string, string> = {
   locations: 'Campuses', courses: 'Courses', agents: 'Agents', trainers: 'Trainers', classes: 'Classes', breaks: 'Breaks', students: 'Students',
-  location: 'Locations', course: 'Courses', unit: 'Units', trainer: 'Trainers', class: 'Classes', class_unit: 'Class units', break: 'Breaks', student: 'Students', agent: 'Agents', agency: 'Agent businesses', qualification: 'Qualifications', unit_result: 'Unit results', master: 'CoE master timetables',
+  location: 'Locations', course: 'Courses', unit: 'Units', trainer: 'Trainers', class: 'Classes', class_unit: 'Class units', break: 'Breaks', student: 'Students', agent: 'Agents', agency: 'Agent businesses', qualification: 'Qualifications', unit_result: 'Unit results', master: 'Course calendars', invoice: 'Invoices', course_fee: 'Course fees', batch: 'Batches', attendance: 'Attendance',
 };
 /** One student's outcome (AXCELERATE-STUDENTS). */
 export type StudentResult = {
   contactId: string; action: string; name?: string; id?: string | null; warnings?: string[]; message?: string;
   agent?: { name?: string; action: string; student?: string; business?: string; message?: string };
   courses?: { name: string; status: string }[];
-  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[]; units?: { code: string; outcome?: string; action: string; message?: string }[] }[];
+  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[]; units?: { code: string; outcome?: string; action: string; message?: string }[]; attendance?: { sessions: number; marked: number; kept: number; skipped: number } }[];
+  /** The student's aXcelerate invoices and payments (AXCELERATE-FEES), amounts in cents. */
+  fees?: { invoices: number; totalCents: number; paidCents: number; balanceCents: number; payments: number; action?: string; message?: string; warnings?: string[] };
 };
 /** The owner's wording for each outcome. */
 export const STUDENT_OUTCOME: Record<string, string> = {

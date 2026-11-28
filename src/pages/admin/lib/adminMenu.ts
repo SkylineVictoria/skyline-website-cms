@@ -38,6 +38,7 @@ const routes = new Set([
   '/admin/signing', '/admin/signing/templates', '/admin/signing/sent', '/admin/signing/partial', '/admin/signing/signed', '/admin/signing/declined', '/admin/signing/expired', '/admin/signing/void', // Sign child routes
   '/admin/qualifications', // QUALIFICATION (Admissions › Qualifications)
   '/admin/finance/payments', // Finance group (admin_menu_items 'finance' / 'finance_payments')
+  '/admin/finance/invoices', // AXCELERATE-FEES (admin_menu_items 'finance_invoices')
 ]);
 
 export interface MenuNode extends AdminMenuItem { children: MenuNode[] }

@@ -18,11 +18,11 @@ export interface FinancePaymentRow {
   refunded_at?: string | null; student_number?: string | null;
 }
 export type FeeType = "tuition" | "enrolment" | "materials" | "oshc" | "other";
-export type PaymentSource = "stripe" | "xero" | "manual";
+export type PaymentSource = "stripe" | "xero" | "manual" | "axcelerate";
 export const FEE_TYPES: Array<{ value: FeeType; label: string }> = [
   { value: "tuition", label: "Tuition" }, { value: "enrolment", label: "Enrolment" }, { value: "materials", label: "Materials" }, { value: "oshc", label: "OSHC" }, { value: "other", label: "Other" },
 ];
-export const PAYMENT_SOURCES: Array<{ value: PaymentSource; label: string }> = [{ value: "stripe", label: "Stripe" }, { value: "xero", label: "Xero" }, { value: "manual", label: "Manual" }];
+export const PAYMENT_SOURCES: Array<{ value: PaymentSource; label: string }> = [{ value: "stripe", label: "Stripe" }, { value: "xero", label: "Xero" }, { value: "manual", label: "Manual" }, { value: "axcelerate", label: "aXcelerate" }];
 export const feeTypeLabel = (v?: string | null) => FEE_TYPES.find((f) => f.value === v)?.label ?? "";
 export const sourceLabel = (v?: string | null) => PAYMENT_SOURCES.find((f) => f.value === v)?.label ?? (v ?? "");
 export interface FinanceSummary { collectedCents: number; refundedCents: number; paid: number; pending: number; failed: number; refunded: number; total: number }

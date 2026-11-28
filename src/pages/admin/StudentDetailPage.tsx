@@ -22,6 +22,7 @@ import { formatDate } from "@/pages/agency/lib/portalData";
 import StudentAvetmissPanel from "@/pages/admin/components/avetmiss/StudentAvetmissPanel";
 import { supabase } from "@/pages/admin/lib/supabase";
 import AxcelerateRefreshStudent from "@/components/axcelerate/AxcelerateRefreshStudent";
+import StudentFeesPanel from "@/components/finance/StudentFeesPanel";
 
 /** Agencies > Students > {name}: every application this student has, across statuses. */
 export default function StudentDetailPage() {
@@ -106,8 +107,8 @@ export default function StudentDetailPage() {
         </div>
       ))}</div> : null}
 
-      <SectionTabs tabs={[{ id: "overview", label: "Overview", icon: "ri-user-line" }, { id: "qualification", label: "Qualification", icon: "ri-graduation-cap-line" }]} active={tab} onChange={setTab} />
-      {tab === "qualification" ? <StudentQualifications studentId={id} /> : <>
+      <SectionTabs tabs={[{ id: "overview", label: "Overview", icon: "ri-user-line" }, { id: "qualification", label: "Qualification", icon: "ri-graduation-cap-line" }, { id: "fees", label: "Fees", icon: "ri-bill-line" }]} active={tab} onChange={setTab} />
+      {tab === "fees" ? <StudentFeesPanel key={reload} studentId={id} /> : tab === "qualification" ? <StudentQualifications studentId={id} /> : <>
       <div className="flex flex-wrap items-start gap-5">
         <Card className="min-w-0 flex-[999_1_560px]">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-background-200 px-4 py-3">

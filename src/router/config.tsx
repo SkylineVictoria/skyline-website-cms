@@ -86,6 +86,7 @@ import StaffDetailPage from "@/pages/admin/StaffDetailPage";
 import TemplatesPage from "@/pages/admin/TemplatesPage";
 import AdminSigningPage from "@/pages/admin/SigningPage";
 import FinancePaymentsPage from "@/pages/admin/finance/PaymentsPage";
+import FinanceInvoicesPage from "@/pages/admin/finance/InvoicesPage";
 import SigningPage from "@/pages/SigningPage";
 import GuardianSignPage from "@/pages/guardian-sign/page";
 import TextInvitePage from "@/pages/TextInvitePage";
@@ -321,6 +322,7 @@ const routes: RouteObject[] = [
           { path: "staff/xero-export", element: <RequireAdmin><XeroExportPage /></RequireAdmin> },
           { path: "staff/templates", element: <RequireAdmin><TemplatesPage /></RequireAdmin> },
           { path: "finance/payments", element: <FinancePaymentsPage /> },
+          { path: "finance/invoices", element: <FinanceInvoicesPage /> },
           { path: "signing", element: <RequireAdmin><AdminSigningPage /></RequireAdmin> },
           { path: "signing/:view", element: <RequireAdmin><AdminSigningPage /></RequireAdmin> },
           { path: "staff/jobs", element: <Navigate to="/admin/jobs" replace /> },

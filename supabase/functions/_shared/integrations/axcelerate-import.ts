@@ -26,8 +26,10 @@ export type StudentResult = {
   /** The student's courses in aXcelerate (kept on the import record; Qualifications are imported in the next stage). */
   courses?: { name: string; status: string }[];
   /** The student's Qualifications imported from their aXcelerate course enrolments (AXCELERATE-QUALIFICATIONS). */
-  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[] }[];
+  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[]; units?: UnitResult[] }[];
 };
+/** One unit result imported with a Qualification (aXcelerate unit enrolment, TYPE s). */
+export type UnitResult = { code: string; outcome?: string; action: string; message?: string };
 export type Counts = Record<string, Record<string, number>>;
 export type Cursor = {
   stage?: Stage;
@@ -92,15 +94,16 @@ export function stagesFor(entities: ImportEntity[]): Stage[] {
   return stages;
 }
 
-async function call(deps: ImportDeps, entity: string, ax: string, label: string, name: string, args: Record<string, unknown>, raw: Row): Promise<string | null> {
+async function call(deps: ImportDeps, entity: string, ax: string, label: string, name: string, args: Record<string, unknown>, raw: Row, notes?: string[]): Promise<string | null> {
   const r = await deps.rpc(name, args);
   if (r.error) {
     bump(deps.counts, entity, 'error');
     await deps.rpc('axcelerate_import_error', { p_run: deps.run, p_entity: entity, p_ax: ax || null, p_label: label || null, p_message: r.error.message ?? 'Import failed', p_raw: raw });
     return null;
   }
-  const out = (r.data ?? {}) as { action?: string; id?: string | null };
+  const out = (r.data ?? {}) as { action?: string; id?: string | null; warnings?: string[] };
   bump(deps.counts, entity, out.action ?? 'done');
+  if (notes) for (const w of out.warnings ?? []) if (notes.length < 200) notes.push(`${label}: ${w}`);
   return out.id ?? null;
 }
 
@@ -161,7 +164,7 @@ async function importClassInstance(deps: ImportDeps, c: Cursor, course: { ax: st
   const locAx = text(detail, 'DELIVERYLOCATIONID');
   const location = locAx ? c.locations![locAx] ?? null : null;
   return await call(deps, 'class', instId, label, 'axcelerate_import_class',
-    { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: detail, p_course: course.sk, p_units: units, p_trainer: trainer, p_location: location }, detail);
+    { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: detail, p_course: course.sk, p_units: units, p_trainer: trainer, p_location: location }, detail, c.notes);
 }
 
 /** aXcelerate's delivery locations, imported once per run (a class's campus). */
@@ -214,7 +217,7 @@ async function ensureClass(deps: ImportDeps, c: Cursor, e: Row): Promise<string>
 }
 
 /** The student's Qualifications: each aXcelerate course enrolment, with its class, as an Enrolled application + Qualification. */
-async function importStudentQualifications(deps: ImportDeps, c: Cursor, studentId: string, enrolments: Row[]): Promise<NonNullable<StudentResult['qualifications']>> {
+async function importStudentQualifications(deps: ImportDeps, c: Cursor, studentId: string, enrolments: Row[], unitRows: Row[] = []): Promise<NonNullable<StudentResult['qualifications']>> {
   const out: NonNullable<StudentResult['qualifications']> = [];
   for (const e of enrolments) {
     const name = text(e, 'NAME', 'CODE') || 'Course';
@@ -223,9 +226,19 @@ async function importStudentQualifications(deps: ImportDeps, c: Cursor, studentI
       const intake = await ensureClass(deps, c, e);
       const r = await deps.rpc('axcelerate_import_qualification', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_student: studentId, p_rec: e, p_intake: intake });
       if (r.error) throw new Error(r.error.message ?? 'Qualification import failed');
-      const q = (r.data ?? {}) as { action?: string; status?: string; warnings?: string[] };
+      const q = (r.data ?? {}) as { id?: string; action?: string; status?: string; warnings?: string[] };
       bump(deps.counts, 'qualification', q.action ?? 'done');
-      out.push({ name, action: q.action ?? 'done', status: q.status, warnings: q.warnings ?? [] });
+      // Its unit results: aXcelerate's unit enrolments (TYPE s) that belong to this qualification enrolment (ENROLID).
+      const enrolId = text(e, 'ENROLID');
+      const mine = unitRows.filter((u) => text(u, 'TYPE').toLowerCase() === 's' && (!enrolId || !text(u, 'ENROLID') || text(u, 'ENROLID') === enrolId));
+      let units: UnitResult[] | undefined;
+      if (q.id && mine.length) {
+        const ur = await deps.rpc('axcelerate_import_unit_results', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_enrolment: q.id, p_units: mine });
+        if (ur.error) units = [{ code: '', action: 'error', message: ur.error.message ?? 'Unit results were not imported' }];
+        else units = ((ur.data as { units?: UnitResult[] } | null)?.units ?? []);
+        for (const u of units) bump(deps.counts, 'unit_result', u.action);
+      }
+      out.push({ name, action: q.action ?? 'done', status: q.status, warnings: q.warnings ?? [], ...(units ? { units } : {}) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Qualification import failed';
       bump(deps.counts, 'qualification', 'error');
@@ -406,7 +419,7 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
               result.agent = await importStudentAgent(deps, c, raw, out.id);
               // Qualifications: course enrolments (not workshops), each with its class and everything the class needs.
               const quals = programs.length ? programs : enrolments.filter((e) => text(e, 'TYPE').toLowerCase() === 'p');
-              if (quals.length) result.qualifications = await importStudentQualifications(deps, c, out.id, quals);
+              if (quals.length) result.qualifications = await importStudentQualifications(deps, c, out.id, quals, enrolments);
               else if (enrolments.some((e) => text(e, 'TYPE').toLowerCase() === 's')) {
                 result.warnings = [...(result.warnings ?? []), 'aXcelerate lists unit enrolments for this student but no qualification enrolment (course enrolments, type p): no Qualification was imported.'];
               }

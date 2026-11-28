@@ -500,7 +500,7 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
    const id=p.split('/')[2];return{status:200,data:[{CONTACTID:id,GIVENNAME:'Zz',SURNAME:`S${id}`,AGENTCONTACTID:'900'}]};},
   getAll:async(p:string,q:Record<string,unknown>={})=>{gets.push([p,q]);
    if(p==='/courses')return[{ID:'C1'},{ID:'C2'}];
-   if(p==='/course/enrolments'&&q.contactID)return q.contactID==='11'?[{CONTACTID:'11',INSTANCEID:'I9',NAME:'Graduate Diploma',STATUS:'Active',ENROLID:'E1',TYPE:'p'}]:[];
+   if(p==='/course/enrolments'&&q.contactID)return q.contactID==='11'?[{CONTACTID:'11',INSTANCEID:'I9',NAME:'Graduate Diploma',STATUS:'Active',ENROLID:13232039,TYPE:'p'}]:[];
    if(p==='/course/enrolments')return enrol[String(q.ID)]??[];return[];}};
  const outcomes:Record<string,string>={'11':'created','12':'duplicate'};
  const calls:Array<Record<string,unknown>>=[];
@@ -511,7 +511,8 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
   if(name==='axcelerate_student_agent')return{data:'moved',error:null};
   if(name==='axcelerate_import_course')return{data:{action:'created',id:'sk1'},error:null};
   if(name==='axcelerate_import_class'){qualCalls.push(['class',args]);return{data:{action:'created',id:'cl1'},error:null};}
-  if(name==='axcelerate_import_qualification'){qualCalls.push(['qualification',args]);return{data:{action:'created',status:'active',warnings:[]},error:null};}
+  if(name==='axcelerate_import_qualification'){qualCalls.push(['qualification',args]);return{data:{action:'created',id:'q1',status:'active',warnings:[]},error:null};}
+  if(name==='axcelerate_import_unit_results'){qualCalls.push(['units',args]);return{data:{units:[{code:'BSBLDR601',outcome:'20',action:'created'}]},error:null};}
   if(name==='axcelerate_import_student'){calls.push(args);
    const id=String((args.p_rec as {CONTACTID:string}).CONTACTID);return{data:{action:outcomes[id]??'unchanged',id:`s${id}`,name:`Zz S${id}`,warnings:id==='11'?['Sex "Q" is not an AVETMISS code; left empty.']:[]},error:null};}
   return{data:null,error:null};};
@@ -526,8 +527,11 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
  assert.equal(((calls[0].p_rec as {PROGRAMS:unknown[]}).PROGRAMS).length,1,'the qualification enrolment comes from /course/enrolments for the contact');
  assert.deepEqual(agentCalls[0].p_org,{NAME:'Agency X',ORGID:'55'});
  // AXCELERATE-QUALIFICATIONS: the course enrolment brings its course, campuses and class first, then the Qualification in that class.
- assert.deepEqual(r.cursor.results?.[0].qualifications,[{name:'Graduate Diploma',action:'created',status:'active',warnings:[]}]);
- assert.deepEqual(qualCalls.map(q=>q[0]),['class','qualification']);
+ // AXCELERATE-TIMETABLE-RESULTS: the Qualification's unit results come from its unit enrolments (TYPE s, same ENROLID).
+ assert.deepEqual(r.cursor.results?.[0].qualifications,[{name:'Graduate Diploma',action:'created',status:'active',warnings:[],units:[{code:'BSBLDR601',outcome:'20',action:'created'}]}]);
+ assert.deepEqual(qualCalls.map(q=>q[0]),['class','qualification','units']);
+ assert.equal(qualCalls[2][1].p_enrolment,'q1');assert.deepEqual((qualCalls[2][1].p_units as {CODE:string}[]).map(u=>u.CODE),['BSBLDR601']);
+ assert.deepEqual(r.counts.unit_result,{created:1});
  assert.equal(qualCalls[1][1].p_intake,'cl1');assert.equal(qualCalls[1][1].p_student,'s11');
  assert.deepEqual((qualCalls[0][1].p_rec as {SESSIONS:unknown}).SESSIONS,[{DATE:'2026-05-04',STARTTIME:'09:00',FINISHTIME:'13:00'}],'the class keeps its sessions, without the attendees');
  // All: every course's enrolments, each contact once; a missing contact is an import error; only results needing attention are kept.

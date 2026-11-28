@@ -26,8 +26,14 @@ export type StudentResult = {
   /** The student's courses in aXcelerate (kept on the import record; Qualifications are imported in the next stage). */
   courses?: { name: string; status: string }[];
   /** The student's Qualifications imported from their aXcelerate course enrolments (AXCELERATE-QUALIFICATIONS). */
-  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[]; units?: UnitResult[] }[];
+  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[]; units?: UnitResult[]; attendance?: AttendanceResult }[];
+  /** The student's invoices and payments from aXcelerate (AXCELERATE-FEES). */
+  fees?: FeesResult;
 };
+/** A Qualification's attendance from aXcelerate (AXCELERATE-ATTENDANCE): class days marked, kept (marked in Skyline), skipped. */
+export type AttendanceResult = { sessions: number; marked: number; kept: number; skipped: number };
+/** A student's aXcelerate invoices as imported (amounts in cents; void invoices left out of the sums). */
+export type FeesResult = { invoices: number; totalCents: number; paidCents: number; balanceCents: number; payments: number; action?: string; message?: string; warnings?: string[] };
 /** One unit result imported with a Qualification (aXcelerate unit enrolment, TYPE s). */
 export type UnitResult = { code: string; outcome?: string; action: string; message?: string };
 export type Counts = Record<string, Record<string, number>>;
@@ -190,8 +196,41 @@ async function importClassInstance(deps: ImportDeps, c: Cursor, course: { ax: st
   }
   const locAx = text(detail, 'DELIVERYLOCATIONID');
   const location = locAx ? c.locations![locAx] ?? null : null;
-  return await call(deps, 'class', instId, label, 'axcelerate_import_class',
+  const classId = await call(deps, 'class', instId, label, 'axcelerate_import_class',
     { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: detail, p_course: course.sk, p_units: units, p_trainer: trainer, p_location: location }, detail, c.notes);
+  // AXCELERATE-FEES: the course's and the class's fee from aXcelerate's costs, where Skyline has none.
+  if (classId) {
+    const f = await deps.rpc('axcelerate_course_fees', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_course: course.sk, p_intake: classId });
+    const done = String(f.data ?? '');
+    if (f.error || done.startsWith('fees not set')) c.notes!.push(`${label}: ${f.error?.message ?? done}`);
+    else if (done) c.notes!.push(`${label}: ${done.includes('course') ? 'course fee' : ''}${done.includes('course') && done.includes('class') ? ' and ' : ''}${done.includes('class') ? 'class fee' : ''} set from aXcelerate's cost.`);
+  }
+  return classId;
+}
+
+/**
+ * A student's invoices (AXCELERATE-FEES): aXcelerate's invoice list for the contact, each merged with its detail (items, payments), into
+ * Skyline's Fees module (invoice, items, payments). Read only.
+ */
+async function importStudentInvoices(deps: ImportDeps, contactId: string, studentId: string): Promise<FeesResult> {
+  const out: FeesResult = { invoices: 0, totalCents: 0, paidCents: 0, balanceCents: 0, payments: 0, warnings: [] };
+  const a = await deps.client.get('/accounting/invoice', { contactID: contactId, displayLength: 100 });
+  if (a.status >= 300) return { ...out, action: 'error', message: `aXcelerate answered HTTP ${a.status} for the student's invoices.` };
+  for (const inv of list(a.data)) {
+    const id = text(inv, 'INVOICEID', 'ID');
+    if (!id || !/^[0-9]{1,12}$/.test(id)) continue;
+    const d = await deps.client.get(`/accounting/invoice/${id}`, {});
+    const rec = { ...inv, ...(d.status < 300 ? one(d.data) ?? {} : {}), INVOICEID: id } as Row;
+    const r = await deps.rpc('axcelerate_import_invoice', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_student: studentId, p_rec: rec });
+    if (r.error) { await fail(deps, 'invoice', id, text(rec, 'INVOICENR', 'INVOICENUMBER') || `invoice ${id}`, r.error.message ?? 'Invoice import failed', rec); out.warnings!.push(`Invoice ${id}: ${r.error.message ?? 'not imported'}`); continue; }
+    const v = (r.data ?? {}) as { action?: string; totalCents?: number; paidCents?: number; balanceCents?: number; void?: boolean; payments?: number; warnings?: string[] };
+    bump(deps.counts, 'invoice', v.action ?? 'done');
+    out.invoices++;
+    out.payments += v.payments ?? 0;
+    if (!v.void) { out.totalCents += v.totalCents ?? 0; out.paidCents += v.paidCents ?? 0; out.balanceCents += v.balanceCents ?? 0; }
+    out.warnings!.push(...(v.warnings ?? []));
+  }
+  return out;
 }
 
 /** aXcelerate's delivery locations, imported once per run (a class's campus). */
@@ -281,7 +320,23 @@ async function ensureClass(deps: ImportDeps, c: Cursor, e: Row): Promise<string>
 }
 
 /** The student's Qualifications: each aXcelerate course enrolment, with its class, as an Enrolled application + Qualification. */
-async function importStudentQualifications(deps: ImportDeps, c: Cursor, studentId: string, enrolments: Row[], unitRows: Row[] = []): Promise<NonNullable<StudentResult['qualifications']>> {
+/**
+ * The student's rows of an aXcelerate attendance answer: either sessions with their attendees (ENROLLEES / ATTENDEES / STUDENTS), each
+ * merged with the session's date, or rows that are already per contact. Rows of other students are left out.
+ */
+export function attendanceRows(rows: Row[], contactId: string): Row[] {
+  const out: Row[] = [];
+  for (const r of rows) {
+    const people = ['ENROLLEES', 'ATTENDEES', 'STUDENTS', 'CONTACTS'].map((k) => r[k]).find(Array.isArray) as Row[] | undefined;
+    if (people) {
+      const me = people.find((p) => text(p, 'CONTACTID', 'LEARNERCONTACTID') === contactId);
+      if (me) { const { ENROLLEES: _e, ATTENDEES: _a, STUDENTS: _s, CONTACTS: _c, ...session } = r; out.push({ ...session, ...me }); }
+    } else if (text(r, 'CONTACTID', 'LEARNERCONTACTID') === contactId) out.push(r);
+  }
+  return out;
+}
+
+async function importStudentQualifications(deps: ImportDeps, c: Cursor, studentId: string, enrolments: Row[], unitRows: Row[] = [], contactId = ''): Promise<NonNullable<StudentResult['qualifications']>> {
   const out: NonNullable<StudentResult['qualifications']> = [];
   for (const e of enrolments) {
     const name = text(e, 'NAME', 'CODE') || 'Course';
@@ -316,7 +371,25 @@ async function importStudentQualifications(deps: ImportDeps, c: Cursor, studentI
         }
         for (const u of units) bump(deps.counts, 'unit_result', u.action);
       }
-      out.push({ name, action: q.action ?? 'done', status: q.status, warnings: q.warnings ?? [], ...(units?.length ? { units } : {}) });
+      // Attendance (AXCELERATE-ATTENDANCE): each unit workshop's attendance for this student, onto the class's registers.
+      let attendance: AttendanceResult | undefined;
+      if (q.id && contactId) {
+        for (const u of mine) {
+          const w = list(u.ACTIVITIES).find((x) => text(x, 'TYPE').toLowerCase() === 'w' && text(x, 'INSTANCEID'));
+          if (!w) continue;
+          const a = await deps.client.get('/course/instance/attendance', { instanceID: text(w, 'INSTANCEID'), type: 'w' });
+          if (a.status >= 300) { const m = `Attendance of ${text(u, 'CODE')}: aXcelerate answered HTTP ${a.status}.`; q.warnings = [...(q.warnings ?? []), m]; continue; }
+          const rows = attendanceRows(list(a.data), contactId);
+          const r = await deps.rpc('axcelerate_import_attendance', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_enrolment: q.id, p_unit_code: text(u, 'CODE'), p_rows: rows });
+          if (r.error) { q.warnings = [...(q.warnings ?? []), `Attendance of ${text(u, 'CODE')}: ${r.error.message ?? 'not imported'}`]; continue; }
+          const v = (r.data ?? {}) as AttendanceResult & { warnings?: string[] };
+          attendance ??= { sessions: 0, marked: 0, kept: 0, skipped: 0 };
+          attendance.sessions += v.sessions ?? 0; attendance.marked += v.marked ?? 0; attendance.kept += v.kept ?? 0; attendance.skipped += v.skipped ?? 0;
+          if (v.marked) bump(deps.counts, 'attendance', 'marked');
+          q.warnings = [...(q.warnings ?? []), ...(v.warnings ?? [])];
+        }
+      }
+      out.push({ name, action: q.action ?? 'done', status: q.status, warnings: q.warnings ?? [], ...(units?.length ? { units } : {}), ...(attendance ? { attendance } : {}) });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Qualification import failed';
       bump(deps.counts, 'qualification', 'error');
@@ -497,10 +570,12 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
               result.agent = await importStudentAgent(deps, c, raw, out.id);
               // Qualifications: course enrolments (not workshops), each with its class and everything the class needs.
               const quals = programs.length ? programs : enrolments.filter((e) => text(e, 'TYPE').toLowerCase() === 'p');
-              if (quals.length) result.qualifications = await importStudentQualifications(deps, c, out.id, quals, enrolments);
+              if (quals.length) result.qualifications = await importStudentQualifications(deps, c, out.id, quals, enrolments, id);
               else if (enrolments.some((e) => text(e, 'TYPE').toLowerCase() === 's')) {
                 result.warnings = [...(result.warnings ?? []), 'aXcelerate lists unit enrolments for this student but no qualification enrolment (course enrolments, type p): no Qualification was imported.'];
               }
+              // Invoices and payments (after the Qualifications, so each invoice finds its Qualification).
+              result.fees = await importStudentInvoices(deps, id, out.id);
             }
           }
         }

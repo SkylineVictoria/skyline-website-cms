@@ -1258,3 +1258,49 @@ test("templates: every built-in template uses only known details, has a subject,
   assert.equal(keys.length, 67);
   assert.equal(new Set(keys).size, keys.length, "duplicate keys");
 });
+
+// LETTERHEAD-DESIGNER (owner 2026-11-28): five designs from the brand, every one passing the fixed rules; the rules catch what they must.
+import { checkLetterhead, contrast, renderLetterhead, type Brand as LetterheadBrand, type LetterheadSpec } from "../supabase/functions/_shared/letterhead-design.ts";
+import { generateDesigns } from "../supabase/functions/_shared/letterhead-engine.ts";
+import { buildDocumentPdf as buildLetterheadDoc } from "../supabase/functions/_shared/document-pdf.ts";
+const lhBrand: LetterheadBrand = { name: "Skyline Institute of Technology", legalName: "INDOPACIFIC GLOBAL PTY LTD T/A Skyline Institute of Technology (SLIT)", address: "Level 8, 310 King Street, Melbourne VIC 3000",
+  phone: "03 9125 1661", email: "info@slit.edu.au", website: "https://slit.edu.au/", rto: "45989", cricos: "04114B", abn: "20 643 760 721",
+  logoSrc: null, logoPx: { w: 350, h: 88 }, logoColors: ["#ea6619", "#1f3a5f"], siteColors: ["#ea6619"], siteFonts: [] };
+
+test("letterhead: the built-in designer gives five distinct styles, each passing every rule (header height, contrast, RTO / CRICOS, logo, fonts)", async () => {
+  const designs = await generateDesigns(lhBrand, 1);
+  assert.deepEqual(designs.map((d) => d.spec.style), ["classic", "modern", "minimal", "bold", "formal"]);
+  for (const d of designs) {
+    assert.ok(d.check.ok, `${d.spec.style}: ${d.check.problems.join("; ")}`);
+    assert.ok(d.check.measures.headerFirst <= 0.15 * 841.89 && d.check.measures.headerLater <= 0.08 * 841.89, d.spec.style);
+    assert.ok(d.check.measures.minContrast >= 4.5, d.spec.style);
+    assert.ok(d.spec.logoHeight <= Math.floor(88 / (150 / 72)), `${d.spec.style}: the 88 px logo prints at 150 dpi or better`);
+    const parts = renderLetterhead(d.spec, lhBrand, { mode: "literal" });
+    assert.match(parts.footer, /RTO 45989/); assert.match(parts.footer, /CRICOS 04114B/);
+  }
+  const again = await generateDesigns(lhBrand, 2);
+  assert.notDeepEqual(again.map((d) => d.spec), designs.map((d) => d.spec), "Generate 5 more gives new designs");
+});
+
+test("letterhead: the rules refuse low contrast, a header taller than 15%, a stretched-small logo and missing RTO / CRICOS", async () => {
+  const base = (await generateDesigns(lhBrand, 1))[1].spec;
+  const pale: LetterheadSpec = { ...base, palette: { ...base.palette, muted: "#c0c0c0" } };
+  assert.ok(contrast("#c0c0c0", "#ffffff") < 4.5);
+  assert.match((await checkLetterhead(pale, lhBrand)).problems.join(" "), /Details text: contrast/);
+  const tall: LetterheadSpec = { ...base, logoHeight: 90, tagline: "A very long tagline", showName: true };
+  const tallCheck = await checkLetterhead(tall, { ...lhBrand, logoSrc: null, logoPx: { w: 2000, h: 1000 } });
+  assert.ok(tallCheck.problems.some((p) => /too small to print|header is/.test(p)) || tallCheck.measures.headerFirst > 0, "measured on the real PDF");
+  assert.match((await checkLetterhead(base, { ...lhBrand, logoPx: { w: 100, h: 40 } })).problems.join(" "), /too small to print sharply/);
+  assert.match((await checkLetterhead(base, { ...lhBrand, cricos: "" })).problems.join(" "), /RTO and CRICOS/);
+});
+
+test("pdf builder: a later-page header is used from page 2, the bands are measured, and Tinos is embedded only when asked for", async () => {
+  const body = "<p>Line of text for the body.</p>".repeat(120);
+  const r = await buildLetterheadDoc({ title: "T", header: "<p>Big header</p><p>line 2</p><p>line 3</p>", headerLater: "<p>Small</p>", footer: "<p>Footer</p>", body, values: {}, brackets: false });
+  assert.ok(r.pages >= 2 && r.bands.header > r.bands.headerLater && r.bands.footer > 0);
+  const plain = await buildLetterheadDoc({ title: "T", header: "<p>H</p>", body: "<p>x</p>", values: {}, brackets: false });
+  const serif = await buildLetterheadDoc({ title: "T", header: '<p><span style="font-family:Tinos,serif">H</span></p>', body: "<p>x</p>", values: {}, brackets: false });
+  const names = async (bytes: Uint8Array) => { const d = await PdfLib.PDFDocument.load(bytes); return d.context.enumerateIndirectObjects().map(([, o]) => String(o)).filter((s) => /FontName/.test(s)).join(" "); };
+  assert.ok(!/Tinos/.test(await names(plain.bytes)), "no Tinos in a document that does not use it");
+  assert.ok(/Tinos/.test(await names(serif.bytes)), "Tinos embedded for serif text");
+});

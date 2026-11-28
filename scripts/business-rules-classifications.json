@@ -1240,5 +1240,30 @@
     "id": "application-form-templates-db",
     "reason": "2026-11-27 owner (APPLICATION-FORM-TEMPLATES): the database side: the Application form template type, one default, what each submission is printed from (copied at signing). Fixed owner rules, not business settings.",
     "fingerprints": []
+  },
+  {
+    "type": "technical",
+    "id": "letterhead-designer",
+    "reason": "2026-11-28 owner (LETTERHEAD-DESIGNER): fixed letterhead rules checked by code (A4 margins, header height page 1 / later pages, WCAG AA contrast, logo resolution, RTO and CRICOS on every page, two embeddable fonts, no overflow), one active letterhead applied to the targets the admin ticks as new template versions. Fixed owner rules, not business settings.",
+    "fingerprints": [
+      "772162f0eaa3f3e9178dcc86adab14d00de9dbc23f8e7886f368c3b70c2f1334",
+      "d1264908511e06b7e3c8542ab90988ab51d48462dfb31befd4d1a44f81ac7e94"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "letterhead-designer-db",
+    "reason": "2026-11-28 owner (LETTERHEAD-DESIGNER): the database side: brand_letterheads (one active), letterhead_apply (admin only, safe HTML, new versions), the standard letter header / footer and later-page headers. Fixed owner rules.",
+    "fingerprints": [
+      "5adc0e3cd1641e317d1f7521f879ddfb5efeb6dcc03c5d7b7b89735b1c5587b5",
+      "6ec84aceee5e20b42d006f74cb754f630231e75508b872c4b92136c493631037",
+      "85ac105a0dae135105219c1236e0d424f0405aa3bca67f2203aa5d7c93837b94",
+      "88687fcc76a29fef0420a563adbc6c05cfc8e94aad2f9c0f731b5f470ec21445",
+      "9b45110f302cb867f8572d3f237cd4b3496e9fdd82cba27f81803b5367c0e705",
+      "a329a581c80d8f27d95fe50134cf4dbd3a7d878207e408e5983ef4b0964a4027",
+      "b0871b2a15612ef1cb939bdf0ebdde40d00b136c61644adfcc0baa1033159fb0",
+      "b115b8de5b4db50e35dfd63af8282e455b9827e61b7dcdaf9e86849c92c5c623",
+      "c5db943f52adacc81102894956fa319f3910ebdf003a6a2aefa4716804b48f1d"
+    ]
   }
 ]

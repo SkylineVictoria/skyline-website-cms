@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(130);
+select plan(142);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -426,6 +426,32 @@ select throws_ok($$insert into hr.sign_templates(name, title, body_html, kind, a
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
 select throws_ok($$select public.application_form_template_set_default((select id from hr.sign_templates where category = 'application_form' and is_default limit 1))$$, null, null, 'an agent cannot choose the default form');
 select ok(public.application_signed_copy('e5100000-0000-0000-0000-000000000002')->'formTemplate'->>'name' is not null, 'the signed copy names the form it prints from');
+reset role;
+-- LETTERHEAD-DESIGNER (20261128019517): only administrators apply a letterhead; it goes where they choose, as new template versions.
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.letterhead_apply('{"name":"X","style":"modern","html":{"app_header":"<p>H</p>","app_footer":"<p>F</p>"}}', array['application_form'])$$, null, null, 'an agent cannot apply a letterhead');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select throws_ok($$select public.letterhead_apply('{"name":"X","style":"modern","html":{"app_header":"<p>H</p><script>x</script>","app_footer":"<p>F</p>"}}', array['application_form'])$$, null, null, 'unsafe HTML is refused');
+select throws_ok($$select public.letterhead_apply('{"name":"X","style":"modern","html":{}}', array['application_form'])$$, '22023', null, 'a target without its letterhead is refused');
+select lives_ok($$select public.letterhead_apply('{"name":"Modern test","style":"modern","designer":"built-in","spec":{},"html":{
+  "app_header":"<p>APP HEADER</p>","app_header_later":"<p>APP LATER</p>","app_footer":"<p>APP FOOTER RTO CRICOS</p>",
+  "loo_header":"<p>LOO HEADER</p>","loo_header_later":"<p>LOO LATER</p>","loo_footer":"<p>{{document.title}} | {{document.version}} | LOO FOOTER</p>",
+  "preset_header":"<p>PRESET HEADER</p>","preset_footer":"<p>PRESET FOOTER</p>","workbook_header":"<p>WORKBOOK</p>"}}',
+  array['application_form','letter_of_offer','document_templates','workbooks'])$$, 'an administrator applies a letterhead everywhere');
+reset role;
+select is((select header_html || '|' || header_later_html || '|' || footer_html from hr.sign_templates where category = 'application_form' and is_default and deleted_at is null),
+  '<p>APP HEADER</p>|<p>APP LATER</p>|<p>APP FOOTER RTO CRICOS</p>', 'the default Application form has the letterhead (header, later-page header, footer)');
+select ok((select count(*) from hr.sign_template_versions v join hr.sign_templates t on t.id = v.template_id where t.category = 'application_form' and t.is_default and v.snapshot->>'header_html' = '<p>APP HEADER</p>') = 1,
+  'as a new version (earlier ones kept)');
+select is((select html from hr.sign_template_parts where kind = 'header' and name = 'SLIT house letterhead' and deleted_at is null), '<p>PRESET HEADER</p>', 'the document template presets have it');
+select is(public.letter_standard_header(), '<p>LOO HEADER</p>', 'a new Letter of Offer starts with it');
+select is(public.letter_standard_footer('MY TITLE', 'Version 9'), '<p>MY TITLE | Version 9 | LOO FOOTER</p>', 'with the letter''s own title and version in the footer');
+select is((select count(*)::int from public.brand_letterheads where active), 1, 'one active letterhead');
+insert into public.enrollment_application_versions(application_id, version, snapshot) values ('e5100000-0000-0000-0000-000000000002', 98, '{}');
+select is((select header_later_html from public.application_form_used where application_id = 'e5100000-0000-0000-0000-000000000002' and version = 98), '<p>APP LATER</p>',
+  'a new submission keeps the later-page header with the form');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select is(public.brand_letterhead_active()->>'workbookHeader', '<p>WORKBOOK</p>', 'workbook added pages get the strip when workbooks were chosen');
 reset role;
 select * from finish();
 rollback;

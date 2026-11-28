@@ -41,9 +41,10 @@ export const APPLICATION_FORM_TOKENS: readonly ApplicationFormToken[] = [
   { key: "application.signatures", label: "Signatures", description: "The student's drawn signature (and the parent / guardian's), with names and dates.", sample: "[Signatures]", block: true },
 ];
 const TOKEN_KEYS = new Set(APPLICATION_FORM_TOKENS.map((t) => t.key));
-const TOKEN = /\{\{\s*([a-z][a-z0-9_.]{0,60})\s*\}\}/gi;
+const TOKEN = /\{\{\s*([a-z][a-z0-9_.]{0,60})(?:\|h(\d{1,3}))?\s*\}\}/gi;
 
-export interface ApplicationFormTemplate { title: string; header_html: string | null; body_html: string; footer_html: string | null }
+export interface ApplicationFormTemplate { title: string; header_html: string | null; body_html: string; footer_html: string | null;
+  /** LETTERHEAD-DESIGNER: the smaller header of pages 2 and on (absent: the header repeats). */ header_later_html?: string | null }
 /** The institute's details (Website Settings); the logo as a PNG or JPEG data URL, so it prints without a network fetch. */
 export interface ApplicationFormInstitute { name?: string; legalName?: string; address?: string; phone?: string; email?: string; website?: string; rto?: string; cricos?: string; abn?: string; logo?: string | null }
 export interface ApplicationFormData {
@@ -121,9 +122,9 @@ export function signaturesHtml(signed: SignedParts | null, fallbackName: string,
 }
 
 /** The institute logo (Website Settings) as a picture, when it was given as a PNG / JPEG data URL. */
-const logoHtml = (institute: ApplicationFormInstitute | undefined, name: string) =>
+const logoHtml = (institute: ApplicationFormInstitute | undefined, name: string, height = 46) =>
   institute?.logo && /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(institute.logo)
-    ? `<img src="${institute.logo}" height="46">` : `<strong><span style="font-size:14pt">${esc(name)}</span></strong>`;
+    ? `<img src="${institute.logo}" height="${Math.min(120, Math.max(10, height))}">` : `<strong><span style="font-size:${height < 30 ? 10 : 14}pt">${esc(name)}</span></strong>`;
 
 /** The simple values of one application, by token. */
 export function applicationFormValues(data: ApplicationFormData): Record<string, string> {
@@ -163,13 +164,13 @@ export function applicationFormValues(data: ApplicationFormData): Record<string,
 /** Fills one part of the template: block tokens become their sections, the others escaped text; an unknown token is left visible. */
 export function fillApplicationFormHtml(html: string | null | undefined, data: ApplicationFormData): string {
   const values = applicationFormValues(data);
-  return String(html ?? "").replace(TOKEN, (whole, raw: string) => {
+  return String(html ?? "").replace(TOKEN, (whole, raw: string, height?: string) => {
     const key = raw.toLowerCase();
     if (!TOKEN_KEYS.has(key) || key.startsWith("page.")) return whole;
     if (key === "application.answers") return `</p>${answersHtml(data)}<p>`;
     if (key === "application.declarations") return `</p>${declarationsHtml(data.signed)}<p>`;
     if (key === "application.signatures") return `</p>${signaturesHtml(data.signed, data.studentName, data.timezone)}<p>`;
-    if (key === "institute.logo") return logoHtml(data.institute, data.institute?.name || data.institution);
+    if (key === "institute.logo") return logoHtml(data.institute, data.institute?.name || data.institution, height ? Number(height) : undefined);
     return esc(values[key] ?? "");
   }).replace(/<p>\s*<\/p>/g, "");
 }
@@ -187,6 +188,7 @@ export async function buildApplicationFormPdf(template: ApplicationFormTemplate,
   const result = await buildDocumentPdf({
     title: fillApplicationFormHtml(template.title, data).replace(/<[^>]*>/g, "") || "Application for enrolment",
     header: fillApplicationFormHtml(template.header_html, data) || null,
+    headerLater: template.header_later_html ? fillApplicationFormHtml(template.header_later_html, data) : null,
     body: fillApplicationFormHtml(template.body_html, data) || "<p></p>",
     footer: fillApplicationFormHtml(template.footer_html, data) || null,
     values: {}, brackets: false, images: {},

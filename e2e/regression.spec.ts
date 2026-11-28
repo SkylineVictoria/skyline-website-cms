@@ -92,7 +92,7 @@ test("the admin staff invitation still works: invite, mail, sign in", async ({ p
 // markup at fixed points, so a run before a change and a run after it can be compared. No reader is called: the browser's request
 // to portal-document-extract is answered here and each reading is recorded in the lab database.
 // BULK-DOCUMENTS (owner 2026-11-28): "upload all the documents at once" -> only the missing ones -> the one page of cards.
-test("bulk documents: all files at once with their guessed types, only the missing one asked again, then the card view", async ({ page }) => {
+test("bulk documents: all files at once, each scanned and attached to its document (no type to choose), only the missing one asked again, then the card view", async ({ page }) => {
   test.setTimeout(240_000);
   const student = person("bulk-student");
   await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
@@ -110,18 +110,20 @@ test("bulk documents: all files at once with their guessed types, only the missi
   await page.screenshot({ path: "test-results/bulk-choice.png" });
   await wizard.getByTestId("doc-mode-bulk").click();
   await expect(wizard.getByTestId("bulk-documents")).toBeVisible();
+  // The names say nothing: each file is scanned (document-classify) and attached to its document, with no type to choose.
   const files = [
-    { name: `passport-${student.local}.pdf`, cat: "Passport" }, { name: `visa-${student.local}.pdf`, cat: "Visa" },
-    { name: `transcript-${student.local}.pdf`, cat: "Academic" },
+    { name: `scan-a-${student.local}.pdf`, cat: "Academic" }, { name: `scan-b-${student.local}.pdf`, cat: "Visa" },
+    { name: `scan-c-${student.local}.pdf`, cat: "Passport" }, { name: `scan-d-${student.local}.pdf`, cat: "Health Insurance" },
   ];
   await wizard.getByTestId("bulk-files").setInputFiles(files.map((f) => ({ name: f.name, mimeType: "application/pdf", buffer: pdfFor(f.cat) })));
-  await expect(wizard.getByTestId("bulk-type-0")).toHaveValue("passport");
-  await expect(wizard.getByTestId("bulk-type-1")).toHaveValue("visa");
-  await expect(wizard.getByTestId("bulk-type-2")).toHaveValue("academic");
+  await expect(wizard.getByTestId("bulk-staged")).toContainText(/Scanning|not attached/);
   await page.screenshot({ path: "test-results/bulk-staged.png" });
-  await wizard.getByTestId("bulk-upload").click();
-  await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents d where d.filename like '%${student.local}.pdf' and d.is_current`), { timeout: 60_000 }).toBe("3");
-  const applicationId = sql(`select application_id from public.enrollment_application_documents where filename = '${files[0].name}' order by created_at desc limit 1`);
+  await expect.poll(() => sql(`select string_agg(d.category, ',' order by d.category) from public.enrollment_application_documents d where d.filename like 'scan-%-${student.local}.pdf' and d.is_current`), { timeout: 60_000 }).toBe("Academic,Passport,Visa");
+  // The health insurance file is not one the application asks for: it is shown, not attached.
+  await expect(wizard.getByTestId("bulk-staged")).toContainText("Not one of the documents this application needs");
+  await expect(wizard.getByTestId("bulk-type-0")).toHaveCount(0);
+  const passportFile = files[2];
+  const applicationId = sql(`select application_id from public.enrollment_application_documents where filename = '${passportFile.name}' order by created_at desc limit 1`);
   markStudentDocumentRead(applicationId, "Passport", { first_name: "BULK", last_name: "STUDENT", dob: "1999-04-05", passport_number: "PB1234567", passport_expiry: "2034-01-01", nationality: "India" });
   markStudentDocumentRead(applicationId, "Visa", { visa_subclass: "500", visa_grant_number: "0012345678901", visa_stay_until: "2034-01-01" });
   markStudentDocumentRead(applicationId, "Academic", { academic_institution: "Example University", academic_qualification: "Bachelor of Science" });

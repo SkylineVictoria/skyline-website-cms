@@ -1,4 +1,5 @@
 import BulkDocumentUpload, { DocumentModeChoice } from "./BulkDocumentUpload";
+import { classifyDocument } from "@/pages/agency/lib/bulkDocuments";
 import { ruleBool, ruleNumber } from "@/lib/businessRules";
 import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
@@ -1370,6 +1371,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         <>
           {readSaveError ? <WizardNotice tone="error">{readSaveError}</WizardNotice> : null}
           <BulkDocumentUpload steps={bulkSteps} onUpload={bulkPick} onRemove={handleRemoveDoc} locked={savingResidency}
+            classify={(file) => classifyDocument(applicationId, file)}
             onOneByOne={(at) => chooseMode("steps", at)}
             residency={hasPassport ? <ResidencyQuestions issuingCountry={passportCountry} answers={answers} errors={answerErrors} onChange={(name, value) => { setAnswer(name, value); setAnswerErrors((prev) => ({ ...prev, [name]: "" })); }} /> : null} />
         </>

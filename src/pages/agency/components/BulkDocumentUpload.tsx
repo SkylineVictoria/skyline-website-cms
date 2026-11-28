@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { PendingUpload, WizardDoc, WizardStep } from "@/pages/agency/lib/wizardConfig";
 import { DOCUMENT_ACCEPT } from "../../../../supabase/functions/_shared/validation/person";
 import { guessDocumentType } from "@/pages/agency/lib/bulkDocuments";
@@ -6,7 +6,7 @@ import { guessDocumentType } from "@/pages/agency/lib/bulkDocuments";
 /**
  * BULK-DOCUMENTS (owner 2026-11-28: "upload all docs in one shot, then only the missing ones, then the card view and submit"). The
  * same screen for the student, the agent and SLIT staff (one wizard, one code): every file dropped at once, each with its document
- * type (guessed from the file name; the user confirms or changes it), uploaded in one go through the same checked upload as the
+ * type found by scanning it (document-classify; no choosing), uploaded in one go through the same checked upload as the
  * one-at-a-time steps (a file that is not what it says is refused and shown here). Then the checklist asks only for what is still
  * missing. Automatic sorting by the document reader replaces the guess once its service can be deployed.
  */
@@ -22,9 +22,16 @@ export interface BulkStep {
   metOtherwise?: string;
 }
 
-interface Staged { key: string; file: File; type: string }
+/** A file chosen in the bulk upload: scanned to find which document it is, then attached to that document automatically. */
+interface Staged {
+  key: string; file: File;
+  /** scanning: being read; ready: its document is known; other: not a document the application asks for; unclear: not readable;
+   *  failed: the scanner is not available (the person then says what it is, the only case with a choice). */
+  status: "scanning" | "ready" | "other" | "unclear" | "failed";
+  type: string; detected?: string;
+}
 
-export default function BulkDocumentUpload({ steps, onUpload, onRemove, residency, onOneByOne, locked }: {
+export default function BulkDocumentUpload({ steps, onUpload, onRemove, residency, onOneByOne, locked, classify }: {
   steps: BulkStep[];
   onUpload: (stepId: string, files: File[], passportComing?: boolean) => void;
   onRemove: (doc: WizardDoc) => Promise<void>;
@@ -33,40 +40,62 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
   /** Switch to one document at a time (the guided steps), e.g. for the English options without a test result. */
   onOneByOne: (stepId?: string) => void;
   locked?: boolean;
+  /** Reads a file and says which document it is (the wizard step id, "" when none); throws when the scanner is unavailable. */
+  classify: (file: File) => Promise<{ step: string; type: string }>;
 }) {
   const [staged, setStaged] = useState<Staged[]>([]);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const known = new Set(steps.map((s) => s.step.id as string));
+  const update = (key: string, patch: Partial<Staged>) => setStaged((prev) => prev.map((x) => (x.key === key ? { ...x, ...patch } : x)));
   const stage = (files: FileList | File[] | null) => {
-    if (!files) return;
-    const added = Array.from(files).map((file) => {
-      const guess = guessDocumentType(file.name);
-      return { key: crypto.randomUUID(), file, type: known.has(guess) ? guess : "" };
-    });
+    if (!files?.length) return;
+    const added: Staged[] = Array.from(files).map((file) => ({ key: crypto.randomUUID(), file, status: "scanning", type: "" }));
     setStaged((prev) => [...prev, ...added]);
+    // Three at a time, so a big batch does not flood the scanner.
+    const queue = [...added];
+    const worker = async () => {
+      for (let item = queue.shift(); item; item = queue.shift()) {
+        try {
+          const found = await classify(item.file);
+          if (found.type === "Unclear") update(item.key, { status: "unclear", detected: found.type });
+          else if (found.step && known.has(found.step)) update(item.key, { status: "ready", type: found.step, detected: found.type });
+          else update(item.key, { status: "other", detected: found.type });
+        } catch {
+          const guess = guessDocumentType(item.file.name);
+          update(item.key, { status: "failed", type: known.has(guess) ? guess : "" });
+        }
+      }
+    };
+    void Promise.all([worker(), worker(), worker()]);
   };
-  const uploadAll = () => {
+  // Once every file is scanned, the ones that were recognised are attached at once (the passport first: the others are checked against it).
+  const scanning = staged.some((item) => item.status === "scanning");
+  useEffect(() => {
+    if (scanning || locked) return;
+    const go = staged.filter((item) => (item.status === "ready" || item.status === "failed") && item.type);
+    if (!go.length || staged.some((item) => item.status === "failed" && !item.type)) return;
     const byType = new Map<string, File[]>();
-    for (const item of staged) byType.set(item.type, [...(byType.get(item.type) ?? []), item.file]);
-    // The passport goes first: the other documents are checked against it.
+    for (const item of go) byType.set(item.type, [...(byType.get(item.type) ?? []), item.file]);
     const passportComing = byType.has("passport");
     for (const [type, files] of [...byType].sort(([a], [b]) => (a === "passport" ? -1 : b === "passport" ? 1 : 0))) {
       const target = steps.find((s) => s.step.id === type);
-      // A single-document type keeps the last file chosen for it (the others would be replaced anyway).
+      // A single document keeps the last file found for it (the others would replace it anyway).
       if (target) onUpload(type, target.step.multiple ? files : files.slice(-1), passportComing);
     }
-    setStaged([]);
-  };
+    const sent = new Set(go.map((item) => item.key));
+    setStaged((prev) => prev.filter((item) => !sent.has(item.key)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the scanning of a batch finishes
+  }, [scanning, staged.length, staged.map((item) => item.status + item.type).join()]);
   const drop = (event: DragEvent) => { event.preventDefault(); setDragging(false); stage(event.dataTransfer.files); };
-  const untyped = staged.some((item) => !item.type);
+  const titleOf = (id: string) => steps.find((s) => s.step.id === id)?.step.title ?? id;
 
   return (
     <div className="space-y-5" data-testid="bulk-documents">
       <div>
         <h2 className="text-lg font-semibold text-foreground-950">Upload all the documents at once</h2>
         <p className="mt-1 text-sm text-foreground-600">
-          Select every file together: {steps.map((s) => `${s.step.short}${s.required ? "" : " (optional)"}`).join(", ")}. Check the type next to each file, then press Upload all.
+          Select every file together: {steps.map((s) => `${s.step.short}${s.required ? "" : " (optional)"}`).join(", ")}. Each file is scanned and attached to the right document for you.
         </p>
       </div>
 
@@ -83,26 +112,29 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
 
       {staged.length ? (
         <section className="space-y-2 rounded-lg border border-background-300 p-3" data-testid="bulk-staged">
-          <p className="text-sm font-semibold">{staged.length} file{staged.length === 1 ? "" : "s"} ready. What is each one?</p>
+          <p className="text-sm font-semibold">{scanning ? `Scanning ${staged.filter((x) => x.status === "scanning").length} of ${staged.length} file${staged.length === 1 ? "" : "s"} to see which document each one is…` : "These files were not attached:"}</p>
           {staged.map((item, index) => (
-            <div key={item.key} className="flex flex-wrap items-center gap-2 text-sm">
-              <i className="ri-file-text-line text-foreground-500" aria-hidden="true" />
+            <div key={item.key} className="flex flex-wrap items-center gap-2 text-sm" data-testid={`bulk-file-${index}`} data-status={item.status}>
+              <i className={item.status === "scanning" ? "ri-loader-4-line animate-spin text-primary-600" : item.status === "ready" ? "ri-checkbox-circle-fill text-emerald-600" : "ri-error-warning-line text-amber-700"} aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate" title={item.file.name}>{item.file.name}</span>
-              <select value={item.type} data-testid={`bulk-type-${index}`} aria-label={`Document type of ${item.file.name}`}
-                onChange={(e) => setStaged((prev) => prev.map((x) => (x.key === item.key ? { ...x, type: e.target.value } : x)))}
-                className={`rounded-md border px-2 py-1.5 text-sm ${item.type ? "border-background-300" : "border-red-400 bg-red-50"}`}>
-                <option value="">Choose the type…</option>
-                {steps.map((s) => <option key={s.step.id} value={s.step.id}>{s.step.title}</option>)}
-              </select>
-              <button type="button" onClick={() => setStaged((prev) => prev.filter((x) => x.key !== item.key))} aria-label={`Remove ${item.file.name}`}
-                className="rounded p-1 text-foreground-500 hover:bg-background-200"><i className="ri-close-line" aria-hidden="true" /></button>
+              <span className="text-xs text-foreground-600">
+                {item.status === "scanning" ? "Scanning…" : item.status === "ready" ? titleOf(item.type)
+                  : item.status === "other" ? "Not one of the documents this application needs"
+                  : item.status === "unclear" ? "Could not be read clearly. Upload a clearer, complete copy"
+                  : "Scanning is unavailable: what is it?"}
+              </span>
+              {item.status === "failed" ? (
+                <select value={item.type} data-testid={`bulk-type-${index}`} aria-label={`Document type of ${item.file.name}`}
+                  onChange={(e) => update(item.key, { type: e.target.value })}
+                  className={`rounded-md border px-2 py-1.5 text-sm ${item.type ? "border-background-300" : "border-red-400 bg-red-50"}`}>
+                  <option value="">Choose the type…</option>
+                  {steps.map((s) => <option key={s.step.id} value={s.step.id}>{s.step.title}</option>)}
+                </select>
+              ) : null}
+              {item.status !== "scanning" ? <button type="button" onClick={() => setStaged((prev) => prev.filter((x) => x.key !== item.key))} aria-label={`Remove ${item.file.name}`}
+                className="rounded p-1 text-foreground-500 hover:bg-background-200"><i className="ri-close-line" aria-hidden="true" /></button> : null}
             </div>
           ))}
-          <div className="flex items-center justify-end gap-2 pt-1">
-            {untyped ? <span className="text-xs text-red-700">Choose the type of every file.</span> : null}
-            <button type="button" disabled={untyped || locked} onClick={uploadAll} data-testid="bulk-upload"
-              className="rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">Upload all</button>
-          </div>
         </section>
       ) : null}
 

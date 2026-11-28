@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(151);
+select plan(156);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -477,5 +477,13 @@ select lives_ok($$select public.sign_template_use_letterhead('f5100000-0000-0000
 reset role;
 update hr.sign_templates set header_html = '<p>MY OWN AGAIN</p>' where id = 'f5100000-0000-0000-0000-0000000000aa';
 select is((select header_html from hr.sign_templates where id = 'f5100000-0000-0000-0000-0000000000aa'), '<p>MY OWN AGAIN</p>', 'unticked, the header is the template''s own again');
+-- STUDENT-PHONE-OPTIONAL (20261128021517): adding a student needs no mobile; the submission asks for one only if SLIT publishes the rule.
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select lives_ok($$select public.portal_student_save(null, 'a6100000-0000-0000-0000-000000000001', 'ZZ No Phone', 'zz.nophone.one@example.test', '')$$, 'a student is added without a mobile');
+select lives_ok($$select public.portal_student_save(null, 'a6100000-0000-0000-0000-000000000001', 'ZZ No Phone Two', 'zz.nophone.two@example.test', null)$$, 'a second one too (no duplicate on an empty mobile)');
+select throws_ok($$select public.portal_student_save(null, 'a6100000-0000-0000-0000-000000000001', 'ZZ No Email', '', '')$$, '22023', 'Enter the student''s email', 'the email is still required');
+reset role;
+select is((select count(*)::int from public.enrollment_students where email like 'zz.nophone.%' and phone is null and not (details ? 'mobile')), 2, 'stored with no mobile');
+select ok((select prosrc like '%application_mobile_required'', false)%' from pg_proc where proname = 'wizard_application_progress'), 'progress: the mobile counts only when the rule is published as required');
 select * from finish();
 rollback;

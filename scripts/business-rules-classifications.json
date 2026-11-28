@@ -1269,5 +1269,41 @@
       "c5db943f52adacc81102894956fa319f3910ebdf003a6a2aefa4716804b48f1d",
       "eb77c377f5c4a076fb7cbc5a841a418257a910aef53e3982c96d1f0435f1e091"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "bulk-documents-phone-optional",
+    "reason": "2026-11-28 owner (BULK-DOCUMENTS, STUDENT-PHONE-OPTIONAL): the documents start with a choice (all at once or one at a time; the same wizard for student, agent and staff), the passport goes first and the rest wait for it, only missing documents are asked again, then the card view; a student's mobile is not asked or required unless SLIT publishes admissions.application_mobile_required. Fixed owner rules, not business settings.",
+    "fingerprints": [
+      "07892d88f7f4d321ce8a5d7b0f30f2e5942f9b8345b54f6fcfa91b4d6b7e72c1",
+      "34214be7e89920059b86f3bdc349e756035eba205d46ae80095bdcb0188babcc",
+      "40383c9c72af7a2a596fb76bb29176f7ea25baa07d249db657e53200ae72329e",
+      "4de14d8bbae5a695b8d3d7a0857bac0c7a63b099ac5cb1a27ae841704ad89276",
+      "55ea467004c85722d18d344364209df3a09122d33cc0ae93100c4200fa0e5ca1",
+      "6fa9f9ded2b46eaf3f009885b2f5c43b761c088c655db761f0b128848137fdbd",
+      "79f31b95db8a5154e6dd0364d43e360b64adcb4653cbabd39c1b25bbed832ea9",
+      "7ab35c69aae3afd29418a19dc6a0d9e16050eb72a2f6226c5d9468cd5cddb6f7",
+      "7c89161257d8fab13a518dbbf6fd726853ab2d17f303c06bab07ec0e5aa55112",
+      "96a182b6d8766a33193eeb337ac25012a5864d7a9519cdacad5b121dffd006c4",
+      "972ab063de27dee38dc9fc5822cf4d4cb57a575847b14341260eb8b79596c147",
+      "a32c803ebdbf8be28a0bad59879244a1db70d721bd8f09ba97e7d1ee92f9aebd",
+      "a49d7a15e801d96d56eeab7c20694c2a66c66fe52d6c3cbfe69d0f9fab9bda46",
+      "b077084c1f1c726f8e33b9852c149f9c605686f6997e2d66af15874e698dec15",
+      "b5ffbf92aa5035c06595382adc7ac91cf10f909c9980c40db0c98b6472f4c806",
+      "c3a90c82601510222b1f5927e3e93e62ebadff855ae75ab998790c89c0ce550a",
+      "cea6ec37474e725d97bbfa03fd8fc22106844f47c86d9bfed30e1675dd150c43",
+      "da1d72690d7e9f492416edd05114075cccab4a82680933ff711376a2cbfa90d5",
+      "e28755c4c9b7b4d70c70a6740a7da227d0ca147f6430f6468b29110e07d64db9"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "student-phone-optional-db",
+    "reason": "2026-11-28 owner (STUDENT-PHONE-OPTIONAL): portal_student_save takes an empty mobile; submission and progress require it only when the rule is published as true.",
+    "fingerprints": [
+      "5b80c1e0caf6f66d8871d4df330efb6f6fac245ac4a4f110ae4ba5ae7632688f",
+      "6728fc00f5091132f3f6e19ad76f500a2e95e50d72de58f1f9f0d937bbca134a",
+      "67edf150204ee8295a1767ea371afcd1c50a52b2fffba059e35aaf45b7650a97"
+    ]
   }
 ]

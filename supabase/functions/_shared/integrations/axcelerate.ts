@@ -33,6 +33,13 @@ export const AXCELERATE_ALLOWED: readonly RegExp[] = [
   '/tasks', '/followUps', '/customFields', '/template/email', '/template/sms', '/portfolio/checklists', '/portfolio/types',
 ].map((p) => new RegExp(`^${p}/?$`));
 
+/** The file reads that may be downloaded as bytes (AXCELERATE-DOCUMENTS); each is also on the read-only list above. */
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+export const AXCELERATE_FILE_PATHS: readonly string[] = ['/contact/portfolio/file', '/contact/enrolment/certificate'];
+/** A downloaded file: bytes, or the JSON aXcelerate answered instead, or tooLarge. */
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+export type AxcelerateFile = { status: number; contentType: string; bytes?: Uint8Array; fileName?: string; data?: unknown; tooLarge?: boolean };
+
 export type BlockReason = 'method_not_allowed' | 'path_not_allowed' | 'bad_request';
 /** A call Skyline refused before anything left the server. Its message never contains a token. */
 export class AxcelerateBlocked extends Error {
@@ -138,5 +145,34 @@ export function axcelerateClient(fields: AxcelerateFields, opts: { fetch?: typeo
     }
     return rows.slice(0, max);
   }
-  return { get, getAll };
+  /**
+   * Downloads one file (AXCELERATE-DOCUMENTS): only the file reads on the list (FILE_PATHS), GET as always, at most maxBytes. The bytes
+   * are returned as they are (a text read would break a PDF or an image); a JSON answer (an error, or a file sent inside JSON) comes back
+   * as data. The tokens never leave this function.
+   */
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+  async function getFile(path: string, params: Record<string, unknown> = {}, maxBytes = 25 * 1024 * 1024): Promise<AxcelerateFile> {
+    if (!AXCELERATE_FILE_PATHS.includes(path)) throw new AxcelerateBlocked('path_not_allowed', 'GET', path, 'Only aXcelerate file reads can be downloaded as files.');
+    const r = axcelerateRequest({ method: 'GET', path, params });
+    const { url, init } = axcelerateFetchArgs(fields, r);
+    let res: Response | null = null;
+    try { res = await request(url, { ...init, headers: { ...(init.headers as Record<string, string>), Accept: '*/*' }, signal: AbortSignal.timeout(opts.timeoutMs ?? 60000) }); }
+    catch { res = null; }
+    await opts.onCall?.(r.path, res?.status ?? null);
+    if (!res) throw new Error('aXcelerate could not be reached.');
+    const contentType = (res.headers.get('Content-Type') ?? '').split(';')[0].trim().toLowerCase();
+    const fileName = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(res.headers.get('Content-Disposition') ?? '')?.[1];
+    const declared = Number(res.headers.get('Content-Length') ?? '0');
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+    if (declared > maxBytes) { await res.body?.cancel(); return { status: res.status, contentType, tooLarge: true }; }
+    if (contentType.includes('json') || res.status >= 300) {
+      const a = await axcelerateAnswer(res, 200_000);
+      return { status: a.status, contentType, data: a.data };
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+    if (bytes.byteLength > maxBytes) return { status: res.status, contentType, tooLarge: true };
+    return { status: res.status, contentType, bytes, ...(fileName ? { fileName: decodeURIComponent(fileName) } : {}) };
+  }
+  return { get, getAll, getFile };
 }

@@ -5,13 +5,20 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/pages/admin/lib/supabase';
 import { currentTenantSite } from '@/lib/tenantSite';
 
-export type ImportEntity = 'trainers' | 'classes' | 'breaks' | 'students';
+export type ImportEntity = 'locations' | 'courses' | 'trainers' | 'classes' | 'breaks' | 'agents' | 'students';
+/** Every entity, in dependency order (what a record needs comes first): the dashboard's "Import everything". */
+export const ALL_ENTITIES: ImportEntity[] = ['locations', 'courses', 'trainers', 'classes', 'breaks', 'agents', 'students'];
 export const ENTITY_LABEL: Record<string, string> = {
-  trainers: 'Trainers', classes: 'Classes', breaks: 'Breaks', students: 'Students',
-  location: 'Locations', course: 'Courses', unit: 'Units', trainer: 'Trainers', class: 'Classes', class_unit: 'Class units', break: 'Breaks', student: 'Students',
+  locations: 'Campuses', courses: 'Courses', agents: 'Agents', trainers: 'Trainers', classes: 'Classes', breaks: 'Breaks', students: 'Students',
+  location: 'Locations', course: 'Courses', unit: 'Units', trainer: 'Trainers', class: 'Classes', class_unit: 'Class units', break: 'Breaks', student: 'Students', agent: 'Agents', agency: 'Agent businesses', qualification: 'Qualifications',
 };
 /** One student's outcome (AXCELERATE-STUDENTS). */
-export type StudentResult = { contactId: string; action: string; name?: string; id?: string | null; warnings?: string[]; message?: string };
+export type StudentResult = {
+  contactId: string; action: string; name?: string; id?: string | null; warnings?: string[]; message?: string;
+  agent?: { name?: string; action: string; student?: string; business?: string; message?: string };
+  courses?: { name: string; status: string }[];
+  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[] }[];
+};
 /** The owner's wording for each outcome. */
 export const STUDENT_OUTCOME: Record<string, string> = {
   created: 'Student imported', updated: 'Student updated', unchanged: 'Already up to date',
@@ -20,7 +27,8 @@ export const STUDENT_OUTCOME: Record<string, string> = {
 };
 export type ImportRun = {
   id: string; mode: 'page' | 'everything' | 'nightly'; entities: string[]; status: 'running' | 'done' | 'failed' | 'cancelled';
-  counts: Record<string, Record<string, number>>; cursor: { stage?: string; notes?: string[]; scope?: 'one' | 'all'; results?: StudentResult[]; contacts?: string[]; contactIndex?: number };
+  counts: Record<string, Record<string, number>>;
+  cursor: { stage?: string; notes?: string[]; scope?: 'one' | 'all'; results?: StudentResult[]; contacts?: string[]; contactIndex?: number; agentResult?: StudentResult['agent'] };
   started_at: string; finished_at: string | null;
   last_error: string | null; startedByName?: string | null; openErrors?: number; cancel_requested?: boolean;
 };
@@ -76,7 +84,8 @@ export function useImportAllowed(): boolean {
  * Starts an import (or retries one) and keeps it going until it finishes: each call works for up to about 100 seconds, then
  * the run is continued. `onProgress` gets the run after every call.
  */
-export async function runAxcelerateImport(start: { entities: ImportEntity[]; mode: 'page' | 'everything'; students?: { scope: 'one'; contactId: string } | { scope: 'all'; changedOnly: boolean } } | { retry: string }, onProgress?: (run: ImportRun) => void): Promise<ImportRun> {
+export async function runAxcelerateImport(start: { entities: ImportEntity[]; mode: 'page' | 'everything'; students?: { scope: 'one'; contactId: string } | { scope: 'all'; changedOnly: boolean };
+  courses?: { courseId: string }; agents?: { contactId: string } } | { retry: string }, onProgress?: (run: ImportRun) => void): Promise<ImportRun> {
   let answer = await invoke<{ run: ImportRun; error?: string }>('retry' in start ? { action: 'retry', runId: start.retry } : { action: 'start', ...start });
   onProgress?.(answer.run);
   for (let guard = 0; answer.run?.status === 'running' && guard < 200; guard++) {
@@ -95,6 +104,9 @@ export const continueAxcelerateImport = async (runId: string, onProgress?: (run:
 export const surveyAxcelerate = () => invoke<{ survey: Survey }>({ action: 'survey' }).then((r) => r.survey);
 /** aXcelerate contacts matching a name, email or mobile (at least 3 letters), with the Skyline student when already imported. */
 export const searchAxcelerateStudents = (query: string) => invoke<{ results: StudentSearchResult[] }>({ action: 'search_students', query }).then((r) => r.results ?? []);
+export type CourseSearchResult = { courseId: string; code: string; name: string };
+export const searchAxcelerateCourses = (query: string) => invoke<{ results: CourseSearchResult[] }>({ action: 'search_courses', query }).then((r) => r.results ?? []);
+export const searchAxcelerateAgents = (query: string) => invoke<{ results: StudentSearchResult[] }>({ action: 'search_agents', query }).then((r) => r.results ?? []);
 /** A possible duplicate: link to one of the students listed, create a new student, or dismiss. */
 export const decideReview = (reviewId: string, action: 'link' | 'create' | 'dismiss', studentId?: string) =>
   rpc<{ action: string; id: string | null; warnings?: string[] }>('axcelerate_review_decide', { p_review: reviewId, p_action: action, p_student: studentId ?? null });
@@ -104,12 +116,12 @@ export const decideConflict = (conflictId: string, takeAxcelerate: boolean) => r
 export const undoSkip = (connectionId: string, entity: string, axcelerateId: string) => rpc('axcelerate_skip_undo', { p_connection: connectionId, p_entity: entity, p_ax: axcelerateId });
 export const resolveImportError = (errorId: string) => rpc('axcelerate_error_resolve', { p_error: errorId });
 export const setImportPermission = (userId: string, grant: boolean) => rpc('cms_permission_set', { p_user: userId, p_permission: 'axcelerate.import', p_grant: grant });
-export const recordBadge = (table: string, id: string) => rpc<{ importedAt: string; lastImportedAt: string; editedInSkylineAt: string | null } | null>('axcelerate_record_badge', { p_table: table, p_id: id }).catch(() => null);
+export const recordBadge = (table: string, id: string) => rpc<{ importedAt: string; lastImportedAt: string; editedInSkylineAt: string | null; axcelerateId?: string; entity?: string } | null>('axcelerate_record_badge', { p_table: table, p_id: id }).catch(() => null);
 
 /** "12 created, 3 updated, 1 error" for one entity's counts. */
 export function countsText(c: Record<string, number> | undefined): string {
   if (!c) return 'nothing';
-  const order = ['created', 'updated', 'linked', 'unchanged', 'duplicate', 'conflict', 'skipped', 'error'];
+  const order = ['created', 'updated', 'linked', 'unchanged', 'moved', 'duplicate', 'conflict', 'skipped', 'error'];
   const label: Record<string, string> = { created: 'created', updated: 'updated', linked: 'matched', unchanged: 'unchanged', duplicate: 'possible duplicate (needs review)', conflict: 'kept (edited in Skyline)', skipped: 'skipped', error: 'error' };
   const parts = order.filter((k) => c[k]).map((k) => `${c[k]} ${label[k]}${k === 'error' && c[k] > 1 ? 's' : ''}`);
   return parts.length ? parts.join(', ') : 'nothing';

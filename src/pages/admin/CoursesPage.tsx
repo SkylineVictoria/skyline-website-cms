@@ -22,6 +22,7 @@ import type { AdminCourse } from "@/pages/admin/lib/types";
 import { courseCategories } from "@/pages/admin/lib/seed";
 import { ActivateCourseModal, CourseCatalogueAutocomplete } from "@/pages/admin/components/CourseCatalogue";
 import type { CatalogueCourse } from "@/pages/admin/lib/courseCatalogue";
+import AxcelerateRecordImport from "@/components/axcelerate/AxcelerateRecordImport";
 
 type SortKey = "order" | "name" | "updated";
 
@@ -146,9 +147,12 @@ export default function CoursesPage() {
         description="Manage every course, its content, media, ordering and homepage visibility."
         breadcrumb="Content"
         actions={
-          <Button icon="ri-add-line" onClick={() => setSelecting(true)}>
-            Add Course
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <AxcelerateRecordImport kind="courses" />
+            <Button icon="ri-add-line" onClick={() => setSelecting(true)}>
+              Add Course
+            </Button>
+          </div>
         }
       />
 

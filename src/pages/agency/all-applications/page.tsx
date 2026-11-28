@@ -13,6 +13,7 @@ import { cmsPaths, useApplicationPaths } from "@/pages/agency/lib/applicationPat
 import { usePortalAuth } from "@/pages/agency/lib/portalAuthContext";
 import { requestWebsiteDomain } from "@/lib/tenantHost";
 import { PageHeading } from "@/pages/agency/components/PortalUI";
+import AxcelerateRecordImport from "@/components/axcelerate/AxcelerateRecordImport";
 
 export default function AllApplicationsPage() {
   const paths = useApplicationPaths();
@@ -62,7 +63,7 @@ export default function AllApplicationsPage() {
       <PageHeading
         eyebrow="All Applications"
         title="All applications"
-        action={<Link to={paths.create} className="inline-flex items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"><i className="ri-add-line" aria-hidden="true" />+ New Application</Link>}
+        action={<div className="flex flex-wrap items-center gap-2"><AxcelerateRecordImport kind="students" label="Import from aXcelerate" /><Link to={paths.create} className="inline-flex items-center gap-2 whitespace-nowrap rounded-md bg-primary-500 px-5 py-2.5 text-sm font-semibold text-background-50 transition-colors hover:bg-primary-600"><i className="ri-add-line" aria-hidden="true" />+ New Application</Link></div>}
         description="Every application across every agency — search, filter by agency, agent, course, intake and status, and open any application for review."
       />
 

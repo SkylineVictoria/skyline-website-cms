@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, Button, Card, EmptyState, PageHeader, SectionTabs } from '@/pages/admin/components/ui';
 import AxcelerateImportButton from '@/components/axcelerate/AxcelerateImportButton';
+import AxcelerateRecordImport from '@/components/axcelerate/AxcelerateRecordImport';
 import {
-  cancelImport, continueAxcelerateImport, countsText, decideConflict, decideReview, ENTITY_LABEL, importOverview, resolveImportError, runAxcelerateImport,
+  ALL_ENTITIES, cancelImport, continueAxcelerateImport, countsText, decideConflict, decideReview, ENTITY_LABEL, importOverview, resolveImportError, runAxcelerateImport,
   setImportPermission, surveyAxcelerate, undoSkip, useImportAllowed, type ImportOverview, type Survey,
 } from '@/lib/axcelerateImport';
 
@@ -54,7 +55,7 @@ export default function AxcelerateImportCentre() {
   return <div data-testid="axcelerate-import-centre">
     <PageHeader title="aXcelerate Import centre" breadcrumb="External Integrations"
       description="Brings data from aXcelerate into Skyline, one way only: Skyline reads aXcelerate and never sends anything back. Imported records are ordinary Skyline records: edit, delete or merge them as usual."
-      actions={<AxcelerateImportButton entities={['trainers', 'classes', 'breaks', 'students']} mode="everything" label="Import everything" variant="primary" onDone={() => void load()} />} />
+      actions={<AxcelerateImportButton entities={ALL_ENTITIES} mode="everything" label="Import everything" variant="primary" onDone={() => void load()} />} />
     {error && <p role="alert" className="mb-4 rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
     {notice && <p role="status" className="mb-4 rounded border border-green-300 p-3 text-sm">{notice}</p>}
     {!conn || !conn.saved ? <Card className="mb-4 p-4 text-sm">
@@ -71,9 +72,12 @@ export default function AxcelerateImportCentre() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" icon="ri-search-eye-line" disabled={busy || !conn?.saved} onClick={() => void act(async () => setSurvey(await surveyAxcelerate()), 'Survey finished.')} data-testid="axcelerate-survey">Run survey</Button>
-            <AxcelerateImportButton entities={['trainers']} label="Import trainers" size="sm" onDone={() => void load()} />
-            <AxcelerateImportButton entities={['classes']} label="Import classes" size="sm" onDone={() => void load()} />
-            <AxcelerateImportButton entities={['breaks']} label="Import breaks" size="sm" onDone={() => void load()} />
+            <AxcelerateRecordImport kind="locations" label="Campuses" onDone={() => void load()} />
+            <AxcelerateRecordImport kind="courses" label="Courses and classes" onDone={() => void load()} />
+            <AxcelerateImportButton entities={['trainers']} label="Trainers" size="sm" onDone={() => void load()} />
+            <AxcelerateImportButton entities={['breaks']} label="Breaks" size="sm" onDone={() => void load()} />
+            <AxcelerateRecordImport kind="agents" label="Agents" onDone={() => void load()} />
+            <AxcelerateRecordImport kind="students" label="Students and Qualifications" onDone={() => void load()} />
           </div>
           {survey && <div className="rounded border border-background-200 p-3" data-testid="axcelerate-survey-result">
             <p className="font-medium">In aXcelerate ({when(survey.at)}):</p>

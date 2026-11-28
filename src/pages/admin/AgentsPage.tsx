@@ -13,6 +13,7 @@ import AgentStatusBadge from "@/pages/admin/components/AgentStatusBadge";
 import { useListParams } from "@/pages/admin/lib/listParams";
 import { useStatusCatalog } from "@/pages/agency/lib/statusCatalog";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import AxcelerateRecordImport from "@/components/axcelerate/AxcelerateRecordImport";
 
 const PAGE_SIZE = 100;
 const KEYS = ["q", "status", "sort", "dir"] as const;
@@ -136,7 +137,7 @@ export default function AgentsPage() {
     <div>
       <PageHeader title="Agents"
         description="Every agent belongs to one business and looks after their own students. Adding an agent can send their sign-in invitation; deactivating one blocks their sign-in but keeps their students."
-        actions={<Button icon="ri-user-add-line" onClick={() => openActivate(null)}>Add agent</Button>} />
+        actions={<div className="flex flex-wrap gap-2"><AxcelerateRecordImport kind="agents" /><Button icon="ri-user-add-line" onClick={() => openActivate(null)}>Add agent</Button></div>} />
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
         <StatusTabs label="Agent status" value={status || "all"} onChange={(v) => update({ status: v === "Active" ? "" : v })}
           tabs={[{ id: "all", label: "All", count: counts?.all ?? null }, ...agentStatuses.map((item) => ({ id: item.value, label: item.label, count: countFor(item.value) }))]} />

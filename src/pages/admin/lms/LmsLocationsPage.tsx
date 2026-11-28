@@ -3,6 +3,7 @@ import { supabase } from "@/pages/admin/lib/supabase";
 import { rto } from "@/pages/admin/lib/rto";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 import { avetmissLabel, avetmissOptions, useAvetmissCodes } from "@/lib/avetmissCodes";
+import AxcelerateRecordImport from "@/components/axcelerate/AxcelerateRecordImport";
 
 interface Room { id: string; name: string; capacity: number | null; isActive: boolean; locationId: string | null }
 // AVETMISS-UI (2026-11-25): each location's NCVER details (avetmiss_location_id, suburb, postcode, state_code, country_code).
@@ -122,9 +123,12 @@ export default function LmsLocationsPage() {
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Locations &amp; rooms</h1>
         <p className="text-sm text-foreground-600">Where classes are held. The room lists in class timetables and the course calendar come from here.</p>
       </div>
+      <div className="flex flex-wrap items-center gap-2">
+      <AxcelerateRecordImport kind="locations" onDone={() => void load()} />
       {canEdit && <button type="button" onClick={() => { setNotice(""); setLoc({ id: null, name: "", address: "", kind: "theory", isActive: true, ...NEW_AVETMISS }); }}
         className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-primary-700">
         <i className="ri-add-line text-lg" aria-hidden="true" />Add location</button>}
+      </div>
     </header>
     {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
     {notice && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>}

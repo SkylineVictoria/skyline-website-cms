@@ -21,6 +21,7 @@ import { getStudent, sendStudentInvitation, studentLoginLabel, type StudentDetai
 import { formatDate } from "@/pages/agency/lib/portalData";
 import StudentAvetmissPanel from "@/pages/admin/components/avetmiss/StudentAvetmissPanel";
 import { supabase } from "@/pages/admin/lib/supabase";
+import AxcelerateRefreshStudent from "@/components/axcelerate/AxcelerateRefreshStudent";
 
 /** Agencies > Students > {name}: every application this student has, across statuses. */
 export default function StudentDetailPage() {
@@ -89,7 +90,7 @@ export default function StudentDetailPage() {
         <Link to={`/admin/businesses/${student.business.id}`} className="hover:text-foreground-900">{student.business.name}</Link><span aria-hidden="true">/</span>
         <span className="text-foreground-900">Student</span>
       </nav>
-      <PageHeader title={student.name || "Unnamed student"} titleSuffix={<>{studentNumber ? <span className="ml-2 inline-block rounded border border-background-300 bg-background-100 px-2 py-0.5 align-middle font-mono text-xs font-medium text-foreground-700" title="Student number (permanent)" data-testid="student-number">{studentNumber}</span> : null}<span className="ml-2 inline-block align-middle"><MessagePersonButton kind="student" refId={student.id} name={student.name} size="sm" /></span></>}
+      <PageHeader title={student.name || "Unnamed student"} titleSuffix={<>{studentNumber ? <span className="ml-2 inline-block rounded border border-background-300 bg-background-100 px-2 py-0.5 align-middle font-mono text-xs font-medium text-foreground-700" title="Student number (permanent)" data-testid="student-number">{studentNumber}</span> : null}<span className="ml-2 inline-block align-middle"><MessagePersonButton kind="student" refId={student.id} name={student.name} size="sm" /></span><span className="ml-2 inline-block align-middle"><AxcelerateRefreshStudent studentId={student.id} onDone={() => setReload((value) => value + 1)} /></span></>}
         description={`Student of ${student.business.name}${student.agent ? `, looked after by ${student.agent.name}` : ""}${student.selfEnrolled ? ", enrolled themselves from the website" : ""}. Sign-in: ${studentLoginLabel(student.login)}.`}
         actions={onlyDrafts || student.login?.status === "active" ? undefined : (
           <Button icon="ri-mail-send-line" disabled={inviting || !student.email} onClick={() => void invite()}>

@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Modal } from '@/pages/admin/components/ui';
-import { countsText, ENTITY_LABEL, runAxcelerateImport, useImportAllowed, type ImportEntity, type ImportRun } from '@/lib/axcelerateImport';
+import { ALL_ENTITIES, countsText, ENTITY_LABEL, runAxcelerateImport, useImportAllowed, type ImportEntity, type ImportRun } from '@/lib/axcelerateImport';
 
 const WHAT: Record<string, string> = {
+  locations: 'aXcelerate’s delivery locations as campuses (an incomplete one is created switched off until its address is complete)',
+  courses: 'aXcelerate’s courses (a course Skyline does not have yet is created as a Draft)',
+  agents: 'agents come with their students (each student’s agent and agency; agents stay Inactive until their agreement is signed)',
   trainers: 'the trainers named on aXcelerate’s classes, as Active staff with the trainer role (no sign-in invitation is sent)',
   classes: 'aXcelerate’s classes as intakes, with their units, trainer and location; a course, unit, location or trainer that Skyline does not have yet is created',
   breaks: 'aXcelerate’s calendar events as term breaks of the courses that have classes from aXcelerate',
-  students: 'every student enrolled in aXcelerate, as students of the direct-students business (possible duplicates wait for review in the Import centre)',
+  students: 'every student enrolled in aXcelerate, with their agent and agency, and each course as a Qualification in its class with its application (possible duplicates wait for review in the Import centre)',
 };
 
 /**
@@ -24,7 +27,7 @@ export default function AxcelerateImportButton({ entities, mode = 'page', label,
   const [run, setRun] = useState<ImportRun | null>(null);
   const [error, setError] = useState('');
   if (!allowed) return null;
-  const list = mode === 'everything' ? (['trainers', 'classes', 'breaks', 'students'] as ImportEntity[]) : entities;
+  const list = mode === 'everything' ? ALL_ENTITIES : entities;
   const start = async () => {
     setBusy(true); setError(''); setRun(null);
     try { setRun(await runAxcelerateImport({ entities: list, mode }, setRun)); onDone?.(); }
@@ -42,7 +45,7 @@ export default function AxcelerateImportButton({ entities, mode = 'page', label,
         {!run || run.status !== 'done' ? <Button disabled={busy} onClick={() => void start()} data-testid="axcelerate-import-start">{busy ? 'Importing…' : 'Start import'}</Button> : null}
       </>}>
       <div className="space-y-3 text-sm" data-testid="axcelerate-import-dialog">
-        <p>Skyline reads from aXcelerate and creates or updates:</p>
+        <p>Skyline reads from aXcelerate and creates or updates, in this order (what a record needs comes first):</p>
         <ul className="list-disc space-y-1 pl-5">{list.map((e) => <li key={e}><strong>{ENTITY_LABEL[e]}:</strong> {WHAT[e]}.</li>)}</ul>
         <p className="text-foreground-600">Nothing is sent to aXcelerate. Records an admin changed in Skyline are kept (differences go to Conflicts); records deleted in Skyline are not brought back.</p>
         {error && <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p>}

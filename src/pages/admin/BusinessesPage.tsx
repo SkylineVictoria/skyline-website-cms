@@ -14,6 +14,7 @@ import { useAuth } from "@/pages/admin/lib/authContext";
 import DeleteBusinessDialog from "@/pages/admin/components/DeleteBusinessDialog";
 import { businessDropdownStatuses, deleteBlockReason, isSlitAdmin } from "@/pages/admin/lib/businessData";
 import SearchableSelect from "@/components/ui/SearchableSelect";
+import AxcelerateRecordImport from "@/components/axcelerate/AxcelerateRecordImport";
 
 const PAGE_SIZE = 25;
 /** Active and Invited are worked out on the device from the active businesses (up to this many). */
@@ -172,7 +173,7 @@ export default function BusinessesPage() {
       <PageHeader
         title="Businesses"
         description="Every business, identified by its ABN. A business has agents; each agent has students; each student has applications. Deactivate a business to block everyone in it."
-        actions={<Link to="/admin/agencies/new"><Button icon="ri-add-line">Add business</Button></Link>}
+        actions={<div className="flex flex-wrap gap-2"><AxcelerateRecordImport kind="agents" label="Import agents from aXcelerate" /><Link to="/admin/agencies/new"><Button icon="ri-add-line">Add business</Button></Link></div>}
       />
 
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">

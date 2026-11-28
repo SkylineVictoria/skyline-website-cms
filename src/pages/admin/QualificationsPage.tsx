@@ -4,6 +4,7 @@ import { Card, PageHeader } from "@/pages/admin/components/ui";
 import { ListMessage } from "@/pages/admin/components/ListControls";
 import QualificationsTable from "@/pages/admin/components/QualificationsTable";
 import { formatQualificationDate, listQualifications, openQualificationTasks, QUALIFICATION_LABELS, QUALIFICATION_STATUSES, type OpenQualificationTask, type QualificationRow } from "@/lib/qualification";
+import AxcelerateRecordImport from "@/components/axcelerate/AxcelerateRecordImport";
 
 /** QUALIFICATION-FILTERS (owner 2026-11-27): "Needs placement" and "PRISMS to report", from the open tasks (?task=place|prisms). */
 type TaskFilter = "place" | "prisms";
@@ -54,7 +55,8 @@ export default function QualificationsPage() {
 
   return (
     <div>
-      <PageHeader title="Qualifications" description="Every student's Qualification: the course they are enrolled in, its intake, status and dates." />
+      <PageHeader title="Qualifications" description="Every student's Qualification: the course they are enrolled in, its intake, status and dates."
+        actions={<AxcelerateRecordImport kind="students" label="Import from aXcelerate" />} />
       <div className="mb-4 flex flex-wrap items-center gap-2" data-testid="qualification-filters">
         <button type="button" onClick={() => setParams(new URLSearchParams(query ? { q: query } : {}), { replace: true })}
           className={`cursor-pointer rounded-full border px-3 py-1 text-sm ${status.length ? "border-background-300 bg-background-50 text-foreground-700" : "border-primary-500 bg-primary-500 text-background-50"}`}>All</button>

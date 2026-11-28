@@ -1388,7 +1388,7 @@ headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT f
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
 Importing into Skyline records is not built yet.
 
-## aXcelerate Qualifications and import screens (AXCELERATE-QUALIFICATIONS, 2026-11-28, LOCAL ONLY)
+## aXcelerate Qualifications and import screens (AXCELERATE-QUALIFICATIONS, 2026-11-28, RELEASED)
 Migration 20261128081517_axcelerate_qualifications: axcelerate_class_room (placeholder classroom per campus for an imported class without a group),
 axcelerate_import_qualification (application source 'axcelerate': draft -> submitted (portal.signed_submit, status_command) -> enrolled
 (qualification_move_application) -> the existing Qualification trigger; link entity 'qualification' keyed by ENROLID), axcelerate_record_badge
@@ -1396,7 +1396,7 @@ axcelerate_import_qualification (application source 'axcelerate': draft -> submi
 actions search_courses / search_agents; start courses: {courseId} / agents: {contactId}; per student GET /course/detail,
 /course/deliveryLocations, /course/instance/detail for the classes of their enrolments. No new env names.
 
-## aXcelerate agents (AXCELERATE-AGENTS, 2026-11-28, LOCAL ONLY)
+## aXcelerate agents (AXCELERATE-AGENTS, 2026-11-28, RELEASED)
 Migration 20261128071517_axcelerate_agents: axcelerate_student_values (+ title, citizenship / nationality, holds_visa / visa_type, alternative_email,
 ec_name / ec_relationship / ec_phone, birth_city; USI in usi_number; English proficiency @ when missing for a non-English speaker),
 axcelerate_import_agency (business by link 'agency' org:<id> / agent:<id>, ABN or name; else created Active, agreement none, code AX<id>),

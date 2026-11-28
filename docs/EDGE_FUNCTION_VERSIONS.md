@@ -7,6 +7,7 @@ Checked 2026-11-28 after BULK-DOCUMENTS auto-scan: document-classify 1 (new; JWT
 Checked <date> after <TASK>: <function> <version>
 ..." line at the top.
 
+Checked 2026-11-28 after AXCELERATE-QUALIFICATIONS: axcelerate-import 3 (agents and agencies, each course's campus / course / class (+ sessions) and Qualification, search_courses / search_agents, one course / one agent; JWT on; live was 2 = recorded), deployed by MCP with the files of main 20762c8 (3 files); OPTIONS 200, 401 without sign-in; migrations 20261128071517 and 20261128081517 applied first.
 Checked 2026-11-28 after AXCELERATE-STUDENTS: axcelerate-import 2 (search_students; students one / all / changed since; JWT on; live was 1 = recorded), deployed by MCP with the files of main d6f6a6d (3 files); OPTIONS 200, 401 without sign-in; migration 20261128051517 applied first.
 Checked 2026-11-28 after AXCELERATE-IMPORT: integrations-admin 17 (axcelerate test via read-only axcelerateClient; axcelerate_call refused as a security event; JWT on; live was 16 = recorded) and axcelerate-import 1 (new; JWT on), both deployed by MCP with the files of main 88ea998; OPTIONS 200, 401 without sign-in; migration 20261128041517 applied first.
 Checked 2026-11-28 after AXCELERATE-CONNECTION: integrations-admin 16 (aXcelerate test / axcelerate_call; JWT on), deployed by MCP with the files of main 126991f (live was 15 = recorded); migration 20261128030517 applied first.

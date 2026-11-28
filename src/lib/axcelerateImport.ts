@@ -12,9 +12,24 @@ export const ENTITY_LABEL: Record<string, string> = {
 };
 export type ImportRun = {
   id: string; mode: 'page' | 'everything' | 'nightly'; entities: string[]; status: 'running' | 'done' | 'failed' | 'cancelled';
-  counts: Record<string, Record<string, number>>; cursor: { stage?: string; notes?: string[] }; started_at: string; finished_at: string | null;
+  counts: Record<string, Record<string, number>>; cursor: { stage?: string; notes?: string[]; log?: ImportLogEntry[] }; started_at: string; finished_at: string | null;
   last_error: string | null; startedByName?: string | null; openErrors?: number; cancel_requested?: boolean;
 };
+/** One record a run touched (AXCELERATE-IMPORT log): action created / updated / linked / unchanged = brought in; error / skipped / conflict = not. */
+export type ImportLogEntry = { entity: string; label: string; ax?: string; action: string; message?: string };
+export const BROUGHT = new Set(['created', 'updated', 'linked', 'unchanged', 'done']);
+/** Why a record was not brought in, in plain words. */
+export function notBroughtReason(e: ImportLogEntry): string {
+  if (e.action === 'skipped') return 'Not brought back: it was deleted in Skyline earlier (see Skipped).';
+  if (e.action === 'conflict') return 'Kept as it is in Skyline: an admin had changed it (see Conflicts).';
+  return e.message || 'Import failed.';
+}
+/** Totals over the run's counts: brought in, and not brought in. */
+export function runTotals(run: Pick<ImportRun, 'counts'>): { brought: number; notBrought: number } {
+  let brought = 0, notBrought = 0;
+  for (const c of Object.values(run.counts ?? {})) for (const [k, n] of Object.entries(c)) { if (BROUGHT.has(k)) brought += n; else notBrought += n; }
+  return { brought, notBrought };
+}
 export type ImportOverview = {
   connection: { id: string; status: string; lastSuccessAt: string | null; saved: boolean } | null;
   runs: ImportRun[];
@@ -25,7 +40,7 @@ export type ImportOverview = {
   audit: { at: string; who: string; action: string; detail: Record<string, unknown> }[];
   permission: { userId: string; name: string; email: string; granted: boolean }[];
 };
-export type Survey = { at: string; courses: number; workshops: number | null; deliveryLocations: number | null; customFields: { label: string; variable: string; type: string; linkTo: string }[] | null };
+export type Survey = { at: string; courses: number | null; workshops: number | null; deliveryLocations: number | null; customFields: { label: string; variable: string; type: string; linkTo: string }[] | null };
 
 async function rpc<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
   const { data, error } = await supabase.rpc(name, args);

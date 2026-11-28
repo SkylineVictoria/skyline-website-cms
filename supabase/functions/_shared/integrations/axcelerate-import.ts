@@ -24,7 +24,15 @@ export type Cursor = {
   locations?: Record<string, string>;
   trainers?: Record<string, string>;
   notes?: string[];
+  /** One line per record the run touched: what came in, and what did not and why (shown in the dialog and the Import centre). */
+  log?: LogEntry[];
+  /** What aXcelerate returned, for the summary notes. */
+  seen?: { courses?: number; classes?: number; classesWithTrainer?: number; trainers?: number };
 };
+export type LogEntry = { entity: string; label: string; ax?: string; action: string; message?: string };
+/** At most this many log lines are kept per run (the counts stay complete). */
+// rule-policy: technical axcelerate-import-log 2026-11-28 owner (AXCELERATE-IMPORT-LOG): import result wording and log size; no configurable value.
+export const LOG_LIMIT = 1000;
 type Row = Record<string, unknown>;
 type Answer = { status: number; data: unknown };
 export type ImportClient = { get(path: string, params?: Record<string, unknown>): Promise<Answer>; getAll(path: string, params?: Record<string, unknown>, opt?: { pageSize?: number; sizeParam?: 'displayLength' | 'limit'; maxRows?: number }): Promise<Row[]> };
@@ -56,27 +64,48 @@ export function stagesFor(entities: ImportEntity[]): Stage[] {
   return stages;
 }
 
+function note(deps: ImportDeps, e: LogEntry) {
+  const log = deps.cursor.log ??= [];
+  if (log.length < LOG_LIMIT) log.push(e);
+}
+
 async function call(deps: ImportDeps, entity: string, ax: string, label: string, name: string, args: Record<string, unknown>, raw: Row): Promise<string | null> {
   const r = await deps.rpc(name, args);
   if (r.error) {
     bump(deps.counts, entity, 'error');
+    note(deps, { entity, label: label || ax, ax, action: 'error', message: r.error.message ?? 'Import failed' });
     await deps.rpc('axcelerate_import_error', { p_run: deps.run, p_entity: entity, p_ax: ax || null, p_label: label || null, p_message: r.error.message ?? 'Import failed', p_raw: raw });
     return null;
   }
   const out = (r.data ?? {}) as { action?: string; id?: string | null };
   bump(deps.counts, entity, out.action ?? 'done');
+  note(deps, { entity, label: label || ax, ax, action: out.action ?? 'done' });
   return out.id ?? null;
 }
 
 async function fail(deps: ImportDeps, entity: string, ax: string, label: string, message: string, raw: Row = {}) {
   bump(deps.counts, entity, 'error');
+  note(deps, { entity, label: label || ax, ax, action: 'error', message });
   await deps.rpc('axcelerate_import_error', { p_run: deps.run, p_entity: entity, p_ax: ax || null, p_label: label || null, p_message: message, p_raw: raw });
+}
+
+/** Plain-language notes on what aXcelerate returned, so a run that brought nothing says why. */
+export function summaryNotes(c: Cursor, want: Set<ImportEntity>): string[] {
+  const s = c.seen ?? {};
+  const courses = s.courses ?? (c.courses ?? []).length, classes = s.classes ?? 0, named = s.classesWithTrainer ?? 0, trainers = s.trainers ?? 0;
+  const out = [`aXcelerate returned ${courses} qualification${courses === 1 ? '' : 's'} (courses) and ${classes} class${classes === 1 ? '' : 'es'}; ${named} class${named === 1 ? ' names' : 'es name'} a trainer (${trainers} different trainer${trainers === 1 ? '' : 's'}).`];
+  if (!courses) out.push('No qualifications came back from aXcelerate, so there were no classes or trainers to read. Check that the connection is Live (not Staging) and that the aXcelerate API user can see the courses.');
+  else if (!classes) out.push('The qualifications have no classes in aXcelerate, so there were no trainers or classes to read.');
+  else if (want.has('trainers') && !named) out.push('None of the classes names a trainer in aXcelerate. Trainers are read from the classes (aXcelerate has no trainer list Skyline may read), so no trainer was imported.');
+  return out;
 }
 
 /** Runs (or continues) an import until it is done, cancelled, or the time budget is used. */
 export async function runImport(deps: ImportDeps): Promise<ImportResult> {
   const now = deps.now ?? (() => Date.now());
-  const c: Cursor = { locations: {}, trainers: {}, classCourses: [], notes: [], ...deps.cursor };
+  const c: Cursor = { locations: {}, trainers: {}, classCourses: [], notes: [], log: [], seen: {}, ...deps.cursor };
+  c.log ??= []; c.seen ??= {}; c.notes ??= [];
+  deps = { ...deps, cursor: c };
   const stages = stagesFor(deps.entities);
   const want = new Set(deps.entities);
   if (!c.stage) c.stage = stages[0] ?? 'done';
@@ -101,6 +130,7 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
     if (c.stage === 'courses') {
       const rows = await deps.client.getAll('/courses', { type: 'p' });
       c.courses = [];
+      c.seen!.courses = rows.length;
       for (const course of rows) {
         const ax = text(course, 'ID');
         const id = await call(deps, 'course', ax, `${text(course, 'CODE')} ${text(course, 'NAME')}`.trim(), 'axcelerate_import_course', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: course }, course);
@@ -116,6 +146,7 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
         if (!timeLeft()) { c.courseIndex = i; await checkpoint(); return { done: false, cancelled: false, cursor: c, counts: deps.counts }; }
         const course = courses[i];
         const instances = await deps.client.getAll('/course/instances', { ID: course.ax, type: 'p', public: 'false', current: 'false' });
+        c.seen!.classes = (c.seen!.classes ?? 0) + instances.length;
         for (const inst of instances) {
           const instId = text(inst, 'INSTANCEID', 'ID');
           const label = text(inst, 'NAME') || `class ${instId}`;
@@ -123,12 +154,14 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
           const detail = { ...inst, ...(detailAnswer && detailAnswer.status < 300 ? one(detailAnswer.data) ?? {} : {}) } as Row;
           // Trainer: created (or linked by email) when the class names one.
           const trainerAx = text(detail, 'TRAINERCONTACTID');
+          if (trainerAx) c.seen!.classesWithTrainer = (c.seen!.classesWithTrainer ?? 0) + 1;
           let trainer: string | null = trainerAx ? c.trainers![trainerAx] ?? null : null;
           if (trainerAx && !trainer && (want.has('trainers') || want.has('classes'))) {
             const t = await deps.client.get(`/trainer/${trainerAx}`, {});
             const ct = await deps.client.get(`/contact/${trainerAx}`, {});
             const rec = { ...(ct.status < 300 ? one(ct.data) ?? {} : {}), ...(t.status < 300 ? one(t.data) ?? {} : {}), CONTACTID: trainerAx } as Row;
-            if (!text(rec, 'GIVENNAME', 'NAME', 'EMAILADDRESS', 'EMAIL')) await fail(deps, 'trainer', trainerAx, '', `aXcelerate returned no details for trainer ${trainerAx}.`, rec);
+            c.seen!.trainers = (c.seen!.trainers ?? 0) + 1;
+            if (!text(rec, 'GIVENNAME', 'NAME', 'EMAILADDRESS', 'EMAIL')) await fail(deps, 'trainer', trainerAx, `trainer ${trainerAx}`, `aXcelerate returned no details for trainer ${trainerAx}.`, rec);
             else trainer = await call(deps, 'trainer', trainerAx, `${text(rec, 'GIVENNAME')} ${text(rec, 'SURNAME')}`.trim() || text(rec, 'NAME'), 'axcelerate_import_trainer', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: rec }, rec);
             if (trainer) c.trainers![trainerAx] = trainer;
           }
@@ -149,6 +182,7 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
         c.courseIndex = i + 1;
         if (!(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
       }
+      c.notes!.push(...summaryNotes(c, want));
       next(); if (!(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
       continue;
     }

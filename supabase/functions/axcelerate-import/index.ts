@@ -63,11 +63,11 @@ Deno.serve(async (req: Request) => {
       const counted = async (path: string, params: Record<string, unknown>) => {
         try { return (await client.getAll(path, params, { maxRows: 50000 })).length; } catch { return null; }
       };
-      const courses = await client.getAll('/courses', { type: 'p' }).catch(() => [] as Record<string, unknown>[]);
+      const courses = await counted('/courses', { type: 'p' });
       const custom = await client.get('/customFields', {}).catch(() => null);
       const survey = {
         at: new Date().toISOString(),
-        courses: courses.length,
+        courses,
         workshops: await counted('/courses', { type: 'w' }),
         deliveryLocations: await counted('/course/deliveryLocations', {}),
         customFields: custom && custom.status < 300 && Array.isArray(custom.data)

@@ -103,6 +103,17 @@ export async function axcelerateAnswer(response: Response, maxChars = 1_500_000)
   return { status: response.status, data, truncated, ...(retryAfter ? { retryAfter } : {}) };
 }
 
+/** Why a 200 answer is not a list: aXcelerate's own message when it sent one ({error, messages}), else the kind of answer. Never the data. */
+export function notListReason(data: unknown): string {
+  if (data && typeof data === 'object') {
+    const o = data as Record<string, unknown>;
+    const m = o.MESSAGES ?? o.messages ?? o.MESSAGE ?? o.message ?? o.ERROR ?? o.error;
+    return typeof m === 'string' && m.trim() ? `: ${m.trim().slice(0, 200)}` : ' (it sent an object)';
+  }
+  if (typeof data === 'string') return data.trim() ? ' (it sent text, not JSON: check the subdomain and Live / Staging)' : ' (it sent an empty answer)';
+  return '';
+}
+
 /**
  * The client. `get` is the only request method it has. `onCall` is told about every call (method, path, HTTP status) so the caller
  * can record it; it never receives the tokens. One retry after a 429, waiting what aXcelerate asks (at most 20 seconds).
@@ -132,7 +143,8 @@ export function axcelerateClient(fields: AxcelerateFields, opts: { fetch?: typeo
     for (let offset = 0; rows.length < max; offset += size) {
       const a = await get(path, { ...params, offset, [key]: size });
       if (a.status < 200 || a.status >= 300) throw new Error(`aXcelerate answered HTTP ${a.status} for ${path}.`);
-      const page = Array.isArray(a.data) ? a.data as Record<string, unknown>[] : [];
+      if (!Array.isArray(a.data)) throw new Error(`aXcelerate did not return a list for ${path}${notListReason(a.data)}.`);
+      const page = a.data as Record<string, unknown>[];
       rows.push(...page);
       if (page.length < size) break;
     }

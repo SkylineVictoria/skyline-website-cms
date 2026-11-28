@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, Button, Card, EmptyState, PageHeader, SectionTabs } from '@/pages/admin/components/ui';
 import AxcelerateImportButton from '@/components/axcelerate/AxcelerateImportButton';
+import AxcelerateRunLog from '@/components/axcelerate/AxcelerateRunLog';
 import {
-  cancelImport, continueAxcelerateImport, countsText, decideConflict, ENTITY_LABEL, importOverview, resolveImportError, runAxcelerateImport,
+  cancelImport, continueAxcelerateImport, decideConflict, ENTITY_LABEL, importOverview, resolveImportError, runAxcelerateImport, runTotals,
   setImportPermission, surveyAxcelerate, undoSkip, useImportAllowed, type ImportOverview, type Survey,
 } from '@/lib/axcelerateImport';
 
@@ -76,7 +77,7 @@ export default function AxcelerateImportCentre() {
           {survey && <div className="rounded border border-background-200 p-3" data-testid="axcelerate-survey-result">
             <p className="font-medium">In aXcelerate ({when(survey.at)}):</p>
             <ul className="mt-1 list-disc pl-5">
-              <li>Qualifications (courses): {survey.courses}</li>
+              <li>Qualifications (courses): {survey.courses ?? 'could not be read'}</li>
               <li>Workshops: {survey.workshops ?? 'could not be read'}</li>
               <li>Delivery locations: {survey.deliveryLocations ?? 'could not be read'}</li>
               <li>Custom fields: {survey.customFields ? survey.customFields.length : 'could not be read'}</li>
@@ -92,8 +93,9 @@ export default function AxcelerateImportCentre() {
               <td className="p-3 whitespace-nowrap">{when(r.started_at)}</td>
               <td className="pr-3">{r.mode === 'everything' ? 'Everything' : r.entities.map((e) => ENTITY_LABEL[e] ?? e).join(', ')}</td>
               <td className="pr-3">{r.startedByName ?? ''}</td>
-              <td className="pr-3"><Badge tone={r.status === 'done' ? 'success' : r.status === 'running' ? 'accent' : 'muted'}>{r.status}</Badge>{r.openErrors ? <span className="ml-1 text-red-700">{r.openErrors} error{r.openErrors > 1 ? 's' : ''}</span> : null}</td>
-              <td className="pr-3 text-xs">{Object.entries(r.counts ?? {}).map(([k, c]) => <div key={k}>{ENTITY_LABEL[k] ?? k}: {countsText(c)}</div>)}{r.last_error && <div className="text-red-700">{r.last_error}</div>}</td>
+              {/* // rule-policy: technical axcelerate-import-log 2026-11-28 owner (AXCELERATE-IMPORT-LOG): import result wording and log size; no configurable value. */}
+              <td className="pr-3"><Badge tone={r.status === 'done' ? (runTotals(r).brought || runTotals(r).notBrought ? 'success' : 'muted') : r.status === 'running' ? 'accent' : 'muted'}>{r.status === 'done' && !runTotals(r).brought && !runTotals(r).notBrought ? 'done, nothing came' : r.status}</Badge>{r.openErrors ? <span className="ml-1 text-red-700">{r.openErrors} error{r.openErrors > 1 ? 's' : ''}</span> : null}</td>
+              <td className="pr-3 text-xs"><AxcelerateRunLog run={r} compact /></td>
               <td className="p-3 text-right"><div className="flex justify-end gap-2">
                 {r.status === 'running' && <>
                   <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => continueAxcelerateImport(r.id), 'Import continued.')}>Continue</Button>

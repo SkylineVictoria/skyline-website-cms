@@ -1389,6 +1389,7 @@ headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT f
 Importing into Skyline records is not built yet.
 
 ## aXcelerate Qualifications and import screens (AXCELERATE-QUALIFICATIONS, 2026-11-28, RELEASED)
+Migration 20261128091517_axcelerate_location_match: axcelerate_import_location matches an unlinked location by AVETMISS location ID (aXcelerate CODE), then name, and overwrites its name / address with aXcelerate's (the record and its rooms stay).
 Migration 20261128081517_axcelerate_qualifications: axcelerate_class_room (placeholder classroom per campus for an imported class without a group),
 axcelerate_import_qualification (application source 'axcelerate': draft -> submitted (portal.signed_submit, status_command) -> enrolled
 (qualification_move_application) -> the existing Qualification trigger; link entity 'qualification' keyed by ENROLID), axcelerate_record_badge

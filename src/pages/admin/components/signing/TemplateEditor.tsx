@@ -17,6 +17,7 @@ import { sectionsReport } from "@/lib/templateSections";
 import { richPlainText, sanitizeRichHtml } from "../../../../../supabase/functions/_shared/rich-html";
 import { docxText, listTemplateParts, paymentDraft, pdfBytes, signingAction, signingAdmin, templatePayment, validatePayment, type PaymentDraft, type SigningRole, type SigningTemplate, type TemplateField } from "@/lib/signingApi";
 import { PaymentFields } from "./PaymentForm";
+import { letterheadParts, putPdfOnLetterhead } from "@/lib/letterheadDesigner";
 import { SIGN_CATEGORIES, SUBJECT_VARIABLES, signingVariables } from "../../../../../supabase/functions/_shared/signing";
 import {
   PLACEHOLDERS, TEMPLATE_TYPES, isTemplateType, placeholderLabels, placeholdersFor, sanitizeTemplateHtml, templatePlaceholders, templateText, textToHtml,
@@ -151,6 +152,11 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     ? { ...template, id: template.id, kind: template.kind, body_html: template.body_html?.trim() ? template.body_html : textToHtml(template.body ?? ""), header_html: template.header_html ?? "", footer_html: template.footer_html ?? "", subject: template.subject ?? (template.kind === "email" ? template.title : ""), ...paymentOf(template) }
     : { ...blank(newKind, newCategory ?? (newKind === "email" ? "offer_email" : "offer_letter")), ...(audience ? { audience } : {}) });
   const [file, setFile] = useState<File | null>(null);
+  /** LETTERHEAD-ON-DOCUMENTS (owner 2026-11-28): "Put on letterhead", ticked by default for a new template. A written template takes the
+   *  letterhead's header and footer (the database keeps them in step when the letterhead changes); a PDF is shrunk onto it when uploaded. */
+  const [onLetterhead, setOnLetterhead] = useState<boolean>(() => (template ? template.kind === "text" && template.use_letterhead === true : true));
+  const [rawFile, setRawFile] = useState<File | null>(null);
+  const [letterheadNote, setLetterheadNote] = useState("");
   const [busy, setBusy] = useState(false); const [error, setError] = useState("");
   const [placing, setPlacing] = useState<string | Uint8Array | null>(null); const [preview, setPreview] = useState<Uint8Array | null>(null);
   const [previewWith, setPreviewWith] = useState(false);
@@ -305,6 +311,30 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     if (Object.keys(patch).length) setDraft((d) => ({ ...d, ...patch }));
     if (failed) throw new Error(`${failed} picture(s) could not be copied to the picture store. Insert them again with Insert image.`);
   };
+  /** The PDF to save and place fields on: the upload as chosen, or put on the letterhead (shrunk to fit). */
+  const pickPdf = (chosen: File | null, lh: boolean) => run(async () => {
+    if (!chosen || !lh) { setFile(chosen); return; }
+    setLetterheadNote("Putting the PDF on the letterhead…");
+    const bytes = await putPdfOnLetterhead(new Uint8Array(await chosen.arrayBuffer()));
+    setFile(new File([bytes as Uint8Array<ArrayBuffer>], chosen.name, { type: "application/pdf" }));
+    setLetterheadNote("Each page is shrunk to fit between the letterhead header and footer. Place the fields on this copy.");
+  });
+  /** A written template ticked: show the letterhead's header and footer (what the database will store on save). */
+  const showLetterhead = (lh: boolean) => run(async () => {
+    if (!lh) { setLetterheadNote(""); return; }
+    const parts = await letterheadParts(draft.category);
+    setDraft((d) => ({ ...d, header_html: parts.header, footer_html: parts.footer }));
+    setLetterheadNote(parts.chosen ? "The header and footer come from the letterhead and follow it when it changes. Untick to write your own."
+      : "No letterhead has been chosen yet (Letterhead designer): this one is the first built-in design; the template follows the chosen letterhead once there is one.");
+  });
+  useEffect(() => { if (sections && onLetterhead) void showLetterhead(true); // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when the editor opens
+  }, []);
+  const letterheadBox = sections || draft.kind === "pdf" ? <div className="rounded-md border border-background-300 bg-background-100 p-3 text-sm" data-testid="template-letterhead">
+    <label className="flex items-center gap-2 font-medium"><input type="checkbox" className="h-4 w-4" checked={onLetterhead} data-testid="template-use-letterhead"
+      onChange={(e) => { const lh = e.target.checked; setOnLetterhead(lh); if (draft.kind === "pdf") { if (rawFile) void pickPdf(rawFile, lh); else setLetterheadNote(lh ? "The PDF you choose is put on the letterhead." : ""); } else void showLetterhead(lh); }} />
+      Put on letterhead</label>
+    <p className="mt-1 text-xs text-foreground-600">{letterheadNote || (draft.kind === "pdf" ? (draft.id && !rawFile ? "Applies to a PDF you upload now; the saved PDF stays as it is." : "The PDF you choose is put on the letterhead: each page shrunk to fit between its header and footer.") : "")}</p>
+  </div> : null;
   const save = (confirmed = false) => run(async () => {
     check();
     if (loo && !confirmed) { await rehostSections(); setLetterCheck(true); return; }
@@ -312,6 +342,11 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     setConfirming(null); setLetterCheck(false);
     const saved = draft.kind === "pdf" && file ? await signingAction<{ id?: string } | null>({ action: "template_upload", id: draft.id, template: payload() }, file)
       : await signingAdmin<{ id?: string } | null>("template_save", draft.id, payload());
+    const savedId = saved?.id ?? draft.id;
+    if (sections && savedId && onLetterhead !== (template?.use_letterhead === true)) {
+      const { error: lhError } = await supabase.rpc("sign_template_use_letterhead", { p_id: savedId, p_on: onLetterhead });
+      if (lhError) throw new Error(lhError.message);
+    }
     onSaved((draft.id ? "The template was saved as a new version." : "The template was added.") + (loo && unmapped.length ? " It is inactive until every variable is mapped." : "")
       + (afm ? " Applications already signed keep the form they were signed with; use Make default to print new ones with it." : ""), saved?.id ?? draft.id ?? undefined);
   });
@@ -409,8 +444,9 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       </div>
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}
       {loo && registry && unmapped.length ? <UnmappedTokens template={letterParts()} registry={registry} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} /> : null}
+      {sections ? letterheadBox : null}
       {sections ? <DocumentSections value={{ header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} onError={setError}
-        storageImages {...(loo ? { letterVariables: registry ?? [] } : afm ? { letterVariables: afmVariables } : {})} />
+        storageImages letterhead={onLetterhead} {...(loo ? { letterVariables: registry ?? [] } : afm ? { letterVariables: afmVariables } : {})} />
       : draft.kind !== "pdf" ? <div className="space-y-2">
         <RichTextEditor key={draft.id ?? `new-${draft.kind}`} value={draft.body_html} onChange={(body_html) => setDraft((d) => ({ ...d, body_html }))} placeholders={placeholders} />
         <div className="flex flex-wrap items-center gap-4 text-xs text-foreground-600">
@@ -420,7 +456,8 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
             onChange={(e) => { const chosen = e.target.files?.[0]; if (chosen) void run(async () => { set({ body_html: textToHtml(await docxText(chosen)) }); }); }} /></label>}
         </div>
       </div> : <Field label={draft.id ? `PDF (${draft.source_pages ?? "?"} pages). Choose a file only to replace it` : "PDF document"} required={!draft.id} hint={`Up to ${ruleNumber("signing.pdf_upload_max_mib", 7)} MB, not password-protected. Variables are printed with Sender fields placed on the pages.`}>
-        <input type="file" accept="application/pdf" data-testid="template-pdf" onChange={(e) => { setFile(e.target.files?.[0] ?? null); if (e.target.files?.[0]) set({ fields: draft.id ? draft.fields : [] }); }} /></Field>}
+        <input type="file" accept="application/pdf" data-testid="template-pdf" onChange={(e) => { const chosen = e.target.files?.[0] ?? null; setRawFile(chosen); void pickPdf(chosen, onLetterhead); if (chosen) set({ fields: draft.id ? draft.fields : [] }); }} /></Field>}
+      {draft.kind === "pdf" ? letterheadBox : null}
 
       {signed && <>
         <section className="space-y-2"><h3 className="font-semibold">Signers</h3>

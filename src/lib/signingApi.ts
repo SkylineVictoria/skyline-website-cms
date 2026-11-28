@@ -12,7 +12,7 @@ export interface TemplateField { type: SignFieldType; role: string; page: number
 export interface SigningTemplate {
   id: string; name: string; title: string; body: string | null; body_html?: string | null; subject?: string | null;
   /** TPL-02: header and footer repeated on every page; [Variable] tokens active (templates saved in the sectioned editor). */
-  header_html?: string | null; footer_html?: string | null; bracket_variables?: boolean;
+  header_html?: string | null; footer_html?: string | null; bracket_variables?: boolean; use_letterhead?: boolean;
   kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent" | "agency"; category: string; status: "active" | "archived";
   /** The agent onboarding blanks (agent_application_form, agent_agreement, agent_referee_check_form): never offered in New signing request. */
   system_key?: string | null;

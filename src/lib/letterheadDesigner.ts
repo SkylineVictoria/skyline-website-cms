@@ -1,6 +1,6 @@
 import { supabase } from "@/pages/admin/lib/supabase";
 import { rasteriseLogo } from "@/pages/agency/lib/applicationPdf";
-import { checkLetterhead, normaliseSpec, renderLetterhead, type Brand, type LetterheadSpec, type LetterheadStyle } from "../../supabase/functions/_shared/letterhead-design";
+import { checkLetterhead, normaliseSpec, placeOnLetterhead, renderLetterhead, type Brand, type LetterheadSpec, type LetterheadStyle } from "../../supabase/functions/_shared/letterhead-design";
 import { generateDesigns, type GeneratedDesign } from "../../supabase/functions/_shared/letterhead-engine";
 import { isSerifFamily } from "../../supabase/functions/_shared/rich-html";
 
@@ -13,7 +13,7 @@ export type LetterheadTarget = "application_form" | "letter_of_offer" | "documen
 export const LETTERHEAD_TARGETS: ReadonlyArray<{ id: LetterheadTarget; label: string; hint: string }> = [
   { id: "application_form", label: "Application form", hint: "Every newly signed application (the default Application form, as a new version)." },
   { id: "letter_of_offer", label: "Letter of Offer", hint: "The active Letter of Offer template (new version) and every new one." },
-  { id: "document_templates", label: "Document templates", hint: "The house header and footer presets new document templates start with." },
+  { id: "document_templates", label: "Document templates", hint: "The house header and footer presets. Templates ticked \u201cPut on letterhead\u201d and uploads follow the letterhead in any case." },
   { id: "workbooks", label: "Workbook added pages", hint: "The continued and answer pages added to assessment workbooks (the trainer's own pages are not changed)." },
 ];
 
@@ -137,7 +137,8 @@ export async function applyLetterhead(design: GeneratedDesign, brand: Brand, tar
   const html: Record<string, string> = {};
   if (targets.includes("application_form")) Object.assign(html, { app_header: app.header, app_header_later: app.headerLater, app_footer: app.footer });
   if (targets.includes("letter_of_offer")) Object.assign(html, { loo_header: loo.header, loo_header_later: loo.headerLater, loo_footer: loo.footer });
-  if (targets.includes("document_templates")) Object.assign(html, { preset_header: preset.header, preset_footer: preset.footer });
+  // The document letterhead is always part of a design: every template ticked "Put on letterhead" follows it.
+  Object.assign(html, { preset_header: preset.header, preset_header_later: preset.headerLater, preset_footer: preset.footer });
   if (targets.includes("workbooks")) Object.assign(html, { workbook_header: preset.headerLater });
   const { data, error } = await supabase.rpc("letterhead_apply", { p_design: { name: design.spec.name, style: design.spec.style, designer: design.designer, spec: design.spec, html }, p_targets: targets });
   if (error) throw new Error(error.message);
@@ -147,5 +148,34 @@ export async function applyLetterhead(design: GeneratedDesign, brand: Brand, tar
 export const activeLetterhead = async () => {
   const { data, error } = await supabase.rpc("brand_letterhead_active");
   if (error) return null;
-  return data as { name: string; style: string; designer: string; targets: string[]; appliedAt: string } | null;
+  return data as { name: string; style: string; designer: string; spec: unknown; targets: string[]; appliedAt: string } | null;
 };
+
+/**
+ * LETTERHEAD-ON-DOCUMENTS (owner 2026-11-28): the letterhead is drawn from the chosen design and the CURRENT Website Settings (logo,
+ * RTO, CRICOS, contact details) each time, so a change there shows on the next document. Without a chosen design: the first built-in
+ * design for the brand.
+ */
+export async function currentLetterhead(): Promise<{ spec: LetterheadSpec; brand: Brand; chosen: boolean }> {
+  const brand = await loadBrand();
+  const active = await activeLetterhead();
+  const spec = active ? normaliseSpec(active.spec, active.style as LetterheadStyle) : null;
+  if (spec) return { spec, brand, chosen: true };
+  const [first] = await generateDesigns(brand, 1);
+  if (!first) throw new Error("Add the organisation name, RTO and CRICOS codes in Website Settings first: the letterhead needs them.");
+  return { spec: first.spec, brand, chosen: false };
+}
+
+/** The letterhead a template on the letterhead shows in the editor and its preview (values filled in; the database stores the same
+ *  design in that template's own placeholder form on save). */
+export async function letterheadParts(category: string): Promise<{ header: string; headerLater: string; footer: string; chosen: boolean }> {
+  const { spec, brand, chosen } = await currentLetterhead();
+  const documentLine = category === "application_form" ? "Application for Enrolment" : category === "student_offer_letter" ? "LETTER OF OFFER AND WRITTEN AGREEMENT  |  Student Initial ______________" : undefined;
+  return { ...renderLetterhead(spec, brand, { mode: "literal", documentLine, pageToken: documentLine ? { number: "{{page.number}}", total: "{{page.total}}" } : { number: "[Page Number]", total: "[Total Pages]" } }), chosen };
+}
+
+/** An uploaded PDF put on the current letterhead (owner choice: shrink to fit; see placeOnLetterhead). */
+export async function putPdfOnLetterhead(source: Uint8Array): Promise<Uint8Array> {
+  const { spec, brand } = await currentLetterhead();
+  return placeOnLetterhead(source, spec, brand);
+}

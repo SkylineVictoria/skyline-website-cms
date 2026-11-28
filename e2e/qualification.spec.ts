@@ -307,5 +307,19 @@ test.describe("Letterhead designer", () => {
     await expect(page.getByText(/is now used for: Application form, Letter of Offer, Document templates, Workbook added pages/)).toBeVisible({ timeout: 30_000 });
     expect(sql(`select style || '|' || array_to_string(targets, ',') from public.brand_letterheads where active`)).toBe("formal|application_form,letter_of_offer,document_templates,workbooks");
     expect(sql(`select (header_later_html is not null and header_html like '%institute.logo%')::text from hr.sign_templates where category = 'application_form' and is_default`)).toBe("true");
+    expect(sql(`select use_letterhead::text from hr.sign_templates where category = 'application_form' and is_default`)).toBe("true");
+    // LETTERHEAD-ON-DOCUMENTS: a new document template is on the letterhead by default (header and footer shown from it, not edited);
+    // a PDF template and a one-time upload offer the same tick.
+    await page.goto("/admin/signing/templates");
+    await page.getByTestId("new-template").click();
+    await page.getByTestId("template-audience-agency").click();
+    const dialog = page.getByTestId("template-dialog");
+    await expect(dialog.getByTestId("template-use-letterhead")).toBeChecked();
+    await expect(dialog.getByTestId("section-letterhead-header")).toContainText("Skyline Institute of Technology", { timeout: 30_000 });
+    await expect(dialog.getByTestId("section-letterhead-footer")).toContainText("CRICOS 04114B");
+    await expect(dialog.getByTestId("section-editor-header")).toHaveCount(0);
+    await page.screenshot({ path: "test-results/letterhead-template.png" });
+    await dialog.getByTestId("template-use-letterhead").uncheck();
+    await expect(dialog.getByTestId("section-editor-header")).toBeVisible();
   });
 });

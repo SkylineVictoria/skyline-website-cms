@@ -1118,6 +1118,8 @@ test("offer letter templates: a logo inserted and pictures pasted go to template
   await dialog.getByRole("option", { name: `+ Add new: E2E LOO tpl ${tag}` }).click();
   await expect(dialog.getByLabel("Document title")).toHaveCount(0);
   await expect(dialog.getByLabel("Document type")).toHaveCount(0);
+  // LETTERHEAD-ON-DOCUMENTS: ticked by default; this test writes its own header and footer.
+  await dialog.getByTestId("template-use-letterhead").uncheck();
   // Header: the logo through Insert image is uploaded to template-assets (not embedded).
   await dialog.getByTestId("section-tab-header").click();
   const header = dialog.getByTestId("section-editor-header");

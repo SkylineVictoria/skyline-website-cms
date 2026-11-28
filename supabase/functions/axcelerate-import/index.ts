@@ -63,6 +63,30 @@ Deno.serve(async (req: Request) => {
       onCall: async (path, status) => { await admin.from('axcelerate_api_calls').insert({ connection_id: conn.id, user_id: who.user.id, method: 'GET', path, http_status: status }); },
     });
 
+    // CRICOS (owner 2026-11-28): each imported course's CRICOS code from the CRICOS register on data.gov.au (read only), by the
+    // provider code in Settings, so a registered course's classes are CoE. One read of the provider's courses per call.
+    const { data: settings } = await admin.from('cms_settings').select('cricos').is('tenant_id', null).limit(1).maybeSingle();
+    const provider = String((settings as { cricos?: unknown } | null)?.cricos ?? '').trim().toUpperCase();
+    let register: Promise<Map<string, string>> | null = null;
+    const cricos = /^[0-9]{5}[A-Z]$/.test(provider) ? async (nationalCode: string) => {
+      register ??= (async () => {
+        const filters = encodeURIComponent(JSON.stringify({ 'CRICOS Provider Code': provider }));
+        const res = await fetch(`https://data.gov.au/data/api/3/action/datastore_search?resource_id=48cacf69-2082-415e-9595-f17d0c3a4af0&limit=1000&filters=${filters}`,
+          { redirect: 'error', signal: AbortSignal.timeout(15_000), headers: { Accept: 'application/json' } });
+        if (!res.ok) throw new Error(`data.gov.au answered HTTP ${res.status}`);
+        const body = await res.json() as { success?: boolean; result?: { records?: Record<string, unknown>[] } };
+        if (!body.success || !Array.isArray(body.result?.records)) throw new Error('unexpected answer');
+        const map = new Map<string, string>();
+        for (const row of body.result!.records!) {
+          const vet = String(row['VET National Code'] ?? '').trim().toUpperCase(), code = String(row['CRICOS Course Code'] ?? '').trim().toUpperCase();
+          if (vet && /^[0-9]{6}[A-Z]$/.test(code) && String(row.Expired ?? '').trim().toLowerCase() !== 'yes') map.set(vet, code);
+        }
+        return map;
+      })();
+      register.catch(() => { register = null; });
+      return (await register).get(nationalCode.trim().toUpperCase()) ?? null;
+    } : undefined;
+
     if (action === 'survey') {
       const counted = async (path: string, params: Record<string, unknown>) => {
         try { return (await client.getAll(path, params, { maxRows: 50000 })).length; } catch { return null; }
@@ -183,7 +207,7 @@ Deno.serve(async (req: Request) => {
     let status: 'running' | 'done' | 'failed' | 'cancelled' = 'running';
     let lastError: string | null = null;
     try {
-      const result = await runImport({ client, rpc: (n, a) => admin.rpc(n, a), connection: conn.id, run: runId!, actor: who.user.id, entities, cursor, counts, deadline: started + BUDGET_MS, save });
+      const result = await runImport({ client, rpc: (n, a) => admin.rpc(n, a), cricos, connection: conn.id, run: runId!, actor: who.user.id, entities, cursor, counts, deadline: started + BUDGET_MS, save });
       cursor = result.cursor; counts = result.counts;
       status = result.cancelled ? 'cancelled' : result.done ? 'done' : 'running';
     } catch (e) {

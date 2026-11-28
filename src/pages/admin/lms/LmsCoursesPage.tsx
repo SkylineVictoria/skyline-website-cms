@@ -17,7 +17,7 @@ import MasterTimetableTab from "./MasterTimetableTab";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import VoeCalendarEditor, { VoeTab } from "./VoeCalendarEditor";
 import WeeklyClassBookingDialog, { type DraftWeek } from "@/pages/admin/components/rto/WeeklyClassBooking";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
@@ -393,7 +393,8 @@ export default function LmsCoursesPage() {
   const wizardUnfinished = !!(canEdit && selected && detail && masterSaved !== null && (masterSaved === false || voeSaved === false || !classesDone));
   // The course page shows the course and its units (owner, 2026-11-28: "no need to show weekly and daily in courses"). The weekly and
   // daily calendars are on each intake (Intakes › an intake › Weekly and daily calendars); here only while the setup wizard needs them.
-  // Owner 2026-11-28: the course view shows the course and its units; the Master calendar and Weekly calendar are their own LMS screens.
+  // Owner 2026-11-28: the course view shows the course and its units only (no intakes, master or weekly calendars: those are their own
+  // LMS screens, Intakes, Master calendar and Weekly calendar).
   const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }] as const;
   const shownTab = tabs.some(t => t.id === tab) ? tab : "overview";
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
@@ -539,8 +540,6 @@ export default function LmsCoursesPage() {
                 className="rounded-lg border border-background-300 px-2.5 py-2 text-foreground-700 hover:bg-background-100"><i className="ri-more-2-fill" aria-hidden="true" /></button>
               {menuOpen ? <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setMenuOpen(false)} /> : null}
               {menuOpen ? <div className="absolute right-0 top-11 z-20 w-64 overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
-                <button type="button" className={menuItem} onClick={() => { setMenuOpen(false); navigate(`/admin/lms/master-calendar?course=${encodeURIComponent(selected.id)}`); }}>
-                  <i className="ri-calendar-2-line" aria-hidden="true" />Master calendar (CoE / VoE)</button>
                 <button type="button" className={menuItem} disabled={syncing || saving} onClick={() => { setMenuOpen(false); void sync(); }}>
                   <i className="ri-refresh-line" aria-hidden="true" />Sync with Training.gov.au and CRICOS</button>
                 {wizardUnfinished ? <button type="button" className={menuItem} disabled={!detail} onClick={() => { setMenuOpen(false); setEditing(true); }}>
@@ -584,43 +583,25 @@ export default function LmsCoursesPage() {
                 {(() => { const rows = ([["Course name", selected.name + (selected.variantLabel ? ` (${selected.variantLabel})` : "")], ["Course code", selected.code],
                     ["Category", selected.category], ["Training package", selected.trainingPackage], ["CRICOS code", selected.cricos], ["CRICOS registered duration", selected.duration],
                     ["training.gov.au", selected.tgaUrl ?? ""]] as [string, string][]).filter(([, value]) => value && value.trim());
-                  return <section className="rounded-lg border border-background-200 p-4">
-                    <h3 className="mb-3 font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">Qualification</h3>
-                    <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">{rows.map(([label, value]) => <div key={label} className="min-w-0">
-                      <dt className="text-xs text-foreground-500">{label}</dt>
+                  return <section className="rounded-xl border border-background-200 bg-background-50">
+                    <h3 className="flex items-center gap-2 border-b border-background-200 px-4 py-3 font-heading text-sm font-semibold text-foreground-900">
+                      <i className="ri-graduation-cap-line text-primary-600" aria-hidden="true" />Qualification</h3>
+                    <dl className="grid gap-x-8 gap-y-4 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">{rows.map(([label, value]) => <div key={label} className="min-w-0">
+                      <dt className="text-xs font-medium uppercase tracking-wide text-foreground-500">{label}</dt>
                       <dd className="break-words font-medium text-foreground-950">{label === "training.gov.au" ? <a className="text-primary-700 underline" href={value} target="_blank" rel="noreferrer">{value}</a> : value}</dd>
                     </div>)}</dl>
-                    {slitDuration ? <p className="mt-3 text-xs text-foreground-500">Duration: {slitHours.toLocaleString()} SLIT hours ÷ {HOURS_PER_WEEK} hours a week = {slitDuration}.</p> : null}
+                    {slitDuration ? <p className="border-t border-background-200 px-4 py-2.5 text-xs text-foreground-500">Duration: {slitHours.toLocaleString()} SLIT hours ÷ {HOURS_PER_WEEK} hours a week = {slitDuration}.</p> : null}
                   </section>; })()}
-                <section className="rounded-lg border border-background-200 p-4 text-sm">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <h3 className="font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">Intakes</h3>
-                    <span className="flex flex-wrap gap-2">
-                      <Link to={`/admin/lms/master-calendar?course=${encodeURIComponent(selected.id)}`} title="The course's CoE and VoE master calendars (cycles and unit dates)"
-                        className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">Master calendar</Link>
-                      <Link to={`/admin/lms/weekly-calendar?course=${encodeURIComponent(selected.id)}`} title="The week of the course's open intakes"
-                        className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">Weekly calendar</Link>
-                      <Link to="/admin/lms/intakes" className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">All intakes</Link>
-                    </span>
-                  </div>
-                  {!detail ? <p className="text-foreground-500">Loading…</p> : !detail.intakes.length ? <p className="text-foreground-600">No intake yet.</p>
-                    : <ul className="divide-y divide-background-200 rounded-lg border border-background-200">{detail.intakes.map(i => <li key={i.id}>
-                      <Link to={`/admin/lms/intakes#${i.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2.5 hover:bg-background-100">
-                        <span className="min-w-0 flex-1 font-semibold text-foreground-950">{i.customName || i.name}</span>
-                        <span className="text-xs text-foreground-600">{i.endDate ? `${i.startDate} – ${i.endDate}` : `Ongoing since ${i.startDate}`}</span>
-                        <span className="text-xs text-foreground-600">{i.enrolled} student{i.enrolled === 1 ? "" : "s"}</span>
-                        {i.trainers?.length ? <span className="text-xs text-foreground-600">{i.trainers.join(", ")}</span> : null}
-                        <span className={"rounded-full px-2 py-0.5 text-xs font-semibold " + (i.status === "open" ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{i.status === "open" ? "Open" : i.status === "closed" ? "Closed" : "Draft"}</span>
-                        <i className="ri-arrow-right-s-line text-foreground-400" aria-hidden="true" />
-                      </Link></li>)}</ul>}
-                  <p className="mt-2 text-xs text-foreground-500">Each intake has its batches, timetable (weekly class times and daily classes), students and attendance.</p>
-                </section>
-                {detail ? <details className="rounded-lg border border-background-200">
-                  <summary className="cursor-pointer px-4 py-3 font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">CRICOS</summary>
+                {detail ? <details className="group rounded-xl border border-background-200 bg-background-50">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-heading text-sm font-semibold text-foreground-900 hover:bg-background-100 [&::-webkit-details-marker]:hidden">
+                    <i className="ri-earth-line text-primary-600" aria-hidden="true" />CRICOS
+                    <i className="ri-arrow-down-s-line ml-auto text-lg text-foreground-400 transition-transform group-open:rotate-180" aria-hidden="true" /></summary>
                   <div className="border-t border-background-200 p-4"><CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly /></div>
                 </details> : null}
-                {detail ? <details className="rounded-lg border border-background-200">
-                  <summary className="cursor-pointer px-4 py-3 font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">Training.gov.au</summary>
+                {detail ? <details className="group rounded-xl border border-background-200 bg-background-50">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-heading text-sm font-semibold text-foreground-900 hover:bg-background-100 [&::-webkit-details-marker]:hidden">
+                    <i className="ri-government-line text-primary-600" aria-hidden="true" />Training.gov.au
+                    <i className="ri-arrow-down-s-line ml-auto text-lg text-foreground-400 transition-transform group-open:rotate-180" aria-hidden="true" /></summary>
                   <div className="border-t border-background-200 p-4"><SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} /></div>
                 </details> : null}
               </div> : null}

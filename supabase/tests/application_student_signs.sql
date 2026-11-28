@@ -3,7 +3,7 @@ begin;
 do $hosted_guard$ begin if (select system_identifier from pg_control_system()) = 7692130048193495360 and coalesce(current_setting('skyline.allow_hosted', true), '') <> 'on' then raise exception 'Refusing to run a test suite on the hosted project (xcpydisstlvtvcsqnjob); set skyline.allow_hosted = on to override.'; end if; end $hosted_guard$;
 -- APPLICATION-STUDENT-SIGNS (20261125190517): agent fills, only the student (and, under 18, a parent / guardian) signs and submits.
 -- Synthetic fixtures, rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(142);
+select plan(151);
 
 -- Invitation settings as published on hosted (the lab has none); everything else reads the real rules.
 alter function public.business_rule_evaluate(text, text, jsonb) rename to business_rule_evaluate_t0;
@@ -453,5 +453,29 @@ select is((select header_later_html from public.application_form_used where appl
 select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
 select is(public.brand_letterhead_active()->>'workbookHeader', '<p>WORKBOOK</p>', 'workbook added pages get the strip when workbooks were chosen');
 reset role;
+-- LETTERHEAD-ON-DOCUMENTS (20261128020517): "Put on letterhead" on any written template; it follows the chosen letterhead.
+insert into hr.sign_templates(id, name, title, kind, audience, category, body_html, header_html, footer_html, created_by)
+  values ('f5100000-0000-0000-0000-0000000000aa', 'ZZ consent', 'ZZ consent', 'text', 'any', 'consent_form', '<p>Body</p>', '<p>OWN HEADER</p>', '<p>OWN FOOTER</p>', 'b5100000-0000-0000-0000-000000000004');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000001');
+select throws_ok($$select public.sign_template_use_letterhead('f5100000-0000-0000-0000-0000000000aa', true)$$, null, null, 'an agent cannot put a template on the letterhead');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select lives_ok($$select public.sign_template_use_letterhead('f5100000-0000-0000-0000-0000000000aa', true)$$, 'an administrator ticks Put on letterhead');
+reset role;
+select is((select header_html || '|' || footer_html || '|' || version from hr.sign_templates where id = 'f5100000-0000-0000-0000-0000000000aa'), '<p>PRESET HEADER</p>|<p>PRESET FOOTER</p>|2',
+  'the template takes the letterhead, as a new version');
+update hr.sign_templates set header_html = '<p>TYPED OVER</p>' where id = 'f5100000-0000-0000-0000-0000000000aa';
+select is((select header_html from hr.sign_templates where id = 'f5100000-0000-0000-0000-0000000000aa'), '<p>PRESET HEADER</p>', 'while ticked, a save keeps the letterhead');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select throws_ok($$select public.letterhead_apply('{"name":"X","style":"modern","html":{"app_header":"<p>H</p>","app_footer":"<p>F</p>"}}', array['application_form'])$$, '22023', null, 'a design without the document letterhead is refused');
+select lives_ok($$select public.letterhead_apply('{"name":"Classic two","style":"classic","designer":"ai","spec":{},"html":{"preset_header":"<p>NEW HEADER</p>","preset_header_later":"<p>NEW LATER</p>","preset_footer":"<p>NEW FOOTER</p>"}}', array['workbooks'])$$,
+  'another letterhead is applied');
+reset role;
+select is((select header_html || '|' || header_later_html || '|' || footer_html || '|' || version from hr.sign_templates where id = 'f5100000-0000-0000-0000-0000000000aa'), '<p>NEW HEADER</p>|<p>NEW LATER</p>|<p>NEW FOOTER</p>|3',
+  'the ticked template follows the new letterhead as a new version');
+select pg_temp.as_user('b5100000-0000-0000-0000-000000000004');
+select lives_ok($$select public.sign_template_use_letterhead('f5100000-0000-0000-0000-0000000000aa', false)$$, 'unticking');
+reset role;
+update hr.sign_templates set header_html = '<p>MY OWN AGAIN</p>' where id = 'f5100000-0000-0000-0000-0000000000aa';
+select is((select header_html from hr.sign_templates where id = 'f5100000-0000-0000-0000-0000000000aa'), '<p>MY OWN AGAIN</p>', 'unticked, the header is the template''s own again');
 select * from finish();
 rollback;

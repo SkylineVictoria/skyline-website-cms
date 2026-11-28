@@ -238,3 +238,36 @@ export function normaliseSpec(raw: unknown, style: LetterheadStyle): LetterheadS
   if (spec.logoHeightLater > spec.logoHeight) spec.logoHeightLater = spec.logoHeight;
   return spec;
 }
+
+const A4 = { w: 595.28, h: 841.89 };
+/**
+ * An uploaded PDF put on the letterhead (owner choice: shrink to fit): every page becomes an A4 page with the letterhead header (the
+ * smaller one from page 2) and footer (page X of Y), the original page scaled down, never up, and centred between them, so nothing
+ * is covered. Fields are placed afterwards on this copy.
+ */
+export async function placeOnLetterhead(source: Uint8Array, spec: LetterheadSpec, brand: Brand): Promise<Uint8Array> {
+  const { buildDocumentPdf } = await import("./document-pdf.ts");
+  const { PDFDocument } = await import("pdf-lib");
+  const src = await PDFDocument.load(source);
+  const out = await PDFDocument.create();
+  const total = src.getPageCount();
+  if (total > 200) throw new Error("The PDF has more than 200 pages.");
+  const gap = 8, side = 36;
+  for (let i = 0; i < total; i++) {
+    const parts = renderLetterhead(spec, brand, { mode: "literal", pageToken: { number: String(i + 1), total: String(total) } });
+    const lh = await buildDocumentPdf({ title: "", header: i === 0 ? parts.header : (parts.headerLater || parts.header), footer: parts.footer, body: "<p><span style=\"color:#ffffff\">.</span></p>", values: {}, brackets: false, images: {} });
+    const top = (i === 0 ? lh.bands.header : (lh.bands.header || lh.bands.headerLater)) + gap;
+    const bottom = lh.bands.footer + gap;
+    const [paper] = await out.embedPdf(lh.bytes, [0]);
+    const page = out.addPage([A4.w, A4.h]);
+    page.drawPage(paper, { x: 0, y: 0, width: A4.w, height: A4.h });
+    const srcPage = src.getPage(i);
+    const { width: w, height: h } = srcPage.getSize();
+    const embedded = await out.embedPdf(src, [i]).then(([e]) => e).catch(() => null); // a blank page has nothing to draw
+    if (!embedded) continue;
+    const scale = Math.min(1, (A4.w - 2 * side) / w, (A4.h - top - bottom) / h);
+    const dw = w * scale, dh = h * scale;
+    page.drawPage(embedded, { x: (A4.w - dw) / 2, y: bottom + (A4.h - top - bottom - dh) / 2, width: dw, height: dh });
+  }
+  return out.save();
+}

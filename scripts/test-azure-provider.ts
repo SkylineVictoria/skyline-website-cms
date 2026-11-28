@@ -1304,3 +1304,16 @@ test("pdf builder: a later-page header is used from page 2, the bands are measur
   assert.ok(!/Tinos/.test(await names(plain.bytes)), "no Tinos in a document that does not use it");
   assert.ok(/Tinos/.test(await names(serif.bytes)), "Tinos embedded for serif text");
 });
+
+test("letterhead: an uploaded PDF is put on the letterhead shrunk to fit (A4, header and page X of Y, nothing covered); no logo prints the name", async () => {
+  const { placeOnLetterhead } = await import("../supabase/functions/_shared/letterhead-design.ts");
+  const { PDFDocument: Doc } = await import("pdf-lib");
+  const src = await Doc.create();
+  src.addPage([612, 792]).drawText("Page one of the upload", { x: 40, y: 750, size: 12 }); src.addPage([595.28, 841.89]).drawText("Page two", { x: 40, y: 800, size: 12 });
+  const [design] = await generateDesigns(lhBrand, 1);
+  const out = await Doc.load(await placeOnLetterhead(await src.save(), design.spec, lhBrand));
+  assert.equal(out.getPageCount(), 2);
+  for (const p of out.getPages()) { const { width, height } = p.getSize(); assert.ok(Math.abs(width - 595.28) < 0.5 && Math.abs(height - 841.89) < 0.5, "A4"); }
+  const noLogo = renderLetterhead(design.spec, { ...lhBrand, logoPx: null }, { mode: "literal" });
+  assert.match(noLogo.header, /Skyline Institute of Technology/, "without a logo the name stands in for it");
+});

@@ -1246,7 +1246,9 @@
     "id": "letterhead-designer",
     "reason": "2026-11-28 owner (LETTERHEAD-DESIGNER): fixed letterhead rules checked by code (A4 margins, header height page 1 / later pages, WCAG AA contrast, logo resolution, RTO and CRICOS on every page, two embeddable fonts, no overflow), one active letterhead applied to the targets the admin ticks as new template versions. Fixed owner rules, not business settings.",
     "fingerprints": [
+      "61a023be3ef92d21cb87e8a383d0745bd3169cd7daf1fc5a5129cf11649f0343",
       "772162f0eaa3f3e9178dcc86adab14d00de9dbc23f8e7886f368c3b70c2f1334",
+      "7d5aa00b816c42f820744328675a60006a84404b08867cb66239f15735b28a22",
       "d1264908511e06b7e3c8542ab90988ab51d48462dfb31befd4d1a44f81ac7e94"
     ]
   },
@@ -1255,6 +1257,7 @@
     "id": "letterhead-designer-db",
     "reason": "2026-11-28 owner (LETTERHEAD-DESIGNER): the database side: brand_letterheads (one active), letterhead_apply (admin only, safe HTML, new versions), the standard letter header / footer and later-page headers. Fixed owner rules.",
     "fingerprints": [
+      "4c85f469bcefbfc1852c1872b74ccf1864593df6b000fa49a401596cf14b82f2",
       "5adc0e3cd1641e317d1f7521f879ddfb5efeb6dcc03c5d7b7b89735b1c5587b5",
       "6ec84aceee5e20b42d006f74cb754f630231e75508b872c4b92136c493631037",
       "85ac105a0dae135105219c1236e0d424f0405aa3bca67f2203aa5d7c93837b94",
@@ -1263,7 +1266,8 @@
       "a329a581c80d8f27d95fe50134cf4dbd3a7d878207e408e5983ef4b0964a4027",
       "b0871b2a15612ef1cb939bdf0ebdde40d00b136c61644adfcc0baa1033159fb0",
       "b115b8de5b4db50e35dfd63af8282e455b9827e61b7dcdaf9e86849c92c5c623",
-      "c5db943f52adacc81102894956fa319f3910ebdf003a6a2aefa4716804b48f1d"
+      "c5db943f52adacc81102894956fa319f3910ebdf003a6a2aefa4716804b48f1d",
+      "eb77c377f5c4a076fb7cbc5a841a418257a910aef53e3982c96d1f0435f1e091"
     ]
   }
 ]

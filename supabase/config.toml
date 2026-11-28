@@ -129,3 +129,6 @@ verify_jwt = true
 # LETTERHEAD-DESIGNER: administrators only (the gateway verifies the JWT; the function then checks cms_is_admin with the caller's token).
 # Sends the brand inputs (details, colours, fonts; never the logo picture) to OpenAI (OPENAI_API_KEY, model EF_LETTERHEAD_MODEL).
 verify_jwt = true
+
+[functions.document-classify]
+verify_jwt = true

@@ -108,3 +108,42 @@ export function createDocumentCategoryCheck(options: { apiKey: string; model: st
     return null;
   };
 }
+
+/**
+ * BULK-DOCUMENTS (owner 2026-11-28: "scan each file in the bulk upload and attach it where it is needed, no manual categories"): the
+ * same classification as the upload check above, without an expected category: which document is this file? Nothing is stored and no
+ * personal data is returned (only the type). The upload that follows still checks the file against the category it is attached to.
+ */
+export type DetectedDocumentType = (typeof detectedTypes)[number];
+export function createDocumentTypeDetector(options: { apiKey: string; model: string; fetch?: typeof fetch }) {
+  return async ({ bytes, mime, filename }: DocumentFile): Promise<{ type: DetectedDocumentType } | DocumentCategoryProblem> => {
+    if (!bytes.length || bytes.length > DOCUMENT_MAX_BYTES) return { status: 415, error: "The file must be greater than 0 bytes and 10 MB or smaller." };
+    const header = bytes.subarray(0, 8);
+    if (documentFileProblem({ name: filename, size: bytes.length, type: mime }, header)) return { status: 415, error: "Upload a readable PDF, JPG or PNG." };
+    if (!options.apiKey.trim() || !options.model.trim()) return unavailable;
+    try {
+      const extension = sniffDocumentKind(header);
+      const upstream = await (options.fetch ?? fetch)(OPENAI_RESPONSES_URL, {
+        method: "POST",
+        signal: AbortSignal.timeout(30_000),
+        headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: options.model,
+          store: false,
+          instructions,
+          input: [{ role: "user", content: [documentInput(bytes, mime, `document.${extension}`, mime.startsWith("image/"))] }],
+          text: { format: { type: "json_schema", name: "document_category_v1", strict: true, schema: {
+            type: "object", additionalProperties: false, required: ["category"], properties: { category: { type: "string", enum: detectedTypes } },
+          } } },
+        }),
+      });
+      if (!upstream.ok) return upstream.status === 400 || upstream.status === 422 ? unclear : unavailable;
+      const response = await upstream.json();
+      if (response.status !== "completed") return unavailable;
+      const detected = (JSON.parse(String(responseText(response))) ?? {}).category;
+      return (detectedTypes as readonly unknown[]).includes(detected) ? { type: detected as DetectedDocumentType } : unavailable;
+    } catch {
+      return unavailable;
+    }
+  };
+}

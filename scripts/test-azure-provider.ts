@@ -1317,3 +1317,20 @@ test("letterhead: an uploaded PDF is put on the letterhead shrunk to fit (A4, he
   const noLogo = renderLetterhead(design.spec, { ...lhBrand, logoPx: null }, { mode: "literal" });
   assert.match(noLogo.header, /Skyline Institute of Technology/, "without a logo the name stands in for it");
 });
+
+test("bulk documents: the type detector returns only the document type (no personal data), refuses unreadable files and fails closed", async () => {
+  const { createDocumentTypeDetector } = await import("../supabase/functions/_shared/document-extraction/classify.ts");
+  const pdf = new TextEncoder().encode("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+  let sent: Record<string, unknown> = {};
+  const answer = (category: string, ok = true) => (async (_url: string | URL | Request, init?: RequestInit) => {
+    sent = JSON.parse(String(init?.body ?? "{}"));
+    return new Response(JSON.stringify({ status: "completed", output_text: JSON.stringify({ category }) }), { status: ok ? 200 : 500 });
+  }) as typeof fetch;
+  const detect = (category: string, ok = true) => createDocumentTypeDetector({ apiKey: "k", model: "m", fetch: answer(category, ok) });
+  assert.deepEqual(await detect("Passport")({ bytes: pdf, mime: "application/pdf", filename: "scan.pdf" }), { type: "Passport" });
+  assert.deepEqual(Object.keys((sent.text as { format: { schema: { properties: object } } }).format.schema.properties), ["category"], "only the type is asked for");
+  assert.equal(((await detect("Nonsense")({ bytes: pdf, mime: "application/pdf", filename: "x.pdf" })) as { status: number }).status, 503);
+  assert.equal(((await detect("Passport", false)({ bytes: pdf, mime: "application/pdf", filename: "x.pdf" })) as { status: number }).status, 503);
+  assert.equal(((await detect("Passport")({ bytes: new TextEncoder().encode("MZ.."), mime: "application/pdf", filename: "x.pdf" })) as { status: number }).status, 415);
+  assert.equal(((await createDocumentTypeDetector({ apiKey: "", model: "m" })({ bytes: pdf, mime: "application/pdf", filename: "x.pdf" })) as { status: number }).status, 503);
+});

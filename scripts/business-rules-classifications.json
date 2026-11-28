@@ -1305,5 +1305,53 @@
       "6728fc00f5091132f3f6e19ad76f500a2e95e50d72de58f1f9f0d937bbca134a",
       "67edf150204ee8295a1767ea371afcd1c50a52b2fffba059e35aaf45b7650a97"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "document-classify",
+    "reason": "2026-11-28 owner (BULK-DOCUMENTS: scan each file of the bulk upload and attach it where it is needed, no manual categories): document-classify answers only the type (no personal data, nothing stored; same size, type and hourly limits as the checked upload), the screen attaches each recognised file (the passport first), lists files that are not needed or unreadable, and asks only when the scanner is unavailable. Fixed owner rules, not business settings.",
+    "fingerprints": [
+      "009123502c2aa09a381fbc0bcefdc97991ee19737867043970a17b2dade00f9c",
+      "02174666ea8f2b6ac3439638f1c06a7185b4611096b312c0d5397c7ca88359bb",
+      "0b052cb5fa9945635dbec6890ae08e9f9ca6c89a133955d0c2a2d2a00fab66d2",
+      "0c1640ab7be845df6f5e678067f3e0c14a97eb5d024372b9f673b195a7aa18cc",
+      "0c8e54c07050a79a5444cda5506ec3c6319ade0977235a31c8a32b7334bbc6b9",
+      "1a73aeb5ed443457d3a8d9cea9c7d7138d8d508920dafe80c5d044ca3102d053",
+      "1f8e3416ec5ba862f7cea3698bf8554ea3a68db5967f8189ee3193c3595387dd",
+      "35537e1c2cc807ec03dd1ea3b58f2e17fac0d09ac2a7dfd427515d848d9d3eae",
+      "40c755f81a402e5d35935357b449e930d0f5dc5f4909fa06487eeb2e4291bba2",
+      "4fdfec1bc29b4def85b371c8806a4f86d30e8c10226f0c920f73d6b848489edb",
+      "533cefb8ed5f68af62b111741163d1dccc5ee3c22b24df7d13c08910e75f46a7",
+      "5e1bc6eb12340621016b18cb1854dcbb252eb64304c03797c543a07e9133abf4",
+      "736e077d71282ec7606b20b37f1a8a5d7a342d8598df09b31389ba7a65341413",
+      "78d82ac863a32b42e6707327bdaf800847024a59edb7b7bd8fef6bc49d6da17c",
+      "817f5474c719b86b7518396a3b12495c8e6658a8055c12d6826dace5a937663c",
+      "8a4d6baa9c355bf5c90d466162661408a2718d7e687ce126a280edbae67e8fb0",
+      "9e4b43482be2804217c31bf5ee49c5f75a26811acc0d3e94a1b4fa3512f932d2",
+      "be3f0303c9bc1f56239be101a7ac4bd4dca2bb873a693b63431cea090e28977c",
+      "be940245f030ccfad8734b296e33ddd70b1234fbba2c0a13dd0e770083f333cb",
+      "c27f36bc9a4480963e5b17248e18f3eb5f008fd1de6f9cb5c4274246b13401ee",
+      "c2f4ec70026f4cdbb8a034108699e88fb19fce42365a7ccad908e2bd2f841062",
+      "c455975d5e2e48deb216cde63c0477b1b7f832258e29da8d14cc91a8173a3f36",
+      "c556e106c392b1522917aec0da01a968f11965d27fbd90eda6439ee43d8403fe",
+      "c63113e522b8eaf0c40ab5e7a182851048b512b77214311b2ff2387b19f0f2df",
+      "ca8f12e5b5345a18aecd9c221700c41e5104db3e3bdcce50fc84b46a2e21f321",
+      "ceab888d87bb29d59fe7069d915029f9a81744fd63874e306628bb89a77c954b",
+      "d0352c51f6b53adc1390e319ecf53523024c899b157e6b5169bafec3736c22ca",
+      "db24ed660b347ff95b7fc617d097a84b2ba6838e9f551b5637cc7dd93825191e",
+      "dc85080b8fc13d3defda6c5a49fbf5c2bea61bec90721d42100b142a1800a57f",
+      "e502c9719997ed2a6f2a15247fc8ac87e63f9bebeb4795eb31c77c0a3f600277",
+      "e612166b1a20c4c5e2f2ca56351e4a0e3630532d18b0f9327a490c18beb64bce",
+      "e7323d68b37b8a26ebde2920c5ffee1fdc665298899cbee5b2e25abc43b910c4",
+      "f459d4f2694ecb4bf8a3c149e1d4ba0f3935706fd0599b8e54829514a04bfbd3",
+      "f5d27d14637c6ef5cf72e3ee9867d68605347c6c0d6c15a5b292936c9de08103",
+      "fce4911dc14d2a3c64f661164c62811d5116a1dcfcbdc7951a4586c1c3636a91"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "document-classify-db",
+    "reason": "2026-11-28 owner (BULK-DOCUMENTS): document-classify joins the Edge Function allowlist.",
+    "fingerprints": []
   }
 ]

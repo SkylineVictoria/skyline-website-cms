@@ -1,15 +1,43 @@
-// aXcelerate API (AXCELERATE-CONNECTION, 2026-11-28). Every request carries the headers `apitoken` and `wstoken`
-// (developer.axcelerate.com Guides > Authentication); the address is per college: https://{subdomain}.app.axcelerate.com/api
-// (production) or https://{subdomain}.stg.axcelerate.com/api (staging). Rate limit 200 requests a minute, 429 + Retry-After.
-// Runtime-neutral (no Deno globals) so scripts/test-axcelerate.ts can check it offline.
+// axcelerateClient: the ONLY way Skyline talks to aXcelerate (AXCELERATE-IMPORT, owner 2026-11-28).
+// Data flows one way, aXcelerate -> Skyline. aXcelerate has no read-only tokens, so Skyline enforces read-only here:
+//   * HTTP GET only. Any other method throws AxcelerateBlocked (the caller logs a security event).
+//   * Only the paths on AXCELERATE_ALLOWED. Anything else (enrol, contact create / update, notes, messages, verifyUSI, invoice
+//     approve / void / unarchive, payment URLs and forms, report runs, user login / logout, portalConfig, webhooks ...) is refused.
+//   * No report API, no webhook registration.
+// Every request carries the headers `apitoken` and `wstoken`; the address is per college: https://{subdomain}.app.axcelerate.com/api
+// (production) or https://{subdomain}.stg.axcelerate.com/api (staging). Rate limit 200 requests a minute (429 + Retry-After).
+// Runtime-neutral (no Deno globals) so scripts/test-document-provider.ts checks it offline. The tokens stay inside this module's
+// caller (an Edge Function holding the service role); they are never returned, logged or put in an error message.
 
 export type AxcelerateFields = { environment: 'production' | 'staging'; subdomain: string; apiToken: string; wsToken: string };
-export type AxcelerateMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
-export type AxcelerateRequest = { method: AxcelerateMethod; path: string; params: Record<string, string> };
+export type AxcelerateRequest = { method: 'GET'; path: string; params: Record<string, string> };
+export type AxcelerateAnswer = { status: number; data: unknown; truncated: boolean; retryAfter?: string };
 
 const SUBDOMAIN = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
-/** An API path: /contacts/search, /course/instance/detail, /contact/123. No query string, no "..", no host. */
-const PATH = /^\/[A-Za-z0-9/_.-]{1,160}$/;
+const ID = '[0-9]{1,12}';
+
+/** The read endpoints Skyline may call (owner's Part 1 list). A trailing slash is accepted. Matched against the whole path. */
+export const AXCELERATE_ALLOWED: readonly RegExp[] = [
+  // Contacts
+  '/contacts/search', `/contact/${ID}`, `/contact/enrolments/${ID}`, `/contact/notes/${ID}`, '/contact/portfolio', '/contact/portfolio/file',
+  '/contact/enrolment/certificate',
+  // Courses
+  '/courses', '/course/detail', '/course/discounts', '/course/instances', '/course/instance/detail', '/course/instance/search',
+  '/course/instance/attendance', '/course/calendar', '/course/deliveryLocations', '/venues', '/course/enrolments', '/enrolment/enrolmentInfo',
+  // People and organisations
+  `/trainer/${ID}`, '/trainer/availability', '/users', '/contactRoles', `/agent/${ID}`, '/organisations', `/organisation/${ID}`,
+  `/organisation/${ID}/children`,
+  // Finance (read only)
+  '/accounting/invoice', `/accounting/invoice/${ID}`, `/accounting/creditnote/${ID}`, '/accounting/transaction', '/accounting/catalogueitem',
+  // Other
+  '/tasks', '/followUps', '/customFields', '/template/email', '/template/sms', '/portfolio/checklists', '/portfolio/types',
+].map((p) => new RegExp(`^${p}/?$`));
+
+export type BlockReason = 'method_not_allowed' | 'path_not_allowed' | 'bad_request';
+/** A call Skyline refused before anything left the server. Its message never contains a token. */
+export class AxcelerateBlocked extends Error {
+  constructor(public reason: BlockReason, public method: string, public path: string, message: string) { super(message); }
+}
 
 /** The saved details (the Vault document), or null when they are missing or malformed. */
 export function axcelerateFields(secret: string | null | undefined): AxcelerateFields | null {
@@ -29,43 +57,86 @@ export function axcelerateBaseUrl(f: Pick<AxcelerateFields, 'environment' | 'sub
   return `https://${f.subdomain}.${f.environment === 'staging' ? 'stg' : 'app'}.axcelerate.com/api`;
 }
 
-/** Checks a request from the browser; returns the error message, or the cleaned request. */
-export function axcelerateRequest(input: Record<string, unknown>): AxcelerateRequest | { error: string } {
+/** True when the path is on the allow-list (no query string, no "..", no host). */
+export function axcelerateAllowed(path: string): boolean {
+  return typeof path === 'string' && !path.includes('..') && !path.includes('//') && !path.includes('?') && AXCELERATE_ALLOWED.some((re) => re.test(path));
+}
+
+/** Checks a request; throws AxcelerateBlocked for anything that is not an allowed GET. */
+export function axcelerateRequest(input: Record<string, unknown>): AxcelerateRequest {
   const method = String(input.method ?? 'GET').toUpperCase();
-  if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) return { error: 'Choose GET, POST, PUT or DELETE.' };
   const path = String(input.path ?? '').trim();
-  if (!PATH.test(path) || path.includes('..') || path.includes('//')) return { error: 'Enter an aXcelerate API path such as /contacts/search (no address, no ?).' };
+  if (method !== 'GET') throw new AxcelerateBlocked('method_not_allowed', method, path, 'Skyline only reads from aXcelerate: only GET requests are allowed.');
+  if (!axcelerateAllowed(path)) throw new AxcelerateBlocked('path_not_allowed', method, path, 'This aXcelerate path is not on Skyline’s read-only list.');
   const raw = input.params ?? {};
-  if (typeof raw !== 'object' || Array.isArray(raw) || raw === null) return { error: 'Parameters must be name / value pairs.' };
+  if (typeof raw !== 'object' || Array.isArray(raw) || raw === null) throw new AxcelerateBlocked('bad_request', method, path, 'Parameters must be name / value pairs.');
   const params: Record<string, string> = {};
   const entries = Object.entries(raw as Record<string, unknown>);
-  if (entries.length > 60) return { error: 'Send at most 60 parameters.' };
+  if (entries.length > 60) throw new AxcelerateBlocked('bad_request', method, path, 'Send at most 60 parameters.');
   for (const [name, value] of entries) {
-    if (!/^[A-Za-z0-9_.[\]-]{1,80}$/.test(name)) return { error: `"${name}" is not a valid parameter name.` };
-    if (value === null || value === undefined) continue;
+    if (!/^[A-Za-z0-9_.[\]-]{1,80}$/.test(name)) throw new AxcelerateBlocked('bad_request', method, path, `"${name}" is not a valid parameter name.`);
+    if (value === null || value === undefined || value === '') continue;
     const text = typeof value === 'string' ? value : typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(value);
-    if (text.length > 4000) return { error: `The value of "${name}" is too long.` };
+    if (text.length > 4000) throw new AxcelerateBlocked('bad_request', method, path, `The value of "${name}" is too long.`);
     params[name] = text;
   }
-  return { method: method as AxcelerateMethod, path, params };
+  return { method: 'GET', path, params };
 }
 
-/** The fetch() arguments for a request: GET / DELETE send the parameters in the address, POST / PUT as a form. */
+/** The fetch() arguments for an allowed GET: parameters in the address, the two token headers, no body, no redirects. */
 export function axcelerateFetchArgs(f: AxcelerateFields, r: AxcelerateRequest): { url: string; init: RequestInit } {
+  if (r.method !== 'GET' || !axcelerateAllowed(r.path)) throw new AxcelerateBlocked(r.method !== 'GET' ? 'method_not_allowed' : 'path_not_allowed', r.method, r.path, 'Refused: not an allowed aXcelerate read.');
   const query = new URLSearchParams(r.params).toString();
-  const withQuery = r.method === 'GET' || r.method === 'DELETE';
-  const url = axcelerateBaseUrl(f) + r.path + (withQuery && query ? `?${query}` : '');
-  const headers: Record<string, string> = { apitoken: f.apiToken, wstoken: f.wsToken, Accept: 'application/json' };
-  if (!withQuery) headers['Content-Type'] = 'application/x-www-form-urlencoded';
-  return { url, init: { method: r.method, headers, ...(withQuery ? {} : { body: query }), redirect: 'error' } };
+  return {
+    url: axcelerateBaseUrl(f) + r.path + (query ? `?${query}` : ''),
+    init: { method: 'GET', headers: { apitoken: f.apiToken, wstoken: f.wsToken, Accept: 'application/json' }, redirect: 'error' },
+  };
 }
 
-/** The answer for the browser: JSON when it is JSON, else text; cut at maxChars so a huge list cannot break the page. */
-export async function axcelerateAnswer(response: Response, maxChars = 1_500_000): Promise<{ status: number; data: unknown; truncated: boolean; retryAfter?: string }> {
+/** The answer: JSON when it is JSON, else text; cut at maxChars so a huge list cannot break the caller. */
+export async function axcelerateAnswer(response: Response, maxChars = 1_500_000): Promise<AxcelerateAnswer> {
   const text = await response.text();
   const truncated = text.length > maxChars;
   let data: unknown = truncated ? text.slice(0, maxChars) : text;
   if (!truncated) { try { data = JSON.parse(text); } catch { /* keep text */ } }
   const retryAfter = response.headers.get('Retry-After') ?? undefined;
   return { status: response.status, data, truncated, ...(retryAfter ? { retryAfter } : {}) };
+}
+
+/**
+ * The client. `get` is the only request method it has. `onCall` is told about every call (method, path, HTTP status) so the caller
+ * can record it; it never receives the tokens. One retry after a 429, waiting what aXcelerate asks (at most 20 seconds).
+ */
+export function axcelerateClient(fields: AxcelerateFields, opts: { fetch?: typeof fetch; onCall?: (path: string, status: number | null) => Promise<void> | void; timeoutMs?: number } = {}) {
+  const request = opts.fetch ?? fetch;
+  async function get(path: string, params: Record<string, unknown> = {}): Promise<AxcelerateAnswer> {
+    const r = axcelerateRequest({ method: 'GET', path, params });
+    const { url, init } = axcelerateFetchArgs(fields, r);
+    for (let attempt = 1; ; attempt++) {
+      let answer: AxcelerateAnswer | null = null;
+      try { answer = await axcelerateAnswer(await request(url, { ...init, signal: AbortSignal.timeout(opts.timeoutMs ?? 30000) })); }
+      catch { answer = null; }
+      await opts.onCall?.(r.path, answer?.status ?? null);
+      if (!answer) throw new Error('aXcelerate could not be reached.');
+      if (answer.status === 429 && attempt === 1) {
+        await new Promise((res) => setTimeout(res, Math.min(20, Math.max(1, Number(answer!.retryAfter) || 5)) * 1000));
+        continue;
+      }
+      return answer;
+    }
+  }
+  /** Reads every page of a list (offset + displayLength, or offset + limit for /course/enrolments). Stops at maxRows. */
+  async function getAll(path: string, params: Record<string, unknown> = {}, opt: { pageSize?: number; sizeParam?: 'displayLength' | 'limit'; maxRows?: number } = {}): Promise<Record<string, unknown>[]> {
+    const size = opt.pageSize ?? 100, key = opt.sizeParam ?? 'displayLength', max = opt.maxRows ?? 20000;
+    const rows: Record<string, unknown>[] = [];
+    for (let offset = 0; rows.length < max; offset += size) {
+      const a = await get(path, { ...params, offset, [key]: size });
+      if (a.status < 200 || a.status >= 300) throw new Error(`aXcelerate answered HTTP ${a.status} for ${path}.`);
+      const page = Array.isArray(a.data) ? a.data as Record<string, unknown>[] : [];
+      rows.push(...page);
+      if (page.length < size) break;
+    }
+    return rows.slice(0, max);
+  }
+  return { get, getAll };
 }

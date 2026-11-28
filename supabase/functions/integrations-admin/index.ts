@@ -4,7 +4,7 @@ import { accessToken } from '../_shared/integrations/credentials.ts';
 import { testProvider } from '../_shared/integrations/provider.ts';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
 import { serverSecretStatus } from '../_shared/integrations/server-secrets.ts';
-import { axcelerateAnswer, axcelerateFetchArgs, axcelerateFields, axcelerateRequest } from '../_shared/integrations/axcelerate.ts';
+import { axcelerateClient, axcelerateFields } from '../_shared/integrations/axcelerate.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -167,30 +167,28 @@ Deno.serve(async(req:Request)=>{
    if(action==='revoke'&&revokeCode==='revoke_failed')return json({ok:true,providerRevoked:false,message:'Disconnected in Skyline, but the provider did not confirm revocation. Remove Skyline from the account\'s connected apps there.'});
    return json({ok:true,...(action==='revoke'?{providerRevoked:revokeCode==='revoked'}:{})});
   }
-  // AXCELERATE-CONNECTION (2026-11-28): Check connection (one small GET /courses) and axcelerate_call (any aXcelerate API path,
-  // administrators only; GET / DELETE parameters in the address, POST / PUT as a form). Tokens are read here from Vault and never
-  // returned; each call is recorded in axcelerate_api_calls (method, path, status, no data).
-  if(c.connector_id==='axcelerate'&&['test','retry','axcelerate_call'].includes(action)){
+  // AXCELERATE (2026-11-28): Check connection only (GET /courses displayLength=1) through axcelerateClient (GET only, read-only
+  // allow-list). The free API caller is gone (owner: no screen runs a custom request in aXcelerate); reading for imports is done by the
+  // axcelerate-import function. Tokens never leave this function. axcelerate_call is refused and recorded as a security event.
+  if(c.connector_id==='axcelerate'&&action==='axcelerate_call'){
+   const ip=(req.headers.get('x-forwarded-for')??'').split(',')[0].trim()||null;
+   const ev=await admin.rpc('axcelerate_security_event',{p_connection:c.id,p_user:user.user.id,p_method:String(body.method??'GET').slice(0,10),p_path:String(body.path??'').slice(0,200),p_reason:'custom_request',p_ip:ip});check(ev.error);
+   return json({error:'Custom aXcelerate requests are not allowed. Use the Import centre.'},403);
+  }
+  if(c.connector_id==='axcelerate'&&(action==='test'||action==='retry')){
    if(c.status==='disabled')return json({error:'Enable this connection first.'},409);
    const cred=await admin.rpc('integration_credential_read',{p_connection:c.id,p_kind:'api_key'});check(cred.error);
    const fields=axcelerateFields(cred.data as string|null);
    if(!fields)return json({error:'Save the aXcelerate subdomain, API token and web service token first.'},409);
-   const request=action==='axcelerate_call'?axcelerateRequest(body):{method:'GET' as const,path:'/courses',params:{displayLength:'1'}};
-   if('error' in request)return json({error:request.error},400);
-   const {url:target,init}=axcelerateFetchArgs(fields,request);
+   const client=axcelerateClient(fields,{timeoutMs:15000,onCall:async(path,status)=>{const rec=await admin.from('axcelerate_api_calls').insert({connection_id:c.id,user_id:user.user.id,method:'GET',path,http_status:status});check(rec.error);}});
    let answer;
-   try{answer=await axcelerateAnswer(await fetch(target,{...init,signal:AbortSignal.timeout(action==='axcelerate_call'?45000:15000)}));}
-   catch{answer=null;}
-   const rec=await admin.from('axcelerate_api_calls').insert({connection_id:c.id,user_id:user.user.id,method:request.method,path:request.path,http_status:answer?.status??null});check(rec.error);
+   try{answer=await client.get('/courses',{displayLength:'1'});}catch{answer=null;}
    const ok=!!answer&&answer.status>=200&&answer.status<300;
    const rejected=answer?.status===401||answer?.status===403;
-   if(action!=='axcelerate_call'||rejected||ok){
-    const now=new Date().toISOString();
-    const cr=await admin.from('integration_connections').update({status:ok?'connected':'error',...(ok?{last_success_at:now}:{}),updated_at:now}).eq('id',c.id).neq('status','disabled');check(cr.error);
-   }
-   await log(!answer?'provider_unreachable':ok?(action==='axcelerate_call'?'axcelerate_call':'connection_verified'):rejected?'credentials_rejected':answer.status===429?'rate_limited':'provider_rejected',ok?'info':'error');
+   const now=new Date().toISOString();
+   const cr=await admin.from('integration_connections').update({status:ok?'connected':'error',...(ok?{last_success_at:now}:{}),updated_at:now}).eq('id',c.id).neq('status','disabled');check(cr.error);
+   await log(!answer?'provider_unreachable':ok?'connection_verified':rejected?'credentials_rejected':answer.status===429?'rate_limited':'provider_rejected',ok?'info':'error');
    if(!answer)return json({error:'aXcelerate could not be reached. Check the subdomain and Live / Staging, then try again.'},502);
-   if(action==='axcelerate_call')return json({ok,status:answer.status,data:answer.data,truncated:answer.truncated,...(answer.retryAfter?{retryAfter:answer.retryAfter}:{})});
    if(ok)return json({ok:true});
    return json({error:rejected?'aXcelerate refused the tokens. Check the API token and the web service token (and that the web service user may read courses).':answer.status===429?'aXcelerate rate limit reached (200 requests a minute). Try again shortly.':`aXcelerate answered HTTP ${answer.status}.`},409);
   }

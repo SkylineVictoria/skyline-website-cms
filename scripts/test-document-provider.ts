@@ -399,26 +399,81 @@ test('OAuth refresh rotates provider credentials without exposing secrets or rac
  assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'2026-11-11T12:00:00Z'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z',docusignProduction:false});
  assert.equal(acquired,1,'fresh access tokens do not start a second refresh');
 });
-test('aXcelerate (AXCELERATE-CONNECTION): two token headers, per-college address, safe paths, form-encoded writes',async()=>{
- const {axcelerateFields,axcelerateBaseUrl,axcelerateRequest,axcelerateFetchArgs,axcelerateAnswer}=await import('../supabase/functions/_shared/integrations/axcelerate.ts');
+test('aXcelerate client (AXCELERATE-IMPORT): read only: GET on the allow-list, everything else refused before any network call',async()=>{
+ const {axcelerateFields,axcelerateBaseUrl,axcelerateRequest,axcelerateFetchArgs,axcelerateAnswer,axcelerateAllowed,axcelerateClient,AxcelerateBlocked}=await import('../supabase/functions/_shared/integrations/axcelerate.ts');
  const f=axcelerateFields(JSON.stringify({version:1,fields:{environment:'production',subdomain:'skyline',apiToken:'api-1234567890',wsToken:'ws-1234567890'}}));
  assert.ok(f);assert.equal(axcelerateBaseUrl(f!),'https://skyline.app.axcelerate.com/api');
  assert.equal(axcelerateBaseUrl({environment:'staging',subdomain:'skyline'}),'https://skyline.stg.axcelerate.com/api');
  assert.equal(axcelerateFields(''),null);assert.equal(axcelerateFields('not json'),null);
  assert.equal(axcelerateFields(JSON.stringify({fields:{environment:'production',subdomain:'evil.com/x',apiToken:'a',wsToken:'b'}})),null,'a subdomain can never point elsewhere');
- for(const path of ['contacts','/contacts?x=1','/../admin','//evil.com','/a b','https://x.y/api'])assert.ok('error' in axcelerateRequest({method:'GET',path}),path);
- assert.ok('error' in axcelerateRequest({method:'PATCH',path:'/contact'}));
- assert.ok('error' in axcelerateRequest({method:'GET',path:'/contacts/search',params:{'bad name':'x'}}));
- const get=axcelerateRequest({method:'get',path:'/contacts/search',params:{search:'Patel',displayLength:100,empty:null}});
- assert.ok(!('error' in get));
- const g=axcelerateFetchArgs(f!,get as Exclude<typeof get,{error:string}>);
+ // Allowed reads (owner's list)
+ for(const p of ['/contacts/search','/contact/123','/contact/enrolments/9','/courses','/courses/','/course/instances','/course/instance/detail','/course/calendar','/trainer/77','/organisation/5/children','/accounting/invoice/42','/venues','/portfolio/types'])assert.ok(axcelerateAllowed(p),p);
+ // Writes and triggers are never on the list
+ for(const p of ['/course/enrol','/course/enrolMultiple','/contact','/contact/','/contact/note','/contact/123/note','/report/run','/report/saved/run','/user/login','/user/logout','/accounting/invoice/abc/approve','/accounting/invoice/1/void','/accounting/invoice/1/paymenturl','/contact/verifyUSI','/webhooks','/portalConfig','/contacts/search?x=1','/../courses','//evil.com/courses','/trainer/abc'])assert.equal(axcelerateAllowed(p),false,p);
+ for(const method of ['POST','PUT','PATCH','DELETE'])assert.throws(()=>axcelerateRequest({method,path:'/courses'}),(e:unknown)=>e instanceof AxcelerateBlocked&&(e as InstanceType<typeof AxcelerateBlocked>).reason==='method_not_allowed');
+ assert.throws(()=>axcelerateRequest({method:'GET',path:'/course/enrol'}),(e:unknown)=>e instanceof AxcelerateBlocked&&(e as InstanceType<typeof AxcelerateBlocked>).reason==='path_not_allowed');
+ assert.throws(()=>axcelerateRequest({method:'GET',path:'/courses',params:{'bad name':'x'}}),AxcelerateBlocked);
+ assert.throws(()=>axcelerateFetchArgs(f!,{method:'POST' as 'GET',path:'/courses',params:{}}),AxcelerateBlocked,'fetch args refuse a forged method too');
+ const g=axcelerateFetchArgs(f!,axcelerateRequest({method:'get',path:'/contacts/search',params:{search:'Patel',displayLength:100,empty:null}}));
  assert.equal(g.url,'https://skyline.app.axcelerate.com/api/contacts/search?search=Patel&displayLength=100');
- const h=g.init.headers as Record<string,string>;assert.equal(h.apitoken,'api-1234567890');assert.equal(h.wstoken,'ws-1234567890');assert.equal(g.init.body,undefined);assert.equal(g.init.redirect,'error');
- const post=axcelerateRequest({method:'POST',path:'/course/enrol',params:{contactID:'5',instanceID:'9',type:'p'}});
- const p=axcelerateFetchArgs(f!,post as Exclude<typeof post,{error:string}>);
- assert.equal(p.url,'https://skyline.app.axcelerate.com/api/course/enrol');assert.equal(p.init.body,'contactID=5&instanceID=9&type=p');
- assert.equal((p.init.headers as Record<string,string>)['Content-Type'],'application/x-www-form-urlencoded');
+ const h=g.init.headers as Record<string,string>;assert.equal(h.apitoken,'api-1234567890');assert.equal(h.wstoken,'ws-1234567890');assert.equal(g.init.method,'GET');assert.equal(g.init.body,undefined);assert.equal(g.init.redirect,'error');
  const a=await axcelerateAnswer(new Response('[{"CONTACTID":1}]',{status:200}));assert.deepEqual(a,{status:200,data:[{CONTACTID:1}],truncated:false});
- const big=await axcelerateAnswer(new Response('x'.repeat(20)),10);assert.equal(big.truncated,true);assert.equal(String(big.data).length,10);
- const limited=await axcelerateAnswer(new Response('slow down',{status:429,headers:{'Retry-After':'30'}}));assert.equal(limited.retryAfter,'30');assert.equal(limited.data,'slow down');
+ const big=await axcelerateAnswer(new Response('x'.repeat(20)),10);assert.equal(big.truncated,true);
+ // The client: GET only (no other method exists), pages through lists, reports each call without tokens
+ const seen:string[]=[];const calls:Array<[string,number|null]>=[];
+ const fake=(async(url:RequestInfo|URL,init?:RequestInit)=>{seen.push(`${init?.method} ${String(url)}`);const off=Number(new URL(String(url)).searchParams.get('offset'));
+  return new Response(JSON.stringify(off===0?[{ID:1},{ID:2}]:[{ID:3}]),{status:200});}) as typeof fetch;
+ const client=axcelerateClient(f!,{fetch:fake,onCall:(p,s)=>{calls.push([p,s]);}});
+ assert.deepEqual(Object.keys(client).sort(),['get','getAll']);
+ const rows=await client.getAll('/courses',{type:'p'},{pageSize:2});
+ assert.equal(rows.length,3);assert.ok(seen.every(x=>x.startsWith('GET https://skyline.app.axcelerate.com/api/courses?')));
+ assert.deepEqual(calls,[['/courses',200],['/courses',200]]);assert.ok(!JSON.stringify(calls).includes('api-1234567890'));
+ await assert.rejects(client.get('/course/enrol',{}),AxcelerateBlocked);assert.equal(seen.length,2,'a refused path makes no network call');
+});
+test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs everything, resume, cancel, errors recorded',async()=>{
+ const {runImport,stagesFor}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');
+ assert.deepEqual(stagesFor(['trainers']),['courses','classes']);
+ assert.deepEqual(stagesFor(['classes']),['locations','courses','classes']);
+ assert.deepEqual(stagesFor(['trainers','classes','breaks']),['locations','courses','classes','breaks']);
+ const aX:Record<string,unknown>={
+  '/course/deliveryLocations':[{ID:'L1',NAME:'Campus'}],
+  '/courses':[{ID:'C1',CODE:'AUR30620',NAME:'Auto'},{ID:'C2',CODE:'BSB80120',NAME:'Biz'}],
+  '/course/instances?C1':[{INSTANCEID:'I1',NAME:'Feb class'}],'/course/instances?C2':[{INSTANCEID:'I2',NAME:'Mar class'}],
+  '/course/instance/detail?I1':{INSTANCEID:'I1',TRAINERCONTACTID:'T1',DELIVERYLOCATIONID:'L1',UNITS:[{UNITCODE:'U1'},{UNITCODE:'U2'}]},
+  '/course/instance/detail?I2':{INSTANCEID:'I2',TRAINERCONTACTID:'T1',UNITS:[]},
+  '/trainer/T1':{CONTACTID:'T1',ACTIVE:true},'/contact/T1':{GIVENNAME:'Zara',SURNAME:'T',EMAILADDRESS:'z@x.au'},
+  '/course/calendar':[{ID:'E1',NAME:'Mid-year',STARTDATE:'2027-04-05',FINISHDATE:'2027-04-16'},{ID:'E2',NAME:'No date'}],
+ };
+ const key=(p:string,q:Record<string,unknown>={})=>p==='/course/instances'?`${p}?${q.ID}`:p==='/course/instance/detail'?`${p}?${q.instanceID}`:p;
+ const gets:string[]=[];
+ const client={get:async(p:string,q?:Record<string,unknown>)=>{gets.push(key(p,q));return{status:200,data:aX[key(p,q)]??[]};},
+  getAll:async(p:string,q?:Record<string,unknown>)=>{gets.push(key(p,q));return (aX[key(p,q)] as Record<string,unknown>[])??[];}};
+ const make=()=>{const calls:Array<[string,Record<string,unknown>]>=[];let n=0;
+  const rpc=async(name:string,args:Record<string,unknown>)=>{calls.push([name,args]);
+   if(name==='axcelerate_import_unit'&&(args.p_rec as {UNITCODE:string}).UNITCODE==='U2')return{data:null,error:{message:'unit refused'}};
+   return{data:{action:'created',id:`id-${++n}`},error:null};};return{calls,rpc};};
+ // Everything
+ let m=make();let saves=0;
+ let r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['trainers','classes','breaks'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>{saves++;return true;}});
+ assert.equal(r.done,true);
+ const names=m.calls.map(c=>c[0]).filter(n=>n!=='axcelerate_import_error');
+ assert.deepEqual(names,['axcelerate_import_location','axcelerate_import_course','axcelerate_import_course','axcelerate_import_trainer','axcelerate_import_unit','axcelerate_import_unit','axcelerate_import_class','axcelerate_import_class','axcelerate_import_break','axcelerate_import_break']);
+ const cls=m.calls.find(c=>c[0]==='axcelerate_import_class')![1];
+ assert.equal((cls.p_units as unknown[]).length,1,'the refused unit is left out of the class');assert.ok(cls.p_trainer);assert.ok(cls.p_location);
+ assert.equal(m.calls.filter(c=>c[0]==='axcelerate_import_trainer').length,1,'one trainer named on two classes is imported once');
+ assert.equal(r.counts.unit.error,1);assert.equal(r.counts.break.error,1,'a calendar event without a date is an import error');
+ assert.equal(m.calls.filter(c=>c[0]==='axcelerate_import_error').length,2);
+ assert.ok(gets.every(g=>!/enrol|report|login/.test(g)));
+ // Trainers only: no classes, no units, no locations, no breaks
+ m=make();r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['trainers'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>true});
+ assert.deepEqual([...new Set(m.calls.map(c=>c[0]))],['axcelerate_import_course','axcelerate_import_trainer']);
+ // Time budget: stops, then continues from the saved cursor
+ m=make();let t=0;const now=()=>t;
+ r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['classes'],cursor:{},counts:{},deadline:1,now,save:async()=>{t=5;return true;}});
+ assert.equal(r.done,false);assert.equal(r.cursor.stage,'courses');
+ t=0;r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['classes'],cursor:r.cursor,counts:r.counts,deadline:100,now,save:async()=>true});
+ assert.equal(r.done,true);assert.equal(m.calls.filter(c=>c[0]==='axcelerate_import_location').length,1,'locations are not imported twice');
+ // Cancel: the next checkpoint stops the run
+ m=make();r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['classes'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>false});
+ assert.equal(r.cancelled,true);assert.equal(m.calls.filter(c=>c[0]==='axcelerate_import_course').length,0);
 });

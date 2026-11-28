@@ -132,3 +132,8 @@ verify_jwt = true
 
 [functions.document-classify]
 verify_jwt = true
+
+[functions.axcelerate-import]
+# AXCELERATE-IMPORT: holders of the aXcelerate import permission only (the gateway verifies the JWT; the function then checks
+# axcelerate_import_allowed with the caller's token). Reads aXcelerate only through axcelerateClient (GET, read-only allow-list).
+verify_jwt = true

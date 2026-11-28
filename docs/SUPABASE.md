@@ -1387,3 +1387,21 @@ saved in Vault by `integration_axcelerate_save` (summary `integration_axcelerate
 headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT form-encoded, answer up to 1.5 MB); every call logged in
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
 Importing into Skyline records is not built yet.
+
+## aXcelerate import (AXCELERATE-IMPORT, 2026-11-28, LOCAL ONLY)
+One way only: aXcelerate -> Skyline. `_shared/integrations/axcelerate.ts` = axcelerateClient, the only gateway: GET only, the owner's read-only
+allow-list (contacts, courses, instances, calendar, venues, trainers, organisations, finance reads ...); anything else throws AxcelerateBlocked.
+integrations-admin keeps only Check connection for aXcelerate (the free API caller is gone; `axcelerate_call` is refused and recorded).
+New Edge Function `axcelerate-import` (JWT on; `axcelerate_import_allowed` checked with the caller's token first, refusal = security event):
+actions start / continue / retry / survey; engine `_shared/integrations/axcelerate-import.ts` (stages locations -> courses -> classes (units,
+trainer, class) -> breaks; resumable cursor; ~100 s per call). Migration 20261128041517_axcelerate_import: `cms_permissions` ('axcelerate.import',
+seeded with active Admins; cms_has_permission / cms_permission_set), `axcelerate_links` / `_skipped` / `_import_runs` / `_import_errors` /
+`_conflicts`, triggers `axcelerate_link_touch` (edited_in_skyline_at; delete -> skipped) on hr.staff_profiles, cms_courses, cms_course_units,
+course_intakes, intake_units, locations, academic_breaks; import functions axcelerate_import_location / _course / _unit / _trainer / _class / _break
+(service role; create missing references, keep admin edits as conflicts); audit rows in portal_audit_log (target_type 'axcelerate');
+axcelerate_security_event (audit + email ops_axcelerate_security to every active Admin); integration_axcelerate_save / _summary store and show
+"saved on / by" (no token part); edge_function_names gains axcelerate-import. Screens: /admin/integrations/axcelerate (Import centre), Import
+buttons on Employees (trainers), Intakes (classes), Term breaks (breaks), dashboard Import everything card, "Imported from aXcelerate" badge.
+Release: apply the migration, deploy integrations-admin and axcelerate-import from clean main, confirm, then push the frontend.
+Not built yet: students, applications, Qualifications, unit results, attendance, documents, notes, finance; nightly sync.
+

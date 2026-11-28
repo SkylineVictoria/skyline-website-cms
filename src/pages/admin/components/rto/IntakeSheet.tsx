@@ -108,8 +108,8 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
                   <AxcelerateBadge table="public.course_intakes" id={intakeId} />
                   <StatusPicker status={i.status} canEdit={canEdit} onChange={setStatus} />
                 </div>
-                <p className="truncate text-sm text-foreground-700" title={i.courseName}>{i.courseName}</p>
-                <p className="text-xs text-foreground-500">{shortDate(i.startDate)} – {shortDate(i.endDate)}{i.campus ? ` · ${i.campus}` : ""}</p>
+                {!(i.customName || i.name || "").includes(i.courseName) ? <p className="truncate text-sm text-foreground-700" title={i.courseName}>{i.courseName}</p> : null}
+                <p className="text-xs text-foreground-500">{i.endDate ? `${shortDate(i.startDate)} – ${shortDate(i.endDate)}` : `Rolling intake · ongoing since ${shortDate(i.startDate)}`}{i.campus ? ` · ${i.campus}` : ""}</p>
               </>
             ) : <div className="h-14 w-64 animate-pulse rounded bg-background-200 motion-reduce:animate-none" />}
           </div>
@@ -119,12 +119,13 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
           <button type="button" onClick={onClose} aria-label="Close" className="flex h-8 w-8 items-center justify-center rounded-md text-foreground-500 hover:bg-background-200"><i className="ri-close-line text-xl" aria-hidden="true" /></button>
         </div>
         <div className="-mb-px mt-3 flex gap-1 overflow-x-auto" role="tablist" aria-label="Intake">
-          {TABS.filter((t) => !(t.id === "timeline" && detail && !detail.intake.endDate)).map((t) => {
+          {/* A rolling intake (no end date): its batches carry the dates, class times and timetable (Batches & timetable). */}
+          {TABS.filter((t) => !((t.id === "timeline" || t.id === "classes") && detail && !detail.intake.endDate)).map((t) => {
             const count = t.id === "students" ? group?.students.filter(active).length : undefined;
             return (
               <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
                 className={`shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors duration-150 ${tab === t.id ? "border-primary-500 text-primary-700" : "border-transparent text-foreground-600 hover:text-foreground-900"}`}>
-                {t.label}{count ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 text-2xs text-foreground-700">{count}</span> : null}
+                {t.id === "batches" && detail && !detail.intake.endDate ? "Batches & timetable" : t.label}{count ? <span className="ml-1.5 rounded-full bg-background-200 px-1.5 text-2xs text-foreground-700">{count}</span> : null}
               </button>
             );
           })}
@@ -213,10 +214,12 @@ function Overview({ detail, canEdit, busy, run, undoable, openTab }: {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <Fact label="Dates" value={`${shortDate(first)} – ${shortDate(last)}`} />
-        <Fact label="Length" value={weeks ? `${weeks} weeks` : "—"} note={registered ? `Course: ${registered} weeks` : undefined} />
+        {/* A rolling intake has no end: its batches carry their own dates (Batches tab). */}
+        {i.endDate ? <Fact label="Dates" value={`${shortDate(first)} – ${shortDate(last)}`} /> : <Fact label="Dates" value={`Ongoing since ${shortDate(i.startDate)}`} note="Rolling intake: each batch has its own dates" />}
+        {i.endDate ? <Fact label="Length" value={weeks ? `${weeks} weeks` : "—"} note={registered ? `Course: ${registered} weeks` : undefined} />
+          : <Fact label="Course length" value={weeks ? `${weeks} weeks` : registered ? `${registered} weeks` : "—"} note="One full cycle of the course calendar" />}
         <Fact label="Teaching hours" value={hours ? `${hours} hours` : "—"} note={`${detail.schedule.length} units`} action={<button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => openTab(i.endDate ? "timeline" : "batches")}>{i.endDate ? "See timeline" : "See batches"}</button>} />
-        <Fact label="Timetable" value={group && hasSetup(group) ? timingShort(group) || "Set" : "Weekly timetable not selected yet"} action={<button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => openTab("classes")}>{group && hasSetup(group) ? "See class setup" : "Set up classes"}</button>} />
+        <Fact label="Timetable" value={group && hasSetup(group) ? timingShort(group) || "Set" : "Weekly timetable not selected yet"} action={<button type="button" className="text-xs font-medium text-primary-600 hover:underline" onClick={() => openTab(i.endDate ? "classes" : "batches")}>{!i.endDate ? "See batches and timetable" : group && hasSetup(group) ? "See class setup" : "Set up classes"}</button>} />
         <div className="rounded-card border border-background-200 bg-background-50 p-3">
           <p className="text-xs font-medium text-foreground-500">Students</p>
           <p className="mt-0.5 font-heading text-lg font-semibold tabular-nums text-foreground-950">{i.enrolled}{places ? <span className="text-sm font-normal text-foreground-500"> of {places} places</span> : null}</p>

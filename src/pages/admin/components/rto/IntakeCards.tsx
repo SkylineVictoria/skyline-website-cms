@@ -22,9 +22,10 @@ export function IntakeCard({ intake: i, showCourse, canEdit, onOpen, onStatus, o
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           {/* The intake's name (CPC30326_01-Dec-2026_Intake_Batch_COE), the start month under it. */}
-          <p className="break-all font-heading text-base font-bold leading-snug text-foreground-950" title={i.customName || i.name}>{i.customName || i.name || monthYear(i.startDate)}</p>
-          <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{monthYear(i.startDate)}</p>
-          {showCourse ? <p className="truncate text-sm font-medium text-foreground-700" title={i.courseName}>{i.courseName}</p> : null}
+          <p className="break-words font-heading text-base font-bold leading-snug text-foreground-950" title={i.customName || i.name}>{i.customName || i.name || monthYear(i.startDate)}</p>
+          {/* A rolling intake is named after its course; a dated one shows its start month and (on the all-courses list) its course. */}
+          {i.endDate ? <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{monthYear(i.startDate)}</p> : <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">Rolling intake</p>}
+          {showCourse && !(i.customName || i.name || "").includes(i.courseName) ? <p className="truncate text-sm font-medium text-foreground-700" title={i.courseName}>{i.courseName}</p> : null}
         </div>
         <StatusPicker status={i.status} canEdit={canEdit} onChange={onStatus} />
         {canEdit ? <MoreMenu label={`More actions for ${i.name}`} items={[
@@ -32,19 +33,19 @@ export function IntakeCard({ intake: i, showCourse, canEdit, onOpen, onStatus, o
         ]} /> : null}
       </div>
       <p className="mt-1 text-xs text-foreground-500">
-        {shortDate(i.startDate)} – {shortDate(i.endDate)}{i.endDate ? ` · ${weeksOf(i.startDate, i.endDate)} weeks` : ""}{when === "running" ? " · running" : when === "finished" ? " · finished" : ""}
+        {i.endDate ? <>{shortDate(i.startDate)} – {shortDate(i.endDate)} · {weeksOf(i.startDate, i.endDate)} weeks{when === "running" ? " · running" : when === "finished" ? " · finished" : ""}</> : <>Ongoing since {shortDate(i.startDate)}</>}
       </p>
       <div className="mt-3">
         <div className="flex items-baseline justify-between text-xs text-foreground-600">
           <span><span className="text-sm font-semibold tabular-nums text-foreground-900">{i.enrolled}</span>{places ? ` of ${places} places` : " students"}</span>
           {places && i.enrolled >= places ? <span className="font-medium text-accent-800">Full</span> : null}
         </div>
-        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-background-200">
-          <div className="h-full rounded-full bg-primary-500 transition-all duration-200" style={{ width: places ? `${Math.min(100, (i.enrolled / places) * 100)}%` : i.enrolled ? "100%" : "0%" }} />
-        </div>
+        {places ? <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-background-200">
+          <div className="h-full rounded-full bg-primary-500 transition-all duration-200" style={{ width: `${Math.min(100, (i.enrolled / places) * 100)}%` }} />
+        </div> : null}
       </div>
       <div className="mt-3 flex min-h-[1.75rem] flex-wrap gap-1.5">
-        {!group || !group.days.length ? <span className="text-xs text-foreground-400">Weekly timetable not selected yet</span> : (
+        {!group || !group.days.length ? <span className="text-xs text-foreground-500">{i.endDate ? "Weekly timetable not selected yet" : "Open to see its batches and timetable"}</span> : (
           <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${group.isActive ? "border-secondary-200 bg-secondary-50 text-secondary-900" : "border-background-300 text-foreground-500"}`} title="Class days">
             <i className="ri-time-line mr-1" aria-hidden="true" />{group.days.join(" ")}
           </span>

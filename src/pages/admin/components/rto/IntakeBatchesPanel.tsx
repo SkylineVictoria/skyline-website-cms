@@ -1,3 +1,4 @@
+import { shortDate } from "@/pages/admin/lib/rto";
 // LMS-BATCHES (2026-11-25): the intake sheet's Batches tab. An intake (CoE or VoE, following its Master's unit dates) holds class batches
 // B1 / B2 / B3, each with its own room, seats, default trainer and weekly class times; a student can be in one or more batches (a whole-
 // course batch, plus optional batches for single units). Views: Class (every class), Daily (by day), Weekly (weekday x batch).
@@ -62,7 +63,7 @@ export default function IntakeBatchesPanel({ intakeId, canEdit, canAssign, units
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="font-heading text-base font-semibold text-foreground-950">Class batches</h3>
-            <p className="text-sm text-foreground-600">Batches set when, where and with whom classes run. Unit dates and assessment windows come from the intake's Master.</p>
+            <p className="text-sm text-foreground-600">Each batch has its own dates, units, weekly class times, room and trainer; its students follow its classes.</p>
           </div>
           <div className="flex items-center gap-2">
             <label className="flex items-center gap-1.5 text-xs text-foreground-600"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /> Show archived</label>
@@ -77,7 +78,8 @@ export default function IntakeBatchesPanel({ intakeId, canEdit, canAssign, units
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="font-medium text-foreground-950">{batchLabel(b)} {b.archivedAt ? <Badge tone="muted">Archived</Badge> : null}</p>
-                    <p className="text-xs text-foreground-600">{b.room ?? "No room"} · {b.trainer ?? "No default trainer"} · {b.capacity ? `${b.students} of ${b.capacity} seats` : `${b.students} student${b.students === 1 ? "" : "s"}`}</p>
+                    {b.startDate ? <p className="text-xs font-semibold text-foreground-800">{shortDate(b.startDate)} – {shortDate(b.endDate ?? null)}{b.unitDates ? ` · ${b.unitDates} unit${b.unitDates === 1 ? "" : "s"}` : ""}</p> : null}
+                    {(() => { const n = Math.max(b.students, b.unitStudents ?? 0); return <p className="text-xs text-foreground-600">{b.room ?? "No room"} · {b.trainer ?? "No default trainer"} · {b.capacity ? `${n} of ${b.capacity} seats` : `${n} student${n === 1 ? "" : "s"}`}</p>; })()}
                   </div>
                   {canEdit && !b.archivedAt ? (
                     <div className="flex gap-1">

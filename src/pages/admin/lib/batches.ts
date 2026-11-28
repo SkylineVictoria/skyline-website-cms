@@ -8,6 +8,8 @@ export interface IntakeBatch {
   id: string; intakeId: string; code: string; name: string | null; roomId: string | null; room: string | null; capacity: number | null;
   defaultTrainerId: string | null; trainer: string | null; sort: number; archivedAt: string | null;
   students: number; upcoming: number; weeklyHours: number; classTimes: BatchClassTime[];
+  /** ROLLING-INTAKES: the batch's own dates, how many units have dates in it, students with a unit in it (rto_batches list, 20261128201517). */
+  startDate?: string | null; endDate?: string | null; unitDates?: number; unitStudents?: number;
 }
 export interface BatchSessionRow {
   id: string; batchId: string; batch: string; date: string; start: string; end: string; sessionType: string; status: string;

@@ -425,29 +425,26 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
   return <div className="space-y-4">
     {dialogs}
     {loadError}
-    <section className={"min-w-0 rounded-2xl border border-background-200 bg-background-50 p-5 shadow-sm" + (draft ? " hidden" : "")}>
+    <section className={"min-w-0" + (draft ? " hidden" : "")}>
       {!selectedCourse ? <p className="py-20 text-center text-sm text-foreground-500">{loading ? "Loading…" : "Select a course."}</p> : <>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selectedCourse.code}</p>
-          <h2 className="font-heading text-xl font-bold text-foreground-950">{selectedCourse.name}</h2></div>
-        {canEdit ? <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => setEditingHours(true)} title="Edit the SLIT hours of every selected unit in one table"
-            className="rounded-lg border border-primary-300 bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-800 hover:bg-primary-100">
-            <i className="ri-time-line mr-1" aria-hidden="true" />Edit all hours</button>
-          <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add or change units</button></div> : null}
-      </div>
       {(() => {
         const units = details.find(d => d.course.id === selectedCourse.id)?.units ?? [];
         const active = units.filter(u => u.isActive);
-        const facts: [string, string][] = [["Active units", String(active.length)], ["Core", String(active.filter(u => u.unitType === "core").length)],
-          ["Electives", String(active.filter(u => u.unitType === "elective").length)], ["Nominal hours", active.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0).toLocaleString()],
-          ["SLIT hours", active.reduce((sum, u) => sum + (hoursOf(u)?.slitHours ?? 0), 0).toLocaleString() +
-            (active.some(u => hoursOf(u) && !hoursOf(u)?.confirmed) ? " (to review)" : "")]];
-        return <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-5 sm:divide-x sm:divide-background-200">
-          {facts.map(([label, value]) => <div key={label} className="px-3 py-2"><dt className="text-xs text-foreground-500">{label}</dt><dd className="text-sm font-semibold text-foreground-950">{loading ? "…" : value}</dd></div>)}
-        </dl>;
+        const slit = active.reduce((sum, u) => sum + (hoursOf(u)?.slitHours ?? 0), 0);
+        const review = active.some(u => hoursOf(u) && !hoursOf(u)?.confirmed);
+        return <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-foreground-700">{loading ? "Loading units…" : <>
+            <b>{active.length}</b> active unit{active.length === 1 ? "" : "s"} · {active.filter(u => u.unitType === "core").length} core · {active.filter(u => u.unitType === "elective").length} elective
+            · {active.reduce((sum, u) => sum + (u.nominalHours ?? 0), 0).toLocaleString()} nominal hrs · {slit.toLocaleString()} SLIT hrs
+            {review ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-xs font-semibold text-amber-800">hours to review</span> : null}</>}</p>
+          {canEdit ? <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => setEditingHours(true)} title="Edit the SLIT hours of every selected unit in one table"
+              className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">
+              <i className="ri-time-line mr-1" aria-hidden="true" />Edit hours</button>
+            <button type="button" onClick={add} className="rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-700">Add or change units</button></div> : null}
+        </div>;
       })()}
-      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
         <label className="relative min-w-56 flex-1"><span className="sr-only">Search units</span>
           <i className="ri-search-line absolute left-3 top-2.5 text-sm text-foreground-400" aria-hidden="true" />
           <input aria-label="Search units" className="w-full rounded-lg border border-background-300 bg-background-50 py-2 pl-9 pr-2 text-sm" placeholder="Search units" value={query} onChange={e=>setQuery(e.target.value)} />
@@ -459,24 +456,29 @@ export default function LmsUnitsPage({ embeddedCourseId }: { embeddedCourseId?: 
         <label className="flex items-center gap-1.5 text-foreground-600"><input type="checkbox" checked={showDocs} onChange={event => setShowDocs(event.target.checked)} />Show document names</label>
       </div>
       {hoursError ? <p role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{hoursError}</p> : null}
-      <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[1150px] text-left text-sm">
-        <thead><tr className="border-b border-background-200 text-xs font-semibold uppercase tracking-wide text-foreground-500">{["Code","Unit","Documents","Type","Prerequisites","Nominal hrs","SLIT hrs","Theory hrs","Practical hrs","Assessment hrs","Status"].map(x=><th key={x} className="px-3 py-2">{x}</th>)}</tr></thead>
+      {(() => {
+        // Columns with nothing to show are left out (prerequisites, documents), so the table fits beside the course list.
+        const showNeeds = paged.some(r => r.unit.id && needs[r.unit.id]?.length);
+        const showDocCol = showDocs || paged.some(r => { const d = r.unit.id ? docs[r.unit.id] : undefined; return !!d && d.learning.length + d.resources.length + d.assessments.length + d.pending.length > 0; });
+        const heads = ["Code", "Unit", "Type", ...(showNeeds ? ["Needs first"] : []), ...(showDocCol ? ["Documents"] : []), "Hours", "Status"];
+        return <div className="mt-3 overflow-x-auto rounded-lg border border-background-200"><table className="w-full min-w-[720px] text-left text-sm">
+        <thead className="bg-background-100"><tr className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{heads.map(x=><th key={x} className={"px-3 py-2" + (x === "Hours" ? " text-right" : "")}>{x}</th>)}</tr></thead>
         <tbody>{paged.map(r=><tr key={r.course.id + ":" + r.index} onClick={()=>open(r)} onKeyDown={e=>{if(e.key==="Enter")open(r);}} tabIndex={0} role="button" aria-label={`Open ${r.unit.code} for ${r.course.code}`}
-          className={"cursor-pointer border-b border-background-100 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
-          <td className="px-3 py-2 font-semibold">{r.unit.code}</td><td className="px-3 py-2">{r.unit.name}
-            </td>
-          <td className="px-3 py-2 text-xs">{documentSummary(r)}</td>
-          <td className="px-3 py-2"><span className="capitalize">{r.unit.unitType}</span>{r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title="Another unit needs this one first, so it is taught earlier">Prerequisite</span> : null}</td>
-          <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="block max-w-xs space-y-0.5">{needs[r.unit.id].map(n => <span key={n.id} className="block"><b className="text-amber-800">{n.code}</b> <span className="text-foreground-600">{r.course && details.find(d => d.course.id === r.course.id)?.units.find(u => u.id === n.id)?.name}</span></span>)}</span> : <span className="text-foreground-400">—</span>}</td><td className="px-3 py-2">{r.unit.nominalHours ?? "—"}</td>
-          {(() => { const h = hoursOf(r.unit); const cell = "px-3 py-2 " + (h && !h.confirmed ? "italic text-foreground-400" : "");
-            return <>
-              <td className={cell}>{h ? h.slitHours : "—"}{h && !h.confirmed ? <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold not-italic text-amber-800">Review</span> : null}</td>
-              {HOUR_PARTS.map(([key]) => <td key={key} className={cell}>{h ? h[key] : "—"}</td>)}
-            </>; })()}
+          className={"cursor-pointer border-t border-background-200 hover:bg-background-100 focus:bg-primary-50 " + (r.unit.isActive ? "" : "text-foreground-400")}>
+          <td className="whitespace-nowrap px-3 py-2 font-semibold">{r.unit.code}</td>
+          <td className="px-3 py-2">{r.unit.name}</td>
+          <td className="whitespace-nowrap px-3 py-2"><span className="capitalize">{r.unit.unitType}</span>{r.unit.isActive && activeNeeded.has(r.unit.id ?? "") ? <span className="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800" title="Another unit needs this one first, so it is taught earlier">Prerequisite</span> : null}</td>
+          {showNeeds ? <td className="px-3 py-2 text-xs">{r.unit.id && needs[r.unit.id]?.length ? <span className="block max-w-xs space-y-0.5">{needs[r.unit.id].map(n => <span key={n.id} className="block"><b className="text-amber-800">{n.code}</b> <span className="text-foreground-600">{r.course && details.find(d => d.course.id === r.course.id)?.units.find(u => u.id === n.id)?.name}</span></span>)}</span> : <span className="text-foreground-400">—</span>}</td> : null}
+          {showDocCol ? <td className="px-3 py-2 text-xs">{documentSummary(r)}</td> : null}
+          {(() => { const h = hoursOf(r.unit);
+            return <td className="whitespace-nowrap px-3 py-2 text-right">
+              <span className={h && !h.confirmed ? "italic text-foreground-500" : "font-semibold"}>{h ? h.slitHours : "—"}</span><span className="text-foreground-500"> SLIT · {r.unit.nominalHours ?? "—"} nominal</span>
+              {h ? <span className="block text-xs text-foreground-500">{HOUR_PARTS.map(([key, label]) => `${label.replace(/ hrs$/i, "")} ${h[key]}`).join(" · ")}</span> : null}
+            </td>; })()}
           <td className="px-3 py-2"><span className={"rounded-full px-2 py-0.5 text-xs font-semibold " + (r.unit.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{r.unit.isActive ? "Active" : "Inactive"}</span></td>
         </tr>)}</tbody></table>
         {loading ? <p className="py-10 text-center text-sm text-foreground-500">Loading units…</p> : !filtered.length ? <p className="py-10 text-center text-sm text-foreground-500">{rows.some(r => r.course.id === courseId) ? "No matching units." : "No units yet. Use Add units to pick them from Training.gov.au."}</p> : null}
-      </div>
+      </div>; })()}
       {pageCount > 1 ? <div className="mt-3 flex items-center justify-between text-xs text-foreground-500">
         <span>{((currentPage-1)*PAGE+1) + "–" + Math.min(currentPage*PAGE,filtered.length) + " of " + filtered.length}</span>
         <div className="flex items-center gap-2">

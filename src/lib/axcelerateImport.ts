@@ -10,14 +10,14 @@ export type ImportEntity = 'locations' | 'courses' | 'trainers' | 'classes' | 'b
 export const ALL_ENTITIES: ImportEntity[] = ['locations', 'courses', 'trainers', 'classes', 'breaks', 'agents', 'students'];
 export const ENTITY_LABEL: Record<string, string> = {
   locations: 'Campuses', courses: 'Courses', agents: 'Agents', trainers: 'Trainers', classes: 'Classes', breaks: 'Breaks', students: 'Students',
-  location: 'Locations', course: 'Courses', unit: 'Units', trainer: 'Trainers', class: 'Classes', class_unit: 'Class units', break: 'Breaks', student: 'Students', agent: 'Agents', agency: 'Agent businesses', qualification: 'Qualifications',
+  location: 'Locations', course: 'Courses', unit: 'Units', trainer: 'Trainers', class: 'Classes', class_unit: 'Class units', break: 'Breaks', student: 'Students', agent: 'Agents', agency: 'Agent businesses', qualification: 'Qualifications', unit_result: 'Unit results', master: 'CoE master timetables',
 };
 /** One student's outcome (AXCELERATE-STUDENTS). */
 export type StudentResult = {
   contactId: string; action: string; name?: string; id?: string | null; warnings?: string[]; message?: string;
   agent?: { name?: string; action: string; student?: string; business?: string; message?: string };
   courses?: { name: string; status: string }[];
-  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[] }[];
+  qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[]; units?: { code: string; outcome?: string; action: string; message?: string }[] }[];
 };
 /** The owner's wording for each outcome. */
 export const STUDENT_OUTCOME: Record<string, string> = {
@@ -121,8 +121,8 @@ export const recordBadge = (table: string, id: string) => rpc<{ importedAt: stri
 /** "12 created, 3 updated, 1 error" for one entity's counts. */
 export function countsText(c: Record<string, number> | undefined): string {
   if (!c) return 'nothing';
-  const order = ['created', 'updated', 'linked', 'unchanged', 'moved', 'duplicate', 'conflict', 'skipped', 'error'];
-  const label: Record<string, string> = { created: 'created', updated: 'updated', linked: 'matched', unchanged: 'unchanged', duplicate: 'possible duplicate (needs review)', conflict: 'kept (edited in Skyline)', skipped: 'skipped', error: 'error' };
+  const order = ['created', 'updated', 'linked', 'unchanged', 'moved', 'duplicate', 'conflict', 'kept', 'open', 'skipped', 'error'];
+  const label: Record<string, string> = { created: 'created', updated: 'updated', linked: 'matched', unchanged: 'unchanged', kept: 'kept from Skyline', open: 'no result yet', duplicate: 'possible duplicate (needs review)', conflict: 'kept (edited in Skyline)', skipped: 'skipped', error: 'error' };
   const parts = order.filter((k) => c[k]).map((k) => `${c[k]} ${label[k]}${k === 'error' && c[k] > 1 ? 's' : ''}`);
   return parts.length ? parts.join(', ') : 'nothing';
 }

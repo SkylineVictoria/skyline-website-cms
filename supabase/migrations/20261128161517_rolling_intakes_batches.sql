@@ -5,10 +5,13 @@
 --      code), name = class name, its own start date, end date and capacity, linked to the aXcelerate class (entity 'batch').
 --   4. Unit dates belong to each batch (intake_batch_units, from its class); students follow their batch's unit dates
 --      (allocations carry the batch and its dates). The intake's own units are the course calendar's current cycle (a template).
---   5. Applications and offers: the ongoing intake with a start date chosen from the upcoming batch starts and calendar cycle
---      starts (course_join_options); the offer's start is the chosen date and its end is calculated from it (course_offer_end).
+--   5. Applications and offers: the start date is still chosen from the unit start dates (course_join_options, unchanged; the
+--      ongoing intake is offered while open); the offer's start is the chosen date and its end one course length later.
 --   6. A re-import turns the intake imported per class ("BSB80120 - JAN 2026 TO DEC 2026 -G1") into the ongoing intake with
 --      batch G1 (same records, no duplicates, no end date).
+--   7. Calendars (owner: "12 months back so it matches the current aXcelerate calendars"): the CoE / VoE calendars built from an
+--      aXcelerate class start at least 12 months back (was 6); every batch gets its daily classes (Mon-Fri 9:00-13:00).
+--   8. One Qualification per student and course: it starts on the student's aXcelerate start date and ends with their last unit.
 -- Seats: an ongoing intake is not limited as a whole (capacity lives on its batches).
 begin;
 
@@ -202,74 +205,6 @@ language sql stable security definer set search_path to 'pg_catalog', 'public', 
      where not l.ongoing and not m.on_master and l.start_date > t.d) n where n.rn <= public.rule_int('lms.intake_upcoming_per_load', 1);
 $$;
 
-/**
- * The start dates of a course for the application form. A dated intake: as before (its day one and its unit starts). The ongoing
- * intake: the upcoming batch starts and the course calendar's upcoming cycle starts (day one), and, when the rule allows joining at
- * any unit, the upcoming unit starts of its batches; each with the course end calculated from that start.
- */
-create or replace function public.course_join_options(p_course text) returns jsonb
-language plpgsql security definer set search_path to 'pg_catalog', 'public', 'pg_temp' as $$
-declare v_cid text := public.course_resolve_id(p_course); v_today date := public.course_intake_today(); v_old jsonb; v_list jsonb; v_ongoing jsonb;
-  v_any boolean := public.rule_text('lms.join_dates', 'Any unit start date') <> 'Intake day one only';
-begin
-  v_old := public.course_intakes_open(p_course);
-  if v_cid is null then return v_old; end if;
-  select coalesce(jsonb_agg(public.course_intake_json(i) || jsonb_build_object(
-      'fallback', false, 'running', i.start_date <= v_today, 'joinDate', s.d, 'firstDay', s.d = i.start_date,
-      'studyLoad', i.study_load, 'unitCode', cu.code, 'unitName', cu.name, 'prereqFirst', p.missed,
-      'option', format('Starts %s – %s (%s)%s', to_char(s.d, 'FMDD Mon YYYY'),
-        case when s.d = i.start_date then 'day one of the course' else coalesce(cu.code || ' ' || cu.name, 'next unit') end,
-        public.course_intake_name(i), case when p.missed then ' · missed prerequisites first' else '' end))
-    order by s.d, i.start_date, i.id), '[]'::jsonb) into v_list
-  from public.course_intakes i
-  cross join lateral (
-    select distinct z.d from (select i.start_date d union all select u.start_date from public.intake_units u where u.intake_id = i.id and v_any) z
-     where z.d >= v_today and (i.end_date is null or z.d <= i.end_date)) s
-  left join lateral (select u.unit_id from public.intake_units u where u.intake_id = i.id and u.start_date = s.d order by u.sort, u.id limit 1) fu on true
-  left join public.cms_course_units cu on cu.id = fu.unit_id
-  cross join lateral (select s.d > i.start_date and exists (
-      select 1 from public.intake_units q cross join lateral public.rto_unit_requires(q.unit_id) r(unit_id)
-        join public.intake_units pr on pr.intake_id = i.id and pr.unit_id = r.unit_id
-       where q.intake_id = i.id and q.start_date >= s.d and pr.start_date < s.d) missed) p
-  where i.id in (select public.course_intake_offered(v_cid)) and not i.ongoing;
-
-  -- The ongoing intakes: batch starts, calendar cycle starts and (rule) the batches' unit starts.
-  select coalesce(jsonb_agg(public.course_intake_json(i) || jsonb_build_object(
-      'fallback', false, 'running', true, 'joinDate', s.d, 'firstDay', s.first_day, 'studyLoad', i.study_load,
-      'unitCode', cu.code, 'unitName', cu.name, 'prereqFirst', false, 'batchCode', s.batch_code,
-      'courseEndDate', public.course_offer_end(i.id, s.d),
-      'option', format('Starts %s – %s (%s)', to_char(s.d, 'FMDD Mon YYYY'),
-        case when s.first_day then 'day one of the course' else coalesce(cu.code || ' ' || cu.name, 'next unit') end,
-        public.course_intake_display(i)))
-    order by s.d, i.id), '[]'::jsonb) into v_ongoing
-  from public.course_intakes i
-  cross join lateral (
-    select z.d, bool_or(z.first_day) as first_day, min(z.unit_id) filter (where not z.first_day) as unit_id, min(z.batch_code) as batch_code from (
-      select b.start_date as d, true as first_day, null::text as unit_id, b.code as batch_code from public.intake_batches b
-       where b.intake_id = i.id and b.archived_at is null and b.start_date is not null
-      union all
-      select x.f, true, null, null from (
-        select cycle, min(start_date) as f from public.course_coe_units where course_id = i.course_id and public.course_master_kind_for(i.course_id, i.study_load) = 'coe' group by cycle
-        union all
-        select cycle, min(start_date) from public.course_voe_units where course_id = i.course_id and start_date is not null
-           and public.course_master_kind_for(i.course_id, i.study_load) = 'voe' group by cycle) x
-      union all
-      select bu.start_date, false, bu.unit_id, b.code from public.intake_batch_units bu join public.intake_batches b on b.id = bu.batch_id
-       where b.intake_id = i.id and b.archived_at is null and v_any) z
-     where z.d >= v_today
-     group by z.d) s
-  left join public.cms_course_units cu on cu.id = s.unit_id
-  where i.id in (select public.course_intake_offered(v_cid)) and i.ongoing;
-  v_list := v_list || v_ongoing;
-
-  if jsonb_array_length(v_list) > 0 then return v_list; end if;
-  if not v_any then
-    return coalesce((select jsonb_agg(x.v order by x.n) from jsonb_array_elements(v_old) with ordinality x(v, n)
-      where not coalesce((x.v->>'running')::boolean, false)), '[]'::jsonb);
-  end if;
-  return v_old;
-end $$;
-
 -- 3. Classes per batch: a batch with its own unit dates is timetabled on them (else on the intake's); an ongoing intake is always
 --    generated batch by batch.
 do $$
@@ -452,7 +387,16 @@ end $$;
 revoke all on function public.rto_intake_merge(uuid, uuid, uuid) from public, anon, authenticated;
 grant execute on function public.rto_intake_merge(uuid, uuid, uuid) to service_role;
 
--- 6. aXcelerate: a class is a batch of the ongoing intake ------------------------------------------------------------------
+-- 6. Calendars from aXcelerate start at least 12 months back (was 6).
+do $$
+declare d text := pg_get_functiondef('public.axcelerate_course_calendars(uuid, uuid, uuid, text, text, jsonb)'::regprocedure); a text;
+begin
+  a := '(v_today - interval ''6 months'')';
+  if position(a in d) = 0 then raise exception 'axcelerate_course_calendars: anchor not found'; end if;
+  execute replace(d, a, '(v_today - interval ''12 months'')');
+end $$;
+
+-- 7. aXcelerate: a class is a batch of the ongoing intake ------------------------------------------------------------------
 /** The batch code at the end of an aXcelerate class / workshop name ("... -G1", "BSBLDR601_BSB80120_G1" -> G1), or null. */
 create or replace function public.axcelerate_batch_code(p_name text) returns text
 language sql immutable set search_path = public as $$
@@ -842,6 +786,15 @@ begin
   select coalesce(jsonb_agg(cu.code || coalesce(' (' || b.code || ')', '') order by a.assigned_start_date, cu.code), '[]'::jsonb) into v_alloc
     from public.lms_unit_students a join public.cms_course_units cu on cu.id = a.unit_id left join public.intake_batches b on b.id = a.batch_id
    where a.student_id = e.student_id and a.course_id = i.course_id;
+  -- One Qualification: from the student's start (aXcelerate's) to the end of their last unit.
+  update public.intake_enrolments q
+     set course_start_date = coalesce(q.enrolled_on, q.course_start_date),
+         course_end_date = greatest(coalesce(q.enrolled_on, q.course_start_date), x.last_end)
+    from (select max(coalesce(a.actual_end_date, a.assigned_end_date)) as last_end from public.lms_unit_students a
+           where a.student_id = e.student_id and a.course_id = i.course_id) x
+   where q.id = e.id and x.last_end is not null
+     and (q.course_end_date is distinct from greatest(coalesce(q.enrolled_on, q.course_start_date), x.last_end)
+          or q.course_start_date is distinct from coalesce(q.enrolled_on, q.course_start_date));
   select coalesce(jsonb_agg(cu.code order by cu.sort, cu.code), '[]'::jsonb) into v_missed from public.cms_course_units cu
    where cu.course_id = i.course_id and cu.is_active and not lms_allocation_private.unit_completed(e.student_id, cu.id)
      and not exists (select 1 from public.lms_unit_students a where a.student_id = e.student_id and a.course_id = i.course_id and a.unit_id = cu.id);

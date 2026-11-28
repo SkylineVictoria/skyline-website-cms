@@ -479,7 +479,10 @@ test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs eve
 });
 
 test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled students once each, changed-since windows, outcomes kept',async()=>{
- const {runImport,stagesFor,updatedWindows}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');
+ const {runImport,stagesFor,updatedWindows,attendanceRows}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');
+ // AXCELERATE-ATTENDANCE: only this student's attendance, from sessions with attendees or from rows per contact.
+ assert.deepEqual(attendanceRows([{DATE:'2026-05-04',ENROLLEES:[{CONTACTID:11,ATTENDED:true},{CONTACTID:12,ATTENDED:false}]},{DATE:'2026-05-05',ENROLLEES:[{CONTACTID:12,ATTENDED:true}]}],'11'),[{DATE:'2026-05-04',CONTACTID:11,ATTENDED:true}]);
+ assert.deepEqual(attendanceRows([{CONTACTID:'11',DATE:'2026-05-06',STATUS:'Absent'},{CONTACTID:'13',DATE:'2026-05-06',STATUS:'Present'}],'11'),[{CONTACTID:'11',DATE:'2026-05-06',STATUS:'Absent'}]);
  assert.deepEqual(stagesFor(['students']),['student_list','students']);
  // AXCELERATE-IMPORT-SCREENS: every entity on its own, and everything in dependency order.
  assert.deepEqual(stagesFor(['locations']),['locations']);assert.deepEqual(stagesFor(['courses']),['courses']);assert.deepEqual(stagesFor(['agents']),['agents']);

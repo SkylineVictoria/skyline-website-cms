@@ -15,7 +15,7 @@ import { unmappedTokens, type LetterVariable } from "../../../../../supabase/fun
 import { isTemplateAsset } from "../../../../../supabase/functions/_shared/rich-html";
 import { sectionsReport } from "@/lib/templateSections";
 import { richPlainText, sanitizeRichHtml } from "../../../../../supabase/functions/_shared/rich-html";
-import { docxText, paymentDraft, pdfBytes, signingAction, signingAdmin, templatePayment, validatePayment, type PaymentDraft, type SigningRole, type SigningTemplate, type TemplateField } from "@/lib/signingApi";
+import { docxText, listTemplateParts, paymentDraft, pdfBytes, signingAction, signingAdmin, templatePayment, validatePayment, type PaymentDraft, type SigningRole, type SigningTemplate, type TemplateField } from "@/lib/signingApi";
 import { PaymentFields } from "./PaymentForm";
 import { SIGN_CATEGORIES, SUBJECT_VARIABLES, signingVariables } from "../../../../../supabase/functions/_shared/signing";
 import {
@@ -181,6 +181,18 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       header_html: DEFAULT_APPLICATION_FORM_TEMPLATE.header_html ?? "", body_html: DEFAULT_APPLICATION_FORM_TEMPLATE.body_html, footer_html: DEFAULT_APPLICATION_FORM_TEMPLATE.footer_html ?? "" }));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when a new application form opens
   }, [template, afm]);
+  // HOUSE-STYLE: a new document template starts with the house letterhead and footer presets (both stay editable).
+  useEffect(() => {
+    if (template || loo || afm || draft.kind !== "text" || isTemplateType(draft.category) || draft.header_html.trim() || draft.footer_html.trim()) return;
+    let active = true;
+    void listTemplateParts().then((parts) => {
+      const header = parts.find((p) => p.kind === "header" && p.name === "SLIT house letterhead")?.html ?? "";
+      const footer = parts.find((p) => p.kind === "footer" && p.name === "SLIT house footer")?.html ?? "";
+      if (active && (header || footer)) setDraft((d) => (d.header_html.trim() || d.footer_html.trim() ? d : { ...d, header_html: header, footer_html: footer }));
+    }, () => undefined);
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when a new document template opens
+  }, [template, loo, afm, draft.kind]);
   // A new student letter starts with the standard SLIT letterhead and footer (from the database; both stay editable).
   useEffect(() => {
     if (template || !loo || draft.header_html.trim() || draft.footer_html.trim()) return;

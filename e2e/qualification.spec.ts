@@ -269,5 +269,11 @@ test.describe("Application form templates", () => {
     // back to the standard one for the other tests
     await row.getByTestId("application-form-make-default").click();
     await expect(row.getByTestId("application-form-default")).toBeVisible();
+    // HOUSE-STYLE: a new document template starts with the house letterhead and footer presets.
+    await page.getByTestId("new-template").click();
+    await page.getByTestId("template-audience-agency").click();
+    const dialog = page.getByTestId("template-dialog");
+    await expect(dialog).toContainText("Total Pages", { timeout: 15_000 });
+    await page.screenshot({ path: "test-results/house-document-template.png" });
   });
 });

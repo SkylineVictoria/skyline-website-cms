@@ -17,7 +17,7 @@ import MasterTimetableTab from "./MasterTimetableTab";
 import AddUnitsFromTga from "./AddUnitsFromTga";
 import VoeCalendarEditor, { VoeTab } from "./VoeCalendarEditor";
 import WeeklyClassBookingDialog, { type DraftWeek } from "@/pages/admin/components/rto/WeeklyClassBooking";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
@@ -114,6 +114,8 @@ export default function LmsCoursesPage() {
   const [campus, setCampus] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
   const [tab, setTab] = useState<Tab>("overview");
+  /** The weekly calendars are opened on purpose (Course calendars, or a link to them); otherwise the course shows its overview and units. */
+  const [calendarsOpen, setCalendarsOpen] = useState(false);
 
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
@@ -268,6 +270,7 @@ export default function LmsCoursesPage() {
     const wanted = params.get("tab");
     if (!params.get("course") || !courses.length) return;
     if (wanted === "master" || wanted === "units" || wanted === "voe") setTab(wanted);
+    if (wanted === "master" || wanted === "voe") setCalendarsOpen(true);
     setParams({}, { replace: true });
   }, [courses, params, setParams]);
   useEffect(() => {
@@ -358,7 +361,7 @@ export default function LmsCoursesPage() {
   const slitPending = slit.some(h => h && !h.confirmed);
   const slitDuration = detail && slitHours > 0 ? courseWeeksLabel(slitHours) : "";
 
-  const pick = (id: string) => { setSelectedId(id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
+  const pick = (id: string) => { setSelectedId(id); setTab("overview"); setCalendarsOpen(false); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
   /** next: "units" opens Add units (then the first intake), "intake" opens New intake (units already chosen), "none" just shows it. */
   const reloadAfterAdd = (courseId: string, next: "units" | "intake" | "none" = "none") => {
     setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); setEditing(false); setSyncNote([]);
@@ -394,14 +397,16 @@ export default function LmsCoursesPage() {
     ["Units", detail ? String(units.length) : "…"],
     ["SLIT hours", detailLoading ? "…" : detail ? slitHours.toLocaleString() + (slitPending ? " (to review)" : "") : "—"],
   ] : [];
-  // The daily timetables sit next to the weekly calendars (owner, 2026-11-21): CoE weekly, VoE weekly, CoE daily, VoE daily.
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" },
-    { id: "coeDaily", label: "CoE Daily Timetable" }, { id: "voeDaily", label: "VoE Daily Timetable" }] as const;
   /** The wizard is unfinished until both weekly calendars are saved and the weekly classes are booked. */
   const wizardUnfinished = !!(canEdit && selected && detail && masterSaved !== null && (masterSaved === false || voeSaved === false || !classesDone));
+  // The course page shows the course and its units (owner, 2026-11-28: "no need to show weekly and daily in courses"). The weekly and
+  // daily calendars are on each intake (Intakes › an intake › Weekly and daily calendars); here only while the setup wizard needs them.
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, ...(wizardUnfinished || wizard || calendarsOpen ? [{ id: "master", label: "CoE Weekly Calendar" }, { id: "voe", label: "VoE Weekly Calendar" },
+    { id: "coeDaily", label: "CoE Daily Timetable" }, { id: "voeDaily", label: "VoE Daily Timetable" }] as const : [])] as const;
+  const shownTab = tabs.some(t => t.id === tab) ? tab : "overview";
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
-  const pane: Pane = tab === "master" || tab === "voe" || tab === "prereq" || tab === "coeDaily" || tab === "voeDaily" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
+  const pane: Pane = shownTab === "master" || shownTab === "voe" || tab === "prereq" || shownTab === "coeDaily" || shownTab === "voeDaily" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
     <header className="flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -584,39 +589,49 @@ export default function LmsCoursesPage() {
             <CricosCourseSection key={selectedId + ":edit"} courseId={selectedId} onSaved={() => { setReloadKey(k => k + 1); void load(selectedId); }} />
           </div> : <>
             <div role="tablist" aria-label="Course sections" className="mt-5 flex gap-5 border-b border-background-200">
-              {tabs.map(t => <button key={t.id} role="tab" aria-selected={tab === t.id} type="button" onClick={() => setTab(t.id)}
-                className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (tab === t.id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t.label}</button>)}
+              {tabs.map(t => <button key={t.id} role="tab" aria-selected={shownTab === t.id} type="button" onClick={() => setTab(t.id)}
+                className={"-mb-px border-b-2 px-1 py-2 text-sm font-semibold " + (shownTab === t.id ? "border-primary-600 text-primary-700" : "border-transparent text-foreground-500 hover:text-foreground-800")}>{t.label}</button>)}
             </div>
             <div role="tabpanel" className="pt-4">
-              {tab === "overview" ? <div className="space-y-6"><dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
-                {([["Course name", selected.name + (selected.variantLabel ? ` (${selected.variantLabel})` : "")], ["Course code", selected.code], ["CRICOS code", selected.cricos],
-                  ["Category", selected.category], ["Training package", selected.trainingPackage],
-                  ["Duration", slitDuration ? `${slitDuration} (${slitHours.toLocaleString()} SLIT hrs ÷ ${HOURS_PER_WEEK} a week)` : ""],
-                  ["CRICOS registered duration", selected.duration], ["Delivery mode", selected.mode],
-                  ["Campus", selected.campus ?? ""], ["Open intakes", selected.openIntakes ? String(selected.openIntakes) : ""], ["training.gov.au", selected.tgaUrl ?? ""]] as [string, string][])
-                  .filter(([, value]) => value && value.trim()).map(([label, value]) => <div key={label}>
-                    <dt className="text-xs text-foreground-500">{label}</dt>
-                    <dd className="break-words font-medium text-foreground-950">{label === "training.gov.au" ? <a className="text-primary-700 underline" href={value} target="_blank" rel="noreferrer">{value}</a> : value}</dd>
-                  </div>)}
-              </dl>
-              {detail ? <section className="border-t border-background-200 pt-5">
-                <h3 className="mb-3 font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">CRICOS</h3>
-                <CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly />
-              </section> : null}
-              {detail ? <section className="border-t border-background-200 pt-5">
-                <h3 className="mb-3 font-heading text-sm font-bold uppercase tracking-wide text-foreground-500">Training.gov.au</h3>
-                <SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} />
-              </section> : null}
+              {shownTab === "overview" ? <div className="space-y-4">
+                {/* Organised in groups; the summary strip above already shows duration, delivery, campus, units and hours. */}
+                {([["Qualification", [["Course name", selected.name + (selected.variantLabel ? ` (${selected.variantLabel})` : "")], ["Course code", selected.code],
+                    ["Category", selected.category], ["Training package", selected.trainingPackage], ["training.gov.au", selected.tgaUrl ?? ""]]],
+                  ["Duration and delivery", [["Duration", slitDuration ? `${slitDuration} (${slitHours.toLocaleString()} SLIT hrs ÷ ${HOURS_PER_WEEK} a week)` : ""],
+                    ["CRICOS code", selected.cricos], ["CRICOS registered duration", selected.duration], ["Delivery mode", selected.mode], ["Campus", selected.campus ?? ""]]]] as [string, [string, string][]][])
+                  .map(([group, rows]) => { const shown = rows.filter(([, value]) => value && value.trim()); return shown.length ? <section key={group} className="rounded-lg border border-background-200 p-4">
+                    <h3 className="mb-3 font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">{group}</h3>
+                    <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">{shown.map(([label, value]) => <div key={label} className="min-w-0">
+                      <dt className="text-xs text-foreground-500">{label}</dt>
+                      <dd className="break-words font-medium text-foreground-950">{label === "training.gov.au" ? <a className="text-primary-700 underline" href={value} target="_blank" rel="noreferrer">{value}</a> : value}</dd>
+                    </div>)}</dl></section> : null; })}
+                <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-background-200 p-4 text-sm">
+                  <div><h3 className="font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">Intakes and timetables</h3>
+                    <p className="mt-1 text-foreground-700">{selected.openIntakes ? `${selected.openIntakes} open intake${selected.openIntakes === 1 ? "" : "s"}.` : "No open intake."} The weekly and daily calendars, batches and attendance are on each intake.</p></div>
+                  <span className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => { setCalendarsOpen(true); setTab("master"); }} title="The course's CoE and VoE weekly calendars (cycles and unit dates)"
+                      className="rounded-lg border border-background-300 px-3 py-2 font-semibold text-foreground-800 hover:bg-background-100">Course calendars</button>
+                    <Link to="/admin/lms/intakes" className="rounded-lg border border-background-300 px-3 py-2 font-semibold text-foreground-800 hover:bg-background-100">Open intakes</Link>
+                  </span>
+                </section>
+                {detail ? <details className="rounded-lg border border-background-200">
+                  <summary className="cursor-pointer px-4 py-3 font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">CRICOS</summary>
+                  <div className="border-t border-background-200 p-4"><CricosCourseSection key={selectedId + ":view:" + reloadKey} courseId={selectedId} readOnly /></div>
+                </details> : null}
+                {detail ? <details className="rounded-lg border border-background-200">
+                  <summary className="cursor-pointer px-4 py-3 font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">Training.gov.au</summary>
+                  <div className="border-t border-background-200 p-4"><SavedTrainingGovDetails key={selectedId + ":" + reloadKey} courseId={selectedId} units={detail.units} /></div>
+                </details> : null}
               </div> : null}
-              {tab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
-              {tab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} /> : null}
-              {(tab === "coeDaily" || tab === "voeDaily") && selected ? <div className="space-y-3 rounded-lg border border-background-200 bg-background-50 p-5">
-                <h3 className="font-heading text-lg font-bold text-foreground-950">{tab === "coeDaily" ? "CoE" : "VoE"} daily timetable</h3>
-                <p className="text-sm text-foreground-600">The week's classes for {tab === "coeDaily" ? "CoE (20 hours a week)" : "VoE (40 hours a week)"} students: day, kind, room, trainer and times. The timetable is saved with the course setup.</p>
+              {shownTab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
+              {shownTab === "voe" && selected ? <VoeTab key={selectedId + ":" + reloadKey} course={selected} canEdit={canEdit} /> : null}
+              {(shownTab === "coeDaily" || shownTab === "voeDaily") && selected ? <div className="space-y-3 rounded-lg border border-background-200 bg-background-50 p-5">
+                <h3 className="font-heading text-lg font-bold text-foreground-950">{shownTab === "coeDaily" ? "CoE" : "VoE"} daily timetable</h3>
+                <p className="text-sm text-foreground-600">The week's classes for {shownTab === "coeDaily" ? "CoE (20 hours a week)" : "VoE (40 hours a week)"} students: day, kind, room, trainer and times. The timetable is saved with the course setup.</p>
                 {wizardUnfinished ? <p className="text-sm font-semibold text-amber-800">Use <b>Continue setup</b> above to create or resume this timetable.</p>
                   : <p className="text-sm text-foreground-600">The course setup is finished. Manage this timetable from its intake.</p>}
               </div> : null}
-              {tab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
+              {shownTab === "master" && selected ? <MasterTimetableTab key={selectedId + ":" + reloadKey} courseId={selectedId} courseCode={selected.code} /> : null}
             </div>
           </>}
         </>}

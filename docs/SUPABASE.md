@@ -1389,6 +1389,7 @@ headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT f
 Importing into Skyline records is not built yet.
 
 ## aXcelerate Qualifications and import screens (AXCELERATE-QUALIFICATIONS, 2026-11-28, RELEASED)
+Migrations 20261128101517_axcelerate_timetable_results + 20261128111517_axcelerate_calendar_fit: axcelerate_class_calendar (CoE master or VoE calendar of the class's kind from aXcelerate's unit dates), axcelerate_class_timetable, axcelerate_import_unit_results, axcelerate_course_cricos; a class is CoE only with a CRICOS code; links entity adds master, unit_result. axcelerate-import v5 looks courses up on the CRICOS register (data.gov.au, provider code from cms_settings.cricos) and imports unit results per Qualification.
 Migration 20261128091517_axcelerate_location_match: axcelerate_import_location matches an unlinked location by AVETMISS location ID (aXcelerate CODE), then name, and overwrites its name / address with aXcelerate's (the record and its rooms stay).
 Migration 20261128081517_axcelerate_qualifications: axcelerate_class_room (placeholder classroom per campus for an imported class without a group),
 axcelerate_import_qualification (application source 'axcelerate': draft -> submitted (portal.signed_submit, status_command) -> enrolled

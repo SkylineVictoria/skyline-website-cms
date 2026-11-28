@@ -10,11 +10,15 @@
 //   entity "trainers": the trainers named on aXcelerate's classes (aXcelerate has no trainer list on the read-only list)
 //   entity "classes":  the classes, creating their course, units, location and trainer when they do not exist yet
 //   entity "breaks":   aXcelerate's calendar events (/course/calendar) as term breaks of the courses that have imported classes
+//   entity "students": aXcelerate contacts as students (AXCELERATE-STUDENTS): one contact (scope "one"), or every contact enrolled in a
+//                      course (scope "all", from /course/enrolments per course; with `since`, only enrolments changed since then)
 // The run's cursor is saved after every step, so a long import continues on the next call ("continue") and can be cancelled.
 
-export type ImportEntity = 'trainers' | 'classes' | 'breaks';
-export const IMPORT_ENTITIES: readonly ImportEntity[] = ['trainers', 'classes', 'breaks'];
-export type Stage = 'locations' | 'courses' | 'classes' | 'breaks' | 'done';
+export type ImportEntity = 'trainers' | 'classes' | 'breaks' | 'students';
+export const IMPORT_ENTITIES: readonly ImportEntity[] = ['trainers', 'classes', 'breaks', 'students'];
+export type Stage = 'locations' | 'courses' | 'classes' | 'breaks' | 'student_list' | 'students' | 'done';
+/** One student's outcome, kept on the run so the page can show it ("Student imported", "Needs review: possible duplicate" ...). */
+export type StudentResult = { contactId: string; action: string; name?: string; id?: string | null; warnings?: string[]; message?: string };
 export type Counts = Record<string, Record<string, number>>;
 export type Cursor = {
   stage?: Stage;
@@ -24,6 +28,15 @@ export type Cursor = {
   locations?: Record<string, string>;
   trainers?: Record<string, string>;
   notes?: string[];
+  /** Students: "one" (contactId) or "all" (every enrolled contact; `since` = only enrolments changed since then, ISO time). */
+  scope?: 'one' | 'all';
+  contactId?: string;
+  since?: string | null;
+  studentCourses?: string[];
+  studentCourseIndex?: number;
+  contacts?: string[];
+  contactIndex?: number;
+  results?: StudentResult[];
 };
 type Row = Record<string, unknown>;
 type Answer = { status: number; data: unknown };
@@ -53,6 +66,7 @@ export function stagesFor(entities: ImportEntity[]): Stage[] {
   if (want.has('classes')) stages.push('locations');
   if (want.has('classes') || want.has('trainers') || want.has('breaks')) stages.push('courses', 'classes');
   if (want.has('breaks')) stages.push('breaks');
+  if (want.has('students')) stages.push('student_list', 'students');
   return stages;
 }
 
@@ -71,6 +85,19 @@ async function call(deps: ImportDeps, entity: string, ax: string, label: string,
 async function fail(deps: ImportDeps, entity: string, ax: string, label: string, message: string, raw: Row = {}) {
   bump(deps.counts, entity, 'error');
   await deps.rpc('axcelerate_import_error', { p_run: deps.run, p_entity: entity, p_ax: ax || null, p_label: label || null, p_message: message, p_raw: raw });
+}
+
+/** aXcelerate's "YYYY-MM-DD hh:mm" for lastUpdated_min / _max. */
+const axTime = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+/** [min, max] windows of at most 89 days from `since` to now (aXcelerate allows 90 days per request). */
+export function updatedWindows(since: string, now: number): [string, string][] {
+  const day = 86_400_000;
+  // One day of overlap: an enrolment read twice is simply "Already up to date".
+  let from = Date.parse(since) - day;
+  if (!Number.isFinite(from)) return [];
+  const out: [string, string][] = [];
+  while (from < now) { const to = Math.min(now, from + 89 * day); out.push([axTime(from), axTime(to)]); from = to; }
+  return out;
 }
 
 /** Runs (or continues) an import until it is done, cancelled, or the time budget is used. */
@@ -148,6 +175,74 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
         }
         c.courseIndex = i + 1;
         if (!(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
+      }
+      next(); if (!(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
+      continue;
+    }
+
+    if (c.stage === 'student_list') {
+      if (c.scope === 'one') {
+        c.contacts = c.contactId ? [c.contactId] : [];
+      } else {
+        // The courses to read enrolments from: the ones this run already listed, else aXcelerate's course list.
+        if (!c.studentCourses) {
+          c.studentCourses = (c.courses ?? []).map((x) => x.ax);
+          if (!c.studentCourses.length) c.studentCourses = (await deps.client.getAll('/courses', { type: 'p' })).map((r) => text(r, 'ID')).filter(Boolean);
+          c.studentCourseIndex = 0; c.contacts = [];
+        }
+        const windows = c.since ? updatedWindows(c.since, now()) : [];
+        const seen = new Set(c.contacts ?? []);
+        for (let i = c.studentCourseIndex ?? 0; i < c.studentCourses.length; i++) {
+          if (!timeLeft()) { c.studentCourseIndex = i; c.contacts = [...seen]; await checkpoint(); return { done: false, cancelled: false, cursor: c, counts: deps.counts }; }
+          const passes: Record<string, unknown>[] = windows.length ? windows.map(([min, max]) => ({ lastUpdated_min: min, lastUpdated_max: max })) : [{}];
+          for (const extra of passes) {
+            const rows = await deps.client.getAll('/course/enrolments', { ID: c.studentCourses[i], type: 'p', ...extra }, { sizeParam: 'limit' });
+            for (const r of rows) { const id = text(r, 'CONTACTID'); if (id) seen.add(id); }
+          }
+          c.studentCourseIndex = i + 1; c.contacts = [...seen];
+          if (!(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
+        }
+        c.contacts = [...seen];
+        if (!c.contacts.length) c.notes!.push(c.since ? 'No student enrolments changed in aXcelerate since the last import.' : 'aXcelerate returned no enrolled students.');
+      }
+      c.contactIndex = 0;
+      next(); if (!(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
+      continue;
+    }
+
+    if (c.stage === 'students') {
+      const contacts = c.contacts ?? [];
+      c.results ??= [];
+      for (let i = c.contactIndex ?? 0; i < contacts.length; i++) {
+        if (!timeLeft()) { c.contactIndex = i; await checkpoint(); return { done: false, cancelled: false, cursor: c, counts: deps.counts }; }
+        const id = contacts[i];
+        const a = await deps.client.get(`/contact/${id}`, {});
+        const rec = a.status < 300 ? one(a.data) : null;
+        let result: StudentResult;
+        if (!rec) {
+          const message = a.status === 404 ? `aXcelerate has no contact ${id}.` : `aXcelerate answered HTTP ${a.status} for contact ${id}.`;
+          await fail(deps, 'student', id, '', message);
+          result = { contactId: id, action: 'error', message };
+        } else {
+          const raw = { ...rec, CONTACTID: text(rec, 'CONTACTID') || id };
+          const r = await deps.rpc('axcelerate_import_student', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: raw, p_target: null, p_create: false });
+          const name = `${text(raw, 'GIVENNAME')} ${text(raw, 'SURNAME')}`.trim();
+          if (r.error) {
+            bump(deps.counts, 'student', 'error');
+            await deps.rpc('axcelerate_import_error', { p_run: deps.run, p_entity: 'student', p_ax: id, p_label: name || null, p_message: r.error.message ?? 'Import failed', p_raw: raw });
+            result = { contactId: id, action: 'error', name, message: r.error.message ?? 'Import failed' };
+          } else {
+            const out = (r.data ?? {}) as { action?: string; id?: string | null; name?: string; warnings?: string[] };
+            bump(deps.counts, 'student', out.action ?? 'done');
+            result = { contactId: id, action: out.action ?? 'done', name: out.name ?? name, id: out.id ?? null, warnings: out.warnings ?? [] };
+          }
+        }
+        // Keep each student's outcome for "one"; for "all", only the ones that need attention (the counts carry the rest).
+        if (c.scope === 'one' || !['created', 'updated', 'unchanged'].includes(result.action) || (result.warnings?.length ?? 0) > 0) {
+          if (c.results.length < 500) c.results.push(result);
+        }
+        c.contactIndex = i + 1;
+        if ((i + 1) % 10 === 0 && !(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
       }
       next(); if (!(await checkpoint())) return { done: false, cancelled: true, cursor: c, counts: deps.counts };
       continue;

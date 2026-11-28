@@ -1388,6 +1388,19 @@ headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT f
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
 Importing into Skyline records is not built yet.
 
+## aXcelerate students (AXCELERATE-STUDENTS, 2026-11-28, LOCAL ONLY)
+Students page › Import from aXcelerate: one student (axcelerate-import action `search_students` = GET /contacts/search, max 20, filtered again
+on the words / digits typed; then start {entities: ['students'], students: {scope: 'one', contactId}}), or all (scope 'all': GET
+/course/enrolments per course, type p, paged by limit; `changedOnly` = only enrolments with lastUpdated since the last finished "all" run, in
+89-day windows; contacts have no updated-since filter in aXcelerate). Engine stages student_list -> students (GET /contact/:id each; outcome
+per student kept in cursor.results). Migration 20261128051517_axcelerate_students: entity 'student' on axcelerate_links, axcelerate_link_touch
+on enrollment_students, table `axcelerate_reviews` (possible duplicates: same email / mobile / name + date of birth), axcelerate_import_student
+(created | updated | unchanged | duplicate | conflict | skipped; new students go to the direct-students business (agencies.is_direct), no agent;
+AVETMISS answers stored as the application form's options only when avetmiss_code accepts them, else a warning), axcelerate_review_decide
+(link: fills empty fields, other differences become conflicts | create | dismiss), axcelerate_conflict_decide now also takes student fields
+(columns and details.<answer>), axcelerate_import_overview adds reviews and studentsImportedAt, axcelerate_students_linked. "Import everything"
+now includes students. No new env names.
+
 ## aXcelerate import (AXCELERATE-IMPORT, 2026-11-28, RELEASED)
 One way only: aXcelerate -> Skyline. `_shared/integrations/axcelerate.ts` = axcelerateClient, the only gateway: GET only, the owner's read-only
 allow-list (contacts, courses, instances, calendar, venues, trainers, organisations, finance reads ...); anything else throws AxcelerateBlocked.

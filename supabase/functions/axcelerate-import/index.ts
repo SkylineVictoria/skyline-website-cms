@@ -3,7 +3,9 @@
 // verify_jwt = true. Before anything else: the caller's token must belong to a holder of the "aXcelerate import" permission
 // (axcelerate_import_allowed, checked with the caller's token); a refused caller is recorded as a security event (admins emailed).
 // Actions:
-//   start    {entities: ['trainers'|'classes'|'breaks'], mode: 'page'|'everything'}  -> starts a run and works on it
+//   start    {entities: ['trainers'|'classes'|'breaks'|'students'], mode: 'page'|'everything',
+//             students?: {scope: 'one', contactId} | {scope: 'all', changedOnly}}             -> starts a run and works on it
+//   search_students {query}                                                            -> up to 20 aXcelerate contacts (read only)
 //   continue {runId}                                                                  -> works on a running run (the page calls it until done)
 //   retry    {runId}                                                                  -> a new run for the same entities as a failed / cancelled one
 //   survey   {}                                                                       -> record counts in aXcelerate (read only)
@@ -77,25 +79,69 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, survey });
     }
 
+    if (action === 'search_students') {
+      // AXCELERATE-STUDENTS: find one student in aXcelerate by name, email or mobile (at least 3 letters). Read only.
+      const query = typeof body.query === 'string' ? body.query.trim().slice(0, 100) : '';
+      if (query.length < 3) return json({ error: 'Type at least 3 letters.' }, 400);
+      const a = await client.get('/contacts/search', { search: query, displayLength: 50 });
+      if (a.status < 200 || a.status >= 300) return json({ error: a.status === 401 || a.status === 403 ? 'aXcelerate refused the tokens. Check the connection.' : `aXcelerate answered HTTP ${a.status}.` }, 502);
+      const rows = Array.isArray(a.data) ? a.data as Record<string, unknown>[] : [];
+      const str = (r: Record<string, unknown>, k: string) => (r[k] === null || r[k] === undefined ? '' : String(r[k]).trim());
+      // The search must match what was typed (name, email or mobile; every word), whatever aXcelerate's own matching did.
+      const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const digits = query.replace(/\D/g, '');
+      const results = rows.map((r) => ({
+        contactId: str(r, 'CONTACTID'), name: `${str(r, 'GIVENNAME')} ${str(r, 'SURNAME')}`.trim(), email: str(r, 'EMAILADDRESS'),
+        mobile: str(r, 'MOBILEPHONE') || str(r, 'PHONE'), dob: str(r, 'DOB').slice(0, 10),
+      })).filter((r) => r.contactId && (
+        words.every((w) => `${r.name} ${r.email}`.toLowerCase().includes(w)) || (digits.length >= 3 && r.mobile.replace(/\D/g, '').includes(digits))
+      )).slice(0, 20);
+      const linked = results.length ? await admin.rpc('axcelerate_students_linked', { p_connection: conn.id, p_ids: results.map((r) => r.contactId) }) : { data: {} };
+      const map = (linked.data ?? {}) as Record<string, string>;
+      return json({ ok: true, results: results.map((r) => ({ ...r, studentId: map[r.contactId] ?? null })) });
+    }
+
     let runId: string | null = null;
     let entities: ImportEntity[] = [];
     let cursor: Cursor = {};
     let counts: Counts = {};
     if (action === 'start' || action === 'retry') {
       let retryOf: string | null = null;
+      let retryStudents: Cursor | null = null;
       let mode = body.mode === 'everything' ? 'everything' : 'page';
       if (action === 'retry') {
         if (typeof body.runId !== 'string' || !uuid.test(body.runId)) return json({ error: 'Choose the import to retry.' }, 400);
-        const { data: old } = await admin.from('axcelerate_import_runs').select('id,entities,mode,status,connection_id').eq('id', body.runId).maybeSingle();
+        const { data: old } = await admin.from('axcelerate_import_runs').select('id,entities,mode,status,connection_id,cursor').eq('id', body.runId).maybeSingle();
         if (!old || old.connection_id !== conn.id || !['failed', 'cancelled', 'done'].includes(old.status)) return json({ error: 'This import cannot be retried.' }, 409);
         entities = (old.entities as string[]).filter((e): e is ImportEntity => (IMPORT_ENTITIES as readonly string[]).includes(e));
         mode = old.mode === 'everything' ? 'everything' : 'page';
         retryOf = old.id;
+        const oc = (old.cursor ?? {}) as Cursor;
+        retryStudents = oc.scope === 'one' ? { scope: 'one', contactId: oc.contactId } : { scope: 'all', since: oc.since ?? null, notes: [] };
       } else {
         const asked = Array.isArray(body.entities) ? body.entities.map(String) : [];
         entities = mode === 'everything' ? [...IMPORT_ENTITIES] : asked.filter((e): e is ImportEntity => (IMPORT_ENTITIES as readonly string[]).includes(e));
       }
       if (!entities.length) return json({ error: 'Choose what to import.' }, 400);
+      if (entities.includes('students')) {
+        // AXCELERATE-STUDENTS: one student, or all; "changed since the last import" reads only enrolments changed since then.
+        const st = (action === 'retry' ? null : body.students) as { scope?: string; contactId?: unknown; changedOnly?: unknown } | null;
+        if (retryStudents) {
+          cursor = retryStudents;
+        } else if (st?.scope === 'one') {
+          const contactId = String(st.contactId ?? '');
+          if (!/^[0-9]{1,12}$/.test(contactId)) return json({ error: 'Choose the student to import.' }, 400);
+          cursor = { scope: 'one', contactId };
+        } else {
+          cursor = { scope: 'all', since: null, notes: [] };
+          if (st?.changedOnly === true) {
+            const { data: last } = await admin.from('axcelerate_import_runs').select('started_at').eq('connection_id', conn.id).eq('status', 'done')
+              .contains('entities', ['students']).eq('cursor->>scope', 'all').order('started_at', { ascending: false }).limit(1).maybeSingle();
+            if (last?.started_at) cursor.since = last.started_at as string;
+            else cursor.notes!.push('No earlier import of all students: every enrolled student was imported.');
+          }
+        }
+      }
       const r = await admin.rpc('axcelerate_run_start', { p_connection: conn.id, p_actor: who.user.id, p_mode: mode, p_entities: entities, p_retry_of: retryOf, p_ip: ip });
       if (r.error) return json({ error: r.error.message ?? 'The import could not start.' }, 409);
       runId = r.data as string;

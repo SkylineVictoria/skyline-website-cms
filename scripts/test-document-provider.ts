@@ -477,3 +477,44 @@ test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs eve
  m=make();r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['classes'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>false});
  assert.equal(r.cancelled,true);assert.equal(m.calls.filter(c=>c[0]==='axcelerate_import_course').length,0);
 });
+
+test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled students once each, changed-since windows, outcomes kept',async()=>{
+ const {runImport,stagesFor,updatedWindows}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');
+ assert.deepEqual(stagesFor(['students']),['student_list','students']);
+ assert.deepEqual(stagesFor(['trainers','classes','breaks','students']).slice(-2),['student_list','students']);
+ const gets:Array<[string,Record<string,unknown>]>=[];
+ const enrol:Record<string,Record<string,unknown>[]>={C1:[{CONTACTID:'11'},{CONTACTID:'12'}],C2:[{CONTACTID:'12'},{CONTACTID:'13'}]};
+ const client={get:async(p:string,q:Record<string,unknown>={})=>{gets.push([p,q]);
+   if(p==='/contact/13')return{status:404,data:'missing'};
+   const id=p.split('/')[2];return{status:200,data:[{CONTACTID:id,GIVENNAME:'Zz',SURNAME:`S${id}`}]};},
+  getAll:async(p:string,q:Record<string,unknown>={})=>{gets.push([p,q]);
+   if(p==='/courses')return[{ID:'C1'},{ID:'C2'}];if(p==='/course/enrolments')return enrol[String(q.ID)]??[];return[];}};
+ const outcomes:Record<string,string>={'11':'created','12':'duplicate'};
+ const calls:Array<Record<string,unknown>>=[];
+ const rpc=async(name:string,args:Record<string,unknown>)=>{if(name==='axcelerate_import_student'){calls.push(args);
+   const id=String((args.p_rec as {CONTACTID:string}).CONTACTID);return{data:{action:outcomes[id]??'unchanged',id:`s${id}`,name:`Zz S${id}`,warnings:id==='11'?['Sex "Q" is not an AVETMISS code; left empty.']:[]},error:null};}
+  return{data:null,error:null};};
+ // One student: only that contact is read; its outcome is kept for the page.
+ let r=await runImport({client,rpc,connection:'c',run:'r',actor:'a',entities:['students'],cursor:{scope:'one',contactId:'11'},counts:{},deadline:Date.now()+60000,save:async()=>true});
+ assert.equal(r.done,true);assert.deepEqual(gets.map(g=>g[0]),['/contact/11']);
+ assert.equal(r.cursor.results?.[0].action,'created');assert.equal(r.cursor.results?.[0].warnings?.length,1);
+ // All: every course's enrolments, each contact once; a missing contact is an import error; only results needing attention are kept.
+ gets.length=0;calls.length=0;
+ r=await runImport({client,rpc,connection:'c',run:'r',actor:'a',entities:['students'],cursor:{scope:'all'},counts:{},deadline:Date.now()+60000,save:async()=>true});
+ assert.equal(r.done,true);
+ assert.deepEqual(calls.map(c=>(c.p_rec as {CONTACTID:string}).CONTACTID),['11','12']);
+ assert.deepEqual(r.counts.student,{created:1,duplicate:1,error:1});
+ assert.deepEqual(r.cursor.results?.map(x=>`${x.contactId}:${x.action}`),['11:created','12:duplicate','13:error']);
+ assert.ok(gets.filter(g=>g[0]==='/course/enrolments').every(g=>g[1].type==='p'&&!('lastUpdated_min' in g[1])));
+ // Changed since: lastUpdated windows of at most 90 days, one day of overlap.
+ const now=Date.parse('2026-11-28T10:00:00Z');
+ const w=updatedWindows('2026-06-01T00:00:00Z',now);
+ assert.equal(w[0][0],'2026-05-31 00:00');assert.equal(w[w.length-1][1],'2026-11-28 10:00');
+ assert.ok(w.every(([a,b])=>Date.parse(b.replace(' ','T')+'Z')-Date.parse(a.replace(' ','T')+'Z')<=89*86400000));
+ gets.length=0;
+ r=await runImport({client,rpc,connection:'c',run:'r',actor:'a',entities:['students'],cursor:{scope:'all',since:'2026-11-01T00:00:00Z'},counts:{},deadline:Date.now()+60000,save:async()=>true});
+ assert.ok(gets.filter(g=>g[0]==='/course/enrolments').every(g=>typeof g[1].lastUpdated_min==='string'&&typeof g[1].lastUpdated_max==='string'));
+ // Only GETs on the read-only list (the engine has no other way to reach aXcelerate).
+ const {axcelerateAllowed}=await import('../supabase/functions/_shared/integrations/axcelerate.ts');
+ assert.ok(['/contact/11','/course/enrolments','/courses','/contacts/search'].every(axcelerateAllowed));
+});

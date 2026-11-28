@@ -45,7 +45,7 @@ async function branding(): Promise<{ institution: string; logo: ImageData | null
 /** Builds the application PDF in the browser from the loaded record (the same branded builder as the submission email) and saves it. */
 export async function downloadApplicationPdf(application: ApplicationDetail): Promise<void> {
   const brand = await branding();
-  const bytes = await buildSubmissionPdf({
+  const bytes = (await houseStylePdf(application, brand)) ?? await buildSubmissionPdf({
     reference: application.reference || "Draft",
     institution: brand.institution,
     version: application.version,
@@ -168,4 +168,25 @@ export async function previewApplicationForm(template: ApplicationFormTemplate, 
   const { data: app } = await supabase.from("enrollment_applications").select("id, reference, student_name, submitted_at, version").eq("id", applicationId).maybeSingle();
   const detail = { id: applicationId, reference: app?.reference ?? "", studentName: app?.student_name ?? "", submittedAt: app?.submitted_at ?? null, version: app?.version ?? 1, data: {}, courses: [] } as unknown as ApplicationDetail;
   return buildApplicationFormPdf(template, await formData(detail, copy, brand));
+}
+
+/**
+ * HOUSE-STYLE (owner 2026-11-28: every form in the same design): the application as the Application form prints it. A signed one prints
+ * from the form recorded at signing (with its signature); one not signed yet from today's default form, with "Not signed yet".
+ * null when there is no Application form (the earlier built-in layout is used then).
+ */
+async function houseStylePdf(application: ApplicationDetail, brand: Awaited<ReturnType<typeof branding>>): Promise<Uint8Array | null> {
+  try {
+    const copy = await getSignedCopy(application.id);
+    const signedNow = !!copy && (copy.signatures.length > 0 || copy.declarations.length > 0) && !["draft", "action_required"].includes(application.status);
+    if (copy && signedNow && copy.formTemplate) return await buildApplicationFormPdf(copy.formTemplate, await formData(application, copy, brand));
+    const { data, error } = await supabase.rpc("application_form_default", { p_application: application.id });
+    if (error || !data) return null;
+    const live = { ...(copy ?? { signatures: [], declarations: [], guardian: null, handoff: null, storedCopy: null }), submission: null, formTemplate: null,
+      institute: (data as { institute?: SignedCopy["institute"] }).institute ?? copy?.institute ?? null } as SignedCopy;
+    const formInput = await formData(application, live, brand);
+    return await buildApplicationFormPdf(data as ApplicationFormTemplate, { ...formInput, signed: null, submittedAt: application.submittedAt ?? null });
+  } catch {
+    return null;
+  }
 }

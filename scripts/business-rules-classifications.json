@@ -1219,7 +1219,9 @@
     "reason": "2026-11-27 owner (APPLICATION-FORM-TEMPLATES): the signed application is printed from the Application form template recorded at signing (one default chosen by staff); editor checks (required blocks, known variables), default switching and the printing path. Fixed owner rules, not business settings.",
     "fingerprints": [
       "023e11f6450f824bb3660f63589181cb9d84dcf635019cdebd92d5c187eab8c8",
+      "2ef09295da1ffb17e003189a1d181d935bb553b9631715245a721916767f11af",
       "334651cc0e7c24bbb2efc5ded497b505e5f80c9b83ab8cd520a189336abf7249",
+      "674baa054d35e5f6aac67626283859988661c05bee6cc7ff0701f805bbe754c4",
       "67d682b7a589946656e5c356c5b20aeddd162e20cf94f0413dab7fe27967cd58",
       "7f4d3a0cf139959e2b1f8adc81810d740b851951a358822b8e588e997d2822ac",
       "81f2338e89de005099cf9169be3d6a730d87dd144ae6225454467e38d863b9ac",

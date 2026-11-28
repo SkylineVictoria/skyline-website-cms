@@ -220,6 +220,14 @@ test.describe("Signed application", () => {
     await check("admin");
     // APPLICATION-FORM-TEMPLATES: the signed copy says which form printed it (recorded when the version was saved).
     await expect(page.getByTestId("signed-form-template")).toContainText("Application for Enrolment (standard)");
+    // HOUSE-STYLE: the staff PDF button prints the same designed form.
+    const pdf = page.waitForEvent("download");
+    await page.getByRole("button", { name: "PDF", exact: true }).click();
+    const file = await pdf;
+    expect(file.suggestedFilename()).toMatch(/^application-ZZ-SIGN-/);
+    const bytes = await (await import("node:fs")).promises.readFile(await file.path());
+    expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(bytes.length).toBeGreaterThan(20_000); // the designed form (letterhead, sections, signature), not the plain layout
     // Nobody changes a signed application's answers (the database refuses it, whoever writes).
     expect(() => sql(`update public.enrollment_applications set data = jsonb_set(data, '{values,preferred_intake}', '"Jan 2030"') where id = '${app}'`)).toThrow(/signed, so it cannot be changed/);
   });
@@ -231,11 +239,15 @@ test.describe("Application form templates", () => {
   test.use({ deviceScaleFactor: 2 });
   test("the standard form is the default; preview with a sample application; make another default", async ({ page }) => {
     test.setTimeout(180_000);
+    // re-runnable: copies made by an earlier run of this test are removed (lab data only)
+    sql(`delete from hr.sign_template_versions where template_id in (select id from hr.sign_templates where category = 'application_form' and name like '%(standard) (copy)%');
+      delete from hr.sign_templates where category = 'application_form' and name like '%(standard) (copy)%';
+      update hr.sign_templates set is_default = (id = 'a9f0e000-0000-4000-8000-000000000001') where category = 'application_form';`);
     const admin = await createAdmin("afm-admin");
     await signInAsAdmin(page, admin.email);
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto("/admin/signing/templates");
-    const row = page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" });
+    const row = page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).filter({ hasNotText: "(copy)" });
     await expect(row).toBeVisible();
     await expect(row.getByTestId("application-form-default")).toHaveText("Default");
     await page.screenshot({ path: "test-results/afm-templates.png" });
@@ -249,13 +261,13 @@ test.describe("Application form templates", () => {
     await page.keyboard.press("Escape");
     // A copy, made the default: newly signed applications print with it; the standard one is no longer the default.
     await page.goto("/admin/signing/templates");
-    await page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).getByRole("button", { name: "Duplicate" }).click();
+    await row.getByRole("button", { name: "Duplicate" }).click();
     const copy = page.getByTestId("sign-template-row").filter({ hasText: "(standard) (copy)" });
     await copy.getByTestId("application-form-make-default").click();
     await expect(copy.getByTestId("application-form-default")).toHaveText("Default");
     expect(sql(`select count(*) from hr.sign_templates where category = 'application_form' and is_default and deleted_at is null`)).toBe("1");
     // back to the standard one for the other tests
-    await page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).getByTestId("application-form-make-default").click();
-    await expect(page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).getByTestId("application-form-default")).toBeVisible();
+    await row.getByTestId("application-form-make-default").click();
+    await expect(row.getByTestId("application-form-default")).toBeVisible();
   });
 });

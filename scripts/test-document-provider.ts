@@ -429,6 +429,11 @@ test('aXcelerate client (AXCELERATE-IMPORT): read only: GET on the allow-list, e
  assert.equal(rows.length,3);assert.ok(seen.every(x=>x.startsWith('GET https://skyline.app.axcelerate.com/api/courses?')));
  assert.deepEqual(calls,[['/courses',200],['/courses',200]]);assert.ok(!JSON.stringify(calls).includes('api-1234567890'));
  await assert.rejects(client.get('/course/enrol',{}),AxcelerateBlocked);assert.equal(seen.length,2,'a refused path makes no network call');
+ // A 200 answer that is not a list is an error with aXcelerate's message, never a silent empty list
+ const odd=axcelerateClient(f!,{fetch:(async()=>new Response(JSON.stringify({error:true,messages:'Invalid wstoken'}),{status:200})) as typeof fetch});
+ await assert.rejects(odd.getAll('/courses',{type:'p'}),/did not return a list for \/courses: Invalid wstoken/);
+ const html=axcelerateClient(f!,{fetch:(async()=>new Response('<html>login</html>',{status:200})) as typeof fetch});
+ await assert.rejects(html.getAll('/courses',{}),/sent text, not JSON/);
 });
 test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs everything, resume, cancel, errors recorded',async()=>{
  const {runImport,stagesFor}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');
@@ -467,6 +472,19 @@ test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs eve
  // Trainers only: no classes, no units, no locations, no breaks
  m=make();r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['trainers'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>true});
  assert.deepEqual([...new Set(m.calls.map(c=>c[0]))],['axcelerate_import_course','axcelerate_import_trainer']);
+ assert.deepEqual(r.cursor.log!.filter(e=>e.entity==='trainer'),[{entity:'trainer',label:'Zara T',ax:'T1',action:'created'}],'the log lists each trainer brought in');
+ assert.ok(r.cursor.notes!.some(n=>n.includes('2 qualifications')&&n.includes('2 classes')&&n.includes('1 different trainer')),'the run says what aXcelerate returned');
+ // Log: a record not brought in carries its reason
+ {const mm=make();const rr=await runImport({client,rpc:mm.rpc,connection:'c',run:'r',actor:'a',entities:['classes'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>true});
+  const u2=rr.cursor.log!.find(e=>e.entity==='unit'&&e.action==='error');assert.equal(u2?.message,'unit refused');}
+ // aXcelerate returns no courses: nothing imported, and the notes say why (not a silent "done")
+ {const empty={get:async()=>({status:200,data:[]}),getAll:async()=>[]};const mm=make();
+  const rr=await runImport({client:empty,rpc:mm.rpc,connection:'c',run:'r',actor:'a',entities:['trainers'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>true});
+  assert.equal(rr.done,true);assert.deepEqual(rr.counts,{});assert.ok(rr.cursor.notes!.some(n=>n.startsWith('No qualifications came back')),rr.cursor.notes!.join('|'));}
+ // Classes without a trainer: the notes say no class names one
+ {const noT={get:async(p:string)=>({status:200,data:p==='/course/instance/detail'?{INSTANCEID:'I9',UNITS:[]}:[]}),getAll:async(p:string)=>p==='/courses'?[{ID:'C9',CODE:'X',NAME:'Y'}]:p==='/course/instances'?[{INSTANCEID:'I9'}]:[]};
+  const rr=await runImport({client:noT,rpc:make().rpc,connection:'c',run:'r',actor:'a',entities:['trainers'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>true});
+  assert.ok(rr.cursor.notes!.some(n=>n.startsWith('None of the classes names a trainer')),rr.cursor.notes!.join('|'));}
  // Time budget: stops, then continues from the saved cursor
  m=make();let t=0;const now=()=>t;
  r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['classes'],cursor:{},counts:{},deadline:1,now,save:async()=>{t=5;return true;}});

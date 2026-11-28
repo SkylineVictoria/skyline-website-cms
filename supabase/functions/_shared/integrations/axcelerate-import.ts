@@ -182,22 +182,32 @@ async function ensureLocations(deps: ImportDeps, c: Cursor) {
  */
 async function ensureClass(deps: ImportDeps, c: Cursor, e: Row): Promise<string> {
   const instId = text(e, 'INSTANCEID');
-  const courseAx = text(e, 'ID', 'COURSEID');
   if (!instId) throw new Error('aXcelerate gave no class (instance) for this enrolment.');
   c.classes ??= {};
   if (c.classes[instId]) return c.classes[instId];
+  // The course comes from the class's own details (an enrolment row's ID is not always the course); else by the course code.
+  const d = await deps.client.get('/course/instance/detail', { instanceID: instId, type: 'p' });
+  const detail = d.status < 300 ? one(d.data) ?? {} : {};
+  let courseAx = text(detail, 'COURSEID', 'ID');
+  if (courseAx === instId) courseAx = '';
+  const code = text(detail, 'CODE') || text(e, 'CODE');
+  if (!courseAx && code) {
+    const all = await deps.client.getAll('/courses', { type: 'p' });
+    courseAx = text(all.find((r) => text(r, 'CODE').toUpperCase() === code.toUpperCase()), 'ID');
+  }
+  if (!courseAx) throw new Error(`aXcelerate gave no course for class ${instId}${code ? ` (${code})` : ''}.`);
   c.courseMap ??= {};
   for (const x of c.courses ?? []) c.courseMap[x.ax] ??= x.sk;
-  let sk = courseAx ? c.courseMap[courseAx] : undefined;
+  let sk = c.courseMap[courseAx];
   if (!sk) {
-    const d = courseAx ? await deps.client.get('/course/detail', { ID: courseAx, type: 'p' }) : null;
-    const rec = { ...e, ...(d && d.status < 300 ? one(d.data) ?? {} : {}), ID: courseAx } as Row;
+    const cd = await deps.client.get('/course/detail', { ID: courseAx, type: 'p' });
+    const rec = { CODE: code, NAME: text(detail, 'COURSENAME', 'QUALIFICATION') || text(e, 'NAME'), ...(cd.status < 300 ? one(cd.data) ?? {} : {}), ID: courseAx } as Row;
     const id = await call(deps, 'course', courseAx, `${text(rec, 'CODE')} ${text(rec, 'NAME')}`.trim(), 'axcelerate_import_course', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: rec }, rec);
     if (!id) throw new Error(`The course ${text(rec, 'CODE', 'NAME') || courseAx} could not be imported (see Errors in the Import centre).`);
     sk = id; c.courseMap[courseAx] = id;
   }
   await ensureLocations(deps, c);
-  const classId = await importClassInstance(deps, c, { ax: courseAx, sk }, { INSTANCEID: instId, NAME: text(e, 'NAME') } as Row);
+  const classId = await importClassInstance(deps, c, { ax: courseAx, sk }, { INSTANCEID: instId, NAME: text(detail, 'NAME') || text(e, 'NAME') } as Row);
   if (!classId) throw new Error(`The class ${instId} could not be imported (see Errors in the Import centre).`);
   c.classes[instId] = classId;
   return classId;
@@ -371,10 +381,13 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
           await fail(deps, 'student', id, '', message);
           result = { contactId: id, action: 'error', message };
         } else {
-          // The student's courses (aXcelerate enrolments), kept on the import record for the Qualification stage.
+          // The student's enrolments. /contact/enrolments/:id lists unit enrolments (TYPE s, with their outcome) and e-learning (el);
+          // the qualification enrolments themselves (TYPE p, with their class) come from /course/enrolments for the contact.
           const en = await deps.client.get(`/contact/enrolments/${id}`, {});
-          const enrolments = en.status < 300 ? list(en.data).filter((e) => text(e, 'TYPE').toLowerCase() !== 'w') : [];
-          const raw = { ...rec, CONTACTID: text(rec, 'CONTACTID') || id, ENROLMENTS: enrolments };
+          const enrolments = en.status < 300 ? list(en.data).filter((e) => !['w', 'el'].includes(text(e, 'TYPE').toLowerCase())) : [];
+          const programs = await deps.client.getAll('/course/enrolments', { contactID: id, type: 'p' }, { sizeParam: 'limit', maxRows: 200 })
+            .then((rows) => rows.filter((e) => text(e, 'INSTANCEID') && String(text(e, 'CONTACTID') || id) === id)).catch(() => [] as Row[]);
+          const raw = { ...rec, CONTACTID: text(rec, 'CONTACTID') || id, ENROLMENTS: enrolments, PROGRAMS: programs };
           const r = await deps.rpc('axcelerate_import_student', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_rec: raw, p_target: null, p_create: false });
           const name = `${text(raw, 'GIVENNAME')} ${text(raw, 'SURNAME')}`.trim();
           if (r.error) {
@@ -385,12 +398,18 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
             const out = (r.data ?? {}) as { action?: string; id?: string | null; name?: string; warnings?: string[] };
             bump(deps.counts, 'student', out.action ?? 'done');
             result = { contactId: id, action: out.action ?? 'done', name: out.name ?? name, id: out.id ?? null, warnings: out.warnings ?? [] };
-            if (enrolments.length) result.courses = enrolments.map((e) => ({ name: text(e, 'NAME', 'CODE') || `Course ${text(e, 'ID')}`, status: text(e, 'STATUS') || 'unknown' }));
+            if (programs.length || enrolments.length) result.courses = [
+              ...programs.map((e) => ({ name: text(e, 'NAME', 'CODE') || `Course ${text(e, 'INSTANCEID')}`, status: text(e, 'STATUS') || 'enrolled' })),
+              ...enrolments.map((e) => ({ name: `Unit ${text(e, 'CODE')} ${text(e, 'NAME')}`.trim(), status: text(e, 'OUTCOMECODE') ? `outcome ${text(e, 'OUTCOMECODE')}` : text(e, 'STATUS') || 'unknown' })),
+            ];
             if (out.id && !['duplicate', 'skipped'].includes(result.action)) {
               result.agent = await importStudentAgent(deps, c, raw, out.id);
               // Qualifications: course enrolments (not workshops), each with its class and everything the class needs.
-              const quals = enrolments.filter((e) => text(e, 'TYPE').toLowerCase() === 'p' || (!text(e, 'TYPE') && text(e, 'INSTANCEID')));
+              const quals = programs.length ? programs : enrolments.filter((e) => text(e, 'TYPE').toLowerCase() === 'p');
               if (quals.length) result.qualifications = await importStudentQualifications(deps, c, out.id, quals);
+              else if (enrolments.some((e) => text(e, 'TYPE').toLowerCase() === 's')) {
+                result.warnings = [...(result.warnings ?? []), 'aXcelerate lists unit enrolments for this student but no qualification enrolment (course enrolments, type p): no Qualification was imported.'];
+              }
             }
           }
         }

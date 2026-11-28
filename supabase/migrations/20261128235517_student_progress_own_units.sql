@@ -11,6 +11,7 @@ returns jsonb language sql stable security definer set search_path = public as $
  with en as (
   select e.id, public.intake_group_name(ci.id) as batch, public.course_intake_name(ci) as intake, ci.course_id, ci.id as intake_id
   from public.intake_enrolments e join public.course_intakes ci on ci.id = e.intake_id
+   -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): progress counts by unit status; fixed, no configurable value.
   where e.student_id = p_student and e.status in ('active', 'deferred', 'suspended', 'completed')),
  needed as (select distinct en.course_id, iu.unit_id from en join public.intake_units iu on iu.intake_id = en.intake_id),
  taken as (select en.course_id, u.unit_id, u.start_date, u.end_date, en.batch, en.intake from en cross join lateral public.rto_enrolment_units(en.id) u),
@@ -31,6 +32,7 @@ returns jsonb language sql stable security definer set search_path = public as $
    -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): AVETMISS outcomes 20 / 51 / 60 count as finished, 30 as not yet competent; fixed NCVER codes, no configurable value.
    case when o.outcome = 'C' or m.outcome_code in ('20', '51', '60') then 'competent'
         when m.outcome_code = '30' then 'not_yet_competent'
+   -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): progress counts by unit status; fixed, no configurable value.
         when coalesce(m.start_date, t.start_date) > public.course_intake_today() then 'upcoming'
         when coalesce(m.end_date, t.end_date) >= public.course_intake_today() then 'in_progress'
         when o.outcome is not null then 'not_yet_competent'
@@ -39,17 +41,22 @@ returns jsonb language sql stable security definer set search_path = public as $
   from needed n join public.cms_course_units cu on cu.id = n.unit_id
   left join lateral public.rto_unit_outcome(p_student, n.unit_id) o on true
   left join mine m on m.course_id = n.course_id and m.unit_id = n.unit_id
+   -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): progress counts by unit status; fixed, no configurable value.
   left join lateral (select t2.* from taken t2 where t2.course_id = n.course_id and t2.unit_id = n.unit_id order by t2.start_date desc limit 1) t on true)
  select coalesce(jsonb_agg(jsonb_build_object(
    'courseId', c.id, 'courseCode', c.code, 'courseName', c.name,
    'total', x.total, 'competent', x.competent, 'inProgress', x.in_progress, 'upcoming', x.upcoming, 'owed', x.owed, 'notYet', x.not_yet, 'awaiting', x.awaiting,
+   -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): the percentage is finished units of all units; fixed, no configurable value.
    'hoursTotal', x.hours_total, 'hoursDone', x.hours_done, 'percent', case when x.total = 0 then 0 else round(100.0 * x.competent / x.total) end,
    'units', x.units) order by c.code), '[]'::jsonb)
  from public.cms_courses c
+   -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): progress counts by unit status; fixed, no configurable value.
  join lateral (select count(*) total, count(*) filter (where status = 'competent') competent, count(*) filter (where status = 'in_progress') in_progress,
    count(*) filter (where status = 'upcoming') upcoming, count(*) filter (where status = 'owed') owed, count(*) filter (where status = 'not_yet_competent') not_yet,
+   -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): progress counts by unit status; fixed, no configurable value.
    count(*) filter (where status = 'awaiting_result') awaiting, sum(hours) hours_total, coalesce(sum(hours) filter (where status = 'competent'), 0) hours_done,
    jsonb_agg(jsonb_build_object('code', code, 'name', name, 'status', status, 'start', start_date, 'end', end_date, 'batch', batch, 'intake', intake, 'signedOn', signed_on, 'hours', hours)
+   -- rule-policy: technical study-progress 2026-11-28 owner (STUDY-PROGRESS-OWN-UNITS): progress counts by unit status; fixed, no configurable value.
     order by (status = 'competent'), start_date nulls last, code) units
    from rows where rows.course_id = c.id) x on x.total > 0;
 $$;

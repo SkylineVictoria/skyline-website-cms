@@ -1,3 +1,4 @@
+import AxcelerateBadge from "@/components/axcelerate/AxcelerateBadge";
 // One intake in a sheet from the right (its address ends in #<intake id>): Overview · Timeline · Class setup · Students · Assessments.
 // The intake is the class group (room, seats, trainers, weekly class times). Changes save as they are made, with Undo on the toast.
 import { useCallback, useEffect, useState } from "react";
@@ -104,6 +105,7 @@ export default function IntakeSheet({ intakeId, canEdit, canEnrol, startTab = "o
               <>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-heading text-2xl font-bold text-foreground-950">{i.customName || i.name || monthYear(i.startDate)}</h2>
+                  <AxcelerateBadge table="public.course_intakes" id={intakeId} />
                   <StatusPicker status={i.status} canEdit={canEdit} onChange={setStatus} />
                 </div>
                 <p className="truncate text-sm text-foreground-700" title={i.courseName}>{i.courseName}</p>

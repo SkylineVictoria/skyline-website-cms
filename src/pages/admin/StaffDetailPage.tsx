@@ -1,3 +1,4 @@
+import AxcelerateBadge from "@/components/axcelerate/AxcelerateBadge";
 import { useCallback, useEffect, useState } from "react";
 import { hrNumber } from "@/lib/hrRules";
 import MessagePersonButton from "@/pages/admin/components/MessagePersonButton";
@@ -104,6 +105,7 @@ function SimpleEmployeePage({ onStatus }: { onStatus: (status: string) => void }
         description={[employee.employment?.jobTitle, employee.email, `since ${date(employee.createdAt)}`].filter(Boolean).join(", ")}
         actions={<>
           <Badge tone={active ? "success" : "muted"}>{EMPLOYEE_STATUS_LABEL[employee.status]}</Badge>
+          <AxcelerateBadge table="hr.staff_profiles" id={employee.id} />
           <MessagePersonButton kind="staff" refId={employee.id} name={fullName(employee)} />
           <Button variant="outline" onClick={() => setEditing(true)} icon="ri-pencil-line" data-testid="employee-edit">Edit</Button>
           <Link to="?view=onboarding" className="inline-flex items-center gap-1.5 rounded-md border border-background-300 px-3 py-2 text-sm font-medium text-foreground-800 hover:bg-background-100" data-testid="employee-onboarding">

@@ -2,6 +2,7 @@ import LmsPage, { OldBatchRedirect } from "@/pages/admin/lms/LmsPage";
 import CommunicationHubPage from "@/pages/admin/CommunicationHubPage";
 import EmailManagementPage from "@/pages/admin/EmailManagementPage";
 import IntegrationConnectionsPage from "@/pages/admin/integrations/ConnectionsPage";
+import AxcelerateImportCentre from "@/pages/admin/integrations/AxcelerateImportCentre";
 import ApplicationStatusesPage from "@/pages/admin/ApplicationStatusesPage";
 import { Navigate } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
@@ -343,6 +344,7 @@ const routes: RouteObject[] = [
           { path: "integrations/sync-history", element: <IntegrationConnectionsPage /> },
           { path: "integrations/logs", element: <IntegrationConnectionsPage /> },
           { path: "integrations/settings", element: <RequireAdmin><IntegrationConnectionsPage /></RequireAdmin> },
+          { path: "integrations/axcelerate", element: <RequireAdmin><AxcelerateImportCentre /></RequireAdmin> },
           { path: "knowledge", element: <RequireAdmin><KnowledgePage /></RequireAdmin> },
           { path: "settings/application-statuses", element: <RequireAdmin><ApplicationStatusesPage /></RequireAdmin> },
           // The Document Extraction page was removed; old links land on the dashboard.

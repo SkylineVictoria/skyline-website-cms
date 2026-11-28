@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import AxcelerateImportButton from "@/components/axcelerate/AxcelerateImportButton";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { generateClassSessions, loadClassSessions, rto, type RtoCourse, type RtoIntake } from "@/pages/admin/lib/rto";
 import SearchableSelect from "@/components/ui/SearchableSelect";
@@ -114,8 +115,11 @@ export default function LmsTermBreaksPage() {
         <h1 className="mt-1 font-heading text-3xl font-bold text-foreground-950">Term breaks</h1>
         <p className="mt-2 text-sm text-foreground-600">No classes are held on these days. Each break is for one course only. When you add, change or delete a break, every running intake's classes move automatically. Public holidays come from HR (confirmed holidays only) and are skipped too.</p>
       </div>
+      <div className="flex flex-wrap gap-2">
+      <AxcelerateImportButton entities={["breaks"]} label="Import breaks from aXcelerate" onDone={() => void load()} />
       {canEdit && !draft && <button type="button" onClick={() => { setDraft({ id: null, label: "", startDate: "", endDate: "", courseId: filter || null }); setNotice(""); }}
         className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add break</button>}
+      </div>
     </div>
 
     {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}

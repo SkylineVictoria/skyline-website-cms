@@ -1,5 +1,6 @@
 // BULK-DOCUMENTS (owner 2026-11-28: "while uploading files in bulk, scan each file and attach it to the category where it is needed; no
-// manual category selection"). POST multipart { applicationId, file }: which application document this file is (passport, visa, English
+// manual category selection"). POST multipart { applicationId, file, firstName?, lastName? } (DOCUMENT-FINDER: with the names, also
+// nameMatch: whether the document is that person's, so "Find my documents" keeps only the student's own): which application document this file is (passport, visa, English
 // result, academic, driving licence, or none of them). The caller must be able to edit the application (portal_can_edit_application with
 // their own token; JWT on). The file is not stored and nothing read from it is returned except its type; the wizard then uploads it
 // through validated-document-upload, which checks it again against the category it is attached to. Same size / type limits and the same
@@ -66,7 +67,10 @@ Deno.serve(async (request) => {
   if (limit.error) return fail("Document checking is temporarily unavailable.", 503);
   if (limit.data !== true) return fail("Upload limit reached. Please try again later.", 429);
 
-  const result = await detect({ bytes: new Uint8Array(await file.arrayBuffer()), mime: file.type, filename: file.name });
-  if ("error" in result) return result.status === 422 ? reply({ type: "Unclear", step: "" }) : fail(result.error, result.status);
-  return reply({ type: result.type, step: STEP_OF[result.type] });
+  // DOCUMENT-FINDER (owner 2026-11-28): with the student's first and last name, also whether the document is theirs (true / false / null).
+  const name = (key: string) => String(form?.get(key) ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 100);
+  const person = name("firstName") && name("lastName") ? { firstName: name("firstName"), lastName: name("lastName") } : undefined;
+  const result = await detect({ bytes: new Uint8Array(await file.arrayBuffer()), mime: file.type, filename: file.name, person });
+  if ("error" in result) return result.status === 422 ? reply({ type: "Unclear", step: "", nameMatch: null }) : fail(result.error, result.status);
+  return reply({ type: result.type, step: STEP_OF[result.type], ...(person ? { nameMatch: result.nameMatch ?? null } : {}) });
 });

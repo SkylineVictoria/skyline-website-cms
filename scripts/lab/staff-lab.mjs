@@ -520,6 +520,13 @@ function startMockReader() {
             const holder = holderOf(content) ?? passportHolder;
             extra = { holders: [holder], passport_first_name: passportHolder ? passportHolder.split(/\s+/)[0] : null };
           }
+          // DOCUMENT-FINDER: name_match asked: the file's %lab-holder against the two quoted names in the instructions (no holder: null).
+          if (Array.isArray(body.text?.format?.schema?.required) && body.text.format.schema.required.includes("name_match")) {
+            const asked = [...String(body.instructions ?? "").matchAll(/person named ("[^"]*") ("[^"]*")/g)][0];
+            const want = asked ? `${JSON.parse(asked[1])} ${JSON.parse(asked[2])}`.toLowerCase().split(/\s+/).sort().join(" ") : "";
+            const holder = holderOf(content);
+            extra = { ...extra, name_match: holder ? holder.toLowerCase().split(/\s+/).sort().join(" ") === want : null };
+          }
           res.writeHead(200, { "content-type": "application/json" });
           return res.end(JSON.stringify({ id: `resp_lab_${reader.calls}`, status: "completed", output_text: JSON.stringify({ category, ...extra }), usage: {} }));
         }

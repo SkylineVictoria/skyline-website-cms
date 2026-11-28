@@ -1334,3 +1334,28 @@ test("bulk documents: the type detector returns only the document type (no perso
   assert.equal(((await detect("Passport")({ bytes: new TextEncoder().encode("MZ.."), mime: "application/pdf", filename: "x.pdf" })) as { status: number }).status, 415);
   assert.equal(((await createDocumentTypeDetector({ apiKey: "", model: "m" })({ bytes: pdf, mime: "application/pdf", filename: "x.pdf" })) as { status: number }).status, 503);
 });
+
+test("find my documents: the detector asks whether the document is the student's (yes / no / unknown only), and files are ranked by name, type hint and age", async () => {
+  const { createDocumentTypeDetector } = await import("../supabase/functions/_shared/document-extraction/classify.ts");
+  const { documentScore } = await import("../src/pages/agency/lib/bulkDocuments.ts");
+  const pdf = new TextEncoder().encode("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+  let sent: { instructions?: string; text?: { format: { schema: { required: string[] } } } } = {};
+  const detector = (answer: Record<string, unknown>) => createDocumentTypeDetector({ apiKey: "k", model: "m", fetch: (async (_u: unknown, init?: RequestInit) => {
+    sent = JSON.parse(String(init?.body ?? "{}"));
+    return new Response(JSON.stringify({ status: "completed", output_text: JSON.stringify(answer) }), { status: 200 });
+  }) as typeof fetch });
+  const person = { firstName: "Asha", lastName: "Patel" };
+  assert.deepEqual(await detector({ category: "Passport", name_match: true })({ bytes: pdf, mime: "application/pdf", filename: "x.pdf", person }), { type: "Passport", nameMatch: true });
+  assert.deepEqual(sent.text?.format.schema.required, ["category", "name_match"]);
+  assert.match(String(sent.instructions), /"Asha" "Patel"/, "the names are quoted as data");
+  assert.deepEqual(await detector({ category: "Passport", name_match: false })({ bytes: pdf, mime: "application/pdf", filename: "x.pdf", person }), { type: "Passport", nameMatch: false });
+  assert.deepEqual(await detector({ category: "Visa" })({ bytes: pdf, mime: "application/pdf", filename: "x.pdf", person }), { type: "Visa", nameMatch: null });
+  assert.deepEqual(await detector({ category: "Visa" })({ bytes: pdf, mime: "application/pdf", filename: "x.pdf" }), { type: "Visa" }, "without a person nothing about names is asked");
+  const now = Date.UTC(2026, 10, 28);
+  const recent = now - 30 * 24 * 3600 * 1000, old = now - 6 * 365 * 24 * 3600 * 1000;
+  const score = (name: string, lastModified = recent, size = 300_000) => documentScore({ name, size, lastModified }, person, now);
+  assert.ok(score("asha_patel_passport.pdf") > score("passport.pdf"), "the student's name in the file name ranks first");
+  assert.ok(score("passport.pdf") > score("IMG_2041.jpg"), "a document word beats a camera name");
+  assert.ok(score("IMG_2041.jpg") > score("IMG_2041.jpg", old), "newer first");
+  assert.ok(score("icon.png", recent, 4_000) < score("IMG_2041.jpg"), "tiny images (icons) last");
+});

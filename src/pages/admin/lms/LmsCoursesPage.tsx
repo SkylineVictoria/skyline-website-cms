@@ -102,6 +102,7 @@ export default function LmsCoursesPage() {
   const [addingCourse, setAddingCourse] = useState<null | "tga">(null);
   const [selectedId, setSelectedId] = useState("");
   const savedPane = useListPane("courses");
+  const [addMenu, setAddMenu] = useState(false);
   // The Master timetable is a wide table: on that tab the course list is folded unless it is opened there.
   const [masterList, setMasterList] = useState(false);
   const [detail, setDetail] = useState<CourseDetail | null>(null);
@@ -401,17 +402,28 @@ export default function LmsCoursesPage() {
 
   const pane: Pane = tab === "prereq" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
   return <div className="mx-auto max-w-[1500px] space-y-5 pb-12">
-    <header className="flex flex-wrap items-end justify-between gap-3">
-      <div>
+    <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div className="min-w-0">
         <h1 className="font-heading text-2xl font-bold text-foreground-950">Courses</h1>
         <p className="text-sm text-foreground-500">Qualifications, their CRICOS registration and units.</p>
       </div>
-      {canEdit ? <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setBulkSync(true)} title="Import one qualification from SLIT's Training.gov.au scope of registration and run the new course wizard on it"
-          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Sync from Training.gov.au</button>
-        <button type="button" onClick={() => setFromDocs(true)} title="Upload course documents: the qualification and units in them are found and synced from Training.gov.au"
-          className="rounded-lg border border-background-300 px-3 py-2 text-sm font-semibold text-foreground-800 hover:bg-background-100">Add from documents</button>
-        <button type="button" onClick={() => setAddingCourse("tga")} className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Add course</button>
+      {canEdit ? <div className="relative md:shrink-0">
+        {/* One button, three ways to add a course (owner 2026-11-28: "the 3 buttons on the top right in one drop-down"). */}
+        <button type="button" aria-haspopup="menu" aria-expanded={addMenu} onClick={() => setAddMenu(v => !v)}
+          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+          <i className="ri-add-line" aria-hidden="true" />Add course<i className={"ri-arrow-down-s-line transition-transform " + (addMenu ? "rotate-180" : "")} aria-hidden="true" /></button>
+        {addMenu ? <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setAddMenu(false)} /> : null}
+        {addMenu ? <div role="menu" className="absolute right-0 top-11 z-20 w-80 overflow-hidden rounded-xl border border-background-200 bg-background-50 py-1 shadow-lg">
+          {([
+            ["ri-search-line", "Add a course", "Find a qualification on Training.gov.au and add it.", () => setAddingCourse("tga")],
+            ["ri-refresh-line", "Sync from Training.gov.au", "Import one qualification from SLIT's scope of registration.", () => setBulkSync(true)],
+            ["ri-file-upload-line", "Add from documents", "Upload course documents; the qualification and units are found in them.", () => setFromDocs(true)],
+          ] as const).map(([ic, label, hint, run]) => <button key={label} type="button" role="menuitem" onClick={() => { setAddMenu(false); run(); }}
+            className="flex w-full items-start gap-3 px-3 py-2.5 text-left hover:bg-background-100">
+            <i className={ic + " mt-0.5 text-lg text-primary-600"} aria-hidden="true" />
+            <span><span className="block text-sm font-semibold text-foreground-950">{label}</span><span className="block text-xs text-foreground-500">{hint}</span></span>
+          </button>)}
+        </div> : null}
       </div> : null}
     </header>
 
@@ -486,7 +498,8 @@ export default function LmsCoursesPage() {
     {addingCourse === "tga" && canEdit && <TrainingGovCourseImport onClose={() => setAddingCourse(null)} onSaved={reloadAfterAdd} />}
     {error ? <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error} <button className="ml-3 underline" onClick={() => void load()}>Retry</button></div> : null}
 
-    <div className={"grid items-start gap-5 " + pane.grid}>
+    {/* A narrow course list (codes and names) leaves the room to the course itself. */}
+    <div className={"grid items-start gap-5 " + (pane.folded ? pane.grid : "lg:grid-cols-[250px_minmax(0,1fr)]")}>
       <ListPane pane={pane} label="Courses" current={selected?.code}>
       <section className={card + " p-3"}>
         <label className="relative block"><span className="sr-only">Search courses</span>
@@ -507,7 +520,7 @@ export default function LmsCoursesPage() {
               className={"flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors " + (selectedId === c.id ? "bg-primary-50 ring-1 ring-primary-300" : "hover:bg-background-100")}>
               <span className={"mt-1.5 h-2 w-2 shrink-0 rounded-full " + (c.isActive ? "bg-green-500" : "bg-background-300")} title={c.isActive ? "Active" : "Inactive"} />
               <span className="min-w-0"><span className="block text-sm font-semibold text-foreground-950">{c.code}</span>
-                <span className="block truncate text-xs text-foreground-600">{c.name}</span></span>
+                <span className="line-clamp-2 block text-xs text-foreground-600">{c.name}</span></span>
             </button>)}
         </div>
       </section>
@@ -515,10 +528,10 @@ export default function LmsCoursesPage() {
 
       <section className={card + " min-w-0 p-5"}>
         {!selected ? <p className="py-20 text-center text-foreground-500">{loading ? "Loading…" : "Select a course."}</p> : <>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wide text-foreground-500">{selected.code}</p>
-              <h2 className="font-heading text-xl font-bold text-foreground-950">{selected.name}</h2>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary-700">{selected.code}</p>
+              <h2 className="line-clamp-2 font-heading text-lg font-bold leading-snug text-foreground-950" title={selected.name}>{selected.name}</h2>
               <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-semibold">
                 <span className={"rounded-full px-2 py-0.5 " + (selected.isActive ? "bg-green-100 text-green-800" : "bg-background-200 text-foreground-600")}>{selected.isActive ? "Active" : "Inactive"}</span>
                 {selected.status === "Draft" ? <span className="rounded-full bg-background-200 px-2 py-0.5 text-foreground-600" title="Not published on the website">Website draft</span> : null}
@@ -526,7 +539,7 @@ export default function LmsCoursesPage() {
                 {!selected.isActive && setupStep && setupStep !== "done" ? <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-900" title={`Next: ${SETUP_TEXT[setupStep]}. Use Continue setup; the course can be made active once it is finished.`}>Setup not finished</span> : null}
               </div>
             </div>
-            {canEdit ? <div className="relative flex items-center gap-2">
+            {canEdit ? <div className="relative flex shrink-0 items-center gap-2">
               {editing ? <span className="text-xs text-foreground-500" role="status">{saving ? "Saving…" : savedAt ? "Saved " + savedAt : "Changes save automatically"}</span> : null}
               {wizardUnfinished && !editing
                 ? <button type="button" onClick={() => { setMenuOpen(false); continueSetup(); }} disabled={!detail}
@@ -554,9 +567,9 @@ export default function LmsCoursesPage() {
             </div> : null}
           </div>
 
-          <dl className="mt-4 grid grid-cols-2 rounded-lg border border-background-200 sm:grid-cols-5 sm:divide-x sm:divide-background-200">
-            {facts.map(([label, value]) => <div key={label} className="px-3 py-2">
-              <dt className="text-xs text-foreground-500">{label}</dt><dd className="truncate text-sm font-semibold text-foreground-950">{value}</dd>
+          <dl className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
+            {facts.map(([label, value]) => <div key={label} className="rounded-lg bg-background-100 px-3 py-2">
+              <dt className="text-[11px] font-medium uppercase tracking-wide text-foreground-500">{label}</dt><dd className="text-sm font-semibold text-foreground-950">{value}</dd>
             </div>)}
           </dl>
 
@@ -580,16 +593,17 @@ export default function LmsCoursesPage() {
             <div role="tabpanel" className="pt-4">
               {shownTab === "overview" ? <div className="space-y-4">
                 {/* Organised in groups; the summary strip above already shows duration, delivery, campus, units and hours. */}
-                {(() => { const rows = ([["Course name", selected.name + (selected.variantLabel ? ` (${selected.variantLabel})` : "")], ["Course code", selected.code],
+                {(() => { const rows = ([["Variant", selected.variantLabel ?? ""],
                     ["Category", selected.category], ["Training package", selected.trainingPackage], ["CRICOS code", selected.cricos], ["CRICOS registered duration", selected.duration],
                     ["training.gov.au", selected.tgaUrl ?? ""]] as [string, string][]).filter(([, value]) => value && value.trim());
                   return <section className="rounded-xl border border-background-200 bg-background-50">
                     <h3 className="flex items-center gap-2 border-b border-background-200 px-4 py-3 font-heading text-sm font-semibold text-foreground-900">
                       <i className="ri-graduation-cap-line text-primary-600" aria-hidden="true" />Qualification</h3>
-                    <dl className="grid gap-x-8 gap-y-4 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">{rows.map(([label, value]) => <div key={label} className="min-w-0">
+                    {!rows.length ? <p className="px-4 py-3 text-sm text-foreground-500">No category, training package or CRICOS details yet: use ⋯ › Sync with Training.gov.au and CRICOS, or Edit.</p> : null}
+                    {rows.length ? <dl className="grid gap-x-8 gap-y-4 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">{rows.map(([label, value]) => <div key={label} className="min-w-0">
                       <dt className="text-xs font-medium uppercase tracking-wide text-foreground-500">{label}</dt>
                       <dd className="break-words font-medium text-foreground-950">{label === "training.gov.au" ? <a className="text-primary-700 underline" href={value} target="_blank" rel="noreferrer">{value}</a> : value}</dd>
-                    </div>)}</dl>
+                    </div>)}</dl> : null}
                     {slitDuration ? <p className="border-t border-background-200 px-4 py-2.5 text-xs text-foreground-500">Duration: {slitHours.toLocaleString()} SLIT hours ÷ {HOURS_PER_WEEK} hours a week = {slitDuration}.</p> : null}
                   </section>; })()}
                 {detail ? <details className="group rounded-xl border border-background-200 bg-background-50">

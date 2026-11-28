@@ -267,12 +267,17 @@ function StudentStep({ onBack, onDone, onSignedIn }: { onBack: () => void; onDon
       <StepHeader step={2} kind="Student" title="Your details" onBack={onBack} />
       <QuickStart onSignedIn={onSignedIn} intent="student" />
       <div className="mt-6 space-y-4">
+        {/* DOCUMENT-FINDER (owner 2026-11-28): the name, as on the passport, with the email (used to find the student's own documents). */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="First name" required hint="As on your passport"><TextInput value={form.firstName} onChange={(e) => patch({ firstName: e.target.value })} autoComplete="given-name" maxLength={100} data-testid="enrol-first-name" /><Problem text={errors.firstName} /></Field>
+          <Field label="Last name" required><TextInput value={form.lastName} onChange={(e) => patch({ lastName: e.target.value })} autoComplete="family-name" maxLength={100} data-testid="enrol-last-name" /><Problem text={errors.lastName} /></Field>
+        </div>
         <Field label="Email" required><EmailField value={form.email} onChange={(email) => patch({ email })} kind="student" context="public" serverError={emailError} placeholder="you@example.com" autoComplete="email" /><Problem text={errors.email} /></Field>
         {/* SIGNUP-PHONE-OPTIONAL (owner 2026-11-27): the mobile field is hidden for now (optional; added back later). */}
         <Field label="Password" required hint={`At least ${MIN_PASSWORD_LENGTH} characters. You sign in with your email and this password.`}>
           <TextInput type="password" value={form.password} onChange={(e) => patch({ password: e.target.value })} autoComplete="new-password" /><Problem text={errors.password} />
         </Field>
-        <p className="text-xs text-foreground-500">Your name and other details come from your passport when you apply.</p>
+        <p className="text-xs text-foreground-500">Your other details come from your passport when you apply.</p>
         {/* Honeypot: hidden from people, filled by bots. */}
         <div className="hidden" aria-hidden="true"><label>Website<input tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} /></label></div>
         <Agree checked={form.agreed} onChange={(agreed) => patch({ agreed })} error={errors.agreed} />

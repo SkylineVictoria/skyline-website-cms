@@ -1353,5 +1353,37 @@
     "id": "document-classify-db",
     "reason": "2026-11-28 owner (BULK-DOCUMENTS): document-classify joins the Edge Function allowlist.",
     "fingerprints": []
+  },
+  {
+    "type": "technical",
+    "id": "document-finder",
+    "reason": "2026-11-28 owner (DOCUMENT-FINDER: the student gives first and last name at sign-up; on the bulk screen, with consent, their documents are found and attached): consent first; a folder chosen in the browser (Downloads first) is searched with its sub-folders on the device, the likeliest 40 files are scanned (type, and whether the document is the student's: yes / no / unknown only), the best per document is attached, someone else's documents are left out; phones and other browsers open their own photo and file picker. Fixed owner rules, not business settings.",
+    "fingerprints": [
+      "03fc93386666aeda314dfbdb52d12703b91fda3f6347dfb85735ad5a346447ee",
+      "19582b1a80ae92bd8da209d5eaa1fd47308f41f26be41d3505336233e6741b13",
+      "1c2adabd02b0b3716f8f9760207fe4ce8a863d199cd34c1d6d3e974c56ff67f5",
+      "23a95bc16e29e7282e373e99a4e694695d549428c711aa7d215bda95fc23fc5e",
+      "3cadfab85695c26072e565d69d87360cd009b021eef6b9f6a051e97ae8eca13f",
+      "54e5346829b316971b43ee39d5427301d912f1abd127cee7968ba7ce050a7229",
+      "77758366dabd0ba5320a73aac241976bcf1c311ee57af8cd55a82f3ae20bf895",
+      "80aa1278a1cacce824f83b26842659b0132e31d5c727918d8711ea2e05c18479",
+      "87de4cbbab9b4dc8ec76d3e96d1ea4cdb2420c027c2a35b161c5f9556ec23bd3",
+      "8a5f9e9163b336b6ef71cf718edb5d22094a7482c2733017652a4d227f446276",
+      "9d2695a5fd0a74da3652bd2f6f9b4de6e4321afaa7450848d58039c1405fc901",
+      "a6ff66957bc8f210322933bf9d0ff1bbcb19283976c34c7b332db3229c15fbcb",
+      "b7e61c199de7d476b9fa1eb8c891f515344072c2f844f7e7d33f9c47f1d3ccab",
+      "b8647d56e3b8d1203e22761e630cd07290dc63159e2451889944460b05803165",
+      "b8d2609a71571875c63824614187c7f37247d3dfbb6eb73e93c65616ae4aab91",
+      "c92107a5a5d65fca89bd9d89bd3b13e1768518a3ef4504140c778a238505e2ef",
+      "cf3e170ad8b529254f2d5880cb0bdfee6e783c9c5162d5d4dbf19875015fce0b",
+      "d4eaeac778daeeeea1d8818bb0bea1cdd027fe726f57e7bc450980ce938a0119",
+      "d8c06a34567151e60b28cebf519184ae8e6b4107d14fc07b5046f314941ca6ae",
+      "e0b1d52597d86f9cf8707b050a467c188d53b946448d68ae927ec0ce9bf65c6d",
+      "e546710be42ce2918519a19fa6681d134fdca8b1e276453825d0ba1de4709491",
+      "f63a3b77268e6bfdcaf44d58b2ae557f574425cfefeab252adb7057b1c7c662d",
+      "f842f315f05a851b88f5c903c9dca0421166fec6b5628c69320fd309d431c246",
+      "f9fcb47f68a200e1312009dbfc185c8bbed7c5f7c3c4349f3247dcce6fb4f9a4",
+      "fd28bf2ce662b713b5e8f0f8a78cbae1913b16993c09970829b1fc42d4f85dea"
+    ]
   }
 ]

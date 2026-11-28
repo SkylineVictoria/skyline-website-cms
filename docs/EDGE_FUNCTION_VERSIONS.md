@@ -2,9 +2,12 @@
 
 Moved out of CLAUDE.md on 2026-11-27. Newest first. This is the "recorded version" the deploy hard rule in CLAUDE.md compares with:
 before a deploy, if the live version (Supabase get_edge_function / list_edge_functions) is newer than the last one recorded here
-(or deployed by this session), STOP and tell the owner. After every deploy, add a "Checked <date> after <TASK>: <function> <version>
+(or deployed by this session), STOP and tell the owner. After every deploy, add a "Checked 2026-11-28 after DOCUMENT-FINDER: document-classify 2 (optional firstName / lastName: also nameMatch yes / no / unknown; JWT on), deployed by MCP with the files of main cb512ea (the same 14 files; live was 1 = recorded); answers 401 own message with the anon key. No migration.
+Checked 2026-11-28 after BULK-DOCUMENTS auto-scan: document-classify 1 (new; JWT on), deployed by MCP with the files of main 2d6267c (14 files: document-classify/index.ts and its _shared imports, copied from main); answers 204 OPTIONS, 401 own message with the anon key; migration 20261128031517 applied first.
+Checked <date> after <TASK>: <function> <version>
 ..." line at the top.
 
+Checked 2026-11-28 after AXCELERATE-CONNECTION: integrations-admin 16 (aXcelerate test / axcelerate_call; JWT on), deployed by MCP with the files of main 126991f (live was 15 = recorded); migration 20261128030517 applied first.
 Checked 2026-11-27 after SIGNUP-PHONE-OPTIONAL: portal-self-register 19 (JWT off, mobile optional), deployed by MCP with the files of main 713a449 (live was 18 = recorded); migration 20261128011517 applied first.
 Checked 2026-11-27 after ASM-ANY-LAYOUT: asm-import 7 (classify_fields; JWT on), CLI deploy from 910b57ea (deploy job run 58 failed: SUPABASE_ACCESS_TOKEN secret invalid); migration 20261127170517 applied first.
 Checked 2026-11-27 after STUDENT-DOCUMENTS: portal-document-delete 27 (JWT on) and portal-application-delete 14 (JWT on) deployed by MCP with the files of main 11f03fb (deploy job run 57 failed: SUPABASE_ACCESS_TOKEN invalid); portal-document-extract still 38 (to deploy from main once the token is renewed); migration 20261127150517 applied first.

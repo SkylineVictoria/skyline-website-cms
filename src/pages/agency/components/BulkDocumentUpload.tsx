@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { PendingUpload, WizardDoc, WizardStep } from "@/pages/agency/lib/wizardConfig";
 import { DOCUMENT_ACCEPT } from "../../../../supabase/functions/_shared/validation/person";
-import { guessDocumentType } from "@/pages/agency/lib/bulkDocuments";
+import { canSearchFolders, findDocumentsInFolder, guessDocumentType } from "@/pages/agency/lib/bulkDocuments";
+import { CLOUD_SOURCES, pickFromCloud, type CloudSource } from "@/lib/cloudPickers";
 
 /**
  * BULK-DOCUMENTS (owner 2026-11-28: "upload all docs in one shot, then only the missing ones, then the card view and submit"). The
@@ -25,13 +26,17 @@ export interface BulkStep {
 /** A file chosen in the bulk upload: scanned to find which document it is, then attached to that document automatically. */
 interface Staged {
   key: string; file: File;
+  /** pick: chosen by the person; find: found by "Find my documents" (only the best one per document is kept, the rest dropped quietly). */
+  origin: "pick" | "find";
   /** scanning: being read; ready: its document is known; other: not a document the application asks for; unclear: not readable;
-   *  failed: the scanner is not available (the person then says what it is, the only case with a choice). */
-  status: "scanning" | "ready" | "other" | "unclear" | "failed";
-  type: string; detected?: string;
+   *  notMine: someone else's document (DOCUMENT-FINDER name check); failed: the scanner is not available (the person then says what
+   *  it is, the only case with a choice). */
+  status: "scanning" | "ready" | "other" | "unclear" | "notMine" | "failed";
+  type: string; detected?: string; nameMatch?: boolean | null;
 }
+type Person = { firstName: string; lastName: string };
 
-export default function BulkDocumentUpload({ steps, onUpload, onRemove, residency, onOneByOne, locked, classify }: {
+export default function BulkDocumentUpload({ steps, onUpload, onRemove, residency, onOneByOne, locked, classify, person }: {
   steps: BulkStep[];
   onUpload: (stepId: string, files: File[], passportComing?: boolean) => void;
   onRemove: (doc: WizardDoc) => Promise<void>;
@@ -40,51 +45,96 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
   /** Switch to one document at a time (the guided steps), e.g. for the English options without a test result. */
   onOneByOne: (stepId?: string) => void;
   locked?: boolean;
-  /** Reads a file and says which document it is (the wizard step id, "" when none); throws when the scanner is unavailable. */
-  classify: (file: File) => Promise<{ step: string; type: string }>;
+  /** Reads a file and says which document it is (the wizard step id, "" when none) and, given a person, whether it is theirs;
+   *  throws when the scanner is unavailable. */
+  classify: (file: File, person?: Person) => Promise<{ step: string; type: string; nameMatch?: boolean | null }>;
+  /** DOCUMENT-FINDER: the student's first and last name (entered by the agent / admin, or by the student at sign-up). */
+  person?: Person;
 }) {
   const [staged, setStaged] = useState<Staged[]>([]);
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   const known = new Set(steps.map((s) => s.step.id as string));
   const update = (key: string, patch: Partial<Staged>) => setStaged((prev) => prev.map((x) => (x.key === key ? { ...x, ...patch } : x)));
-  const stage = (files: FileList | File[] | null) => {
+  const named = person && person.firstName.trim() && person.lastName.trim() ? person : undefined;
+  const stage = (files: FileList | File[] | null, origin: Staged["origin"] = "pick") => {
     if (!files?.length) return;
-    const added: Staged[] = Array.from(files).map((file) => ({ key: crypto.randomUUID(), file, status: "scanning", type: "" }));
+    const added: Staged[] = Array.from(files).map((file) => ({ key: crypto.randomUUID(), file, origin, status: "scanning", type: "" }));
     setStaged((prev) => [...prev, ...added]);
     // Three at a time, so a big batch does not flood the scanner.
     const queue = [...added];
     const worker = async () => {
       for (let item = queue.shift(); item; item = queue.shift()) {
         try {
-          const found = await classify(item.file);
+          const found = await classify(item.file, named);
           if (found.type === "Unclear") update(item.key, { status: "unclear", detected: found.type });
-          else if (found.step && known.has(found.step)) update(item.key, { status: "ready", type: found.step, detected: found.type });
+          else if (found.nameMatch === false) update(item.key, { status: "notMine", detected: found.type, nameMatch: false });
+          else if (found.step && known.has(found.step)) update(item.key, { status: "ready", type: found.step, detected: found.type, nameMatch: found.nameMatch });
           else update(item.key, { status: "other", detected: found.type });
         } catch {
           const guess = guessDocumentType(item.file.name);
-          update(item.key, { status: "failed", type: known.has(guess) ? guess : "" });
+          // A found file the scanner could not read is dropped (it was never chosen); a chosen one asks what it is.
+          update(item.key, origin === "find" ? { status: "unclear" } : { status: "failed", type: known.has(guess) ? guess : "" });
         }
       }
     };
     void Promise.all([worker(), worker(), worker()]);
   };
-  // Once every file is scanned, the ones that were recognised are attached at once (the passport first: the others are checked against it).
+
+  // DOCUMENT-FINDER: consent first, then a folder (computer) or the photo / file picker (phone, Safari, Firefox).
+  const [finding, setFinding] = useState<"" | "ask" | "searching" | "reading">("");
+  const [looked, setLooked] = useState(0);
+  const [found, setFound] = useState<{ attached: string[]; others: number } | null>(null);
+  const folderSearch = canSearchFolders();
+  const [cloudError, setCloudError] = useState("");
+  // A cloud source: its own window, the student chooses there; those files are scanned like any chosen ones (name check included).
+  const fromCloud = async (source: CloudSource) => {
+    setCloudError(""); setFound(null);
+    try {
+      const files = await pickFromCloud(source, named);
+      setFinding("");
+      if (files.length) stage(files, "pick");
+    } catch (error) { setCloudError(error instanceof Error ? error.message : "That service could not be opened."); }
+  };
+  const find = async () => {
+    if (!folderSearch) { setFinding(""); input.current?.click(); return; }
+    setFinding("searching"); setLooked(0); setFound(null);
+    const files = await findDocumentsInFolder(named, setLooked);
+    if (!files) { setFinding(""); return; }
+    setFinding(files.length ? "reading" : "");
+    if (!files.length) { setFound({ attached: [], others: 0 }); return; }
+    stage(files, "find");
+  };
+
+  // Once every file is scanned, the ones that were recognised are attached at once (the passport first: the others are checked against
+  // it). Per document the best file goes: the student's name confirmed first, then the newest.
   const scanning = staged.some((item) => item.status === "scanning");
   useEffect(() => {
     if (scanning || locked) return;
+    if (staged.some((item) => item.status === "failed" && !item.type)) return;
     const go = staged.filter((item) => (item.status === "ready" || item.status === "failed") && item.type);
-    if (!go.length || staged.some((item) => item.status === "failed" && !item.type)) return;
-    const byType = new Map<string, File[]>();
-    for (const item of go) byType.set(item.type, [...(byType.get(item.type) ?? []), item.file]);
+    const fromFind = staged.some((item) => item.origin === "find");
+    if (!go.length && !fromFind) return;
+    const byType = new Map<string, Staged[]>();
+    for (const item of go) byType.set(item.type, [...(byType.get(item.type) ?? []), item]);
     const passportComing = byType.has("passport");
-    for (const [type, files] of [...byType].sort(([a], [b]) => (a === "passport" ? -1 : b === "passport" ? 1 : 0))) {
+    const attached: string[] = [];
+    for (const [type, items] of [...byType].sort(([a], [b]) => (a === "passport" ? -1 : b === "passport" ? 1 : 0))) {
       const target = steps.find((s) => s.step.id === type);
-      // A single document keeps the last file found for it (the others would replace it anyway).
-      if (target) onUpload(type, target.step.multiple ? files : files.slice(-1), passportComing);
+      if (!target) continue;
+      const best = [...items].sort((a, b) => (a.nameMatch === true ? 0 : 1) - (b.nameMatch === true ? 0 : 1) || b.file.lastModified - a.file.lastModified);
+      // A found document the application already has is left as it is; chosen files always go (a single document keeps the best one).
+      const pick = items.every((item) => item.origin === "find") && target.docs.length && !target.step.multiple ? []
+        : target.step.multiple ? best.slice(0, items.every((item) => item.origin === "find") ? 5 : best.length) : best.slice(0, 1);
+      if (pick.length) { onUpload(type, pick.map((item) => item.file), passportComing); attached.push(target.step.title); }
     }
+    if (fromFind) {
+      setFound({ attached, others: staged.filter((item) => item.origin === "find" && item.status === "notMine").length });
+      setFinding("");
+    }
+    // What was sent goes; so does everything a search found that is not attached (it was never chosen by the student).
     const sent = new Set(go.map((item) => item.key));
-    setStaged((prev) => prev.filter((item) => !sent.has(item.key)));
+    setStaged((prev) => prev.filter((item) => !sent.has(item.key) && item.origin !== "find"));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the scanning of a batch finishes
   }, [scanning, staged.length, staged.map((item) => item.status + item.type).join()]);
   const drop = (event: DragEvent) => { event.preventDefault(); setDragging(false); stage(event.dataTransfer.files); };
@@ -99,6 +149,51 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
         </p>
       </div>
 
+      {/* DOCUMENT-FINDER (owner 2026-11-28): with the student's consent, their documents are looked for and attached. */}
+      <section className="rounded-xl border border-primary-200 bg-primary-50/60 p-4" data-testid="bulk-finder">
+        {finding === "ask" ? (
+          <div className="space-y-3 text-sm" data-testid="bulk-find-consent">
+            <p className="font-semibold text-foreground-950">May we look for your documents?</p>
+            <p className="text-foreground-700">Choose where your documents might be. We only look at what you allow there, find your passport, visa, English result, academic documents and driving licence{named ? <> with the name <strong>{named.firstName} {named.lastName}</strong></> : null}, and attach them. Only the documents we attach are uploaded.</p>
+            <div className="grid gap-2 sm:grid-cols-2" data-testid="bulk-find-sources">
+              <button type="button" onClick={() => void find()} data-testid="bulk-find-allow"
+                className="flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2.5 text-left text-sm font-semibold text-white hover:bg-primary-700">
+                <i className={folderSearch ? "ri-computer-line" : "ri-smartphone-line"} aria-hidden="true" />
+                {folderSearch ? "This computer: choose a folder (Downloads, Documents, iCloud Drive…)" : "My phone: photos and files (also iCloud, Drive, OneDrive)"}</button>
+              {CLOUD_SOURCES.filter((source) => source.ready).map((source) => (
+                <button key={source.id} type="button" onClick={() => void fromCloud(source.id)} data-testid={`bulk-find-${source.id}`}
+                  className="flex items-center gap-2 rounded-md border border-primary-300 bg-white px-4 py-2.5 text-left text-sm font-semibold text-primary-800 hover:bg-primary-50">
+                  <i className={source.icon} aria-hidden="true" /> {source.label}</button>
+              ))}
+            </div>
+            {cloudError ? <p role="alert" className="text-xs text-red-700">{cloudError}</p> : null}
+            <button type="button" onClick={() => setFinding("")} className="text-xs font-semibold text-foreground-600 underline">Not now</button>
+          </div>
+        ) : finding === "searching" || finding === "reading" ? (
+          <p role="status" className="flex items-center gap-2 text-sm text-foreground-800" data-testid="bulk-find-progress">
+            <i className="ri-loader-4-line animate-spin text-primary-600" aria-hidden="true" />
+            {finding === "searching" ? `Looking through your folder… ${looked} files so far` : `Reading the likeliest ${staged.filter((x) => x.origin === "find").length} files to find your documents…`}
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-foreground-950">Don't know where your documents are?</p>
+              <p className="text-xs text-foreground-600">We can look for them for you{named ? ` (${named.firstName} ${named.lastName})` : ""} and attach them.</p>
+            </div>
+            <button type="button" disabled={locked} onClick={() => setFinding("ask")} data-testid="bulk-find"
+              className="inline-flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+              <i className="ri-search-eye-line" aria-hidden="true" /> Find my documents</button>
+          </div>
+        )}
+        {found && finding === "" ? (
+          <p role="status" className="mt-2 text-xs text-foreground-700" data-testid="bulk-find-result">
+            {found.attached.length ? `Found and attached: ${found.attached.join(", ")}.` : "We did not find your documents in that folder."}
+            {found.others ? ` ${found.others} document${found.others === 1 ? "" : "s"} of someone else ${found.others === 1 ? "was" : "were"} left out.` : ""}
+            {" "}Anything still needed is marked below; you can try another folder or add it yourself.
+          </p>
+        ) : null}
+      </section>
+
       <div onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={drop}
         className={`flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center ${dragging ? "border-primary-500 bg-primary-50" : "border-background-300 bg-background-50"}`}>
         <i className="ri-upload-cloud-2-line text-3xl text-primary-600" aria-hidden="true" />
@@ -110,10 +205,10 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
         <p className="text-2xs text-foreground-500">PDF, JPG or PNG, up to 10 MB each.</p>
       </div>
 
-      {staged.length ? (
+      {staged.some((x) => x.origin === "pick") ? (
         <section className="space-y-2 rounded-lg border border-background-300 p-3" data-testid="bulk-staged">
-          <p className="text-sm font-semibold">{scanning ? `Scanning ${staged.filter((x) => x.status === "scanning").length} of ${staged.length} file${staged.length === 1 ? "" : "s"} to see which document each one is…` : "These files were not attached:"}</p>
-          {staged.map((item, index) => (
+          <p className="text-sm font-semibold">{staged.some((x) => x.origin === "pick" && x.status === "scanning") ? `Scanning ${staged.filter((x) => x.origin === "pick" && x.status === "scanning").length} of ${staged.filter((x) => x.origin === "pick").length} file${staged.filter((x) => x.origin === "pick").length === 1 ? "" : "s"} to see which document each one is…` : "These files were not attached:"}</p>
+          {staged.filter((x) => x.origin === "pick").map((item, index) => (
             <div key={item.key} className="flex flex-wrap items-center gap-2 text-sm" data-testid={`bulk-file-${index}`} data-status={item.status}>
               <i className={item.status === "scanning" ? "ri-loader-4-line animate-spin text-primary-600" : item.status === "ready" ? "ri-checkbox-circle-fill text-emerald-600" : "ri-error-warning-line text-amber-700"} aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate" title={item.file.name}>{item.file.name}</span>
@@ -121,6 +216,7 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
                 {item.status === "scanning" ? "Scanning…" : item.status === "ready" ? titleOf(item.type)
                   : item.status === "other" ? "Not one of the documents this application needs"
                   : item.status === "unclear" ? "Could not be read clearly. Upload a clearer, complete copy"
+                  : item.status === "notMine" ? `This seems to be someone else's document${named ? ` (not ${named.firstName} ${named.lastName})` : ""}: not attached`
                   : "Scanning is unavailable: what is it?"}
               </span>
               {item.status === "failed" ? (

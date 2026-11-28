@@ -16,6 +16,7 @@ import { useDraftRegistry } from '@/pages/admin/lib/draftContext';
 import { useIntegrations, date, inputClass } from './state';
 import PendingCredentialsForm from './PendingCredentialsForm';
 import CommConnectionForm, { VAULT_FORM_CONNECTORS } from './CommConnectionForm';
+import AxcelerateConnection from './AxcelerateConnection';
 import Microsoft365Panel from '@/pages/admin/components/Microsoft365Panel';
 import { m365Label, useMicrosoft365 } from '@/pages/admin/lib/microsoft365';
 import SearchableSelect from "@/components/ui/SearchableSelect";
@@ -31,6 +32,7 @@ const PURPOSE: Record<string, string> = {
   google_maps: 'Fills a business\u2019s office address, website and phone on Add business (Places API (New)).',
   brave_search: 'Finds a business\u2019s registered migration agents on the public OMARA register (Add business).',
   tavily: 'Finds a business\u2019s registered migration agents on the public OMARA register (alternative to Brave Search).',
+  axcelerate: 'aXcelerate (Accelerate CRM): read and import contacts, courses, enrolments and reports with its API.',
 };
 
 type OAuthSetup = {
@@ -272,7 +274,8 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
   // Apps whose connector is not built yet: their details can be stored, but there is nothing to test or disconnect.
   const pendingApp = definition?.availability === 'requires_approval' && Object.hasOwn(australianEducationApps, definition.id);
   // Communication Hub accounts (ClickSend, WhatsApp Business, Microsoft Teams channels) and Google Maps: saved here in Vault, used server side.
-  const commApp = isVaultFormConnector(definition?.id);
+  // aXcelerate (2026-11-28) is set up the same way, with its own form (tokens, Check connection, API calls).
+  const commApp = isVaultFormConnector(definition?.id) || definition?.id === 'axcelerate';
   const wrongDomain = setup && new URL(setup.callbackUrl).origin !== window.location.origin;
   // rule-policy: security integration-credential-access Reuses existing administrator and provider form availability.
   const hasCredentials = isAdmin && !serverManaged && !!connection && !disabled && !!definition && definition.id !== M365 &&
@@ -407,6 +410,8 @@ function Workspace({ initialActivity, openSettings, openCredentials }: {
       // rule-policy: technical integration-oauth-loading Shows progress while reading existing setup metadata.
       <p role="status">Loading provider setup…</p>
     )
+  ) : definition?.id === 'axcelerate' ? (
+    <AxcelerateConnection connectionId={connection?.id} ensureConnection={ensureConnection} busy={busy} perform={perform} onNotice={announce} onDraftChange={setDirty} />
   ) : commApp && definition ? (
     <CommConnectionForm connectionId={connection?.id} ensureConnection={ensureConnection} connectorId={definition.id} busy={busy} perform={perform} onNotice={announce} onDraftChange={setDirty} />
   ) : pendingApp && definition ? (

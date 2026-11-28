@@ -674,17 +674,18 @@ test("enrol: the ABN is checked like the Edge Function does and shown in groups"
   assert.equal(formatAbn("85165345717999"), "85 165 345 717", "never more than 11 digits");
 });
 
-test("enrol: a student gives only email and a password and agrees (mobile, name and date of birth optional: SIGNUP-PHONE-OPTIONAL); the payload is normalised", () => {
+test("enrol: a student gives first and last name (DOCUMENT-FINDER), email and a password and agrees (mobile and date of birth optional: SIGNUP-PHONE-OPTIONAL); the payload is normalised", () => {
   const today = new Date(Date.UTC(2026, 10, 5));
   const empty = validateStudentEnrol(EMPTY_STUDENT_ENROL, today);
-  assert.deepEqual(Object.keys(empty).sort(), ["agreed", "email", "password"]);
+  assert.deepEqual(Object.keys(empty).sort(), ["agreed", "email", "firstName", "lastName", "password"]);
+  const named = { ...EMPTY_STUDENT_ENROL, firstName: "Asha", lastName: "Patel" };
   // the mobile is hidden on the form for now: optional, but a given one is still checked
-  assert.deepEqual(validateStudentEnrol({ ...EMPTY_STUDENT_ENROL, email: "a@b.test", password: "long-enough-pw", agreed: true }, today), {});
-  assert.ok(validateStudentEnrol({ ...EMPTY_STUDENT_ENROL, email: "a@b.test", mobile: "12", password: "long-enough-pw", agreed: true }, today).mobile);
-  const minimal = { ...EMPTY_STUDENT_ENROL, email: "a@b.test", mobile: "+61412345678", password: "long-enough-pw", agreed: true };
+  assert.deepEqual(validateStudentEnrol({ ...named, email: "a@b.test", password: "long-enough-pw", agreed: true }, today), {});
+  assert.ok(validateStudentEnrol({ ...named, email: "a@b.test", mobile: "12", password: "long-enough-pw", agreed: true }, today).mobile);
+  const minimal = { ...named, email: "a@b.test", mobile: "+61412345678", password: "long-enough-pw", agreed: true };
   assert.ok(validateStudentEnrol({ ...minimal, password: "short" }, today).password);
   assert.deepEqual(validateStudentEnrol(minimal, today), {});
-  assert.equal(studentEnrolPayload(minimal, today).firstName, "");
+  assert.equal(studentEnrolPayload(minimal, today).firstName, "Asha");
   const form = { ...EMPTY_STUDENT_ENROL, firstName: " Stu ", lastName: "Dent", email: "Stu.Dent@Example.test ", mobile: "+61412345678", dateOfBirth: "2000-01-02", course: "X - Y", referralCode: " AGT-1 ", agreed: true, password: "long-enough-pw" };
   assert.deepEqual(validateStudentEnrol(form, today), {});
   assert.deepEqual(studentEnrolPayload(form, today), { kind: "student", firstName: "Stu", lastName: "Dent", email: "stu.dent@example.test", phone: "+61412345678", dateOfBirth: "2000-01-02", course: "X - Y", referralCode: "AGT-1" });

@@ -28,6 +28,8 @@ export default defineConfig({
       VITE_PUBLIC_SITE_URL: `http://127.0.0.1:${E2E_PORT}`,
       // The staff form's security check renders the local mock (the functions accept "mock-ok" only against a local stack).
       VITE_CAPTCHA_SITE_KEY: "local-mock",
+      // DOCUMENT-FINDER: the Dropbox source shows (its window is a stand-in in the tests; no Dropbox call is made).
+      VITE_DROPBOX_APP_KEY: "lab-test",
     },
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],

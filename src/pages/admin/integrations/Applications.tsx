@@ -39,6 +39,7 @@ const icons: Record<string, string> = {
   microsoft_teams: 'ri-group-fill bg-indigo-100 text-indigo-700',
   brave_search: 'ri-search-eye-line bg-orange-100 text-orange-800',
   tavily: 'ri-search-line bg-sky-100 text-sky-800',
+  axcelerate: 'ri-database-2-line bg-teal-100 text-teal-800',
   calendly: 'ri-calendar-line bg-blue-100 text-blue-700',
   xero: 'ri-bank-line bg-sky-100 text-sky-800',
   usi: 'ri-fingerprint-line bg-secondary-100 text-secondary-800',

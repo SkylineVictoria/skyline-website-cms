@@ -48,9 +48,10 @@ export type EnrolErrors<T> = Partial<Record<keyof T | "form", string>>;
 /** `ageRange`: Business Rules admissions.applicant_age_range (the caller reads it; 10 to 100 years when not given). */
 export function validateStudentEnrol(form: StudentEnrolForm, today?: Date, ageRange?: AgeRange): EnrolErrors<StudentEnrolForm> {
   const errors: EnrolErrors<StudentEnrolForm> = {};
-  // Email and mobile only, like an application; a name or date of birth is checked only when given.
-  const first = form.firstName.trim() ? nameProblem(form.firstName, "first name") : ""; if (first) errors.firstName = first;
-  const last = form.lastName.trim() ? nameProblem(form.lastName, "last name") : ""; if (last) errors.lastName = last;
+  // DOCUMENT-FINDER (owner 2026-11-28): first and last name are asked with the email (they find and check the student's own documents);
+  // a date of birth is checked only when given.
+  const first = nameProblem(form.firstName, "first name"); if (first) errors.firstName = first;
+  const last = nameProblem(form.lastName, "last name"); if (last) errors.lastName = last;
   const email = emailProblem(form.email); if (email) errors.email = email;
   // SIGNUP-PHONE-OPTIONAL (owner 2026-11-27): the mobile is hidden for now; checked only when given.
   const mobile = form.mobile.trim() ? mobileProblem(form.mobile) : ""; if (mobile) errors.mobile = mobile;

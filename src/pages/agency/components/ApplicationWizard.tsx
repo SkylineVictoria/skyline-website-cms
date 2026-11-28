@@ -379,6 +379,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         if (active) setDraftIssuingCountry(pick("issuing_country").trim() || pick("passport_issuing_country").trim());
         const courses = Array.isArray(values.courses_of_interest) ? (values.courses_of_interest as unknown[]).map(String) : [];
         if (active) {
+          // DOCUMENT-FINDER: the student's name as the agent / admin entered it or the student gave it at sign-up.
+          const recordName = [pick("first_name").trim(), pick("last_name").trim()].filter(Boolean).join(" ");
+          setStudentFullName((pick("first_name").trim() && pick("last_name").trim() ? recordName : String(application.studentName ?? "")).trim().replace(/\s+/g, " "));
           const savedMode = (application.data.wizard as { docMode?: string } | undefined)?.docMode;
           if (savedMode === "bulk" || savedMode === "steps") setDocMode(savedMode);
           const saved = (application.data.wizard ?? {}) as { activeStep?: string; completedSteps?: string[]; courseChoice?: string; intakeChoice?: string; intakeLabel?: string; intakeJoin?: string; englishChoice?: string; studyChoice?: AusStudyAnswer; cambridgeChoice?: AusStudyAnswer };
@@ -754,6 +757,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const [savingResidency, setSavingResidency] = useState(false);
   /* BULK-DOCUMENTS (owner 2026-11-28): all documents at once, or one at a time (the guided steps). The same wizard for every role. */
   const [docMode, setDocMode] = useState<"" | "bulk" | "steps">("");
+  const [studentFullName, setStudentFullName] = useState("");
   const chooseMode = (mode: "bulk" | "steps", at?: string) => {
     setDocMode(mode);
     pendingWizard.current = { ...pendingWizard.current, docMode: mode };
@@ -1371,7 +1375,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         <>
           {readSaveError ? <WizardNotice tone="error">{readSaveError}</WizardNotice> : null}
           <BulkDocumentUpload steps={bulkSteps} onUpload={bulkPick} onRemove={handleRemoveDoc} locked={savingResidency}
-            classify={(file) => classifyDocument(applicationId, file)}
+            classify={(file, person) => classifyDocument(applicationId, file, person)}
+            person={answers.first_name?.trim() && answers.last_name?.trim() ? { firstName: answers.first_name, lastName: answers.last_name }
+              : { firstName: studentFullName.split(" ")[0] ?? "", lastName: studentFullName.split(" ").length > 1 ? studentFullName.split(" ").slice(-1)[0] : "" }}
             onOneByOne={(at) => chooseMode("steps", at)}
             residency={hasPassport ? <ResidencyQuestions issuingCountry={passportCountry} answers={answers} errors={answerErrors} onChange={(name, value) => { setAnswer(name, value); setAnswerErrors((prev) => ({ ...prev, [name]: "" })); }} /> : null} />
         </>

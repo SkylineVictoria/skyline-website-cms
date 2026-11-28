@@ -44,6 +44,7 @@ Hosted-only functions (not in this repo): address-search v9, portal-application-
 | portal-document-extract | false | worker secret / user enqueue; leased, fenced | 12 |
 | public-assistant-index | false | worker secret | 5 |
 | public-assistant | false | public, rate-limited | 8 |
+| document-classify | true | caller JWT; portal_can_edit_application with the caller's token; multipart { applicationId, file }: which application document the file is (OpenAI, OPENAI_DOCUMENT_MODEL; only the type is returned, nothing stored; same size / type rules and hourly upload limit as validated-document-upload). Used by the bulk upload to attach each file to its document (BULK-DOCUMENTS, migration 20261128031517) | v2 DEPLOYED 2026-11-28 by MCP (v2: optional firstName / lastName in, nameMatch out: whether the document is that person's, true / false / null) |
 | letterhead-designer | true | admin JWT (`cms_is_admin` with the caller's token); action `design` sends the brand inputs (details, logo / website colours and fonts, never the logo image) to the OpenAI Responses API, one structured spec per style (Classic, Modern, Minimal, Bold, Formal), each normalised and checked by `_shared/letterhead-design.ts` (header height on the real PDF, contrast, logo dpi, RTO / CRICOS every page, two fonts), retried up to 3 times with the reasons (LETTERHEAD-DESIGNER, migration 20261128019517) | NOT DEPLOYED (Supabase token 401); the page uses the built-in designer until then |
 | staff-register | false | public staff application (HR-02b), multipart action `apply`: per-IP and per-email rate limits (fail closed), honeypot, name/email/E.164 phone, resume PDF/DOCX by name AND content (<= 5 MB), CAPTCHA (`EF_CAPTCHA_SECRET_KEY`: Cloudflare Turnstile siteverify; `local-mock` only against a local Supabase URL), then service-role `hr_svc_apply` + upload to `staff-documents/{profile}/resume/` + `hr_svc_apply_resume`. No login is created; an existing application gets the same thank-you. `no-store`, `no-referrer`. The deployed v1 (`check` / `sign_up`, Auth signUp) is replaced | v10 DEPLOYED 2026-11-11 (verified in the hosted function list) |
 | staff-document-extract | - | DELETED locally (HR-02d2): reading runs only inside staff-onboarding (`staff-onboarding/reader.ts`, link-checked). The hosted v1 (2026-11-05) is NOT redeployed; delete it on hosted at the HR-02 release | deleted on hosted (absent from the function list, verified 2026-11-11) |
@@ -1379,10 +1380,10 @@ SQL taking effect; this applies them with the definitions a fresh lab has (`port
 every changed answer to `application_admin_changes` (source application / student / course, field, old and new value, who, when;
 append-only), read by SLIT admins with `application_admin_changes_list(application)`.
 
-## aXcelerate connection (AXCELERATE-CONNECTION, 2026-11-28, LOCAL ONLY)
+## aXcelerate connection (AXCELERATE-CONNECTION, 2026-11-28, released: migration applied, integrations-admin v16)
 Integrations › Connections › aXcelerate (Accelerate CRM): Live / Staging, subdomain, API token (from aXcelerate support) and web service token,
 saved in Vault by `integration_axcelerate_save` (summary `integration_axcelerate_summary` shows only the last 4 characters; `integration_axcelerate_clear`).
 `integrations-admin` action `test` (GET /courses) and `axcelerate_call` (administrators; any path under https://{subdomain}.app|stg.axcelerate.com/api,
 headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT form-encoded, answer up to 1.5 MB); every call logged in
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
-Release: apply the migration, deploy integrations-admin from clean main, confirm, then push the frontend. Importing into Skyline records is not built yet.
+Importing into Skyline records is not built yet.

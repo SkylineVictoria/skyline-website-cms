@@ -12,7 +12,7 @@ const filled = (html: string) => Boolean(richPlainText(html).trim()) || /<img\b/
  * Header & footer presets: the saved parts a document template's header or footer can be copied from (signing_admin part_list /
  * part_save / part_delete). Renaming or editing a preset changes the preset only: templates keep the copy they took.
  */
-export default function PresetsManager({ onClose }: { onClose: () => void }) {
+export default function PresetsManager({ onClose, inline = false }: { onClose?: () => void; inline?: boolean }) {
   const [parts, setParts] = useState<TemplatePart[] | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [error, setError] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
@@ -50,8 +50,7 @@ export default function PresetsManager({ onClose }: { onClose: () => void }) {
     </div>
   </Modal>;
 
-  return <Modal open title="Header & footer presets" width="max-w-3xl" onClose={onClose} footer={<Button variant="outline" onClick={onClose}>Close</Button>}>
-    <div className="space-y-4 text-sm" data-testid="presets-manager">
+  const body = <div className="space-y-4 text-sm" data-testid="presets-manager">
       <p className="text-foreground-600">A preset is copied into a document template's header or footer with "Use preset". Changing or deleting a preset here does not change templates that already took a copy.</p>
       {error && <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p>}
       {notice && <p role="status" className="rounded border border-green-300 p-3">{notice}</p>}
@@ -69,6 +68,10 @@ export default function PresetsManager({ onClose }: { onClose: () => void }) {
               <Button size="sm" variant="outline" disabled={busy} onClick={() => setDraft({ id: p.id, kind: p.kind, name: p.name, html: p.html })} data-testid="preset-edit">Edit</Button>
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => remove(p)} data-testid="preset-delete">Delete</Button>
             </div></td></tr>)}</tbody></table>}
-    </div>
+    </div>;
+  // Owner (2026-11-28): the same list also sits on Settings & Policies › AVETMISS settings (Letterhead), next to the company details.
+  if (inline) return body;
+  return <Modal open title="Header & footer presets" width="max-w-3xl" onClose={() => onClose?.()} footer={<Button variant="outline" onClick={() => onClose?.()}>Close</Button>}>
+    {body}
   </Modal>;
 }

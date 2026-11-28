@@ -38,6 +38,8 @@ export const SIGN_CATEGORIES: Record<string, { label: string; audience: "student
   individual_agent_agreement: { label: "Individual agent agreement", audience: "agent" },
   other: { label: "Other document", audience: "any" },
   student_offer_letter: { label: "Letter of Offer (student)", audience: "student" },
+  // APPLICATION-FORM-TEMPLATES (2026-11-27): how a signed application is printed (one default, chosen in Templates); never sent for signing.
+  application_form: { label: "Application form (student)", audience: "student" },
 };
 /** The variables each kind of record fills by itself (hr.sign_subject); anything else is typed by the administrator. */
 export const SUBJECT_VARIABLES: Record<"student" | "employee" | "agent" | "agency", string[]> = {

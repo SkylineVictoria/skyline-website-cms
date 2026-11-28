@@ -413,6 +413,8 @@ test("Documents & Signatures: a document template with Header, Body and Footer, 
   const name = `E2E enrolment agreement ${Date.now()}`;
   await page.getByRole("combobox", { name: "Template name" }).fill(name);
   await page.getByRole("option", { name: `+ Add new: ${name}` }).click();
+  // LETTERHEAD-ON-DOCUMENTS: ticked by default; this test writes its own header and footer.
+  await page.getByTestId("template-use-letterhead").uncheck();
   const sections = page.getByTestId("document-sections");
   await expect(sections.getByRole("tab")).toHaveText(["Header", "Body", "Footer"]);
   // One family, the one the PDF prints: no font choice that would change in the PDF.

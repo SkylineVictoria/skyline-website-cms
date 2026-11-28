@@ -222,9 +222,10 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
 
       {question.id === "declare" ? (
         <div className="space-y-5">
-          {mobileKnown && !errors.mobile ? null : <div>
-            <Label htmlFor="wizard-mobile" required={ruleBool("admissions.application_mobile_required", true)}>Mobile</Label>
-            <PhoneInput key={`mobile-${version}`} id="wizard-mobile" name="mobile" value={v("mobile")} required={ruleBool("admissions.application_mobile_required", true)} placeholder="041 234 5678" onValueChange={(value) => onChange("mobile", value)} />
+          {/* STUDENT-PHONE-OPTIONAL (owner 2026-11-28): the mobile is asked only when SLIT publishes the rule requiring it. */}
+          {(mobileKnown && !errors.mobile) || (!ruleBool("admissions.application_mobile_required", false) && !errors.mobile) ? null : <div>
+            <Label htmlFor="wizard-mobile" required={ruleBool("admissions.application_mobile_required", false)}>Mobile</Label>
+            <PhoneInput key={`mobile-${version}`} id="wizard-mobile" name="mobile" value={v("mobile")} required={ruleBool("admissions.application_mobile_required", false)} placeholder="041 234 5678" onValueChange={(value) => onChange("mobile", value)} />
             <FieldError text={errors.mobile} />
           </div>}
           <div className="rounded-lg border border-background-200 bg-background-100/60 p-4 text-sm">
@@ -232,7 +233,7 @@ export default function WizardFinishSteps({ question, answers, errors, onChange,
               <dt className="text-foreground-500">Student</dt><dd className="font-medium text-foreground-900">{summary.name || "—"}</dd>
               <dt className="text-foreground-500">Course</dt><dd className="font-medium text-foreground-900">{summary.course || "—"}</dd>
               <dt className="text-foreground-500">Intake</dt><dd className="font-medium text-foreground-900">{summary.intake || "—"}</dd>
-              {mobileKnown && !errors.mobile ? <><dt className="text-foreground-500">Mobile</dt><dd className="font-medium text-foreground-900">{formatMobile(v("mobile"))}
+              {mobileKnown && !errors.mobile && ruleBool("admissions.application_mobile_required", false) ? <><dt className="text-foreground-500">Mobile</dt><dd className="font-medium text-foreground-900">{formatMobile(v("mobile"))}
                 <button type="button" onClick={() => setMobileKnown(false)} className="ml-2 cursor-pointer text-xs font-semibold text-primary-700 hover:underline" data-testid="wizard-mobile-change">Change</button></dd></> : null}
               <dt className="text-foreground-500">Documents</dt><dd className="text-foreground-800">{summary.documents.length ? summary.documents.join(", ") : "—"}</dd>
             </dl>

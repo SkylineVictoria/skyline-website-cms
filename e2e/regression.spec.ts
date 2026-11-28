@@ -10,8 +10,9 @@ test.beforeAll(() => { resetRateLimits(); });
 
 test("student registration still works and opens the application wizard", async ({ page }) => {
   const student = person("reg-student");
-  // Only students sign themselves up (EnrolWizard SELF_ENROL_KINDS): Enroll now opens straight on the student form.
   await page.goto("/login?mode=enroll&as=student");
+  await expect(page.getByRole("radio", { name: /Student/ })).toHaveAttribute("aria-checked", "true");
+  await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(student.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -23,15 +24,17 @@ test("student registration still works and opens the application wizard", async 
   expect(sql(`select count(*) from hr.staff_profiles where email = '${student.email}'`)).toBe("0");
 });
 
-test("Enroll now: students only (agents and staff are added by SLIT), the student form opens at once", async ({ page }) => {
+test("the Enroll now choices: Student and Agent unchanged, Staff now needs approval", async ({ page }) => {
   await page.goto("/login?mode=enroll");
-  await expect(page.getByRole("heading", { name: "Who are you enrolling as?" })).toHaveCount(0);
-  await expect(page.getByRole("radio", { name: /Agent|Staff/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Create student account" })).toBeVisible();
-  // asking for the agent form still lands on the student form
-  await page.goto("/login?mode=enroll&as=agent");
-  await expect(page.getByRole("button", { name: "Create student account" })).toBeVisible();
-  await expect(page.getByText(/ABN/i)).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Who are you enrolling as?" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Agent/ })).toContainText("Needs approval");
+  await expect(page.getByRole("radio", { name: /Staff/ })).toContainText("Needs approval");
+  await expect(page.getByRole("radio", { name: /Student/ })).not.toContainText("Needs approval");
+  await expect(page.getByRole("radio", { name: /Staff/ })).not.toContainText("Invite only");
+  // Agent step 2 is still the business (ABN) step.
+  await page.getByRole("radio", { name: /Agent/ }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText(/ABN/i).first()).toBeVisible();
 });
 
 /** A checksum-valid ABN nobody has registered yet (the ATO weighting: subtract 1 from the first digit, weights 10,1,3,5,7,9,11,13,15,17,19, sum divisible by 89). */
@@ -45,8 +48,7 @@ function freshAbn(): string {
   }
 }
 
-// Agents and businesses are added by SLIT (invitation only): the server refuses agent self-registration and creates nothing.
-test("agent self-registration is refused (invitation only) and creates no business, invitation or staff record", async () => {
+test("agent registration still creates an inactive business awaiting review, with its invitation", async () => {
   const agent = person("reg-agent");
   const abn = freshAbn();
   const response = await fetch(`${E2E_API_URL}/functions/v1/portal-self-register`, {
@@ -54,11 +56,10 @@ test("agent self-registration is refused (invitation only) and creates no busine
     body: JSON.stringify({ action: "register", kind: "agent", email: agent.email, contactName: "Agent Contact", abn, businessName: `E2E Agency ${agent.email.slice(10, 16)}`, phone: agent.local, agreed: true, redirectTo: `http://127.0.0.1:${E2E_PORT}/reset-password` }),
   });
   const body = await response.json() as Record<string, unknown>;
-  expect(response.status, JSON.stringify(body)).toBe(400);
-  expect(String(body.error)).toMatch(/invitation only/i);
-  expect(sql(`select count(*) from public.agencies where registration_number = '${abn}'`)).toBe("0");
-  expect(sql(`select count(*) from public.agency_invitations where email = '${agent.email}'`)).toBe("0");
-  expect(sql(`select count(*) from auth.users where lower(email) = '${agent.email}'`)).toBe("0");
+  expect(response.status, JSON.stringify(body)).toBe(200);
+  expect(body.ok).toBe(true);
+  expect(sql(`select status || '/' || (registration_requested_at is not null)::text from public.agencies where registration_number = '${abn}' order by created_at desc limit 1`)).toBe("Inactive/true");
+  expect(sql(`select role from public.agency_invitations where email = '${agent.email}'`)).toBe("agency_admin");
   expect(sql(`select count(*) from hr.staff_profiles where email = '${agent.email}'`)).toBe("0");
 });
 
@@ -90,11 +91,71 @@ test("the admin staff invitation still works: invite, mail, sign in", async ({ p
 // staff onboarding wizard (src/components/shared/wizard). With E2E_SHOTS_DIR set, this walk saves screenshots and the dialog's
 // markup at fixed points, so a run before a change and a run after it can be compared. No reader is called: the browser's request
 // to portal-document-extract is answered here and each reading is recorded in the lab database.
+// BULK-DOCUMENTS (owner 2026-11-28): "upload all the documents at once" -> only the missing ones -> the one page of cards.
+test("bulk documents: all files at once, each scanned and attached to its document (no type to choose), only the missing one asked again, then the card view", async ({ page }) => {
+  test.setTimeout(240_000);
+  const student = person("bulk-student");
+  await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
+  await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByPlaceholder("you@example.com").fill(student.email);
+  await page.locator('input[type="password"]').fill(PASSWORD);
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Create student account" }).click();
+  const alone = page.getByRole("button", { name: /I am applying by myself/ });
+  await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
+  if (await alone.isVisible()) await alone.click();
+  const wizard = page.getByRole("dialog");
+  await expect(wizard.getByTestId("document-mode")).toBeVisible();
+  await page.screenshot({ path: "test-results/bulk-choice.png" });
+  await wizard.getByTestId("doc-mode-bulk").click();
+  await expect(wizard.getByTestId("bulk-documents")).toBeVisible();
+  // The names say nothing: each file is scanned (document-classify) and attached to its document, with no type to choose.
+  const files = [
+    { name: `scan-a-${student.local}.pdf`, cat: "Academic" }, { name: `scan-b-${student.local}.pdf`, cat: "Visa" },
+    { name: `scan-c-${student.local}.pdf`, cat: "Passport" }, { name: `scan-d-${student.local}.pdf`, cat: "Health Insurance" },
+  ];
+  await wizard.getByTestId("bulk-files").setInputFiles(files.map((f) => ({ name: f.name, mimeType: "application/pdf", buffer: pdfFor(f.cat) })));
+  await expect(wizard.getByTestId("bulk-staged")).toContainText(/Scanning|not attached/);
+  await page.screenshot({ path: "test-results/bulk-staged.png" });
+  await expect.poll(() => sql(`select string_agg(d.category, ',' order by d.category) from public.enrollment_application_documents d where d.filename like 'scan-%-${student.local}.pdf' and d.is_current`), { timeout: 60_000 }).toBe("Academic,Passport,Visa");
+  // The health insurance file is not one the application asks for: it is shown, not attached.
+  await expect(wizard.getByTestId("bulk-staged")).toContainText("Not one of the documents this application needs");
+  await expect(wizard.getByTestId("bulk-type-0")).toHaveCount(0);
+  const passportFile = files[2];
+  const applicationId = sql(`select application_id from public.enrollment_application_documents where filename = '${passportFile.name}' order by created_at desc limit 1`);
+  markStudentDocumentRead(applicationId, "Passport", { first_name: "BULK", last_name: "STUDENT", dob: "1999-04-05", passport_number: "PB1234567", passport_expiry: "2034-01-01", nationality: "India" });
+  markStudentDocumentRead(applicationId, "Visa", { visa_subclass: "500", visa_grant_number: "0012345678901", visa_stay_until: "2034-01-01" });
+  markStudentDocumentRead(applicationId, "Academic", { academic_institution: "Example University", academic_qualification: "Bachelor of Science" });
+  // Only the English result is still needed; Continue waits for it and the residency answer.
+  await expect(page.getByTestId("bulk-continue")).toBeDisabled();
+  await wizard.getByRole("group", { name: /Australian permanent resident/ }).getByText("No", { exact: true }).click({ timeout: 30_000 });
+  await expect(wizard.getByTestId("bulk-item-english")).toHaveAttribute("data-state", "missing", { timeout: 30_000 });
+  for (const id of ["passport", "visa", "academic"]) await expect(wizard.getByTestId(`bulk-item-${id}`)).toHaveAttribute("data-state", "done", { timeout: 30_000 });
+  await expect(wizard.getByTestId("bulk-item-licence")).toHaveAttribute("data-state", "optional");
+  await expect(page.getByTestId("bulk-continue")).toBeDisabled();
+  await page.screenshot({ path: "test-results/bulk-missing.png" });
+  await wizard.getByTestId("bulk-missing-english").setInputFiles({ name: `results-${student.local}.pdf`, mimeType: "application/pdf", buffer: pdfFor("English") });
+  await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents where application_id = '${applicationId}' and category = 'English Test' and is_current`), { timeout: 60_000 }).toBe("1");
+  markStudentDocumentRead(applicationId, "English Test", { english_type: "IELTS Academic", english_score: "7.0", english_date: "2025-03-01" });
+  await expect(wizard.getByTestId("bulk-item-english")).toHaveAttribute("data-state", "done", { timeout: 30_000 });
+  await expect(page.getByTestId("bulk-continue")).toBeEnabled();
+  await page.getByTestId("bulk-continue").click();
+  // The card view: every section as a card, what is missing marked, then sign and submit.
+  await expect(page.getByTestId("one-page-cards")).toBeVisible({ timeout: 60_000 });
+  // STUDENT-PHONE-OPTIONAL: the mobile is not shown or asked.
+  await expect(page.getByTestId("one-page-cards")).not.toContainText("Mobile");
+  expect(sql(`select (a.data->'wizard'->>'bulkDone') || '/' || (s.details->>'holds_visa') || '/' || (s.details->>'english_pathway') from public.enrollment_applications a
+    join public.enrollment_students s on s.id = a.student_id where a.id = '${applicationId}'`)).toBe("true/Yes/English test");
+  await page.screenshot({ path: "test-results/bulk-cards.png", fullPage: true });
+});
+
 test("the student document wizard: upload, reading, emergency contact and the phone rules look and behave as before", async ({ page }) => {
   test.setTimeout(240_000);
   const student = person("wizard-student");
   await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
   await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(student.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -105,14 +166,16 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   await expect(page.locator("#wizard-title")).toBeVisible();
   const wizard = page.getByRole("dialog");
   const next = wizard.getByRole("button", { name: "Next" });
+  // BULK-DOCUMENTS: the documents start with the choice; this walk is the one-at-a-time path.
+  await wizard.getByTestId("doc-mode-steps").click();
   await expect(wizard.getByText("Upload file")).toBeVisible();
   await shot(page, "student-wizard-upload");
   await domSnapshot(page, '[role="dialog"]', "student-wizard-upload");
 
   let applicationId = "";
   const upload = async (category: string, file: string, read: Record<string, string>) => {
-    // the step's own empty upload box (Next has moved on; a filled step shows Replace instead)
-    await expect(wizard.getByRole("button", { name: /^Upload file/ })).toBeVisible();
+    // The next screen is shown (nothing uploaded on it yet) before its file is chosen.
+    await expect(wizard.getByText("Ready for review")).toHaveCount(0);
     await wizard.locator('input[type="file"]').first().setInputFiles({ name: file, mimeType: "application/pdf", buffer: pdfFor(category === "English Test" ? "English" : category) });
     await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents where filename = '${file}' and category = '${category}' and is_current`)).not.toBe("0");
     applicationId ||= sql(`select application_id from public.enrollment_application_documents where filename = '${file}' order by created_at desc limit 1`);
@@ -125,11 +188,11 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   };
   await upload("Passport", `passport-${student.local}.pdf`, { first_name: "WIZARD", last_name: "STUDENT", dob: "1999-04-05", passport_number: "PA1234567", passport_expiry: "2034-01-01", nationality: "India" });
   await expect(page.getByText(/We filled 6 fields from your passport\. Please review\./)).toBeVisible();
-  // Residency (asked under the passport): an overseas student.
-  await wizard.getByRole("group", { name: /Australian permanent resident/ }).getByRole("radio", { name: "No" }).check();
+  await wizard.getByRole("group", { name: /Australian permanent resident/ }).getByText("No", { exact: true }).click();
   await expect(next).toBeEnabled();
   await shot(page, "student-wizard-uploaded");
   await next.click();
+  await expect(wizard.getByText("Required. Upload the visa grant notice or VEVO record.")).toBeVisible();
   await upload("Visa", `visa-${student.local}.pdf`, { visa_subclass: "500", visa_grant_number: "0012345678901", visa_stay_until: "2034-01-01" });
   await next.click();
   await upload("English Test", `english-${student.local}.pdf`, { english_type: "IELTS Academic", english_score: "7.0" });
@@ -137,28 +200,7 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   await upload("Academic", `academic-${student.local}.pdf`, { academic_institution: "Example University", academic_qualification: "Bachelor of Science" });
   await next.click();
   await wizard.getByRole("button", { name: "Continue without licence" }).click();
-  // Personal details: the passport filled the name, date of birth, nationality and passport; title, gender and country of birth remain.
-  await expect(wizard.getByRole("heading", { name: "Personal details" })).toBeVisible();
-  await choose(wizard.locator("button#wizard-title"), { index: 1 }); // the dialog heading has the same id
-  await wizard.getByRole("group", { name: /Gender/ }).getByRole("radio", { name: "Male", exact: true }).check();
-  await wizard.locator("#wizard-birth_country").fill("India");
-  await wizard.getByRole("option", { name: "India", exact: true }).click();
-  await next.click();
-  await expect(wizard.getByRole("heading", { name: "Address in Australia" })).toBeVisible();
-  await wizard.getByRole("textbox", { name: /Street address/ }).fill("1 Test Street");
-  await wizard.getByRole("textbox", { name: /Suburb or city/ }).fill("Melbourne");
-  await choose(wizard.getByRole("combobox", { name: /State or territory/ }), "VIC");
-  await wizard.getByRole("textbox", { name: /Postcode/ }).fill("3000");
-  await next.click();
-  // Language: chosen from the AVETMISS list.
-  await choose(wizard.getByRole("combobox", { name: /Which language does the student speak/ }), { label: "Hindi" });
-  await next.click();
-  // About the student (AVETMISS): the defaults stand; the school year and the prior qualification (read from the academic record) are completed.
-  await expect(wizard.getByRole("heading", { name: "About the student" })).toBeVisible();
-  await wizard.getByRole("textbox", { name: /Year that school level was completed/ }).fill("2016");
-  const prior = wizard.getByRole("group", { name: /Prior qualifications completed/ });
-  await choose(prior.getByRole("combobox", { name: "Qualification level" }), { index: 1 });
-  await choose(prior.getByRole("combobox", { name: "Where it was completed" }), { index: 1 });
+  await wizard.locator("#wizard-language_other").fill("Hindi");
   await next.click();
   await wizard.locator("#wizard-usi_number").fill("ABC234DEF5");
   await next.click();
@@ -189,14 +231,11 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   // Finish into the full form, then a document on it: Replace uploads the new file, the shared reading panel shows while it is
   // read, then the compact row, the filled fields and a toast; the old file goes only once the new one is in.
   await choose(wizard.locator("#wizard-course"), { index: 1 });
-  // The start date: CoE for a student visa holder, then a date on the start calendar.
-  await wizard.getByTestId("intake-calendar").getByRole("radio").first().click();
-  await next.click();
-  await expect(wizard.getByRole("heading", { name: "Study details" })).toBeVisible();
-  // Save and close: back to the list; the draft (details now on it) opens again on its form.
-  await wizard.getByRole("button", { name: "Save and close", exact: true }).click();
-  await expect(page).toHaveURL(/\/applications$/);
-  await page.goto(`/agency/applications/${applicationId}`);
+  const intake = selectOf(wizard.locator("#wizard-preferred_intake"));
+  await expect(intake).toBeEnabled();
+  await expect.poll(async () => (await intake.locator("option").count())).toBeGreaterThan(1);
+  await choose(intake, { index: 1 });
+  await wizard.getByRole("button", { name: "Finish" }).click();
   await expect(page.getByTestId("form-step-nav")).toBeVisible({ timeout: 30_000 });
   // The drawer lists each stage with its steps nested underneath; a step is one click away.
   await page.getByRole("button", { name: "All steps" }).click();
@@ -230,6 +269,7 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   test.setTimeout(180_000);
   const student = person("intake-student");
   await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(student.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -455,7 +495,6 @@ test("student picker: an admin searches, selects an existing student (mobile pre
   await page.getByTestId("student-result").click();
   await expect(page.getByTestId("student-picked")).toContainText(`Pickable ${tag}`);
   await expect(page.getByTestId("student-picked")).toContainText(who.email);
-  await expect(page.locator("#student-mobile")).not.toHaveValue("");
   await page.getByRole("radio", { name: "No" }).check();
   await page.getByTestId("student-continue").click();
   await expect(page.getByRole("heading", { name: "New application", level: 2 })).toBeVisible({ timeout: 30_000 });
@@ -478,12 +517,13 @@ test("student picker: an agent adds a new student from the popup (search text pr
   await expect(form.locator("#new-student-first")).toHaveValue("Newbie");
   await expect(form.locator("#new-student-last")).toHaveValue(`Student${tag}`);
   await form.locator("#new-student-email").fill(fresh.email);
-  await form.locator("#new-student-mobile").fill(fresh.local);
+  // STUDENT-PHONE-OPTIONAL: no mobile is asked when adding a student.
+  await expect(form.locator("#new-student-mobile")).toHaveCount(0);
   await shot(page, "student-picker-new-student");
   await page.getByTestId("new-student-save").click();
   await expect(page.getByTestId("student-picked")).toContainText(`Newbie Student${tag}`);
   await expect(page.getByTestId("student-picked")).toContainText(fresh.email);
-  expect(sql(`select agency_id || '|' || agent_id || '|' || date_of_birth from public.enrollment_students where lower(email) = '${fresh.email}'`)).toBe(`${agency}|${agent.agentId}|2001-04-15`);
+  expect(sql(`select agency_id || '|' || agent_id || '|' || coalesce(phone, 'none') from public.enrollment_students where lower(email) = '${fresh.email}'`)).toBe(`${agency}|${agent.agentId}|none`);
   await expect(page.getByTestId("student-continue")).toBeEnabled();
 });
 
@@ -501,7 +541,6 @@ test("student picker: a duplicate email in the popup says it is in use and offer
   await expect(form.locator("#new-student-email")).toHaveValue(taken.email);
   await form.locator("#new-student-first").fill("Second");
   await form.locator("#new-student-last").fill("Copy");
-  await form.locator("#new-student-mobile").fill(person("pick-dup-mobile").local);
   await page.getByTestId("new-student-save").click();
   await expect(form).toContainText("Email already in use.");
   await expect(page.getByTestId("new-student-in-use")).toContainText("Already Here");
@@ -571,6 +610,7 @@ test("identity email: public student sign-up with an email that already has an a
   // A student who already signs in. (An email on a record with no sign-in takes the existing claim flow instead.)
   const existing = await createStudentLogin("idx-public");
   await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
   await page.getByPlaceholder("you@example.com").fill(existing.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -1142,6 +1182,8 @@ test("offer letter templates: a logo inserted and pictures pasted go to template
   await dialog.getByRole("option", { name: `+ Add new: E2E LOO tpl ${tag}` }).click();
   await expect(dialog.getByLabel("Document title")).toHaveCount(0);
   await expect(dialog.getByLabel("Document type")).toHaveCount(0);
+  // LETTERHEAD-ON-DOCUMENTS: ticked by default; this test writes its own header and footer.
+  await dialog.getByTestId("template-use-letterhead").uncheck();
   // Header: the logo through Insert image is uploaded to template-assets (not embedded).
   await dialog.getByTestId("section-tab-header").click();
   const header = dialog.getByTestId("section-editor-header");

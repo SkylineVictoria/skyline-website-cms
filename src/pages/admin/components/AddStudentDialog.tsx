@@ -102,7 +102,7 @@ export default function AddStudentDialog({ open, onClose, onAdded, presetBusines
     if (!business || !agent || busy) return;
     const address = normalizeEmail(email);
     const problem = !firstName.trim() || !lastName.trim() ? "Enter the student's first and last name."
-      : validateEmail(address) || (!textableMobile(mobile) ? "Enter the student's mobile number, with the country code." : "");
+      : validateEmail(address);
     if (problem) { setError(problem); return; }
     setBusy(true);
     setError("");
@@ -187,7 +187,7 @@ export default function AddStudentDialog({ open, onClose, onAdded, presetBusines
         <Button icon="ri-user-add-line" disabled={busy || emailBlocked} onClick={() => void saveStudentOnly()} data-testid="add-student-save">{busy ? "Saving…" : "Add student"}</Button>
       </> : <Button variant="outline" disabled={busy} onClick={onClose}>Cancel</Button>}>
       <div className="space-y-5">
-        {!ready ? <p className="text-sm text-foreground-600">Choose the business and the agent who looks after the student, then enter the student's name, email and mobile.</p> : null}
+        {!ready ? <p className="text-sm text-foreground-600">Choose the business and the agent who looks after the student, then enter the student's name and email.</p> : null}
 
         {/* Business */}
         <div>
@@ -236,7 +236,7 @@ export default function AddStudentDialog({ open, onClose, onAdded, presetBusines
                 value={email} onChange={(value) => { setEmail(value); setError(""); }} serverError={emailError} checker={checkEmail}
                 onStatusChange={(_status, blocked) => setEmailBlocked(blocked)} />
             </div>
-            <ContactLinkFields id="add-student" mobile={mobile} onMobile={(value) => { setMobile(value); setError(""); }} mobileRequired locked={busy} who="the student" />
+            {/* PHONE-HIDDEN (owner 2026-11-28): a student's mobile is optional and not asked when adding a student. */}
             {error ? <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p> : null}
             <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
           </form>

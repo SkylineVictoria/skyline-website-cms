@@ -61,6 +61,7 @@ export default function SignedApplicationCard({ application, compact = false }: 
             <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-2xs font-semibold uppercase text-emerald-900">Read-only</span>
           </div>
           <p className="mt-1 text-sm text-foreground-800" data-testid="signed-by">Signed by <span className="font-semibold">{who.name}</span> on {day(who.at)}</p>
+          {copy.formTemplate ? <p className="mt-0.5 text-xs text-foreground-500" data-testid="signed-form-template">Printed from the application form “{copy.formTemplate.name}”{copy.formTemplate.version ? ` (version ${copy.formTemplate.version})` : ""}, as it was when the student signed.</p> : null}
           {copy.storedCopy ? <p className="mt-0.5 text-xs text-foreground-500" data-testid="signed-stored">The signed application was emailed to the student, the agent and SLIT admissions, and is kept here.</p> : null}
         </div>
         <div className="flex flex-wrap gap-2">

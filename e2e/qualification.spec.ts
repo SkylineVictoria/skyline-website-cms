@@ -175,6 +175,7 @@ test.describe("Signed application", () => {
     sql(`begin; set local session_replication_role = replica;
       update public.enrollment_applications set status = 'submitted', submitted_at = now(), version = 1 where id = '${app}';
       insert into public.application_signatures(application_id, signer_role, signer_name, png, ip, user_agent) values ('${app}', 'student', 'Zz Signer', '${png}', '203.0.113.77', 'ZZ-Agent/9.9');
+      set local session_replication_role = origin;
       insert into public.enrollment_application_versions(application_id, version, snapshot)
         select '${app}', 1, a.data || jsonb_build_object('submission', jsonb_build_object('consentIds', '${JSON.stringify(consents)}'::jsonb, 'declarationVersion', '2026-11-25', 'actor', '${agentProfile}'))
         from public.enrollment_applications a where a.id = '${app}';
@@ -217,7 +218,108 @@ test.describe("Signed application", () => {
     await page.goto(`/admin/applications/${app}`);
     await expect(page.getByRole("button", { name: /Document upload wizard/ })).toHaveCount(0);
     await check("admin");
+    // APPLICATION-FORM-TEMPLATES: the signed copy says which form printed it (recorded when the version was saved).
+    await expect(page.getByTestId("signed-form-template")).toContainText("Application for Enrolment (standard)");
+    // HOUSE-STYLE: the staff PDF button prints the same designed form.
+    const pdf = page.waitForEvent("download");
+    await page.getByRole("button", { name: "PDF", exact: true }).click();
+    const file = await pdf;
+    expect(file.suggestedFilename()).toMatch(/^application-ZZ-SIGN-/);
+    const bytes = await (await import("node:fs")).promises.readFile(await file.path());
+    expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(bytes.length).toBeGreaterThan(20_000); // the designed form (letterhead, sections, signature), not the plain layout
     // Nobody changes a signed application's answers (the database refuses it, whoever writes).
     expect(() => sql(`update public.enrollment_applications set data = jsonb_set(data, '{values,preferred_intake}', '"Jan 2030"') where id = '${app}'`)).toThrow(/signed, so it cannot be changed/);
+  });
+});
+
+// APPLICATION-FORM-TEMPLATES (owner 2026-11-27): Documents & Signatures › Templates holds the Application form (the standard one is the
+// default); the editor previews it with a sample application as a PDF; staff make another one the default.
+test.describe("Application form templates", () => {
+  test.use({ deviceScaleFactor: 2 });
+  test("the standard form is the default; preview with a sample application; make another default", async ({ page }) => {
+    test.setTimeout(180_000);
+    // re-runnable: copies made by an earlier run of this test are removed (lab data only)
+    sql(`delete from hr.sign_template_versions where template_id in (select id from hr.sign_templates where category = 'application_form' and name like '%(standard) (copy)%');
+      delete from hr.sign_templates where category = 'application_form' and name like '%(standard) (copy)%';
+      update hr.sign_templates set is_default = (id = 'a9f0e000-0000-4000-8000-000000000001') where category = 'application_form';`);
+    const admin = await createAdmin("afm-admin");
+    await signInAsAdmin(page, admin.email);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/admin/signing/templates");
+    const row = page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).filter({ hasNotText: "(copy)" });
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("application-form-default")).toHaveText("Default");
+    await page.screenshot({ path: "test-results/afm-templates.png" });
+    await row.getByRole("button", { name: "Edit" }).click();
+    await expect(page.getByTestId("application-form-help")).toBeVisible();
+    await page.screenshot({ path: "test-results/afm-editor.png" });
+    await page.getByTestId("application-form-preview-sample").click();
+    await expect(page.getByText("Template preview (PDF)")).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: "test-results/afm-preview.png" });
+    await page.keyboard.press("Escape");
+    // A copy, made the default: newly signed applications print with it; the standard one is no longer the default.
+    await page.goto("/admin/signing/templates");
+    await row.getByRole("button", { name: "Duplicate" }).click();
+    const copy = page.getByTestId("sign-template-row").filter({ hasText: "(standard) (copy)" });
+    await copy.getByTestId("application-form-make-default").click();
+    await expect(copy.getByTestId("application-form-default")).toHaveText("Default");
+    expect(sql(`select count(*) from hr.sign_templates where category = 'application_form' and is_default and deleted_at is null`)).toBe("1");
+    // back to the standard one for the other tests
+    await row.getByTestId("application-form-make-default").click();
+    await expect(row.getByTestId("application-form-default")).toBeVisible();
+    // HOUSE-STYLE: a new document template starts with the house letterhead and footer presets.
+    await page.getByTestId("new-template").click();
+    await page.getByTestId("template-audience-agency").click();
+    const dialog = page.getByTestId("template-dialog");
+    await expect(dialog).toContainText("Total Pages", { timeout: 15_000 });
+    await page.screenshot({ path: "test-results/house-document-template.png" });
+  });
+});
+
+// LETTERHEAD-DESIGNER (owner 2026-11-28): five checked designs from the brand, previews on three samples, applied where the admin chooses.
+test.describe("Letterhead designer", () => {
+  test.use({ deviceScaleFactor: 2 });
+  test("five designs (Classic, Modern, Minimal, Bold, Formal), each passing the checks; Select all; applied as new versions", async ({ page }) => {
+    test.setTimeout(240_000);
+    sql(`insert into public.cms_settings (id, name, legal_name, address, phone, email, website, rto, cricos, abn, primary_color)
+      values (1, 'Skyline Institute of Technology', 'ZZ Legal Name Pty Ltd', 'Level 8, 310 King Street, Melbourne VIC 3000', '03 9125 1661', 'info@example.test', 'https://example.test/', '45989', '04114B', '20 643 760 721', '#ea6619')
+      on conflict (id) do update set name = coalesce(nullif(cms_settings.name, ''), excluded.name), rto = coalesce(nullif(cms_settings.rto, ''), excluded.rto), cricos = coalesce(nullif(cms_settings.cricos, ''), excluded.cricos),
+        address = coalesce(nullif(cms_settings.address, ''), excluded.address), legal_name = coalesce(cms_settings.legal_name, excluded.legal_name), website = coalesce(cms_settings.website, excluded.website), abn = coalesce(cms_settings.abn, excluded.abn)`);
+    const admin = await createAdmin("letterhead-admin");
+    await signInAsAdmin(page, admin.email);
+    await page.setViewportSize({ width: 1400, height: 1000 });
+    await page.goto("/admin/signing/templates");
+    await page.getByTestId("letterhead-designer-open").click();
+    const designs = page.getByTestId("letterhead-design");
+    await expect(designs).toHaveCount(5, { timeout: 60_000 });
+    for (const style of ["Classic", "Modern", "Minimal", "Bold", "Formal"]) await expect(page.getByTestId("letterhead-designs")).toContainText(style);
+    await expect(page.getByTestId("letterhead-checks")).toHaveCount(5);
+    await expect(designs.first().locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: "test-results/letterhead-designer.png" });
+    await designs.nth(4).getByTestId("letterhead-use").click();
+    await page.getByTestId("letterhead-select-all").click();
+    for (const t of ["application_form", "letter_of_offer", "document_templates", "workbooks"]) await expect(page.getByTestId(`letterhead-target-${t}`)).toBeChecked();
+    await page.screenshot({ path: "test-results/letterhead-apply.png" });
+    await page.getByTestId("letterhead-apply").click();
+    await expect(page.getByText(/is now used for: Application form, Letter of Offer, Document templates, Workbook added pages/)).toBeVisible({ timeout: 30_000 });
+    expect(sql(`select style || '|' || array_to_string(targets, ',') from public.brand_letterheads where active`)).toBe("formal|application_form,letter_of_offer,document_templates,workbooks");
+    expect(sql(`select (header_later_html is not null and header_html like '%institute.logo%')::text from hr.sign_templates where category = 'application_form' and is_default`)).toBe("true");
+    expect(sql(`select use_letterhead::text from hr.sign_templates where category = 'application_form' and is_default`)).toBe("true");
+    // LETTERHEAD-ON-DOCUMENTS: a new document template is on the letterhead by default (header and footer shown from it, not edited);
+    // a PDF template and a one-time upload offer the same tick.
+    await page.goto("/admin/signing/templates");
+    await page.getByTestId("new-template").click();
+    await page.getByTestId("template-audience-agency").click();
+    const dialog = page.getByTestId("template-dialog");
+    await expect(dialog.getByTestId("template-use-letterhead")).toBeChecked();
+    await expect(dialog.getByTestId("section-letterhead-header")).toContainText("Skyline Institute of Technology", { timeout: 30_000 });
+    await expect(dialog.getByTestId("section-letterhead-footer")).toContainText("CRICOS 04114B");
+    await expect(dialog.getByTestId("section-editor-header")).toHaveCount(0);
+    await page.screenshot({ path: "test-results/letterhead-template.png" });
+    await dialog.getByTestId("template-use-letterhead").uncheck();
+    await expect(dialog.getByTestId("section-editor-header")).toBeVisible();
   });
 });

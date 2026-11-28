@@ -10,6 +10,9 @@ import LegacySigningPage from "./components/signing/LegacySigningPage";
 import { signedCount, signingAction, signingAdmin, signingStatus, signingUpgraded, SIGNING_STATUS, type SigningContext, type SigningRequest, type SigningTemplate } from "@/lib/signingApi";
 import { SIGN_CATEGORIES } from "../../../supabase/functions/_shared/signing";
 import { LETTER_CATEGORY, setLetterTemplateActive } from "@/lib/offerLetters";
+import { APPLICATION_FORM_CATEGORY } from "../../../supabase/functions/_shared/notification/application-form";
+import { supabase } from "@/pages/admin/lib/supabase";
+import LetterheadDesigner from "./components/signing/LetterheadDesigner";
 import { Modal } from "./components/ui";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
 import { unitDocuments, type UnitTemplateLink } from "@/lib/unitDocuments";
@@ -72,6 +75,7 @@ function EnvelopeSigningPage() {
   const [editing, setEditing] = useState<SigningTemplate | { audience: Audience; category: string; lockCategory?: boolean } | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [presets, setPresets] = useState(false);
+  const [designer, setDesigner] = useState(false);
   const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "agent" | "agency" | "unit">("");
   const [links, setLinks] = useState<UnitTemplateLink[]>([]);
   const [unitStep, setUnitStep] = useState<{ templateId: string | null; initial: { courseId: string; unitId: string } | null } | null>(null);
@@ -106,6 +110,7 @@ function EnvelopeSigningPage() {
       {tab === "requests" && <Button icon="ri-add-line" onClick={() => setCompose(true)} data-testid="new-request">New signing request</Button>}
       {tab === "templates" && <Button icon="ri-file-add-line" onClick={() => setChoosing(true)} data-testid="new-template">New template</Button>}
       {tab === "templates" && <Button variant="outline" icon="ri-layout-top-2-line" onClick={() => setPresets(true)} data-testid="manage-presets">Header &amp; footer presets</Button>}
+      {tab === "templates" && <Button variant="outline" icon="ri-magic-line" onClick={() => setDesigner(true)} data-testid="letterhead-designer-open">Letterhead designer</Button>}
       <Button variant="outline" disabled={busy} onClick={() => void act(load)}>Refresh</Button>
       {tab === "requests" && <Button variant="outline" disabled={busy} onClick={() => void act(async () => { const r = await signingAction<{ expired: number; reminders: number }>({ action: "tick" }); setNotice(`${r.reminders} reminder${r.reminders === 1 ? "" : "s"} sent, ${r.expired} request${r.expired === 1 ? "" : "s"} expired.`); })}>Send due reminders now</Button>}
     </div>
@@ -138,12 +143,14 @@ function EnvelopeSigningPage() {
       : <div className="overflow-x-auto rounded-md border border-background-300"><table className="w-full min-w-[720px] text-left text-sm" data-testid="template-table">
         <thead className="bg-background-100 text-xs text-foreground-600"><tr><th className="px-3 py-2">Template</th><th className="px-3">Type</th><th className="px-3">For</th><th className="px-3">Signers</th><th className="px-3">Version</th><th className="px-3" /></tr></thead>
         <tbody>{templates.map((t) => <tr key={t.id} className="border-t border-background-200" data-testid="sign-template-row" data-category={t.category} data-audience={t.audience}>
-          <td className="px-3 py-2"><p className="font-medium">{t.name}</p><p className="text-xs text-foreground-500">{t.kind === "pdf" ? `PDF, ${t.source_pages ?? "?"} pages` : t.kind === "email" ? "Email (not signed)" : "Text"} · {t.category === LETTER_CATEGORY ? "Header, body, footer · sent from an application" : <>{t.fields.length} field{t.fields.length === 1 ? "" : "s"}</>}{t.status === "archived" ? (t.category === LETTER_CATEGORY ? " · inactive" : " · archived") : t.category === LETTER_CATEGORY ? " · active" : ""}</p></td>
+          <td className="px-3 py-2"><p className="font-medium">{t.name}</p><p className="text-xs text-foreground-500">{t.kind === "pdf" ? `PDF, ${t.source_pages ?? "?"} pages` : t.kind === "email" ? "Email (not signed)" : "Text"} · {t.category === APPLICATION_FORM_CATEGORY ? <>Header, body, footer · prints every signed application{t.is_default ? <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-2xs font-semibold text-emerald-900" data-testid="application-form-default">Default</span> : null}</> : t.category === LETTER_CATEGORY ? "Header, body, footer · sent from an application" : <>{t.fields.length} field{t.fields.length === 1 ? "" : "s"}</>}{t.status === "archived" ? (t.category === LETTER_CATEGORY ? " · inactive" : " · archived") : t.category === LETTER_CATEGORY ? " · active" : ""}</p></td>
           <td className="px-3">{SIGN_CATEGORIES[t.category]?.label ?? t.category}</td><td className="px-3">{AUDIENCE[t.audience]}{linkOf(t.id) ? <span className="mt-1 block text-xs text-primary-700" title={linkOf(t.id)?.unitName}>Unit {linkOf(t.id)?.unitCode}</span> : null}</td><td className="px-3">{t.category === LETTER_CATEGORY ? "Accepted in the portal" : t.roles.map((r) => r.label).join(" → ")}</td><td className="px-3">{t.version}</td>
           <td className="px-3 py-2"><div className="flex flex-wrap justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setEditing(t)}>Edit</Button>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => signingAction({ action: "template_duplicate", id: t.id }), "Template duplicated.")}>Duplicate</Button>
-            {t.category !== LETTER_CATEGORY && t.audience !== "employee" && (t.audience !== "agent" || linkOf(t.id)) && <Button size="sm" variant="outline" disabled={busy} data-testid="template-unit" onClick={() => { const l = linkOf(t.id); setUnitStep({ templateId: t.id, initial: l ? { courseId: l.courseId, unitId: l.unitId } : null }); }}>{linkOf(t.id) ? "Change unit" : "Link to unit"}</Button>}
+            {t.category === APPLICATION_FORM_CATEGORY && !t.is_default && t.status === "active" && <Button size="sm" variant="outline" disabled={busy} data-testid="application-form-make-default"
+              onClick={() => void act(async () => { const { error } = await supabase.rpc("application_form_template_set_default", { p_id: t.id }); if (error) throw new Error(error.message); }, `“${t.name}” now prints every newly signed application. Applications already signed keep the form they were signed with.`)}>Make default</Button>}
+            {t.category !== LETTER_CATEGORY && t.category !== APPLICATION_FORM_CATEGORY && t.audience !== "employee" && (t.audience !== "agent" || linkOf(t.id)) && <Button size="sm" variant="outline" disabled={busy} data-testid="template-unit" onClick={() => { const l = linkOf(t.id); setUnitStep({ templateId: t.id, initial: l ? { courseId: l.courseId, unitId: l.unitId } : null }); }}>{linkOf(t.id) ? "Change unit" : "Link to unit"}</Button>}
             {t.category === LETTER_CATEGORY
               ? <Button size="sm" variant="outline" disabled={busy} data-testid="letter-template-toggle" onClick={() => void act(() => setLetterTemplateActive(t.id, t.status !== "active"), t.status === "active" ? "The letter is inactive." : "The letter is active.")}>{t.status === "active" ? "Make inactive" : "Make active"}</Button>
               : <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => signingAdmin("template_archive", t.id), t.status === "active" ? "Template archived." : "Template restored.")}>{t.status === "active" ? "Archive" : "Unarchive"}</Button>}
@@ -164,6 +171,13 @@ function EnvelopeSigningPage() {
                 <i className={`${icon} text-xl text-primary-600`} aria-hidden="true" /><span className="font-semibold text-foreground-950">{label}</span><span className="text-xs text-foreground-600">{hint}</span>
               </button>
             </div>))}
+        <div className="min-w-0 rounded-lg border border-background-300">
+          <button type="button" data-testid="template-audience-application-form" onClick={() => { setChoosing(false); setEditing({ audience: "student", category: APPLICATION_FORM_CATEGORY, lockCategory: true }); }}
+            className="flex w-full cursor-pointer flex-col items-start gap-1 rounded-lg p-4 text-left hover:bg-primary-50">
+            <i className="ri-file-list-3-line text-xl text-primary-600" aria-hidden="true" /><span className="font-semibold text-foreground-950">Application form</span>
+            <span className="text-xs text-foreground-600">How a signed student application is printed (answers, declarations, signature). The default one prints every newly signed application.</span>
+          </button>
+        </div>
         <button type="button" data-testid="template-audience-unit" onClick={() => { setChoosing(false); setUnitStep({ templateId: null, initial: null }); }}
           className="flex cursor-pointer flex-col items-start gap-1 rounded-lg border border-background-300 p-4 text-left hover:border-primary-400 hover:bg-primary-50">
           <i className="ri-book-open-line text-xl text-primary-600" aria-hidden="true" /><span className="font-semibold text-foreground-950">Units / Assessments</span><span className="text-xs text-foreground-600">Choose a course and unit. Students of that unit's intakes sign it, sent from the intake's unit documents.</span>
@@ -183,6 +197,7 @@ function EnvelopeSigningPage() {
         void load();
       }} />}
     {presets && <PresetsManager onClose={() => setPresets(false)} />}
+    {designer && <LetterheadDesigner onClose={() => setDesigner(false)} onApplied={(m) => { setDesigner(false); setNotice(m); void load(); }} />}
     {openId && <RequestDetail id={openId} startPlacing={placeAfterCreateId === openId} onClose={() => { setOpenId(null); setPlaceAfterCreateId(null); }} onChanged={() => void load()} />}
   </div>;
 }

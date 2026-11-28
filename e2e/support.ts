@@ -164,9 +164,6 @@ export function markStudentDocumentRead(applicationId: string, category: string,
   const extraction = { status: "unreviewed", extracted, confirmed: {}, source: { engine: "e2e-mock", parser: "document-extraction-v1" } };
   sql(`update public.enrollment_application_documents set metadata = jsonb_set(coalesce(metadata, '{}'::jsonb), '{extraction}', ${q(JSON.stringify(extraction))}::jsonb)
     where application_id = '${applicationId}' and category = ${q(category)} and is_current`);
-  // As the extraction worker does when a job finishes (portal_finish_document_extraction_job): empty draft fields are filled from it.
-  sql(`select public.portal_apply_document_candidates(d.id, ${q(JSON.stringify(extracted))}::jsonb, '{"engine": "e2e-mock"}'::jsonb)
-    from public.enrollment_application_documents d where d.application_id = '${applicationId}' and d.category = ${q(category)} and d.is_current`);
 }
 
 /** The pay details an offer needs (hr_admin_onboarding_pay_save), as the admin form sends them. */

@@ -1,3 +1,4 @@
+import { ruleBool } from "@/lib/businessRules";
 import { useEffect, useState } from "react";
 import { Button, Field, Modal, Select, TextInput } from "@/pages/admin/components/ui";
 import { useToast } from "@/pages/admin/components/toastContext";
@@ -16,6 +17,7 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
+  const mobileShown = ruleBool("admissions.application_mobile_required", false);
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [passportNumber, setPassportNumber] = useState("");
   const [nationality, setNationality] = useState("");
@@ -49,8 +51,9 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
     const cleanEmail = email.trim().toLowerCase();
     const emailProblem = validateEmail(cleanEmail);
     if (emailProblem) { setError(emailProblem); return; }
-    if (!parseStoredPhone(mobile)?.national) { setError("Enter the student's mobile number."); return; }
-    const phoneProblem = validateStoredPhone(mobile);
+    // STUDENT-PHONE-OPTIONAL (owner 2026-11-28): the mobile is not shown or required (a saved one is kept as it is).
+    if (mobileShown && !parseStoredPhone(mobile)?.national) { setError("Enter the student's mobile number."); return; }
+    const phoneProblem = mobileShown && mobile.trim() ? validateStoredPhone(mobile) : "";
     if (phoneProblem) { setError(phoneProblem); return; }
     setBusy(true);
     try {
@@ -97,12 +100,12 @@ export default function EditStudentDialog({ student, onClose, onSaved }: { stude
             recordId={student?.id ?? null} savedEmail={student?.email ?? null} serverError={emailError}
             onStatusChange={(_status, blocking) => setEmailBlocking(blocking)} />
         </Field>
-        <div>
+        {mobileShown ? <div>
           <p className="mb-1.5 text-label font-medium text-foreground-800">Mobile <span className="text-primary-600">*</span></p>
           <div onInput={(e) => { const target = e.target as HTMLInputElement; if (target.name === "student_mobile") setMobile(target.value); }}>
             <PhoneInput key={student?.id ?? "none"} id="edit-student-mobile" name="student_mobile" value={mobile} required locked={busy} placeholder="041 234 5678" />
           </div>
-        </div>
+        </div> : null}
         <Field label="Date of birth"><TextInput type="date" value={dateOfBirth} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setDateOfBirth(e.target.value)} /></Field>
         <Field label="Passport number"><TextInput value={passportNumber} onChange={(e) => setPassportNumber(e.target.value.toUpperCase())} maxLength={40} /></Field>
         <Field label="Nationality"><TextInput value={nationality} onChange={(e) => setNationality(e.target.value)} maxLength={100} /></Field>

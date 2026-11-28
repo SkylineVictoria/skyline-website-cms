@@ -69,6 +69,7 @@ export const saveLetterValueToSource = (applicationId: string, key: string, valu
 export interface LetterTemplate {
   id: string; name: string; title: string; version: number; updatedAt: string; active: boolean;
   headerHtml: string | null; bodyHtml: string | null; footerHtml: string | null; unmapped: string[];
+  /** LETTERHEAD-DESIGNER: the smaller header of pages 2 and on (null: the header repeats). */ headerLaterHtml?: string | null;
 }
 export const loadLetterTemplates = () => rpc<LetterTemplate[]>("letter_templates");
 export const setLetterTemplateActive = (id: string, active: boolean) => rpc<{ id: string; active: boolean }>("letter_template_set_active", { p_id: id, p_active: active });
@@ -163,7 +164,7 @@ const loadImage = (url: string) => {
 };
 
 export interface LetterPdfInput {
-  template: Pick<LetterTemplate, "title" | "headerHtml" | "bodyHtml" | "footerHtml">;
+  template: Pick<LetterTemplate, "title" | "headerHtml" | "bodyHtml" | "footerHtml"> & { headerLaterHtml?: string | null };
   registry: readonly LetterVariable[];
   values: Record<string, LetterValue>;
   manual?: readonly ManualFill[];
@@ -181,14 +182,15 @@ export async function buildLetterPdf(input: LetterPdfInput) {
   const { buildDocumentPdf, linkedImages } = await import("../../supabase/functions/_shared/document-pdf");
   const expand = (html: string | null | undefined) => expandFor(html, input.courses, input.charges, Boolean(input.gst));
   const headerHtml = expand(input.template.headerHtml), bodyHtml = expand(input.template.bodyHtml), footerHtml = expand(input.template.footerHtml);
+  const headerLaterHtml = input.template.headerLaterHtml ? expand(input.template.headerLaterHtml) : null;
   const values = withChargeValues(withCourseValues(input.values, input.courses), input.charges);
   const images: Record<string, Uint8Array> = {};
   // Pictures in the HTML (template-assets) and picture variables ({{institute.logo}}: the URL from Settings).
-  const used = new Set(letterKeys(`${headerHtml ?? ""}\n${bodyHtml ?? ""}\n${footerHtml ?? ""}`));
+  const used = new Set(letterKeys(`${headerHtml ?? ""}\n${headerLaterHtml ?? ""}\n${bodyHtml ?? ""}\n${footerHtml ?? ""}`));
   const pictureValues = input.registry.filter((v) => v.format === "image" && used.has(v.key)).map((v) => values[v.key]?.value).filter((url): url is string => Boolean(url && /^https?:\/\//.test(url)));
-  await Promise.all([...new Set([...linkedImages(headerHtml, bodyHtml, footerHtml), ...pictureValues])].map(async (url) => { const bytes = await loadImage(url); if (bytes) images[url] = bytes; }));
+  await Promise.all([...new Set([...linkedImages(headerHtml, headerLaterHtml, bodyHtml, footerHtml), ...pictureValues])].map(async (url) => { const bytes = await loadImage(url); if (bytes) images[url] = bytes; }));
   return buildDocumentPdf({
-    title: input.template.title || "Offer letter", header: headerHtml, body: bodyHtml || "<p></p>", footer: footerHtml, values: {}, brackets: false, images,
+    title: input.template.title || "Offer letter", header: headerHtml, headerLater: headerLaterHtml, body: bodyHtml || "<p></p>", footer: footerHtml, values: {}, brackets: false, images,
     curly: letterResolver(input.registry, values, input.manual ?? [], input.conditions ?? "", Boolean(input.sample)),
   });
 }

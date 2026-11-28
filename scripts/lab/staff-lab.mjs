@@ -222,22 +222,6 @@ function copyFunctions(from, to) {
   }
 }
 
-/**
- * Lab only: the local edge runtime resolves type-only imports too, so a function that reaches _shared/notification/pdf-layout.ts
- * through `import type` (cms-admin-users via hr-mail.ts) fails to boot on its bare "pdf-lib" import; the hosted bundler drops type
- * imports, so the deployed functions need no import map. The lab copy of every function without its own deno.json gets the same
- * map the PDF functions carry (docs/SUPABASE.md "Import maps"). The repo's functions are not changed.
- */
-const LAB_PDF_IMPORTS = { imports: { "pdf-lib": "npm:pdf-lib@1.17.1", "@pdf-lib/fontkit": "npm:@pdf-lib/fontkit@1.1.1" } };
-function labImportMaps(functionsDir) {
-  for (const entry of fs.readdirSync(functionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name.startsWith("_")) continue;
-    const dir = path.join(functionsDir, entry.name);
-    if (!fs.existsSync(path.join(dir, "index.ts")) || fs.existsSync(path.join(dir, "deno.json")) || fs.existsSync(path.join(dir, "import_map.json"))) continue;
-    fs.writeFileSync(path.join(dir, "deno.json"), JSON.stringify(LAB_PDF_IMPORTS, null, 2) + "\n");
-  }
-}
-
 /* ------------------------------------------------------------------ commands */
 
 async function up() {
@@ -306,7 +290,6 @@ async function up() {
     text = text.replaceAll("create function pg_temp.", "create or replace function pg_temp.");    fs.writeFileSync(path.join(migrations, HOSTED_LATER[file] ?? file), text);
   }
   copyFunctions(path.join(REPO, "supabase", "functions"), path.join(WORK, "supabase", "functions"));
-  labImportMaps(path.join(WORK, "supabase", "functions"));
   fs.writeFileSync(path.join(WORK, "supabase", "functions", ".env"), Object.entries(LAB_SECRETS).map(([k, v]) => `${k}=${v}`).join("\n") + "\n");
 
   console.log(`Starting a fresh lab stack in ${WORK} (this replays every migration)...`);

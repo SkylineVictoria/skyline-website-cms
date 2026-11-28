@@ -14,6 +14,7 @@ import { tokenReport, variableKeys } from "../../../../../supabase/functions/_sh
 import OfferLetterDrawer from "@/components/shared/application-status/OfferLetterDrawer";
 import { getStudent, type ApplicationRow } from "@/pages/admin/lib/businessData";
 import { LETTER_CATEGORY } from "@/lib/offerLetters";
+import { putPdfOnLetterhead } from "@/lib/letterheadDesigner";
 
 export interface SubjectPreset { type: "student" | "employee" | "agent" | "agency"; id: string; name?: string }
 interface Person { role: string; label: string; name: string; email: string; order: number; required: boolean }
@@ -48,6 +49,8 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
 }) {
   const [source, setSource] = useState<"template" | "upload">(initialSource);
   const [templateId, setTemplateId] = useState(""); const [file, setFile] = useState<File | undefined>(); const [title, setTitle] = useState("");
+  /** LETTERHEAD-ON-DOCUMENTS (owner 2026-11-28): a one-time PDF is put on the letterhead (shrunk to fit) unless unticked. */
+  const [onLetterhead, setOnLetterhead] = useState(true);
   const [category, setCategory] = useState("other");
   const [subjectType, setSubjectType] = useState<"" | SubjectPreset["type"]>(preset?.type ?? ""); const [subjectId, setSubjectId] = useState(preset?.id ?? "");
   const [query, setQuery] = useState(""); const [matches, setMatches] = useState<Array<{ id: string; name: string; email: string }>>([]);
@@ -66,7 +69,7 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
   // Emails are not signed; every other active template whose "Used for" matches the person type is offered (its current version is what
   // "create" uses). 2026-11-21: the student offer letter is offered too (it was left out, so "A student" had an empty list): it needs
   // one of the student's applications and is prepared from it below.
-  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && !ONBOARDING_KEYS.has(t.system_key ?? "")
+  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.category !== "application_form" && t.kind !== "email" && !ONBOARDING_KEYS.has(t.system_key ?? "")
     && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
   const fromApplication = source === "template" && !!template && needsApplication(template);
@@ -134,7 +137,8 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
   const create = () => run(async () => {
     if (source === "upload" && !file) throw new Error("Choose the PDF to send.");
     if (source === "template" && !template) throw new Error("Choose a template.");
-    const record = source === "upload" ? await signingAction<SigningRequest>({ action: "create", title, category, ...body() }, file) : await signingAction<SigningRequest>({ action: "create", templateId, values, ...body() });
+    const upload = source === "upload" && file && onLetterhead ? new File([await putPdfOnLetterhead(new Uint8Array(await file.arrayBuffer())) as Uint8Array<ArrayBuffer>], file.name, { type: "application/pdf" }) : file;
+    const record = source === "upload" ? await signingAction<SigningRequest>({ action: "create", title, category, ...body() }, upload) : await signingAction<SigningRequest>({ action: "create", templateId, values, ...body() });
     // The function's create does not carry a payment: the database copies the template's; anything else is a second call.
     if (!samePayment(payment, asked)) {
       try {
@@ -202,6 +206,8 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
         {signerTokens.length > 0 && <p className="rounded-md border border-background-300 bg-background-50 p-3 text-sm" data-testid="compose-signer-fields">The first signer fills in {signerTokens.map((n) => `[${n}]`).join(", ")} on the signing screen before signing; their initials go wherever [Student Initial] is.</p>}
       </> : <div className="grid gap-4 md:grid-cols-2">
         <Field label="PDF document" required hint={`Up to ${ruleNumber("signing.pdf_upload_max_mib", 7)} MB. This request will not create or change any saved template.`}><input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0])} data-testid="compose-file" /></Field>
+        <label className="flex items-center gap-2 text-sm" data-testid="compose-letterhead"><input type="checkbox" className="h-4 w-4" checked={onLetterhead} onChange={(e) => setOnLetterhead(e.target.checked)} data-testid="compose-use-letterhead" />
+          <span><span className="font-medium">Put on letterhead</span> <span className="text-xs text-foreground-600">each page is shrunk to fit between the letterhead header and footer (logo, RTO, CRICOS from Website Settings)</span></span></label>
         <Field label="Document title" required><TextInput maxLength={200} value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
         <Field label="Document type"><Select value={category} onChange={(e) => setCategory(e.target.value)}>{Object.entries(SIGN_CATEGORIES).map(([key, c]) => <option key={key} value={key}>{c.label}</option>)}</Select></Field>
       </div>}

@@ -4,6 +4,7 @@ import { accessToken } from '../_shared/integrations/credentials.ts';
 import { testProvider } from '../_shared/integrations/provider.ts';
 import { microsoft365Status } from '../_shared/microsoft365.ts';
 import { serverSecretStatus } from '../_shared/integrations/server-secrets.ts';
+import { axcelerateAnswer, axcelerateFetchArgs, axcelerateFields, axcelerateRequest } from '../_shared/integrations/axcelerate.ts';
 const cors={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info, x-tenant-domain','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...cors,'Content-Type':'application/json'}});
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -165,6 +166,33 @@ Deno.serve(async(req:Request)=>{
    if(action==='revoke'&&revokeCode==='revoke_not_supported')return json({ok:true,providerRevoked:false,message:'Disconnected in Skyline. This provider has no revoke API: remove Skyline from the account\'s connected apps there if required.'});
    if(action==='revoke'&&revokeCode==='revoke_failed')return json({ok:true,providerRevoked:false,message:'Disconnected in Skyline, but the provider did not confirm revocation. Remove Skyline from the account\'s connected apps there.'});
    return json({ok:true,...(action==='revoke'?{providerRevoked:revokeCode==='revoked'}:{})});
+  }
+  // AXCELERATE-CONNECTION (2026-11-28): Check connection (one small GET /courses) and axcelerate_call (any aXcelerate API path,
+  // administrators only; GET / DELETE parameters in the address, POST / PUT as a form). Tokens are read here from Vault and never
+  // returned; each call is recorded in axcelerate_api_calls (method, path, status, no data).
+  if(c.connector_id==='axcelerate'&&['test','retry','axcelerate_call'].includes(action)){
+   if(c.status==='disabled')return json({error:'Enable this connection first.'},409);
+   const cred=await admin.rpc('integration_credential_read',{p_connection:c.id,p_kind:'api_key'});check(cred.error);
+   const fields=axcelerateFields(cred.data as string|null);
+   if(!fields)return json({error:'Save the aXcelerate subdomain, API token and web service token first.'},409);
+   const request=action==='axcelerate_call'?axcelerateRequest(body):{method:'GET' as const,path:'/courses',params:{displayLength:'1'}};
+   if('error' in request)return json({error:request.error},400);
+   const {url:target,init}=axcelerateFetchArgs(fields,request);
+   let answer;
+   try{answer=await axcelerateAnswer(await fetch(target,{...init,signal:AbortSignal.timeout(action==='axcelerate_call'?45000:15000)}));}
+   catch{answer=null;}
+   const rec=await admin.from('axcelerate_api_calls').insert({connection_id:c.id,user_id:user.user.id,method:request.method,path:request.path,http_status:answer?.status??null});check(rec.error);
+   const ok=!!answer&&answer.status>=200&&answer.status<300;
+   const rejected=answer?.status===401||answer?.status===403;
+   if(action!=='axcelerate_call'||rejected||ok){
+    const now=new Date().toISOString();
+    const cr=await admin.from('integration_connections').update({status:ok?'connected':'error',...(ok?{last_success_at:now}:{}),updated_at:now}).eq('id',c.id).neq('status','disabled');check(cr.error);
+   }
+   await log(!answer?'provider_unreachable':ok?(action==='axcelerate_call'?'axcelerate_call':'connection_verified'):rejected?'credentials_rejected':answer.status===429?'rate_limited':'provider_rejected',ok?'info':'error');
+   if(!answer)return json({error:'aXcelerate could not be reached. Check the subdomain and Live / Staging, then try again.'},502);
+   if(action==='axcelerate_call')return json({ok,status:answer.status,data:answer.data,truncated:answer.truncated,...(answer.retryAfter?{retryAfter:answer.retryAfter}:{})});
+   if(ok)return json({ok:true});
+   return json({error:rejected?'aXcelerate refused the tokens. Check the API token and the web service token (and that the web service user may read courses).':answer.status===429?'aXcelerate rate limit reached (200 requests a minute). Try again shortly.':`aXcelerate answered HTTP ${answer.status}.`},409);
   }
   if((action==='test'||action==='retry')&&c.connector_id==='microsoft365'){
    // 2026-11-20: Microsoft 365 is checked app-only (Email Management's status: connection, consent, domain, licence), one status in both places.

@@ -30,10 +30,11 @@ const sectionFilled = (html: string) => Boolean(richPlainText(html).trim()) || /
  * picker. A header or footer can be filled from a saved preset (the preset's HTML is copied in), saved as one, or cleared; a Word
  * document can start the body. Pictures are uploaded to template-assets and linked by URL.
  */
-export default function DocumentSections({ value, onChange, onError, letterVariables, storageImages = false }: {
+export default function DocumentSections({ value, onChange, onError, letterVariables, storageImages = false, letterhead = false }: {
   value: Sections; onChange: (patch: Partial<Sections>) => void; onError: (message: string) => void;
   /** Offer letters: {{variable}} chips from the registry instead of [Variables]. */ letterVariables?: readonly LetterVariable[];
   /** Pictures go to the template-assets bucket. */ storageImages?: boolean;
+  /** LETTERHEAD-ON-DOCUMENTS: "Put on letterhead" is ticked: header and footer come from the letterhead (shown, not edited). */ letterhead?: boolean;
 }) {
   const [parts, setParts] = useState<TemplatePart[] | null>(null);
   const [presetName, setPresetName] = useState<Record<string, string>>({});
@@ -108,6 +109,10 @@ export default function DocumentSections({ value, onChange, onError, letterVaria
 
   const section = (s: Section) => {
     const key = `${s}_html` as keyof Sections;
+    if (letterhead && s !== "body") return <section key={s} className="space-y-2 rounded-md border border-dashed border-background-300 bg-background-50 p-3" data-testid={`section-${s}`}>
+      <h3 className="font-semibold" data-testid={`section-tab-${s}`}>{TITLES[s]} <span className="text-xs font-normal text-foreground-600">from the letterhead</span></h3>
+      <div className="overflow-hidden rounded border border-background-200 bg-white p-3 text-xs" data-testid={`section-letterhead-${s}`} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(value[key]) }} />
+    </section>;
     const filled = s !== "body" && sectionFilled(value[key]);
     return <section key={s} className="space-y-2 rounded-md border border-background-300 p-3" data-testid={`section-${s}`} aria-labelledby={`section-title-${s}`}>
       <div className="flex flex-wrap items-center gap-2">

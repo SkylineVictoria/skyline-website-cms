@@ -181,6 +181,12 @@ export function safeImageSrc(value: string | undefined): string | null {
   return /^data:image\/(png|jpeg);base64,[A-Za-z0-9+/]+=*$/.test(src) && src.length <= MAX_IMAGE_CHARS ? src : null;
 }
 
+/** True when a CSS font-family list starts with a serif face (Tinos, Times, Georgia, Garamond, serif); "sans-serif" is not one. */
+export function isSerifFamily(value: string | undefined): boolean {
+  const first = String(value ?? "").split(",")[0]?.trim().replace(/^['"]|['"]$/g, "").toLowerCase() ?? "";
+  return first === "serif" || /^(tinos|times|times new roman|georgia|garamond|cambria|book antiqua|palatino)$/.test(first);
+}
+
 /** The style a kept element may carry, normalised. */
 function cleanStyle(tag: string, attrs: Record<string, string>): string {
   const css = styleMap(attrs.style);
@@ -206,7 +212,9 @@ function cleanStyle(tag: string, attrs: Record<string, string>): string {
       if (space !== null) out.push(`margin-${side}:${space}pt`);
     }
   }
-  // No font family is kept: the PDF prints every text in Arimo (Arial metrics), so the editor shows Arial too and nothing changes on the way.
+  // One font family choice is kept (LETTERHEAD-DESIGNER, 2026-11-28): a serif family (Tinos / Times / Georgia / serif) prints in Tinos;
+  // anything else prints in Arimo (Arial metrics), so the editor and the PDF agree.
+  if (isSerifFamily(css["font-family"])) out.push("font-family:serif");
   const weight = (css["font-weight"] ?? "").toLowerCase();
   if (weight === "bold" || weight === "bolder" || /^[6-9]00$/.test(weight)) out.push("font-weight:bold");
   if ((css["font-style"] ?? "").toLowerCase() === "italic") out.push("font-style:italic");

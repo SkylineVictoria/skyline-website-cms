@@ -1,6 +1,7 @@
 import { buildSubmissionPdf, loadLogo, type LogoFormat } from "../../../../supabase/functions/_shared/notification/submission-pdf";
 import type { ImageData } from "../../../../supabase/functions/_shared/notification/pdf-layout";
 import { appendSignedPage, hasSignedParts, signedBy, type SignedParts } from "../../../../supabase/functions/_shared/notification/signed-page";
+import { buildApplicationFormPdf, type ApplicationFormData, type ApplicationFormTemplate } from "../../../../supabase/functions/_shared/notification/application-form";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { currentPortalScope } from "@/lib/portalScope";
 import type { ApplicationDetail } from "@/pages/agency/lib/portalApplications";
@@ -44,7 +45,7 @@ async function branding(): Promise<{ institution: string; logo: ImageData | null
 /** Builds the application PDF in the browser from the loaded record (the same branded builder as the submission email) and saves it. */
 export async function downloadApplicationPdf(application: ApplicationDetail): Promise<void> {
   const brand = await branding();
-  const bytes = await buildSubmissionPdf({
+  const bytes = (await houseStylePdf(application, brand)) ?? await buildSubmissionPdf({
     reference: application.reference || "Draft",
     institution: brand.institution,
     version: application.version,
@@ -85,6 +86,9 @@ export interface SignedCopy extends SignedParts {
   handoff: { state: string | null; signedAt: string | null; signedBy: string | null } | null;
   storedCopy: { version: number; fileName: string; createdAt: string } | null;
   submission: { reference: string | null; submittedAt: string | null; version: number | null; snapshot: Record<string, unknown> } | null;
+  /** APPLICATION-FORM-TEMPLATES: the Application form template recorded when the student signed, and the institute's details. */
+  formTemplate?: (ApplicationFormTemplate & { id: string | null; version: number | null; name: string }) | null;
+  institute?: { name?: string; legalName?: string; address?: string; phone?: string; email?: string; website?: string; rto?: string; cricos?: string; abn?: string; logoUrl?: string | null } | null;
 }
 
 export async function getSignedCopy(applicationId: string): Promise<SignedCopy | null> {
@@ -118,6 +122,8 @@ export async function buildSignedApplicationPdf(application: ApplicationDetail, 
   const brand = await branding();
   const submission = copy.submission;
   const reference = submission?.reference || application.reference || "Draft";
+  // The Application form template recorded at signing prints the whole document, the same as the emailed copy.
+  if (copy.formTemplate) return buildApplicationFormPdf(copy.formTemplate, await formData(application, copy, brand));
   const form = await buildSubmissionPdf({
     reference, institution: brand.institution, version: submission?.version ?? application.version,
     submittedAt: submission?.submittedAt ?? application.submittedAt,
@@ -125,4 +131,62 @@ export async function buildSignedApplicationPdf(application: ApplicationDetail, 
     branding: { primary: brand.primary, logo: brand.logo, timezone: brand.timezone },
   });
   return hasSignedParts(copy) ? appendSignedPage(form, copy, { reference, studentName: application.studentName || "", timezone: brand.timezone }) : form;
+}
+
+const dataUrlOf = (image: ImageData | null) => {
+  if (!image) return null;
+  let binary = "";
+  for (let i = 0; i < image.bytes.length; i += 0x8000) binary += String.fromCharCode(...image.bytes.subarray(i, i + 0x8000));
+  return `data:image/${image.type === "jpg" ? "jpeg" : "png"};base64,${btoa(binary)}`;
+};
+/** What the Application form template prints for this application: the submission, what was signed, the institute (logo as a picture). */
+async function formData(application: ApplicationDetail, copy: SignedCopy, brand: Awaited<ReturnType<typeof branding>>): Promise<ApplicationFormData> {
+  const submission = copy.submission;
+  const institute = copy.institute ?? {};
+  return {
+    reference: submission?.reference || application.reference || "Draft", submittedAt: submission?.submittedAt ?? application.submittedAt,
+    institution: institute.name || brand.institution, timezone: brand.timezone, snapshot: submission?.snapshot ?? { ...application.data, courses: application.courses },
+    signed: copy, studentName: application.studentName || "",
+    institute: { ...institute, name: institute.name || brand.institution, logo: dataUrlOf(brand.logo) },
+  };
+}
+
+/** The template editor's preview: a template (as being edited) printed for an application, or for the sample application. */
+export async function previewApplicationForm(template: ApplicationFormTemplate, applicationId: string | null): Promise<Uint8Array> {
+  const { sampleApplicationFormData } = await import("../../../../supabase/functions/_shared/notification/application-form");
+  const brand = await branding();
+  if (!applicationId) {
+    const sample = sampleApplicationFormData();
+    const { data } = await supabase.from("cms_settings").select("name, legal_name, address, phone, email, website, rto, cricos, abn").order("id", { ascending: true }).limit(1);
+    const row = (Array.isArray(data) && data[0] ? data[0] : {}) as Record<string, string | null>;
+    return buildApplicationFormPdf(template, { ...sample, institution: row.name || brand.institution, timezone: brand.timezone,
+      institute: { name: row.name ?? undefined, legalName: row.legal_name ?? undefined, address: row.address ?? undefined, phone: row.phone ?? undefined, email: row.email ?? undefined,
+        website: row.website ?? undefined, rto: row.rto ?? undefined, cricos: row.cricos ?? undefined, abn: row.abn ?? undefined, logo: dataUrlOf(brand.logo) } });
+  }
+  const copy = await getSignedCopy(applicationId);
+  if (!copy || !copy.submission) throw new Error("That application has no submission to print yet.");
+  const { data: app } = await supabase.from("enrollment_applications").select("id, reference, student_name, submitted_at, version").eq("id", applicationId).maybeSingle();
+  const detail = { id: applicationId, reference: app?.reference ?? "", studentName: app?.student_name ?? "", submittedAt: app?.submitted_at ?? null, version: app?.version ?? 1, data: {}, courses: [] } as unknown as ApplicationDetail;
+  return buildApplicationFormPdf(template, await formData(detail, copy, brand));
+}
+
+/**
+ * HOUSE-STYLE (owner 2026-11-28: every form in the same design): the application as the Application form prints it. A signed one prints
+ * from the form recorded at signing (with its signature); one not signed yet from today's default form, with "Not signed yet".
+ * null when there is no Application form (the earlier built-in layout is used then).
+ */
+async function houseStylePdf(application: ApplicationDetail, brand: Awaited<ReturnType<typeof branding>>): Promise<Uint8Array | null> {
+  try {
+    const copy = await getSignedCopy(application.id);
+    const signedNow = !!copy && (copy.signatures.length > 0 || copy.declarations.length > 0) && !["draft", "action_required"].includes(application.status);
+    if (copy && signedNow && copy.formTemplate) return await buildApplicationFormPdf(copy.formTemplate, await formData(application, copy, brand));
+    const { data, error } = await supabase.rpc("application_form_default", { p_application: application.id });
+    if (error || !data) return null;
+    const live = { ...(copy ?? { signatures: [], declarations: [], guardian: null, handoff: null, storedCopy: null }), submission: null, formTemplate: null,
+      institute: (data as { institute?: SignedCopy["institute"] }).institute ?? copy?.institute ?? null } as SignedCopy;
+    const formInput = await formData(application, live, brand);
+    return await buildApplicationFormPdf(data as ApplicationFormTemplate, { ...formInput, signed: null, submittedAt: application.submittedAt ?? null });
+  } catch {
+    return null;
+  }
 }

@@ -29,7 +29,8 @@ const CELL_PAD = 4;
 const BLACK = "#000000";
 
 /* ------------------------------------------------------------------ model */
-interface Style { bold: boolean; italic: boolean; underline: boolean; strike: boolean; size: number; color: string; background: string | null; href: string | null; script: "sub" | "sup" | null }
+interface Style { bold: boolean; italic: boolean; underline: boolean; strike: boolean; size: number; color: string; background: string | null; href: string | null; script: "sub" | "sup" | null;
+  /** LETTERHEAD-DESIGNER: set in Tinos (font-family:serif), otherwise Arimo. */ serif?: boolean }
 type Inline =
   | { t: "text"; text: string; style: Style; mark?: string }
   | { t: "image"; src: string; w: number | null; h: number | null; style: Style }
@@ -63,6 +64,7 @@ function styled(base: Style, node: ElementNode): Style {
     case "sup": s.script = "sup"; break;
     case "a": { const href = safeHref(node.attrs.href); if (href) { s.href = href; s.underline = true; s.color = "#1155cc"; } break; }
   }
+  if (c["font-family"] === "serif") s.serif = true;
   if (c["font-weight"] === "bold") s.bold = true;
   if (c["font-style"] === "italic") s.italic = true;
   if (c["text-decoration"] === "underline") s.underline = true;
@@ -281,15 +283,23 @@ function resolveInlines(inlines: Inline[], ctx: TokenContext): Inline[] {
 }
 
 /* ------------------------------------------------------------------ fonts */
-interface Fonts { faces: Record<"r" | "b" | "i" | "bi", PDFFont>; fallback: { r: PDFFont; b: PDFFont }; sets: Map<PDFFont, Set<number>> }
+interface Fonts { faces: Record<"r" | "b" | "i" | "bi", PDFFont>; serif: Record<"r" | "b" | "i" | "bi", PDFFont> | null; fallback: { r: PDFFont; b: PDFFont }; sets: Map<PDFFont, Set<number>> }
 const fromBase64 = (text: string) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
-async function embedFonts(pdf: PDFDocument): Promise<Fonts> {
+async function embedFonts(pdf: PDFDocument, serif = false): Promise<Fonts> {
   pdf.registerFontkit(fontkit);
   const embed = (b64: string) => pdf.embedFont(fromBase64(b64), { subset: true });
   const [r, b, i, bi, nr, nb] = await Promise.all([embed(ARIMO_REGULAR), embed(ARIMO_BOLD), embed(ARIMO_ITALIC), embed(ARIMO_BOLD_ITALIC), embed(NOTO_SANS_REGULAR), embed(NOTO_SANS_BOLD)]);
   const sets = new Map<PDFFont, Set<number>>();
   for (const f of [r, b, i, bi, nr, nb]) sets.set(f, new Set(f.getCharacterSet()));
-  return { faces: { r, b, i, bi }, fallback: { r: nr, b: nb }, sets };
+  // Tinos only when a document asks for it (font-family:serif), so every other document stays byte-for-byte as before.
+  let serifFaces: Fonts["serif"] = null;
+  if (serif) {
+    const { TINOS_REGULAR, TINOS_BOLD, TINOS_ITALIC, TINOS_BOLD_ITALIC } = await import("./pdf-fonts-tinos.ts");
+    const [sr, sb, si, sbi] = await Promise.all([embed(TINOS_REGULAR), embed(TINOS_BOLD), embed(TINOS_ITALIC), embed(TINOS_BOLD_ITALIC)]);
+    for (const f of [sr, sb, si, sbi]) sets.set(f, new Set(f.getCharacterSet()));
+    serifFaces = { r: sr, b: sb, i: si, bi: sbi };
+  }
+  return { faces: { r, b, i, bi }, serif: serifFaces, fallback: { r: nr, b: nb }, sets };
 }
 /**
  * Tick boxes and ticks are drawn as lines, never set as characters: neither Arimo nor Noto Sans has ☐ ☑ ☒ (they printed "?" on the
@@ -364,7 +374,7 @@ class Layout {
     return x;
   }
 
-  private face(style: Style): PDFFont { const f = this.fonts.faces; return style.bold ? (style.italic ? f.bi : f.b) : style.italic ? f.i : f.r; }
+  private face(style: Style): PDFFont { const f = (style.serif && this.fonts.serif) || this.fonts.faces; return style.bold ? (style.italic ? f.bi : f.b) : style.italic ? f.i : f.r; }
   /** A text in segments of one font each: Arimo where it has the glyph, Noto Sans where only it has it, "?" (reported) otherwise. */
   segments(text: string, style: Style, size: number): Seg[] {
     const face = this.face(style);
@@ -670,6 +680,8 @@ export interface DocumentInput {
   curly?: CurlyResolver;
   /** The bytes of pictures linked from template-assets, by URL (the caller loads them; one not given is left out). */
   images?: Record<string, Uint8Array>;
+  /** LETTERHEAD-DESIGNER: the header of pages 2 and on (a smaller one); absent: the header repeats on every page. */
+  headerLater?: string | null;
 }
 export interface DocumentResult {
   bytes: Uint8Array; pages: number; fields: PlacedField[]; missing: string[]; unsupported: string | null;
@@ -680,6 +692,8 @@ export interface DocumentResult {
   /** Where each tick box was drawn, and each empty table cell (document order). */
   boxes: PlacedBox[];
   blanks: PlacedBlank[];
+  /** How tall the header (page 1, later pages) and the footer are, in points, measured from the page edge (rule checks). */
+  bands: { header: number; headerLater: number; footer: number };
 }
 
 const imageSources = (html: string) => [...String(html ?? "").matchAll(/<img\b[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]).filter((src) => safeImageSrc(src) === src);
@@ -692,10 +706,11 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
   pdf.setTitle(input.title.slice(0, 200));
   pdf.setProducer("Skyline ERP");
   pdf.setCreator("Skyline ERP");
-  const fonts = await embedFonts(pdf);
-  const images = new Map<string, PDFImage>();
   const header = sanitizeRichHtml(input.header ?? ""), body = sanitizeRichHtml(input.body ?? ""), footer = sanitizeRichHtml(input.footer ?? "");
-  for (const src of [...imageSources(header), ...imageSources(body), ...imageSources(footer)]) {
+  const headerLater = input.headerLater == null ? header : sanitizeRichHtml(input.headerLater);
+  const fonts = await embedFonts(pdf, [header, headerLater, body, footer].some((h) => h.includes("font-family:serif")));
+  const images = new Map<string, PDFImage>();
+  for (const src of [...imageSources(header), ...imageSources(headerLater), ...imageSources(body), ...imageSources(footer)]) {
     if (images.has(src)) continue;
     const bytes = src.startsWith("data:") ? fromBase64(src.slice(src.indexOf(",") + 1)) : input.images?.[src];
     if (!bytes) continue;
@@ -704,6 +719,7 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
   const tokens: TokenContext | null = input.brackets || input.curly ? { values: input.values, sample: !!input.sample, missing: new Set(), brackets: input.brackets, curly: input.curly } : null;
   const marks: PlacedMark[] = [];
   const headerBlocks = header ? blocksOf(header, tokens) : [];
+  const laterBlocks = headerLater === header ? headerBlocks : headerLater ? blocksOf(headerLater, tokens) : [];
   const bodyBlocks = blocksOf(body, tokens);
   const footerBlocks = footer ? blocksOf(footer, tokens) : [];
   if (!bodyBlocks.some((b) => b.kind !== "para" || b.inlines.length)) throw new Error("The document is empty.");
@@ -712,17 +728,20 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
   const heightOf = (items: Item[]) => items.reduce((n, it) => n + it.height, 0);
   // Header and footer measured with three-digit page numbers; drawn per page with the real ones.
   const headerH = headerBlocks.length ? heightOf(layout.items(headerBlocks, width, null)) : 0;
+  const laterH = laterBlocks === headerBlocks ? headerH : laterBlocks.length ? heightOf(layout.items(laterBlocks, width, null)) : 0;
   const footerH = footerBlocks.length ? heightOf(layout.items(footerBlocks, width, null)) : 0;
-  const bodyTop = headerH ? DOC_PAGE_H - DOC_BAND - headerH - BAND_GAP : DOC_PAGE_H - BODY_MARGIN;
+  const topOf = (h: number) => (h ? DOC_PAGE_H - DOC_BAND - h - BAND_GAP : DOC_PAGE_H - BODY_MARGIN);
+  const firstTop = topOf(headerH), laterTop = topOf(laterH);
+  let bodyTop = firstTop;
   const bodyBottom = footerH ? DOC_BAND + footerH + BAND_GAP : BODY_MARGIN;
-  const pageRoom = bodyTop - bodyBottom;
+  const pageRoom = Math.min(firstTop, laterTop) - bodyBottom;
   if (pageRoom < 200) throw new Error("The header and footer leave too little room for the text. Make them shorter.");
 
   // Paginate the body.
   const pages: Array<Array<{ item: Item; top: number }>> = [[]];
   let y = bodyTop;
   const queue = layout.items(bodyBlocks, width, null);
-  const newPage = () => { pages.push([]); y = bodyTop; if (pages.length > MAX_DOCUMENT_PAGES) throw new Error(`The document is longer than ${MAX_DOCUMENT_PAGES} pages.`); };
+  const newPage = () => { pages.push([]); bodyTop = laterTop; y = bodyTop; if (pages.length > MAX_DOCUMENT_PAGES) throw new Error(`The document is longer than ${MAX_DOCUMENT_PAGES} pages.`); };
   for (let i = 0; i < queue.length; i++) {
     const item = queue[i];
     const atTop = y === bodyTop;
@@ -749,7 +768,8 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
   pages.forEach((placed, index) => {
     const page = pdf.addPage([DOC_PAGE_W, DOC_PAGE_H]);
     const ctx: DrawCtx = { page, pageIndex: index, total, fields, sample: !!input.sample, marks, boxes, blanks };
-    if (headerBlocks.length) { let hy = DOC_PAGE_H - DOC_BAND; for (const it of layout.items(headerBlocks, width, { page: index + 1, total })) { it.draw(ctx, DOC_MARGIN_X, hy); hy -= it.height; } }
+    const pageHeader = index === 0 ? headerBlocks : laterBlocks;
+    if (pageHeader.length) { let hy = DOC_PAGE_H - DOC_BAND; for (const it of layout.items(pageHeader, width, { page: index + 1, total })) { it.draw(ctx, DOC_MARGIN_X, hy); hy -= it.height; } }
     for (const { item, top } of placed) item.draw(ctx, DOC_MARGIN_X, top);
     if (footerBlocks.length) {
       const items = layout.items(footerBlocks, width, { page: index + 1, total });
@@ -758,5 +778,6 @@ export async function buildDocumentPdf(input: DocumentInput): Promise<DocumentRe
     }
   });
   const unsupported = layout.unsupported.size ? [...layout.unsupported].join("") : null;
-  return { bytes: await pdf.save({ useObjectStreams: true }), pages: total, fields, missing: [...(tokens?.missing ?? [])], unsupported, placed: layout.placed, marks, boxes, blanks };
+  return { bytes: await pdf.save({ useObjectStreams: true }), pages: total, fields, missing: [...(tokens?.missing ?? [])], unsupported, placed: layout.placed, marks, boxes, blanks,
+    bands: { header: headerH ? DOC_BAND + headerH : 0, headerLater: laterH ? DOC_BAND + laterH : 0, footer: footerH ? DOC_BAND + footerH : 0 } };
 }

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Button, Card, Select, TextInput, Toggle } from "@/pages/admin/components/ui";
 import type { Definition, Rule, Snapshot } from "./model";
 import AvetmissOrgSettings from "@/pages/admin/components/AvetmissOrgSettings";
+import LetterheadSettings from "@/pages/admin/components/LetterheadSettings";
 
 /** Owner (2026-11-25): the AVETMISS / NCVER organisation details live here as their own area (saved by their own Save button). */
 const AVETMISS_AREA = "AVETMISS settings";
@@ -165,7 +166,7 @@ export default function SimpleSettings({ snapshot, publish, busy, showAdvanced }
         <i className="ri-government-line" aria-hidden="true" />{AVETMISS_AREA}
       </button>
     </div>
-    {avetmiss ? <AvetmissOrgSettings /> : <Card className="overflow-hidden p-0">
+    {avetmiss ? <><AvetmissOrgSettings /><LetterheadSettings /></> : <Card className="overflow-hidden p-0">
       <ul className="divide-y divide-background-100">{section.settings.map(s => {
         const rule = byId.get(s.id);
         const current = rule ? liveDefinition(rule) : undefined;

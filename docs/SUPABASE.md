@@ -1388,7 +1388,7 @@ headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT f
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
 Importing into Skyline records is not built yet.
 
-## aXcelerate students (AXCELERATE-STUDENTS, 2026-11-28, LOCAL ONLY)
+## aXcelerate students (AXCELERATE-STUDENTS, 2026-11-28, RELEASED)
 Students page › Import from aXcelerate: one student (axcelerate-import action `search_students` = GET /contacts/search, max 20, filtered again
 on the words / digits typed; then start {entities: ['students'], students: {scope: 'one', contactId}}), or all (scope 'all': GET
 /course/enrolments per course, type p, paged by limit; `changedOnly` = only enrolments with lastUpdated since the last finished "all" run, in

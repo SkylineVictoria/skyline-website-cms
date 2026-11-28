@@ -20,7 +20,7 @@ export default function CourseWeeklyTimetable({ courseId, intakes, canEdit }: { 
   const open = intakes.filter((i) => i.status !== "closed");
   const [weeks, setWeeks] = useState<Record<string, BatchSession[]> | null>(null);
   const [groups, setGroups] = useState<Record<string, string>>({});
-  /** Each intake shows its whole calendar (as on the intake's Weekly timetable tab) or its week; the calendar first. */
+  /** Each intake shows its week (the classes by weekday) or its whole calendar; the week first (owner 2026-11-28: weekly calendar). */
   const [view, setView] = useState<Record<string, "calendar" | "week">>({});
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [error, setError] = useState("");
@@ -57,14 +57,14 @@ export default function CourseWeeklyTimetable({ courseId, intakes, canEdit }: { 
             </div>
             <span className="flex flex-wrap items-center gap-2">
             {list.length && groups[i.id] ? <span className="inline-flex overflow-hidden rounded-lg border border-background-300 text-xs font-semibold" role="group" aria-label="View">
-              {(["calendar", "week"] as const).map((v) => <button key={v} type="button" aria-pressed={(view[i.id] ?? "calendar") === v} onClick={() => setView((m) => ({ ...m, [i.id]: v }))}
-                className={`px-3 py-1.5 ${(view[i.id] ?? "calendar") === v ? "bg-primary-600 text-white" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{v === "calendar" ? "Calendar" : "Week"}</button>)}
+              {(["calendar", "week"] as const).map((v) => <button key={v} type="button" aria-pressed={(view[i.id] ?? "week") === v} onClick={() => setView((m) => ({ ...m, [i.id]: v }))}
+                className={`px-3 py-1.5 ${(view[i.id] ?? "week") === v ? "bg-primary-600 text-white" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{v === "calendar" ? "Calendar" : "Week"}</button>)}
             </span> : null}
             {canEdit ? <Link to={`/admin/lms/intakes#${i.id}`} className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-200">
               <i className="ri-edit-line mr-1" aria-hidden="true" />{list.length ? "Change" : "Make it"}</Link> : null}
             </span>
           </header>
-          {list.length && groups[i.id] && (view[i.id] ?? "calendar") === "calendar" ? <div className="p-3">
+          {list.length && groups[i.id] && (view[i.id] ?? "week") === "calendar" ? <div className="p-3">
             <BatchCourseCalendar batchId={groups[i.id]} courseId={courseId} intakeStart={i.startDate} intakeEnd={i.endDate} hasSlots canManage={canEdit} reloadKey={0} />
           </div> : list.length ? <div className="overflow-x-auto">
             <div className="grid min-w-[700px] grid-cols-7 divide-x divide-background-200">

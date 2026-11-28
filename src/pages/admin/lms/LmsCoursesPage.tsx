@@ -18,7 +18,7 @@ import AddUnitsFromTga from "./AddUnitsFromTga";
 import VoeCalendarEditor, { VoeTab } from "./VoeCalendarEditor";
 import WeeklyClassBookingDialog, { type DraftWeek } from "@/pages/admin/components/rto/WeeklyClassBooking";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { Drawer } from "@/pages/admin/components/rto/shared";
+import { DailyTimetableTab } from "./CourseWeeklyTimetable";
 import { loadCricos, lookupCricos, saveCricos } from "@/pages/admin/lib/cricos";
 import SearchableSelect from "@/components/ui/SearchableSelect";
 
@@ -115,8 +115,6 @@ export default function LmsCoursesPage() {
   const [campus, setCampus] = useState("");
   const [activeOnly, setActiveOnly] = useState(false);
   const [tab, setTab] = useState<Tab>("overview");
-  /** The weekly calendars are opened on purpose (Course calendars, or a link to them); otherwise the course shows its overview and units. */
-  const [calendarsOpen, setCalendarsOpen] = useState(false);
 
   const [error, setError] = useState("");
   const [detailError, setDetailError] = useState("");
@@ -271,7 +269,7 @@ export default function LmsCoursesPage() {
     const wanted = params.get("tab");
     if (!params.get("course") || !courses.length) return;
     if (wanted === "master" || wanted === "units" || wanted === "voe") setTab(wanted);
-    if (wanted === "master" || wanted === "voe") setCalendarsOpen(true);
+    if (wanted === "voe") { setCalendarKind("voe"); setTab("master"); }
     setParams({}, { replace: true });
   }, [courses, params, setParams]);
   useEffect(() => {
@@ -362,7 +360,7 @@ export default function LmsCoursesPage() {
   const slitPending = slit.some(h => h && !h.confirmed);
   const slitDuration = detail && slitHours > 0 ? courseWeeksLabel(slitHours) : "";
 
-  const pick = (id: string) => { setSelectedId(id); setTab("overview"); setCalendarsOpen(false); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
+  const pick = (id: string) => { setSelectedId(id); setTab("overview"); setSavedAt(""); setEditing(false); setSyncNote([]); setMenuOpen(false); };
   /** next: "units" opens Add units (then the first intake), "intake" opens New intake (units already chosen), "none" just shows it. */
   const reloadAfterAdd = (courseId: string, next: "units" | "intake" | "none" = "none") => {
     setAddingCourse(null); setQuery(""); setCampus(""); setActiveOnly(false); setSavedAt(""); setEditing(false); setSyncNote([]);
@@ -395,10 +393,15 @@ export default function LmsCoursesPage() {
   const wizardUnfinished = !!(canEdit && selected && detail && masterSaved !== null && (masterSaved === false || voeSaved === false || !classesDone));
   // The course page shows the course and its units (owner, 2026-11-28: "no need to show weekly and daily in courses"). The weekly and
   // daily calendars are on each intake (Intakes › an intake › Weekly and daily calendars); here only while the setup wizard needs them.
-  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }] as const;
+  // Owner 2026-11-28: the course shows its Master calendar (cycles and unit dates) and its Weekly calendar (the intakes' classes), each
+  // with a CoE / VoE switch, instead of four separate calendar tabs.
+  const tabs = [{ id: "overview", label: "Overview" }, { id: "units", label: "Units" }, { id: "master", label: "Master calendar" }, { id: "weekly", label: "Weekly calendar" }] as const;
   const shownTab = tabs.some(t => t.id === tab) ? tab : "overview";
   /** The course's CoE / VoE weekly calendars, in a side panel opened from the menu (or a link to them). */
   const [calendarKind, setCalendarKind] = useState<"coe" | "voe">("coe");
+  // A course on the CRICOS register runs CoE intakes first; otherwise its intakes are VoE.
+  const selectedCricos = selected?.cricos ?? "";
+  useEffect(() => { setCalendarKind(selectedCricos ? "coe" : "voe"); }, [selectedId, selectedCricos]);
   const menuItem = "flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-background-100 disabled:opacity-50";
 
   const pane: Pane = tab === "prereq" ? { folded: !masterList, toggle: () => setMasterList(v => !v), grid: paneGrid(!masterList) } : savedPane;
@@ -542,8 +545,8 @@ export default function LmsCoursesPage() {
                 className="rounded-lg border border-background-300 px-2.5 py-2 text-foreground-700 hover:bg-background-100"><i className="ri-more-2-fill" aria-hidden="true" /></button>
               {menuOpen ? <div className="fixed inset-0 z-10" aria-hidden="true" onClick={() => setMenuOpen(false)} /> : null}
               {menuOpen ? <div className="absolute right-0 top-11 z-20 w-64 overflow-hidden rounded-lg border border-background-200 bg-background-50 py-1 shadow-lg">
-                <button type="button" className={menuItem} onClick={() => { setMenuOpen(false); setCalendarKind("coe"); setCalendarsOpen(true); }}>
-                  <i className="ri-calendar-2-line" aria-hidden="true" />Course calendars (CoE / VoE weekly)</button>
+                <button type="button" className={menuItem} onClick={() => { setMenuOpen(false); setTab("master"); }}>
+                  <i className="ri-calendar-2-line" aria-hidden="true" />Master calendar (CoE / VoE)</button>
                 <button type="button" className={menuItem} disabled={syncing || saving} onClick={() => { setMenuOpen(false); void sync(); }}>
                   <i className="ri-refresh-line" aria-hidden="true" />Sync with Training.gov.au and CRICOS</button>
                 {wizardUnfinished ? <button type="button" className={menuItem} disabled={!detail} onClick={() => { setMenuOpen(false); setEditing(true); }}>
@@ -599,8 +602,8 @@ export default function LmsCoursesPage() {
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <h3 className="font-heading text-xs font-bold uppercase tracking-wide text-foreground-500">Intakes</h3>
                     <span className="flex flex-wrap gap-2">
-                      <button type="button" onClick={() => { setCalendarKind("coe"); setCalendarsOpen(true); }} title="The course's CoE and VoE weekly calendars (cycles and unit dates)"
-                        className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">Course calendars</button>
+                      <button type="button" onClick={() => setTab("master")} title="The course's CoE and VoE master calendars (cycles and unit dates)"
+                        className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">Master calendar</button>
                       <Link to="/admin/lms/intakes" className="rounded-lg border border-background-300 px-3 py-1.5 text-sm font-semibold text-foreground-800 hover:bg-background-100">All intakes</Link>
                     </span>
                   </div>
@@ -626,21 +629,22 @@ export default function LmsCoursesPage() {
                 </details> : null}
               </div> : null}
               {shownTab === "units" && selectedId ? <LmsUnitsPage key={selectedId + ":" + reloadKey} embeddedCourseId={selectedId} /> : null}
+              {(shownTab === "master" || shownTab === "weekly") && selected ? <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm text-foreground-600">{shownTab === "master" ? "The course's cycles and unit dates, which its intakes and batches follow." : "The weekly classes of the course's open intakes: days, times, rooms and trainers."}</p>
+                  <div className="inline-flex overflow-hidden rounded-lg border border-background-300 text-sm font-semibold" role="group" aria-label="CoE or VoE">
+                    {([["coe", "CoE"], ["voe", "VoE"]] as const).map(([k, label]) => <button key={k} type="button" aria-pressed={calendarKind === k} onClick={() => setCalendarKind(k)}
+                      className={`px-4 py-1.5 ${calendarKind === k ? "bg-primary-600 text-white" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{label}</button>)}
+                  </div>
+                </div>
+                {shownTab === "master" ? (calendarKind === "coe" ? <MasterTimetableTab key={selectedId + ":coe:" + reloadKey} courseId={selectedId} courseCode={selected.code} />
+                  : <VoeTab key={selectedId + ":voe:" + reloadKey} course={selected} canEdit={canEdit} />)
+                  : detail ? <DailyTimetableTab key={selectedId + ":" + calendarKind + ":" + reloadKey} courseId={selectedId} intakes={detail.intakes} canEdit={canEdit} load={calendarKind} /> : <p className="text-sm text-foreground-500">Loading…</p>}
+              </div> : null}
             </div>
           </>}
         </>}
       </section>
     </div>
-    {selected ? <Drawer open={calendarsOpen} width="max-w-6xl" title={`${selected.code} · course calendars`} onClose={() => setCalendarsOpen(false)}>
-      <div className="space-y-3">
-        <p className="text-sm text-foreground-600">The course's weekly calendars: the cycles and unit dates that intakes and batches follow. Each intake's classes are on its Timetable tab.</p>
-        <div className="inline-flex overflow-hidden rounded-lg border border-background-300 text-sm font-semibold" role="group" aria-label="Calendar">
-          {([["coe", "CoE weekly"], ["voe", "VoE weekly"]] as const).map(([k, label]) => <button key={k} type="button" aria-pressed={calendarKind === k} onClick={() => setCalendarKind(k)}
-            className={`px-4 py-2 ${calendarKind === k ? "bg-primary-600 text-white" : "bg-background-50 text-foreground-700 hover:bg-background-100"}`}>{label}</button>)}
-        </div>
-        {calendarKind === "coe" ? <MasterTimetableTab key={selectedId + ":coe:" + reloadKey} courseId={selectedId} courseCode={selected.code} />
-          : <VoeTab key={selectedId + ":voe:" + reloadKey} course={selected} canEdit={canEdit} />}
-      </div>
-    </Drawer> : null}
   </div>;
 }

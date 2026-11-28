@@ -1379,10 +1379,10 @@ SQL taking effect; this applies them with the definitions a fresh lab has (`port
 every changed answer to `application_admin_changes` (source application / student / course, field, old and new value, who, when;
 append-only), read by SLIT admins with `application_admin_changes_list(application)`.
 
-## aXcelerate connection (AXCELERATE-CONNECTION, 2026-11-28, LOCAL ONLY)
+## aXcelerate connection (AXCELERATE-CONNECTION, 2026-11-28, released: migration applied, integrations-admin v16)
 Integrations › Connections › aXcelerate (Accelerate CRM): Live / Staging, subdomain, API token (from aXcelerate support) and web service token,
 saved in Vault by `integration_axcelerate_save` (summary `integration_axcelerate_summary` shows only the last 4 characters; `integration_axcelerate_clear`).
 `integrations-admin` action `test` (GET /courses) and `axcelerate_call` (administrators; any path under https://{subdomain}.app|stg.axcelerate.com/api,
 headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT form-encoded, answer up to 1.5 MB); every call logged in
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
-Release: apply the migration, deploy integrations-admin from clean main, confirm, then push the frontend. Importing into Skyline records is not built yet.
+Importing into Skyline records is not built yet.

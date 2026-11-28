@@ -457,7 +457,7 @@ test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs eve
  let r=await runImport({client,rpc:m.rpc,connection:'c',run:'r',actor:'a',entities:['trainers','classes','breaks'],cursor:{},counts:{},deadline:Date.now()+60000,save:async()=>{saves++;return true;}});
  assert.equal(r.done,true);
  const names=m.calls.map(c=>c[0]).filter(n=>n!=='axcelerate_import_error');
- assert.deepEqual(names,['axcelerate_import_location','axcelerate_import_course','axcelerate_import_course','axcelerate_import_trainer','axcelerate_import_unit','axcelerate_import_unit','axcelerate_import_class','axcelerate_import_class','axcelerate_import_break','axcelerate_import_break']);
+ assert.deepEqual(names,['axcelerate_import_location','axcelerate_import_course','axcelerate_import_course','axcelerate_import_trainer','axcelerate_import_unit','axcelerate_import_unit','axcelerate_import_class','axcelerate_course_fees','axcelerate_import_class','axcelerate_course_fees','axcelerate_import_break','axcelerate_import_break']);
  const cls=m.calls.find(c=>c[0]==='axcelerate_import_class')![1];
  assert.equal((cls.p_units as unknown[]).length,1,'the refused unit is left out of the class');assert.ok(cls.p_trainer);assert.ok(cls.p_location);
  assert.equal(m.calls.filter(c=>c[0]==='axcelerate_import_trainer').length,1,'one trainer named on two classes is imported once');
@@ -494,6 +494,8 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
    if(p==='/course/detail')return{status:200,data:{ID:'C1',CODE:'BSB80120',NAME:'Graduate Diploma'}};
    if(p==='/course/instance/detail')return{status:200,data:{INSTANCEID:'I9',ID:'C1',CODE:'BSB80120',NAME:'Apr class',UNITS:[]}};
    if(p==='/course/instance/attendance')return{status:200,data:[{DATE:'2026-05-04',STARTTIME:'09:00',FINISHTIME:'13:00',ENROLLEES:[{CONTACTID:'11'}]}]};
+   if(p==='/accounting/invoice')return{status:200,data:[{INVOICEID:501,INVOICENR:'INV-501'}]};
+   if(p==='/accounting/invoice/501')return{status:200,data:{INVOICEID:501,PRICEGROSS:15000,BALANCE:4500,ITEMS:[{DESCRIPTION:'BSB80120 tuition',TOTALGROSS:15000}],PAYMENTS:[{PAYMENTID:9,AMOUNT:10500,PAYMENTDATE:'2026-04-15'}]}};
    if(p==='/course/calendar')return{status:200,data:[{ID:'E1',NAME:'Summer break',STARTDATE:'2026-12-21',FINISHDATE:'2027-01-17'},{INSTANCEID:'I9',NAME:'Apr class',STARTDATE:'2026-04-27'}]};
    if(p==='/agent/900')return{status:200,data:{CONTACTID:'900',GIVENNAME:'Ann',SURNAME:'Agent',ORGID:'55'}};
    if(p==='/contact/900')return{status:200,data:[{CONTACTID:'900',EMAILADDRESS:'ann@agency.example'}]};
@@ -513,6 +515,7 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
   if(name==='axcelerate_import_course')return{data:{action:'created',id:'sk1'},error:null};
   if(name==='axcelerate_import_class'){qualCalls.push(['class',args]);return{data:{action:'created',id:'cl1'},error:null};}
   if(name==='axcelerate_import_qualification'){qualCalls.push(['qualification',args]);return{data:{action:'created',id:'q1',status:'active',warnings:[]},error:null};}
+  if(name==='axcelerate_import_invoice'){qualCalls.push(['invoice',args]);return{data:{action:'created',totalCents:1500000,paidCents:1050000,balanceCents:450000,payments:1,warnings:[]},error:null};}
   if(name==='axcelerate_import_break'){qualCalls.push(['break',args]);return{data:{action:'created',id:'b1'},error:null};}
   if(name==='axcelerate_import_unit_results'){qualCalls.push(['units',args]);return{data:{units:[{code:'BSBLDR601',outcome:'20',action:'created'}]},error:null};}
   if(name==='axcelerate_import_student'){calls.push(args);
@@ -523,7 +526,10 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
  let r=await runImport({client,rpc,cricos:async(code:string)=>{cricosAsked.push(code);return null;},connection:'c',run:'r',actor:'a',entities:['students'],cursor:{scope:'one',contactId:'11'},counts:{},deadline:Date.now()+60000,save:async()=>true});
  // AXCELERATE-CALENDAR-FIT: the class's course is looked up on the CRICOS register; not registered = VoE, noted on the run.
  assert.deepEqual(cricosAsked,['BSB80120']);assert.ok(r.cursor.notes?.some(n=>n.startsWith('BSB80120 is not on the provider')),'a course not on the CRICOS registration is noted');
- assert.equal(r.done,true);assert.deepEqual(gets.map(g=>g[0]),['/contact/11','/contact/enrolments/11','/course/enrolments','/agent/900','/contact/900','/organisation/55','/course/instance/detail','/course/detail','/course/deliveryLocations','/course/calendar','/course/instance/detail','/course/instance/attendance']);
+ assert.equal(r.done,true);assert.deepEqual(gets.map(g=>g[0]),['/contact/11','/contact/enrolments/11','/course/enrolments','/agent/900','/contact/900','/organisation/55','/course/instance/detail','/course/detail','/course/deliveryLocations','/course/calendar','/course/instance/detail','/course/instance/attendance','/accounting/invoice','/accounting/invoice/501']);
+ // AXCELERATE-FEES: the student's invoices, each with its detail (items, payments), after the Qualification.
+ assert.deepEqual(r.cursor.results?.[0].fees,{invoices:1,totalCents:1500000,paidCents:1050000,balanceCents:450000,payments:1,warnings:[]});
+ assert.deepEqual((qualCalls.find(q=>q[0]==='invoice')![1].p_rec as {INVOICENR:string;PAYMENTS:unknown[]}).PAYMENTS.length,1);
  assert.equal(r.cursor.results?.[0].action,'created');assert.equal(r.cursor.results?.[0].warnings?.length,1);
  // AXCELERATE-AGENTS: the agent and their organisation are imported; the student's courses (not workshops) are kept on the record.
  assert.deepEqual(r.cursor.results?.[0].agent,{name:'Ann Agent',business:'Agency X',action:'imported',student:'moved',message:undefined});
@@ -535,7 +541,7 @@ test('aXcelerate students (AXCELERATE-STUDENTS): one student, all enrolled stude
  // AXCELERATE-TIMETABLE-RESULTS: the Qualification's unit results come from its unit enrolments (TYPE s, same ENROLID).
  assert.deepEqual(r.cursor.results?.[0].qualifications,[{name:'Graduate Diploma',action:'created',status:'active',warnings:[],units:[{code:'BSBLDR601',outcome:'20',action:'created'}]}]);
  // AXCELERATE-STUDY-PLAN: aXcelerate's calendar breaks are imported for the class's course before the class (a class in the calendar is not a break).
- assert.deepEqual(qualCalls.map(q=>q[0]),['break','class','qualification','units']);
+ assert.deepEqual(qualCalls.map(q=>q[0]),['break','class','qualification','units','invoice']);
  assert.deepEqual(qualCalls[0][1].p_rec,{id:'E1',label:'Summer break',start:'2026-12-21',end:'2027-01-17'});
  assert.equal(qualCalls[3][1].p_enrolment,'q1');assert.deepEqual((qualCalls[3][1].p_units as {CODE:string}[]).map(u=>u.CODE),['BSBLDR601']);
  assert.deepEqual(r.counts.unit_result,{created:1});

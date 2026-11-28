@@ -90,6 +90,7 @@ export function answersHtml(data: Pick<ApplicationFormData, "reference" | "insti
 /** The declarations as agreed: each in a box, ticked, its title and the stored wording. */
 export function declarationsHtml(signed: SignedParts | null): string {
   const list = (signed?.declarations ?? []).filter((d) => d.role !== "guardian");
+  if (!signed) return `<p><span style="font-size:9pt"><em><span style="color:${MUTED}">Not signed yet: the student agrees to the declarations when signing.</span></em></span></p>`;
   if (!list.length) return `<p><span style="color:${MUTED}">No declarations are recorded for this application.</span></p>`;
   return list.map((d) => {
     const body = d.body ? d.body.split(/\n+/).filter((l) => l.trim()).map((l) => `<p style="margin-bottom:2pt"><span style="font-size:8.5pt"><span style="color:#374151">${esc(l)}</span></span></p>`).join("")
@@ -111,7 +112,7 @@ export function signaturesHtml(signed: SignedParts | null, fallbackName: string,
   const declared = signed?.declarations.find((d) => d.role !== "guardian");
   const name = student?.name || signed?.signedBy || declared?.name || fallbackName;
   const at = student?.signedAt || signed?.signedAt || declared?.at || null;
-  const left = cell("Signature of the student", student?.png ?? null, name, at ? `Signed ${day(at, tz)}` : "");
+  const left = cell("Signature of the student", student?.png ?? null, name, at ? `Signed ${day(at, tz)}` : "Not signed yet");
   const guardian = signed?.signatures.find((s) => s.role === "guardian");
   const right = guardian || signed?.guardian
     ? cell(`Parent / guardian${signed?.guardian?.relationship ? ` (${signed.guardian.relationship})` : ""}`, guardian?.png ?? null, guardian?.name || signed?.guardian?.name || "", guardian ? `Signed ${day(guardian.signedAt, tz)}` : "Not signed yet")
@@ -137,7 +138,7 @@ export function applicationFormValues(data: ApplicationFormData): Record<string,
   const fullName = [str("first_name"), str("middle_name"), str("last_name")].filter(Boolean).join(" ") || data.studentName;
   return {
     "application.reference": data.reference,
-    "application.submitted_on": day(data.submittedAt, data.timezone),
+    "application.submitted_on": day(data.submittedAt, data.timezone) || "Not submitted yet",
     "student.full_name": fullName,
     "student.email": str("email"),
     "student.date_of_birth": day(str("dob") || null, data.timezone),

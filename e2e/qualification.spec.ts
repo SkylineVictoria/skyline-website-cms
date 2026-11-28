@@ -175,6 +175,7 @@ test.describe("Signed application", () => {
     sql(`begin; set local session_replication_role = replica;
       update public.enrollment_applications set status = 'submitted', submitted_at = now(), version = 1 where id = '${app}';
       insert into public.application_signatures(application_id, signer_role, signer_name, png, ip, user_agent) values ('${app}', 'student', 'Zz Signer', '${png}', '203.0.113.77', 'ZZ-Agent/9.9');
+      set local session_replication_role = origin;
       insert into public.enrollment_application_versions(application_id, version, snapshot)
         select '${app}', 1, a.data || jsonb_build_object('submission', jsonb_build_object('consentIds', '${JSON.stringify(consents)}'::jsonb, 'declarationVersion', '2026-11-25', 'actor', '${agentProfile}'))
         from public.enrollment_applications a where a.id = '${app}';
@@ -217,7 +218,44 @@ test.describe("Signed application", () => {
     await page.goto(`/admin/applications/${app}`);
     await expect(page.getByRole("button", { name: /Document upload wizard/ })).toHaveCount(0);
     await check("admin");
+    // APPLICATION-FORM-TEMPLATES: the signed copy says which form printed it (recorded when the version was saved).
+    await expect(page.getByTestId("signed-form-template")).toContainText("Application for Enrolment (standard)");
     // Nobody changes a signed application's answers (the database refuses it, whoever writes).
     expect(() => sql(`update public.enrollment_applications set data = jsonb_set(data, '{values,preferred_intake}', '"Jan 2030"') where id = '${app}'`)).toThrow(/signed, so it cannot be changed/);
+  });
+});
+
+// APPLICATION-FORM-TEMPLATES (owner 2026-11-27): Documents & Signatures › Templates holds the Application form (the standard one is the
+// default); the editor previews it with a sample application as a PDF; staff make another one the default.
+test.describe("Application form templates", () => {
+  test.use({ deviceScaleFactor: 2 });
+  test("the standard form is the default; preview with a sample application; make another default", async ({ page }) => {
+    test.setTimeout(180_000);
+    const admin = await createAdmin("afm-admin");
+    await signInAsAdmin(page, admin.email);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/admin/signing/templates");
+    const row = page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" });
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("application-form-default")).toHaveText("Default");
+    await page.screenshot({ path: "test-results/afm-templates.png" });
+    await row.getByRole("button", { name: "Edit" }).click();
+    await expect(page.getByTestId("application-form-help")).toBeVisible();
+    await page.screenshot({ path: "test-results/afm-editor.png" });
+    await page.getByTestId("application-form-preview-sample").click();
+    await expect(page.getByText("Template preview (PDF)")).toBeVisible({ timeout: 30_000 });
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: "test-results/afm-preview.png" });
+    await page.keyboard.press("Escape");
+    // A copy, made the default: newly signed applications print with it; the standard one is no longer the default.
+    await page.goto("/admin/signing/templates");
+    await page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).getByRole("button", { name: "Duplicate" }).click();
+    const copy = page.getByTestId("sign-template-row").filter({ hasText: "(standard) (copy)" });
+    await copy.getByTestId("application-form-make-default").click();
+    await expect(copy.getByTestId("application-form-default")).toHaveText("Default");
+    expect(sql(`select count(*) from hr.sign_templates where category = 'application_form' and is_default and deleted_at is null`)).toBe("1");
+    // back to the standard one for the other tests
+    await page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).getByTestId("application-form-make-default").click();
+    await expect(page.getByTestId("sign-template-row").filter({ hasText: "Application for Enrolment (standard)" }).getByTestId("application-form-default")).toBeVisible();
   });
 });

@@ -1212,5 +1212,31 @@
       "a6d46a8d25dd69379135f8ebcdddd0b240e5ed12639df958abd4484a8e59550f",
       "faad476be3eaf59bf9a8702ee980931bf9bea407d248dfb078f3ff1c48f9528a"
     ]
+  },
+  {
+    "type": "technical",
+    "id": "application-form-templates",
+    "reason": "2026-11-27 owner (APPLICATION-FORM-TEMPLATES): the signed application is printed from the Application form template recorded at signing (one default chosen by staff); editor checks (required blocks, known variables), default switching and the printing path. Fixed owner rules, not business settings.",
+    "fingerprints": [
+      "023e11f6450f824bb3660f63589181cb9d84dcf635019cdebd92d5c187eab8c8",
+      "334651cc0e7c24bbb2efc5ded497b505e5f80c9b83ab8cd520a189336abf7249",
+      "67d682b7a589946656e5c356c5b20aeddd162e20cf94f0413dab7fe27967cd58",
+      "7f4d3a0cf139959e2b1f8adc81810d740b851951a358822b8e588e997d2822ac",
+      "81f2338e89de005099cf9169be3d6a730d87dd144ae6225454467e38d863b9ac",
+      "8e9cadc299572a60abe4e5efc7ae888d0651fa51f1c0fb708a4a13d39380d7e8",
+      "9beeff6f078f329fdb784581cf8d4f89efadbe9963484c803e3819a61fd98f31",
+      "a74636a30680b40c037b50a9e32a077c14137018448ab2a0a15cd3cf5f8fd2e3",
+      "a87048d462bc11716e377b24ba92d241fcb61c42c7426747151e3df584b77f92",
+      "bcacf2d34b1538e00721a084b4327c3345f12ec91be7887923f7008ca17621cb",
+      "d268f0f2d0bd8865497d77d4c9609b6ffa45fba08d7ce0891180088c4efee5be",
+      "f6fc70597de04941ef756efae76eff3385089d6aec108df6c0acc88b6885779c",
+      "fe5050c270741b516b4ee795a454f50db7634f6bd474af4d5c76519e3815c381"
+    ]
+  },
+  {
+    "type": "technical",
+    "id": "application-form-templates-db",
+    "reason": "2026-11-27 owner (APPLICATION-FORM-TEMPLATES): the database side: the Application form template type, one default, what each submission is printed from (copied at signing). Fixed owner rules, not business settings.",
+    "fingerprints": []
   }
 ]

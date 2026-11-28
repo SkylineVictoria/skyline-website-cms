@@ -8,6 +8,8 @@ import TemplatePreviewDialog from "./TemplatePreviewDialog";
 import DocumentSections from "./DocumentSections";
 import { LetterTestDialog, UnmappedTokens } from "./LetterTemplateTools";
 import { LETTER_CATEGORY, loadLetterRegistry, rehostImagesIn } from "@/lib/offerLetters";
+import { APPLICATION_FORM_CATEGORY, APPLICATION_FORM_TOKENS, DEFAULT_APPLICATION_FORM_TEMPLATE, unknownApplicationFormTokens } from "../../../../../supabase/functions/_shared/notification/application-form";
+import { previewApplicationForm } from "@/pages/agency/lib/applicationPdf";
 import { supabase } from "@/pages/admin/lib/supabase";
 import { unmappedTokens, type LetterVariable } from "../../../../../supabase/functions/_shared/letter-variables";
 import { isTemplateAsset } from "../../../../../supabase/functions/_shared/rich-html";
@@ -164,7 +166,21 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
 
   const hrms = isTemplateType(draft.category);
   const loo = draft.category === LETTER_CATEGORY;
+  /** APPLICATION-FORM-TEMPLATES: how a signed application is printed; its own {{variables}} (answers, declarations, signatures blocks). */
+  const afm = draft.category === APPLICATION_FORM_CATEGORY;
+  const afmVariables = useMemo<LetterVariable[]>(() => APPLICATION_FORM_TOKENS.map((t) => ({
+    key: t.key, group: t.key.startsWith("institute.") ? "Institute" : t.key.startsWith("page.") ? "Page" : t.key.startsWith("student.") ? "Student" : t.key.startsWith("course.") ? "Course" : "Application",
+    label: t.label, description: t.description, sourceKind: "render", source: "", format: t.key === "institute.logo" ? "image" : "text", inputType: "text", required: false, editableSource: false, aliases: [], sample: t.sample,
+  })), []);
+  const [afmPreview, setAfmPreview] = useState<{ ask: boolean; reference: string } | null>(null);
   useEffect(() => { if (loo && !registry) void loadLetterRegistry().then(setRegistry, (e: Error) => setError(e.message)); }, [loo, registry]);
+  // A new Application form starts as the standard form (letterhead, title band, sections, signature, footer); everything stays editable.
+  useEffect(() => {
+    if (template || !afm || draft.header_html.trim() || draft.footer_html.trim()) return;
+    setDraft((d) => ({ ...d, name: d.name || "Application for Enrolment", title: d.title || DEFAULT_APPLICATION_FORM_TEMPLATE.title, audience: "student",
+      header_html: DEFAULT_APPLICATION_FORM_TEMPLATE.header_html ?? "", body_html: DEFAULT_APPLICATION_FORM_TEMPLATE.body_html, footer_html: DEFAULT_APPLICATION_FORM_TEMPLATE.footer_html ?? "" }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when a new application form opens
+  }, [template, afm]);
   // A new student letter starts with the standard SLIT letterhead and footer (from the database; both stay editable).
   useEffect(() => {
     if (template || !loo || draft.header_html.trim() || draft.footer_html.trim()) return;
@@ -211,9 +227,9 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       category: kind === "pdf" && category === LETTER_CATEGORY ? "other" : category,
     });
   };
-  const signed = draft.kind !== "email" && !loo;
+  const signed = draft.kind !== "email" && !loo && !afm;
   // Stripe: every document template (text or PDF, students, agents or units) can ask for a payment; HRMS letters and emails cannot.
-  const payable = draft.kind !== "email" && !hrms;
+  const payable = draft.kind !== "email" && !hrms && !afm;
   const paymentSection = (compact: boolean) => <section className="space-y-3 rounded-md border border-background-300 p-3" data-testid="template-payment">
     <div className={`flex gap-3 ${compact ? "flex-col" : "flex-wrap items-center justify-between"}`}>
       <div className="text-sm"><p className="font-semibold">Payment</p>{!compact && <p className="text-foreground-600">Ask the signer to pay by card through Stripe (Integrations › Stripe must be connected). Each request made from this template starts with this payment; it can be changed or removed per request.</p>}</div>
@@ -232,7 +248,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   const payload = () => ({
     name: draft.name.trim(), title: (draft.kind === "email" ? draft.subject : draft.title).trim(), subject: draft.kind === "email" ? draft.subject.trim() : null,
     body_html: draft.kind === "pdf" ? null : html, body: draft.kind === "pdf" ? null : sections ? richPlainText(html).slice(0, 200000) || null : templateText(html), kind: draft.kind,
-    ...(sections ? { header_html: sanitizeRichHtml(draft.header_html), footer_html: sanitizeRichHtml(draft.footer_html), bracket_variables: !loo } : {}), audience: loo ? "student" : draft.audience, category: draft.category,
+    ...(sections ? { header_html: sanitizeRichHtml(draft.header_html), footer_html: sanitizeRichHtml(draft.footer_html), bracket_variables: !loo && !afm } : {}), audience: loo || afm ? "student" : draft.audience, category: draft.category,
     signing_mode: draft.signing_mode, expiry_days: draft.expiry_days, reminder_days: draft.reminder_days, roles: draft.roles, fields: signed ? draft.fields : [],
     // Stripe: { enabled: false } switches the payment off; absent would leave the saved settings unchanged.
     payment: payable && draft.payment_enabled
@@ -255,7 +271,12 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       const missing = spec.requires.filter((k) => !templatePlaceholders(text).includes(k));
       if (missing.length) throw new Error(`This email must contain ${missing.map((k) => `{{${k}}}`).join(" and ")} (${placeholderLabels(missing)}).`);
     }
-    if (!loo) signingVariables([draft.title, text, ...draft.fields.filter((f) => f.role === SENDER).map((f) => f.value ?? "")].join("\n"));
+    if (afm) {
+      const unknown = unknownApplicationFormTokens(draft.title, draft.header_html, draft.body_html, draft.footer_html);
+      if (unknown.length) throw new Error(`${unknown.map((k) => `{{${k}}}`).join(", ")} is not an application form variable. Use the variables listed in the editor.`);
+      if (!/\{\{\s*application\.answers\s*\}\}/.test(draft.body_html)) throw new Error("The body must contain {{application.answers}}: it prints the student's answers.");
+      if (!/\{\{\s*application\.signatures\s*\}\}/.test(draft.body_html)) throw new Error("The body must contain {{application.signatures}}: it prints the signature.");
+    } else if (!loo) signingVariables([draft.title, text, ...draft.fields.filter((f) => f.role === SENDER).map((f) => f.value ?? "")].join("\n"));
   };
   const letterParts = () => ({ title: draft.title, header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html });
   const unmapped = loo && registry ? unmappedTokens(Object.values(letterParts()).join("\n"), registry) : [];
@@ -275,11 +296,12 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
   const save = (confirmed = false) => run(async () => {
     check();
     if (loo && !confirmed) { await rehostSections(); setLetterCheck(true); return; }
-    if (sections && !loo && !confirmed) { setConfirming(sectionsReport(draft, draft.title)); return; }
+    if (sections && !loo && !afm && !confirmed) { setConfirming(sectionsReport(draft, draft.title)); return; }
     setConfirming(null); setLetterCheck(false);
     const saved = draft.kind === "pdf" && file ? await signingAction<{ id?: string } | null>({ action: "template_upload", id: draft.id, template: payload() }, file)
       : await signingAdmin<{ id?: string } | null>("template_save", draft.id, payload());
-    onSaved((draft.id ? "The template was saved as a new version." : "The template was added.") + (loo && unmapped.length ? " It is inactive until every variable is mapped." : ""), saved?.id ?? draft.id ?? undefined);
+    onSaved((draft.id ? "The template was saved as a new version." : "The template was added.") + (loo && unmapped.length ? " It is inactive until every variable is mapped." : "")
+      + (afm ? " Applications already signed keep the form they were signed with; use Make default to print new ones with it." : ""), saved?.id ?? draft.id ?? undefined);
   });
   const documentSource = async (): Promise<string | Uint8Array> => {
     if (draft.kind === "pdf") return file ? new Uint8Array(await file.arrayBuffer()) : (await signingAction<{ url: string }>({ action: "template_url", id: draft.id })).url;
@@ -323,12 +345,28 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       </div>
     </Modal>;
   }
+  if (afmPreview?.ask) return <Modal open title="Test with an application" onClose={() => setAfmPreview(null)}
+    footer={<><Button variant="outline" onClick={() => setAfmPreview(null)}>Cancel</Button>
+      <Button disabled={busy || !afmPreview.reference.trim()} data-testid="application-form-test-run" onClick={() => void run(async () => {
+        const { data, error: e } = await supabase.from("enrollment_applications").select("id").eq("reference", afmPreview.reference.trim()).maybeSingle();
+        if (e || !data) throw new Error("No application has that reference.");
+        setPreview(await previewApplicationForm({ title: draft.title, header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }, String(data.id)));
+        setAfmPreview(null);
+      })}>{busy ? "Preparing…" : "Show the PDF"}</Button></>}>
+    <Field label="Application reference" hint="A submitted application, for example SLIT-2026-0148. Nothing is saved or sent.">
+      <TextInput value={afmPreview.reference} onChange={(e) => setAfmPreview({ ask: true, reference: e.target.value })} data-testid="application-form-test-reference" /></Field>
+    {error && <p role="alert" className={ALERT}>{error}</p>}
+  </Modal>;
   if (previewWith && hrms) return <TemplatePreviewDialog template={{ id: draft.id, type: draft.category as TemplateType, name: draft.name, subject: draft.kind === "email" ? draft.subject : draft.title, bodyHtml: html }} onClose={() => setPreviewWith(false)} />;
 
   return <Modal open title={template ? `Edit ${kindLabel} (version ${draft.version})` : `New ${kindLabel}`} width="max-w-5xl" onClose={() => { if (!busy) onClose(); }}
     footer={<div className="flex w-full flex-wrap justify-end gap-2">
       {hrms && draft.kind !== "pdf" && <Button variant="outline" disabled={busy} onClick={() => setPreviewWith(true)} data-testid="template-draft-preview">Preview with an employee's details</Button>}
-      {loo ? <>
+      {afm ? <>
+        <Button variant="outline" disabled={busy} data-testid="application-form-preview-sample" onClick={() => void run(async () => {
+          setPreview(await previewApplicationForm({ title: draft.title, header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }, null)); })}>Preview with sample application</Button>
+        <Button variant="outline" disabled={busy} data-testid="application-form-test-open" onClick={() => setAfmPreview({ ask: true, reference: "" })}>Test with application</Button>
+      </> : loo ? <>
         <Button variant="outline" disabled={busy || !registry} onClick={() => setLetterTest("sample")} data-testid="letter-preview-sample">Preview with sample application</Button>
         <Button variant="outline" disabled={busy || !registry} onClick={() => setLetterTest("application")} data-testid="letter-test-application-open">Test with application</Button>
       </> : draft.kind !== "email" && <Button variant="outline" disabled={busy} onClick={() => void run(async () => { check(); const source = await documentSource(); setPreview(typeof source === "string" ? new Uint8Array(await (await fetch(source)).arrayBuffer()) : source); })}>Preview the PDF</Button>}
@@ -338,7 +376,8 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
     <div className="space-y-5" data-testid="template-dialog">
       {error && <p role="alert" className={ALERT} data-testid="template-error">{error}</p>}
       {draft.kind !== "email" && <div className="rounded-md border border-background-300 bg-background-100 px-3 py-2 text-sm" data-testid="template-used-for"><span className="text-foreground-600">Used for: </span><span className="font-semibold text-foreground-900">{({ student: "Students", employee: "Employees", agent: "Agents", agency: "Agencies / Businesses", any: "Anyone" } as const)[loo ? "student" : draft.audience]}</span></div>}
-      {!template && <div className="flex flex-wrap gap-4 text-sm" role="radiogroup" aria-label="Kind of template">
+      {afm && <p className="rounded-md border border-background-300 bg-background-100 px-3 py-2 text-sm text-foreground-700" data-testid="application-form-help">This form prints a signed application: the PDF the student, the agent and SLIT admissions get and keep. {"{{application.answers}}"} prints every answer, {"{{application.declarations}}"} the declarations as agreed, {"{{application.signatures}}"} the signature. Each save is a new version; an application keeps the version it was signed with.</p>}
+      {!template && !afm && <div className="flex flex-wrap gap-4 text-sm" role="radiogroup" aria-label="Kind of template">
         <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "text"} onChange={() => changeKind("text")} /> Letter or document to sign (rich text with placeholders)</label>
         {audience !== "agent" && <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "email"} onChange={() => changeKind("email")} /> Email</label>}
         <label className="flex items-center gap-2"><input type="radio" checked={draft.kind === "pdf"} onChange={() => changeKind("pdf")} /> A ready-made PDF</label>
@@ -359,7 +398,7 @@ export default function TemplateEditor({ template, onClose, onSaved, newKind = "
       {spec && <p className="text-sm text-foreground-600">{spec.description}</p>}
       {loo && registry && unmapped.length ? <UnmappedTokens template={letterParts()} registry={registry} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} /> : null}
       {sections ? <DocumentSections value={{ header_html: draft.header_html, body_html: draft.body_html, footer_html: draft.footer_html }} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} onError={setError}
-        storageImages {...(loo ? { letterVariables: registry ?? [] } : {})} />
+        storageImages {...(loo ? { letterVariables: registry ?? [] } : afm ? { letterVariables: afmVariables } : {})} />
       : draft.kind !== "pdf" ? <div className="space-y-2">
         <RichTextEditor key={draft.id ?? `new-${draft.kind}`} value={draft.body_html} onChange={(body_html) => setDraft((d) => ({ ...d, body_html }))} placeholders={placeholders} />
         <div className="flex flex-wrap items-center gap-4 text-xs text-foreground-600">

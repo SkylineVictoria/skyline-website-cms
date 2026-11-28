@@ -16,6 +16,8 @@ export interface SigningTemplate {
   kind: "text" | "pdf" | "email"; audience: "any" | "student" | "employee" | "agent" | "agency"; category: string; status: "active" | "archived";
   /** The agent onboarding blanks (agent_application_form, agent_agreement, agent_referee_check_form): never offered in New signing request. */
   system_key?: string | null;
+  /** Application form templates: the one that prints every newly signed application (application_form_template_set_default). */
+  is_default?: boolean;
   version: number; roles: SigningRole[]; fields: TemplateField[]; signing_mode: "sequential" | "parallel"; expiry_days: number; reminder_days: number; source_pages: number | null; updated_at: string; created_at?: string;
   /** Stripe: requests made from the template ask the signer for this payment (hr.sign_templates payment_* columns). */
   payment_enabled?: boolean; payment_amount_cents?: number | null; payment_currency?: string | null; payment_description?: string | null; payment_timing?: PaymentTiming | null;

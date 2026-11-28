@@ -66,7 +66,7 @@ export default function ComposeRequest({ templates, templatesLoading = false, pr
   // Emails are not signed; every other active template whose "Used for" matches the person type is offered (its current version is what
   // "create" uses). 2026-11-21: the student offer letter is offered too (it was left out, so "A student" had an empty list): it needs
   // one of the student's applications and is prepared from it below.
-  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.kind !== "email" && !ONBOARDING_KEYS.has(t.system_key ?? "")
+  const usable = useMemo(() => templates.filter((t) => t.status === "active" && t.category !== "application_form" && t.kind !== "email" && !ONBOARDING_KEYS.has(t.system_key ?? "")
     && (!subjectType || t.audience === "any" || t.audience === subjectType)), [templates, subjectType]);
   const template = usable.find((t) => t.id === templateId);
   const fromApplication = source === "template" && !!template && needsApplication(template);

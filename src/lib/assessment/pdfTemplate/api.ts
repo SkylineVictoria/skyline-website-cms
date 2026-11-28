@@ -106,7 +106,24 @@ export async function buildStampedPdf(bundle: PdfBundle, opts: { attemptNo?: num
   const [{ stampPdf }, { stampValues }, original] = await Promise.all([import("./stamp"), import("./output"), downloadWorkbook(bundle.template.pdf.path)]);
   const cur = bundle.attempts.find((a) => a.attemptNo === (opts.attemptNo ?? bundle.attemptNo));
   const footer = cur?.snapshot ? `Submission snapshot SHA-256 ${cur.snapshot.hash}` : undefined;
-  return (await stampPdf(original, bundle.template, stampValues(bundle, opts), { footer, continuedAtEnd: opts.continuedAtEnd })).bytes;
+  return (await stampPdf(original, bundle.template, stampValues(bundle, opts), { footer, continuedAtEnd: opts.continuedAtEnd, letterhead: await workbookLetterhead() })).bytes;
+}
+
+let letterheadCache: Promise<{ pdf: Uint8Array; height: number } | null> | null = null;
+/**
+ * LETTERHEAD-DESIGNER: the active letterhead's strip for the pages a workbook gains (continued / answer pages), when the admin applied
+ * it to workbooks; null otherwise (or for someone who cannot read it), and the pages print as before.
+ */
+async function workbookLetterhead(): Promise<{ pdf: Uint8Array; height: number } | null> {
+  letterheadCache ??= (async () => {
+    const { data, error } = await supabase.rpc("brand_letterhead_active");
+    const html = !error && data && typeof (data as { workbookHeader?: unknown }).workbookHeader === "string" ? (data as { workbookHeader: string }).workbookHeader : "";
+    if (!html) return null;
+    const { buildDocumentPdf } = await import("../../../../supabase/functions/_shared/document-pdf");
+    const r = await buildDocumentPdf({ title: "Letterhead", header: html, body: "<p>&nbsp;</p>", values: {}, brackets: false, images: {} });
+    return r.bands.header ? { pdf: r.bytes, height: r.bands.header } : null;
+  })().catch(() => null);
+  return letterheadCache;
 }
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {

@@ -277,3 +277,35 @@ test.describe("Application form templates", () => {
     await page.screenshot({ path: "test-results/house-document-template.png" });
   });
 });
+
+// LETTERHEAD-DESIGNER (owner 2026-11-28): five checked designs from the brand, previews on three samples, applied where the admin chooses.
+test.describe("Letterhead designer", () => {
+  test.use({ deviceScaleFactor: 2 });
+  test("five designs (Classic, Modern, Minimal, Bold, Formal), each passing the checks; Select all; applied as new versions", async ({ page }) => {
+    test.setTimeout(240_000);
+    sql(`insert into public.cms_settings (id, name, legal_name, address, phone, email, website, rto, cricos, abn, primary_color)
+      values (1, 'Skyline Institute of Technology', 'ZZ Legal Name Pty Ltd', 'Level 8, 310 King Street, Melbourne VIC 3000', '03 9125 1661', 'info@example.test', 'https://example.test/', '45989', '04114B', '20 643 760 721', '#ea6619')
+      on conflict (id) do update set name = coalesce(nullif(cms_settings.name, ''), excluded.name), rto = coalesce(nullif(cms_settings.rto, ''), excluded.rto), cricos = coalesce(nullif(cms_settings.cricos, ''), excluded.cricos),
+        address = coalesce(nullif(cms_settings.address, ''), excluded.address), legal_name = coalesce(cms_settings.legal_name, excluded.legal_name), website = coalesce(cms_settings.website, excluded.website), abn = coalesce(cms_settings.abn, excluded.abn)`);
+    const admin = await createAdmin("letterhead-admin");
+    await signInAsAdmin(page, admin.email);
+    await page.setViewportSize({ width: 1400, height: 1000 });
+    await page.goto("/admin/signing/templates");
+    await page.getByTestId("letterhead-designer-open").click();
+    const designs = page.getByTestId("letterhead-design");
+    await expect(designs).toHaveCount(5, { timeout: 60_000 });
+    for (const style of ["Classic", "Modern", "Minimal", "Bold", "Formal"]) await expect(page.getByTestId("letterhead-designs")).toContainText(style);
+    await expect(page.getByTestId("letterhead-checks")).toHaveCount(5);
+    await expect(designs.first().locator("canvas").first()).toBeVisible({ timeout: 60_000 });
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: "test-results/letterhead-designer.png" });
+    await designs.nth(4).getByTestId("letterhead-use").click();
+    await page.getByTestId("letterhead-select-all").click();
+    for (const t of ["application_form", "letter_of_offer", "document_templates", "workbooks"]) await expect(page.getByTestId(`letterhead-target-${t}`)).toBeChecked();
+    await page.screenshot({ path: "test-results/letterhead-apply.png" });
+    await page.getByTestId("letterhead-apply").click();
+    await expect(page.getByText(/is now used for: Application form, Letter of Offer, Document templates, Workbook added pages/)).toBeVisible({ timeout: 30_000 });
+    expect(sql(`select style || '|' || array_to_string(targets, ',') from public.brand_letterheads where active`)).toBe("formal|application_form,letter_of_offer,document_templates,workbooks");
+    expect(sql(`select (header_later_html is not null and header_html like '%institute.logo%')::text from hr.sign_templates where category = 'application_form' and is_default`)).toBe("true");
+  });
+});

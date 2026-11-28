@@ -21,7 +21,14 @@ interface AnswerBlock { after: number; title: string; question: string; text: st
 const ANSWER_SIZE = 10;
 export interface StampResult { bytes: Uint8Array; continued: { afterPage: number; pages: number }[] }
 
-export async function stampPdf(original: Uint8Array, t: PdfTemplate, values: Map<string, StampValue>, opts: { footer?: string; continuedAtEnd?: boolean } = {}): Promise<StampResult> {
+export async function stampPdf(original: Uint8Array, t: PdfTemplate, values: Map<string, StampValue>, opts: {
+  footer?: string; continuedAtEnd?: boolean;
+  /** LETTERHEAD-DESIGNER: a one-page PDF whose top `height` points are the letterhead strip, drawn on every page added here (the
+   *  continued and answer pages); the trainer's own pages are never changed. */
+  letterhead?: { pdf: Uint8Array; height: number } | null;
+} = {}): Promise<StampResult> {
+  const lift = opts.letterhead ? Math.min(90, Math.max(0, opts.letterhead.height)) : 0;
+  const added: PDFPage[] = [];
   const doc = await PDFDocument.load(original, { updateMetadata: false });
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -96,8 +103,8 @@ export async function stampPdf(original: Uint8Array, t: PdfTemplate, values: Map
     for (const g of groups) {
       const { width: W, height: H } = pages[g - 1].getSize();
       const out: { a: AnswerBlock; kind: "title" | "question" | "line"; text: string }[][] = [[]];
-      let y = H - MARGIN - 18;
-      const room = (h: number) => { if (y - h < MARGIN) { out.push([]); y = H - MARGIN - 18; } };
+      let y = H - MARGIN - 18 - lift;
+      const room = (h: number) => { if (y - h < MARGIN) { out.push([]); y = H - MARGIN - 18 - lift; } };
       for (const a of answers.filter((x) => x.after === g)) {
         room(11 * LINE_HEIGHT * 3);
         a.pageNo = g + shift + out.length;
@@ -114,9 +121,9 @@ export async function stampPdf(original: Uint8Array, t: PdfTemplate, values: Map
     for (const g of [...plan].reverse()) {
       const { width: W, height: H } = pages[g.after - 1].getSize();
       g.pages.forEach((items, i) => {
-        const page = doc.insertPage(g.after + i, [W, H]);
-        page.drawText(safe(`Answers (continued from page ${g.after})`), { x: MARGIN, y: H - MARGIN + 8, size: 11, font: bold, color: rgb(0.2, 0.2, 0.2) });
-        let y = H - MARGIN - 18;
+        const page = doc.insertPage(g.after + i, [W, H]); added.push(page);
+        page.drawText(safe(`Answers (continued from page ${g.after})`), { x: MARGIN, y: H - MARGIN + 8 - lift, size: 11, font: bold, color: rgb(0.2, 0.2, 0.2) });
+        let y = H - MARGIN - 18 - lift;
         for (const it of items) {
           if (it.kind === "title") { page.drawText(safe(it.text), { x: MARGIN, y, size: 11, font: bold, color: INK[it.a.by] }); y -= 11 * LINE_HEIGHT + 2; }
           else if (it.kind === "question") { page.drawText(safe(it.text), { x: MARGIN, y, size: 9, font: bold, color: rgb(0.25, 0.25, 0.25) }); y -= 9 * LINE_HEIGHT; }
@@ -135,19 +142,27 @@ export async function stampPdf(original: Uint8Array, t: PdfTemplate, values: Map
   for (const p of pagesWith) {
     const { width: W, height: H } = pages[p - 1].getSize();
     let index = atEnd ? doc.getPageCount() : p; // after page p (0-based index p), or at the end
-    let page = doc.insertPage(index, [W, H]); let count = 1;
-    let y = H - MARGIN;
-    const heading = (pg: PDFPage) => { pg.drawText(safe(`Continued from page ${p}`), { x: MARGIN, y: H - MARGIN + 8, size: 11, font: bold, color: rgb(0.2, 0.2, 0.2) }); };
+    let page = doc.insertPage(index, [W, H]); added.push(page); let count = 1;
+    let y = H - MARGIN - lift;
+    const heading = (pg: PDFPage) => { pg.drawText(safe(`Continued from page ${p}`), { x: MARGIN, y: H - MARGIN + 8 - lift, size: 11, font: bold, color: rgb(0.2, 0.2, 0.2) }); };
     heading(page); y -= 18;
     for (const b of blocks.filter((x) => x.page === p)) {
       const lines = wrap(b.lines.join(" "), W - 2 * MARGIN, b.size, measure);
-      const need = () => { if (y < MARGIN + b.size * LINE_HEIGHT) { index += 1; page = doc.insertPage(index, [W, H]); count += 1; heading(page); y = H - MARGIN - 18; } };
+      const need = () => { if (y < MARGIN + b.size * LINE_HEIGHT) { index += 1; page = doc.insertPage(index, [W, H]); added.push(page); count += 1; heading(page); y = H - MARGIN - 18 - lift; } };
       need();
       page.drawText(safe(`${b.title} (continued)`), { x: MARGIN, y, size: 9, font: bold, color: INK[b.by] }); y -= 9 * LINE_HEIGHT + 2;
       for (const line of lines) { need(); page.drawText(safe(line), { x: MARGIN, y, size: b.size, font, color: INK[b.by] }); y -= b.size * LINE_HEIGHT; }
       y -= 8;
     }
     continued.push({ afterPage: p, pages: count });
+  }
+  if (opts.letterhead && added.length) {
+    try {
+      const src = await PDFDocument.load(opts.letterhead.pdf);
+      const sp = src.getPage(0); const { width: LW, height: LH } = sp.getSize();
+      const strip = await doc.embedPage(sp, { left: 0, bottom: LH - lift, right: LW, top: LH });
+      for (const pg of added) { const { width: W, height: H } = pg.getSize(); const k = W / LW; pg.drawPage(strip, { x: 0, y: H - lift * k, xScale: k, yScale: k }); }
+    } catch { /* a letterhead that cannot be read is left out; the pages are complete without it */ }
   }
   if (opts.footer) for (const pg of doc.getPages()) pg.drawText(safe(opts.footer), { x: MARGIN, y: 12, size: 6, font, color: rgb(0.45, 0.45, 0.45) });
   return { bytes: await doc.save(), continued: atEnd ? continued : continued.reverse() };

@@ -12,6 +12,7 @@ import { SIGN_CATEGORIES } from "../../../supabase/functions/_shared/signing";
 import { LETTER_CATEGORY, setLetterTemplateActive } from "@/lib/offerLetters";
 import { APPLICATION_FORM_CATEGORY } from "../../../supabase/functions/_shared/notification/application-form";
 import { supabase } from "@/pages/admin/lib/supabase";
+import LetterheadDesigner from "./components/signing/LetterheadDesigner";
 import { Modal } from "./components/ui";
 import { rto, type CourseDetail, type RtoCourse, type RtoUnit } from "@/pages/admin/lib/rto";
 import { unitDocuments, type UnitTemplateLink } from "@/lib/unitDocuments";
@@ -74,6 +75,7 @@ function EnvelopeSigningPage() {
   const [editing, setEditing] = useState<SigningTemplate | { audience: Audience; category: string; lockCategory?: boolean } | null>(null);
   const [choosing, setChoosing] = useState(false);
   const [presets, setPresets] = useState(false);
+  const [designer, setDesigner] = useState(false);
   const [forFilter, setForFilter] = useState<"" | "employee" | "student" | "agent" | "agency" | "unit">("");
   const [links, setLinks] = useState<UnitTemplateLink[]>([]);
   const [unitStep, setUnitStep] = useState<{ templateId: string | null; initial: { courseId: string; unitId: string } | null } | null>(null);
@@ -108,6 +110,7 @@ function EnvelopeSigningPage() {
       {tab === "requests" && <Button icon="ri-add-line" onClick={() => setCompose(true)} data-testid="new-request">New signing request</Button>}
       {tab === "templates" && <Button icon="ri-file-add-line" onClick={() => setChoosing(true)} data-testid="new-template">New template</Button>}
       {tab === "templates" && <Button variant="outline" icon="ri-layout-top-2-line" onClick={() => setPresets(true)} data-testid="manage-presets">Header &amp; footer presets</Button>}
+      {tab === "templates" && <Button variant="outline" icon="ri-magic-line" onClick={() => setDesigner(true)} data-testid="letterhead-designer-open">Letterhead designer</Button>}
       <Button variant="outline" disabled={busy} onClick={() => void act(load)}>Refresh</Button>
       {tab === "requests" && <Button variant="outline" disabled={busy} onClick={() => void act(async () => { const r = await signingAction<{ expired: number; reminders: number }>({ action: "tick" }); setNotice(`${r.reminders} reminder${r.reminders === 1 ? "" : "s"} sent, ${r.expired} request${r.expired === 1 ? "" : "s"} expired.`); })}>Send due reminders now</Button>}
     </div>
@@ -194,6 +197,7 @@ function EnvelopeSigningPage() {
         void load();
       }} />}
     {presets && <PresetsManager onClose={() => setPresets(false)} />}
+    {designer && <LetterheadDesigner onClose={() => setDesigner(false)} onApplied={(m) => { setDesigner(false); setNotice(m); void load(); }} />}
     {openId && <RequestDetail id={openId} startPlacing={placeAfterCreateId === openId} onClose={() => { setOpenId(null); setPlaceAfterCreateId(null); }} onChanged={() => void load()} />}
   </div>;
 }

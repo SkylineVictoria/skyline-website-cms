@@ -4,7 +4,7 @@ do $hosted_guard$ begin if (select system_identifier from pg_control_system()) =
 -- AVETMISS-NO-JUNK (20261127050517): application answers are checked on every write (changed answers only, blanks pass, old answers
 -- kept), and every AVETMISS column has a guard. The installed trigger function is exercised on a scratch copy of the table, so no real
 -- application is touched. Rolled back. Run: node scripts/lab/staff-lab.mjs sql
-select plan(21);
+select plan(28);
 
 -- Every AVETMISS code column has a foreign key, a check or a validating trigger: a new column added without one fails here.
 select is((select count(*)::int from public.avetmiss_guard_gaps()), 0, 'no AVETMISS column without a guard');
@@ -55,5 +55,34 @@ select ok(exists (select 1 from pg_trigger where tgrelid = 'public.intake_enrolm
 select ok(pg_get_constraintdef((select oid from pg_constraint where conname = 'intake_enrolments_status_text_check')) like '%status_reason%', 'the Qualification reason, note and CoE / VoE numbers are length-checked');
 -- QUALIFICATION-BRIEF (2026-11-27): the Qualification's new columns (dates, the Qualification's id on unit enrolments) leave no guard gap
 select is((select count(*)::int from public.avetmiss_guard_gaps() where table_name in ('intake_enrolments', 'lms_unit_students')), 0, 'the Qualification''s dates and links on NAT source tables leave no AVETMISS guard gap');
+-- AXCELERATE-STUDENT-LISTS (20261128061517): aXcelerate's list fields (JSON arrays or comma text) become prior education and disability
+-- rows; a bad item is skipped with a warning and never fails the student; the sync never inserts a row without a code.
+select is(public.axcelerate_student_values('{"PRIOREDUCATIONIDS": ["008I"], "PRIOREDUCATIONNAMES": ["Bachelor degree or higher degree"]}')->'details'->'prior_education',
+  '[{"code": "008", "recognition": "I", "name": "Bachelor degree or higher degree"}]'::jsonb, 'a JSON array item 008I is code 008, recognition I, with its name');
+insert into public.enrollment_students(agency_id, full_name, email, details)
+select (select id from public.agencies where is_direct order by created_at limit 1), 'Zz Lists One', 'zz.lists.one@blackhole.postmarkapp.com',
+       public.axcelerate_student_values('{"PRIOREDUCATIONIDS": ["008I"], "PRIOREDUCATIONNAMES": ["Bachelor degree or higher degree"], "DISABILITYTYPEIDS": ["11", "12"]}')->'details';
+select is((select array_agg(prior_education_code || recognition_code || ':' || coalesce(qualification_name, '')) from public.student_prior_education p
+            join public.enrollment_students s on s.id = p.student_id where s.email = 'zz.lists.one@blackhole.postmarkapp.com'),
+  array['008I:Bachelor degree or higher degree'], 'the student gets prior education 008 / I with the name');
+select is((select array_agg(disability_type_code order by disability_type_code) from public.student_disabilities d
+            join public.enrollment_students s on s.id = d.student_id where s.email = 'zz.lists.one@blackhole.postmarkapp.com'),
+  array['11', '12'], 'a JSON array ["11","12"] gives two disability types');
+insert into public.enrollment_students(agency_id, full_name, email, details)
+select (select id from public.agencies where is_direct order by created_at limit 1), 'Zz Lists Two', 'zz.lists.two@blackhole.postmarkapp.com',
+       public.axcelerate_student_values('{"PRIOREDUCATIONIDS": "008A,410E"}')->'details';
+select is((select array_agg(prior_education_code || recognition_code order by prior_education_code) from public.student_prior_education p
+            join public.enrollment_students s on s.id = p.student_id where s.email = 'zz.lists.two@blackhole.postmarkapp.com'),
+  array['008A', '410E'], 'comma text "008A,410E" gives two prior education rows');
+select ok((select bool_or(w like '%"XYZ"%skipped%') from jsonb_array_elements_text(public.axcelerate_student_values('{"PRIOREDUCATIONIDS": ["XYZ", "008I"], "DISABILITYTYPEIDS": ["11", "ABC"]}')->'warnings') w)
+  and public.axcelerate_student_values('{"PRIOREDUCATIONIDS": ["XYZ", "008I"]}')->'details'->'prior_education' = '[{"code": "008", "recognition": "I"}]'::jsonb,
+  'a bad item (XYZ) is skipped with a warning; the good items are kept');
+select lives_ok($$insert into public.enrollment_students(agency_id, full_name, email, details)
+  select (select id from public.agencies where is_direct order by created_at limit 1), 'Zz Lists Three', 'zz.lists.three@blackhole.postmarkapp.com',
+         public.axcelerate_student_values('{"PRIOREDUCATIONIDS": ["XYZ"], "DISABILITYTYPEIDS": ["ABC"]}')->'details'$$, 'a student with only bad list items still saves');
+select lives_ok($$insert into public.enrollment_students(agency_id, full_name, email, details)
+  select (select id from public.agencies where is_direct order by created_at limit 1), 'Zz Lists Four', 'zz.lists.four@blackhole.postmarkapp.com',
+         '{"prior_education": [{"code": null, "recognition": null}, {"code": "008"}], "disability_types": " , "}'::jsonb$$,
+  'the sync skips prior education rows without a code or recognition, and empty disability items (no NULL insert)');
 select * from finish();
 rollback;

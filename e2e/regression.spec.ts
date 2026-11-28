@@ -207,6 +207,42 @@ test("find my documents: consent, one folder searched with its sub-folders, only
   await page.screenshot({ path: "test-results/finder-result.png" });
 });
 
+// DOCUMENT-FINDER cloud sources: a source the student allows (here Dropbox, whose own window is a stand-in) hands over the chosen
+// files; they are scanned and attached like any others, and someone else's document is not attached.
+test("find my documents from a cloud source: the chosen files are scanned and attached, someone else's is not", async ({ page }) => {
+  test.setTimeout(240_000);
+  const student = person("cloud-student");
+  await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
+  const doc = (category: string, holder: string) => `%PDF-1.4\n%lab-category:${category}\n%lab-holder:${holder}\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n`;
+  const chosen = [
+    { name: `p-${student.local}.pdf`, link: `data:application/pdf;base64,${Buffer.from(doc("Passport", "Cleo Cloud")).toString("base64")}` },
+    { name: `e-${student.local}.pdf`, link: `data:application/pdf;base64,${Buffer.from(doc("English Evidence", "Cleo Cloud")).toString("base64")}` },
+    { name: `x-${student.local}.pdf`, link: `data:application/pdf;base64,${Buffer.from(doc("Academic", "Max Other")).toString("base64")}` },
+  ];
+  await page.addInitScript((files) => {
+    (window as unknown as { Dropbox: unknown }).Dropbox = { choose: (o: { success: (f: unknown) => void }) => setTimeout(() => o.success(files), 50) };
+  }, chosen);
+  await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Cleo");
+  await page.getByTestId("enrol-last-name").fill("Cloud");
+  await page.getByPlaceholder("you@example.com").fill(student.email);
+  await page.locator('input[type="password"]').fill(PASSWORD);
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Create student account" }).click();
+  const alone = page.getByRole("button", { name: /I am applying by myself/ });
+  await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
+  if (await alone.isVisible()) await alone.click();
+  const wizard = page.getByRole("dialog");
+  await wizard.getByTestId("doc-mode-bulk").click();
+  await wizard.getByTestId("bulk-find").click();
+  await expect(wizard.getByTestId("bulk-find-sources")).toContainText("Dropbox");
+  await page.screenshot({ path: "test-results/finder-sources.png" });
+  await wizard.getByTestId("bulk-find-dropbox").click();
+  await expect.poll(() => sql(`select string_agg(category, ',' order by category) from public.enrollment_application_documents where filename like '%-${student.local}.pdf' and is_current`), { timeout: 90_000 }).toBe("English Test,Passport");
+  await expect(wizard.getByTestId("bulk-staged")).toContainText("someone else's document");
+});
+
 test("the student document wizard: upload, reading, emergency contact and the phone rules look and behave as before", async ({ page }) => {
   test.setTimeout(240_000);
   const student = person("wizard-student");

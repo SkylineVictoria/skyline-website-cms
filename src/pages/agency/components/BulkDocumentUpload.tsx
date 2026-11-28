@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "rea
 import type { PendingUpload, WizardDoc, WizardStep } from "@/pages/agency/lib/wizardConfig";
 import { DOCUMENT_ACCEPT } from "../../../../supabase/functions/_shared/validation/person";
 import { canSearchFolders, findDocumentsInFolder, guessDocumentType } from "@/pages/agency/lib/bulkDocuments";
+import { CLOUD_SOURCES, pickFromCloud, type CloudSource } from "@/lib/cloudPickers";
 
 /**
  * BULK-DOCUMENTS (owner 2026-11-28: "upload all docs in one shot, then only the missing ones, then the card view and submit"). The
@@ -85,6 +86,16 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
   const [looked, setLooked] = useState(0);
   const [found, setFound] = useState<{ attached: string[]; others: number } | null>(null);
   const folderSearch = canSearchFolders();
+  const [cloudError, setCloudError] = useState("");
+  // A cloud source: its own window, the student chooses there; those files are scanned like any chosen ones (name check included).
+  const fromCloud = async (source: CloudSource) => {
+    setCloudError(""); setFound(null);
+    try {
+      const files = await pickFromCloud(source, named);
+      setFinding("");
+      if (files.length) stage(files, "pick");
+    } catch (error) { setCloudError(error instanceof Error ? error.message : "That service could not be opened."); }
+  };
   const find = async () => {
     if (!folderSearch) { setFinding(""); input.current?.click(); return; }
     setFinding("searching"); setLooked(0); setFound(null);
@@ -143,16 +154,20 @@ export default function BulkDocumentUpload({ steps, onUpload, onRemove, residenc
         {finding === "ask" ? (
           <div className="space-y-3 text-sm" data-testid="bulk-find-consent">
             <p className="font-semibold text-foreground-950">May we look for your documents?</p>
-            {folderSearch ? (
-              <p className="text-foreground-700">Your browser will ask you to choose a folder: <strong>Downloads</strong> is suggested (choose <strong>Documents</strong> or Desktop if you keep them there). We look through that folder and its folders on your computer for your passport, visa, English result, academic documents and driving licence{named ? <> with the name <strong>{named.firstName} {named.lastName}</strong></> : null}. Only the documents we attach are uploaded; nothing else leaves your computer.</p>
-            ) : (
-              <p className="text-foreground-700">Your phone will open your photos and files. Select everything that could be a document (passport, visa, English result, certificates, licence): we work out which is which{named ? <> and keep only the ones with the name <strong>{named.firstName} {named.lastName}</strong></> : null}.</p>
-            )}
-            <div className="flex flex-wrap gap-2">
+            <p className="text-foreground-700">Choose where your documents might be. We only look at what you allow there, find your passport, visa, English result, academic documents and driving licence{named ? <> with the name <strong>{named.firstName} {named.lastName}</strong></> : null}, and attach them. Only the documents we attach are uploaded.</p>
+            <div className="grid gap-2 sm:grid-cols-2" data-testid="bulk-find-sources">
               <button type="button" onClick={() => void find()} data-testid="bulk-find-allow"
-                className="rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">{folderSearch ? "Allow and choose the folder" : "Allow and open my photos and files"}</button>
-              <button type="button" onClick={() => setFinding("")} className="rounded-md border border-background-300 bg-white px-4 py-2 text-sm font-semibold text-foreground-700 hover:bg-background-100">Not now</button>
+                className="flex items-center gap-2 rounded-md bg-primary-600 px-4 py-2.5 text-left text-sm font-semibold text-white hover:bg-primary-700">
+                <i className={folderSearch ? "ri-computer-line" : "ri-smartphone-line"} aria-hidden="true" />
+                {folderSearch ? "This computer: choose a folder (Downloads, Documents, iCloud Drive…)" : "My phone: photos and files (also iCloud, Drive, OneDrive)"}</button>
+              {CLOUD_SOURCES.filter((source) => source.ready).map((source) => (
+                <button key={source.id} type="button" onClick={() => void fromCloud(source.id)} data-testid={`bulk-find-${source.id}`}
+                  className="flex items-center gap-2 rounded-md border border-primary-300 bg-white px-4 py-2.5 text-left text-sm font-semibold text-primary-800 hover:bg-primary-50">
+                  <i className={source.icon} aria-hidden="true" /> {source.label}</button>
+              ))}
             </div>
+            {cloudError ? <p role="alert" className="text-xs text-red-700">{cloudError}</p> : null}
+            <button type="button" onClick={() => setFinding("")} className="text-xs font-semibold text-foreground-600 underline">Not now</button>
           </div>
         ) : finding === "searching" || finding === "reading" ? (
           <p role="status" className="flex items-center gap-2 text-sm text-foreground-800" data-testid="bulk-find-progress">

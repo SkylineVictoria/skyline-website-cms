@@ -26,15 +26,10 @@ export const LMS_MENU: readonly LmsMenuEntry[] = [
   { id: "intakes", label: "Intakes", route: "/admin/lms/intakes", icon: "ri-calendar-event-line", dependencies: ["course"], primaryAction: "Add Intake" },
   // LMS-BATCHES (owner 2026-11-25): the class batches B1 / B2 / B3 of an intake on their own page.
   { id: "batches", label: "Batches", route: "/admin/lms/batches", icon: "ri-group-2-line", dependencies: ["course", "intake"] },
-  // Timetable: three links (owner, 2026-11-19: less clutter). Trainers, rooms, students and the intakes timeline are tabs of the
-  // calendar; term breaks, locations and saved course timetables are tabs of Settings. Old addresses still open.
+  // Timetable: three links (TIMETABLE-TIDY, owner 2026-11-28: "remove all garbage calendars"): one calendar of every class, Create
+  // timetable, Settings (term breaks, locations and rooms). Trainers', rooms' and students' availability live in Bookings.
   { id: "tt-calendar", label: "Calendar", route: "/admin/lms/timetable", icon: "ri-calendar-2-line", dependencies: [], parent: "timetable" },
   { id: "timetable-create", label: "Create timetable", route: "/admin/lms/timetable-create", icon: "ri-add-circle-line", dependencies: ["course", "intake"], parent: "timetable" },
-  // Room hours live in Bookings (one availability module for people and rooms); this is a shortcut to it.
-  { id: "room-availability", label: "Room availability", route: "/admin/bookings?tab=availability&who=rooms", icon: "ri-door-open-line", dependencies: [], parent: "timetable" },
-  { id: "trainer-availability", label: "Trainer availability", route: "/admin/bookings?tab=availability&who=trainers", icon: "ri-user-star-line", dependencies: [], parent: "timetable" },
-  // Students' weeks, like the trainers': the Timetable's Students view.
-  { id: "tt-students", label: "Student availability", route: "/admin/lms/timetable?view=students", icon: "ri-group-line", dependencies: [], parent: "timetable" },
   { id: "timetable-settings", label: "Settings", route: "/admin/lms/timetable-settings", icon: "ri-settings-3-line", dependencies: [], parent: "timetable" },
   { id: "attendance", label: "Attendance", route: "/admin/lms/attendance", icon: "ri-checkbox-circle-line", dependencies: ["course", "intake", "session"], primaryAction: "Mark Attendance" },
   // AVETMISS-UI (2026-11-25): each student's AVETMISS outcome per unit (outcome, actual dates, delivery, location, RPL evidence).

@@ -49,7 +49,11 @@ const AGENT_LINK: Record<string, string> = {
 };
 const QUAL_LABEL: Record<string, string> = { created: 'imported', linked: 'matched to the Qualification already in Skyline', unchanged: 'already up to date', updated: 'updated', skipped: 'skipped (deleted in Skyline)', error: 'not imported' };
 
-/** One student's outcome: the owner's wording, the agent, the Qualifications, and what needs attention. */
+/** AVETMISS outcome codes as staff read them (NAT00120). */
+const OUTCOME_LABEL: Record<string, string> = { '20': 'Competent', '30': 'Not yet competent', '40': 'Withdrawn', '41': 'Incomplete', '51': 'RPL granted', '52': 'RPL not granted', '60': 'Credit transfer', '61': 'Superseded', '70': 'Continuing', '85': 'Not yet started' };
+const UNIT_ACTION: Record<string, string> = { created: 'imported', updated: 'updated', unchanged: 'up to date', kept: 'kept from Skyline', open: 'no result yet', error: 'not imported' };
+
+/** One student's outcome: the owner's wording, the agent, the Qualifications (with unit results), and what needs attention. */
 export function StudentOutcome({ r }: { r: StudentResult }) {
   const review = NEEDS_REVIEW.has(r.action);
   const bad = r.action === 'error' || r.action === 'skipped';
@@ -67,6 +71,9 @@ export function StudentOutcome({ r }: { r: StudentResult }) {
       {r.qualifications!.map((q, n) => <li key={`${q.name}-${n}`} className={q.action === 'error' ? 'text-red-700' : 'text-foreground-700'}>
         Qualification {q.name}: {QUAL_LABEL[q.action] ?? q.action}{q.status && q.action !== 'error' ? ` (${q.status === 'active' ? 'In Progress' : q.status})` : ''}{q.message ? `: ${q.message}` : ''}
         {(q.warnings ?? []).map((w) => <span key={w} className="block text-foreground-600">{w}</span>)}
+        {(q.units ?? []).length > 0 && <span className="block text-foreground-600" data-testid="axcelerate-unit-results">
+          Unit results: {q.units!.map((u) => `${u.code}${u.outcome ? ` ${OUTCOME_LABEL[u.outcome] ?? u.outcome}` : ''} (${UNIT_ACTION[u.action] ?? u.action}${u.message ? `: ${u.message}` : ''})`).join('; ')}
+        </span>}
       </li>)}
     </ul>}
     {(r.warnings ?? []).length > 0 && <ul className="mt-1 list-disc pl-5 text-foreground-600">{r.warnings!.map((w) => <li key={w}>{w}</li>)}</ul>}

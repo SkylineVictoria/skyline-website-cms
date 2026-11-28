@@ -1388,7 +1388,7 @@ headers apitoken / wstoken, GET / DELETE parameters in the address, POST / PUT f
 `public.axcelerate_api_calls` (who, method, path, HTTP status; no data). Migration 20261128030517_axcelerate_connection. No env var.
 Importing into Skyline records is not built yet.
 
-## aXcelerate import (AXCELERATE-IMPORT, 2026-11-28, LOCAL ONLY)
+## aXcelerate import (AXCELERATE-IMPORT, 2026-11-28, RELEASED)
 One way only: aXcelerate -> Skyline. `_shared/integrations/axcelerate.ts` = axcelerateClient, the only gateway: GET only, the owner's read-only
 allow-list (contacts, courses, instances, calendar, venues, trainers, organisations, finance reads ...); anything else throws AxcelerateBlocked.
 integrations-admin keeps only Check connection for aXcelerate (the free API caller is gone; `axcelerate_call` is refused and recorded).

@@ -47,7 +47,7 @@ export default function MasterTimetableDue({ banner = false, weeklyPopup = false
             <span className={"block text-xs " + (item.locked ? "font-semibold text-red-700" : "text-foreground-600")}>
               {item.locked ? <><i className="ri-lock-line mr-1" aria-hidden="true" />Locked: </> : null}
               {item.daysLeft < 0 ? `Ended ${day(item.planEnd)}` : `Last cycle ends ${day(item.planEnd)} (${item.daysLeft} day${item.daysLeft === 1 ? "" : "s"} left)`} · {item.cyclesPlanned} cycle{item.cyclesPlanned === 1 ? "" : "s"} scheduled</span></span>
-          <Link to={`/admin/lms/courses?course=${encodeURIComponent(item.courseId)}&tab=master`} onClick={later}
+          <Link to={`/admin/lms/master-calendar?course=${encodeURIComponent(item.courseId)}`} onClick={later}
             className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-700">Open Weekly Calendar</Link>
         </li>)}
       </ul>

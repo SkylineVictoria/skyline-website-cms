@@ -8,6 +8,7 @@ import LmsBatchesPage from "./LmsBatchesPage";
 import LmsAssessmentsPage from "./LmsAssessmentsPage";
 import LmsCoursesPage from "./LmsCoursesPage";
 import LmsUnitsPage from "./LmsUnitsPage";
+import LmsCourseCalendarsPage from "./LmsCourseCalendarsPage";
 import LmsTimetableHub from "./timetable/LmsTimetableHub";
 import LmsTermBreaksPage from "./LmsTermBreaksPage";
 import LmsLocationsPage from "./LmsLocationsPage";
@@ -29,6 +30,8 @@ export default function LmsPage() {
   if (!area || area === "dashboard") return <Navigate to="/admin/lms/courses" replace />;
   if (area === "courses") return <LmsCoursesPage />;
   if (area === "units") return <LmsUnitsPage />;
+  if (area === "master-calendar") return <LmsCourseCalendarsPage key="master" kind="master" />;
+  if (area === "weekly-calendar") return <LmsCourseCalendarsPage key="weekly" kind="weekly" />;
   // The intake list is the same screen as Courses › Intakes; old ?intake= links open that intake in its sheet.
   if (area === "intakes") return query.get("intake") ? <Navigate to={`/admin/lms/intakes#${query.get("intake")}`} replace /> : <IntakesPage />;
   if (area === "assessments") return <LmsAssessmentsPage />;

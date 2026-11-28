@@ -13,6 +13,8 @@ test("student registration still works and opens the application wizard", async 
   await page.goto("/login?mode=enroll&as=student");
   await expect(page.getByRole("radio", { name: /Student/ })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Asha");
+  await page.getByTestId("enrol-last-name").fill("Student");
   await page.getByPlaceholder("you@example.com").fill(student.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -98,6 +100,8 @@ test("bulk documents: all files at once, each scanned and attached to its docume
   await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
   await page.goto("/login?mode=enroll&as=student");
   await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Asha");
+  await page.getByTestId("enrol-last-name").fill("Student");
   await page.getByPlaceholder("you@example.com").fill(student.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -150,12 +154,67 @@ test("bulk documents: all files at once, each scanned and attached to its docume
   await page.screenshot({ path: "test-results/bulk-cards.png", fullPage: true });
 });
 
+// DOCUMENT-FINDER (owner 2026-11-28): the student gives first and last name at sign-up; on the bulk screen "Find my documents" asks
+// for consent, then a folder (the browser's own folder picker: here a stand-in folder), searches it with its sub-folders on the device
+// and attaches only the student's own documents (a sibling's passport in the same folder is left out).
+test("find my documents: consent, one folder searched with its sub-folders, only the student's own documents attached", async ({ page }) => {
+  test.setTimeout(240_000);
+  const student = person("finder-student");
+  await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
+  const doc = (category: string, holder: string) => `%PDF-1.4\n%lab-category:${category}\n%lab-holder:${holder}\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n`;
+  const folder = {
+    files: [
+      { name: `IMG_2041-${student.local}.pdf`, body: doc("Passport", "Asha Finder") },
+      { name: `scan_${student.local}.pdf`, body: doc("Passport", "Ravi Finder") },
+      { name: `holiday-${student.local}.pdf`, body: doc("Other", "Asha Finder") },
+    ],
+    sub: { name: "Uni stuff", files: [
+      { name: `doc1-${student.local}.pdf`, body: doc("Academic", "Asha Finder") },
+      { name: `grant-${student.local}.pdf`, body: doc("Australian Visa", "Asha Finder") },
+    ] },
+  };
+  // The browser's folder picker cannot be clicked by a test: a stand-in returns this folder (the same calls the real one answers).
+  await page.addInitScript((tree) => {
+    const fileOf = (f: { name: string; body: string }) => ({ kind: "file", name: f.name, getFile: async () => new File([f.body], f.name, { type: "application/pdf", lastModified: Date.now() }) });
+    const dirOf = (name: string, files: Array<{ name: string; body: string }>, sub?: { name: string; files: Array<{ name: string; body: string }> }) => ({
+      kind: "directory", name,
+      async *values() { for (const f of files) yield fileOf(f); if (sub) yield dirOf(sub.name, sub.files); },
+    });
+    (window as unknown as { showDirectoryPicker: () => Promise<unknown> }).showDirectoryPicker = async () => dirOf("Downloads", tree.files, tree.sub);
+  }, folder);
+  await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Asha");
+  await page.getByTestId("enrol-last-name").fill("Finder");
+  await page.getByPlaceholder("you@example.com").fill(student.email);
+  await page.locator('input[type="password"]').fill(PASSWORD);
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Create student account" }).click();
+  const alone = page.getByRole("button", { name: /I am applying by myself/ });
+  await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
+  if (await alone.isVisible()) await alone.click();
+  expect(sql(`select coalesce(details->>'first_name', '') || ' ' || coalesce(details->>'last_name', '') from public.enrollment_students where lower(email) = '${student.email}'`)).toBe("Asha Finder");
+  const wizard = page.getByRole("dialog");
+  await wizard.getByTestId("doc-mode-bulk").click();
+  await wizard.getByTestId("bulk-find").click();
+  await expect(wizard.getByTestId("bulk-find-consent")).toContainText("Asha Finder");
+  await page.screenshot({ path: "test-results/finder-consent.png" });
+  await wizard.getByTestId("bulk-find-allow").click();
+  await expect.poll(() => sql(`select string_agg(category, ',' order by category) from public.enrollment_application_documents where filename like '%-${student.local}.pdf' and is_current`), { timeout: 90_000 }).toBe("Academic,Passport,Visa");
+  expect(sql(`select filename from public.enrollment_application_documents where category = 'Passport' and filename like '%${student.local}.pdf' and is_current`)).toBe(`IMG_2041-${student.local}.pdf`);
+  await expect(wizard.getByTestId("bulk-find-result")).toContainText("Found and attached");
+  await expect(wizard.getByTestId("bulk-find-result")).toContainText("1 document of someone else was left out");
+  await page.screenshot({ path: "test-results/finder-result.png" });
+});
+
 test("the student document wizard: upload, reading, emergency contact and the phone rules look and behave as before", async ({ page }) => {
   test.setTimeout(240_000);
   const student = person("wizard-student");
   await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
   await page.goto("/login?mode=enroll&as=student");
   await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Asha");
+  await page.getByTestId("enrol-last-name").fill("Student");
   await page.getByPlaceholder("you@example.com").fill(student.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -270,6 +329,8 @@ test("the enrolment wizard's intake follows the course: only open intakes from t
   const student = person("intake-student");
   await page.goto("/login?mode=enroll&as=student");
   await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Asha");
+  await page.getByTestId("enrol-last-name").fill("Student");
   await page.getByPlaceholder("you@example.com").fill(student.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();
@@ -611,6 +672,8 @@ test("identity email: public student sign-up with an email that already has an a
   const existing = await createStudentLogin("idx-public");
   await page.goto("/login?mode=enroll&as=student");
   await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Asha");
+  await page.getByTestId("enrol-last-name").fill("Student");
   await page.getByPlaceholder("you@example.com").fill(existing.email);
   await page.locator('input[type="password"]').fill(PASSWORD);
   await page.getByRole("checkbox").check();

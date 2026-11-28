@@ -219,7 +219,6 @@ function NewStudentSheet({ open, typed, role, agency, profileId, onClose, onSave
     if (!lastName.trim()) errors.lastName = "Enter the last name.";
     const emailIssue = validateEmail(address);
     if (emailIssue) errors.email = emailIssue;
-    if (!textableMobile(mobile)) errors.mobile = "Enter the mobile with its country code.";
     if (!agent) errors.agent = role === "slit_admin" ? "Choose the business and the agent who looks after the student." : "Choose the agent who looks after the student.";
     setField(errors);
     setInUse(null);
@@ -304,12 +303,7 @@ function NewStudentSheet({ open, typed, role, agency, profileId, onClose, onSave
               </div>
             ) : null}
           </div>
-          <div>
-            <label htmlFor="new-student-mobile" className="mb-1.5 block text-sm font-medium">Mobile <span className="text-primary-600">*</span></label>
-            <PhoneInput id="new-student-mobile" name="new_student_mobile" value={mobile} required locked={busy} placeholder="041 234 5678"
-              onValueChange={(v) => { setMobile(v); setField((f) => ({ ...f, mobile: "" })); }} invalid={Boolean(field.mobile)} />
-            {err("mobile")}
-          </div>
+          {/* PHONE-HIDDEN (owner 2026-11-28): a student's mobile is optional and not asked when adding a student. */}
           {role === "agent" ? null : (
             <div className="space-y-3 border-t border-background-200 pt-4">
               <p className="text-sm font-medium text-foreground-800">Who looks after this student?</p>

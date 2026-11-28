@@ -1,3 +1,4 @@
+import { ruleBool } from "@/lib/businessRules";
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
 import { FormCountrySearch } from "@/components/shared/CountrySearch";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, useLayoutEffect } from "react";
@@ -68,6 +69,8 @@ const courseCodeOf = (label: string) => label.split(" - ")[0].trim().toUpperCase
 
 const FORM_ID = "portal-application-form";
 const STUDENT_CONTACT_FIELDS = new Set(["mobile", "email", "confirm_email", "email_note"]);
+/** STUDENT-PHONE-OPTIONAL (owner 2026-11-28): the student's mobile is not shown unless SLIT publishes the rule requiring it (kept if saved). */
+const mobileHidden = (name: string) => name === "mobile" && !ruleBool("admissions.application_mobile_required", false);
 const AUSTRALIAN_ADDRESS: Record<string, string> = { address_type: "Australian Address", au_country: "Australia" };
 // Answers the portal fixes (greyed out, not editable): an Australian address, and a USI while Business Rules
 // admissions.usi_required says Required (today); when SLIT makes the USI optional the "Do you already have a USI?" answer is asked.
@@ -1426,7 +1429,7 @@ export default function ApplicationWorkspace({
     sections.forEach((section, index) => {
       if (!isConditionMet(section.showIf, values)) return;
       for (const field of section.fields) {
-        if (field.type === "static" || field.type === "table" || field.type === "terms") continue;
+        if (field.type === "static" || field.type === "table" || field.type === "terms" || mobileHidden(field.name)) continue;
         if (!field.required && !field.format) continue;
         if (!isConditionMet(field.showIf, values)) continue;
         if (field.required ? fieldMissing(field) : fieldInvalid(field)) {
@@ -1635,14 +1638,14 @@ export default function ApplicationWorkspace({
 
   /** Shown as a field on its page (not a value the form keeps out of sight, and not a note or reference table). */
   const visibleField = (field: AppField) =>
-    !(contactFixed && STUDENT_CONTACT_FIELDS.has(field.name)) && !LOCKED_AGENT_FIELDS.has(field.name)
+    !(contactFixed && STUDENT_CONTACT_FIELDS.has(field.name)) && !LOCKED_AGENT_FIELDS.has(field.name) && !mobileHidden(field.name)
     && !["address_type", "holds_visa", "visa_copy", "english_upload", "checklist"].includes(field.name)
     && !["static", "table", "terms"].includes(field.type) && isConditionMet(field.showIf, values) && !hiddenField(field.name);
 
   const renderField = (field: AppField, marks: boolean) => {
     // The student's email and mobile are set once, uniquely, when the application is started; they are kept with the
     // form (saved, counted as filled) but not shown or editable here.
-    if (contactFixed && STUDENT_CONTACT_FIELDS.has(field.name)) {
+    if ((contactFixed && STUDENT_CONTACT_FIELDS.has(field.name)) || mobileHidden(field.name)) {
       if (field.type === "static") return null;
       const saved = String(mergedInitial[field.name] ?? (field.name === "confirm_email" ? mergedInitial.email ?? "" : ""));
       return <input key={field.name} type="hidden" name={field.name} defaultValue={saved} />;

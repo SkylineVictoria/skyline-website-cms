@@ -91,6 +91,63 @@ test("the admin staff invitation still works: invite, mail, sign in", async ({ p
 // staff onboarding wizard (src/components/shared/wizard). With E2E_SHOTS_DIR set, this walk saves screenshots and the dialog's
 // markup at fixed points, so a run before a change and a run after it can be compared. No reader is called: the browser's request
 // to portal-document-extract is answered here and each reading is recorded in the lab database.
+// BULK-DOCUMENTS (owner 2026-11-28): "upload all the documents at once" -> only the missing ones -> the one page of cards.
+test("bulk documents: all files at once with their guessed types, only the missing one asked again, then the card view", async ({ page }) => {
+  test.setTimeout(240_000);
+  const student = person("bulk-student");
+  await page.route("**/functions/v1/portal-document-extract", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }));
+  await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByPlaceholder("you@example.com").fill(student.email);
+  await page.locator('input[type="password"]').fill(PASSWORD);
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Create student account" }).click();
+  const alone = page.getByRole("button", { name: /I am applying by myself/ });
+  await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
+  if (await alone.isVisible()) await alone.click();
+  const wizard = page.getByRole("dialog");
+  await expect(wizard.getByTestId("document-mode")).toBeVisible();
+  await page.screenshot({ path: "test-results/bulk-choice.png" });
+  await wizard.getByTestId("doc-mode-bulk").click();
+  await expect(wizard.getByTestId("bulk-documents")).toBeVisible();
+  const files = [
+    { name: `passport-${student.local}.pdf`, cat: "Passport" }, { name: `visa-${student.local}.pdf`, cat: "Visa" },
+    { name: `transcript-${student.local}.pdf`, cat: "Academic" },
+  ];
+  await wizard.getByTestId("bulk-files").setInputFiles(files.map((f) => ({ name: f.name, mimeType: "application/pdf", buffer: pdfFor(f.cat) })));
+  await expect(wizard.getByTestId("bulk-type-0")).toHaveValue("passport");
+  await expect(wizard.getByTestId("bulk-type-1")).toHaveValue("visa");
+  await expect(wizard.getByTestId("bulk-type-2")).toHaveValue("academic");
+  await page.screenshot({ path: "test-results/bulk-staged.png" });
+  await wizard.getByTestId("bulk-upload").click();
+  await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents d where d.filename like '%${student.local}.pdf' and d.is_current`), { timeout: 60_000 }).toBe("3");
+  const applicationId = sql(`select application_id from public.enrollment_application_documents where filename = '${files[0].name}' order by created_at desc limit 1`);
+  markStudentDocumentRead(applicationId, "Passport", { first_name: "BULK", last_name: "STUDENT", dob: "1999-04-05", passport_number: "PB1234567", passport_expiry: "2034-01-01", nationality: "India" });
+  markStudentDocumentRead(applicationId, "Visa", { visa_subclass: "500", visa_grant_number: "0012345678901", visa_stay_until: "2034-01-01" });
+  markStudentDocumentRead(applicationId, "Academic", { academic_institution: "Example University", academic_qualification: "Bachelor of Science" });
+  // Only the English result is still needed; Continue waits for it and the residency answer.
+  await expect(page.getByTestId("bulk-continue")).toBeDisabled();
+  await wizard.getByRole("group", { name: /Australian permanent resident/ }).getByText("No", { exact: true }).click({ timeout: 30_000 });
+  await expect(wizard.getByTestId("bulk-item-english")).toHaveAttribute("data-state", "missing", { timeout: 30_000 });
+  for (const id of ["passport", "visa", "academic"]) await expect(wizard.getByTestId(`bulk-item-${id}`)).toHaveAttribute("data-state", "done", { timeout: 30_000 });
+  await expect(wizard.getByTestId("bulk-item-licence")).toHaveAttribute("data-state", "optional");
+  await expect(page.getByTestId("bulk-continue")).toBeDisabled();
+  await page.screenshot({ path: "test-results/bulk-missing.png" });
+  await wizard.getByTestId("bulk-missing-english").setInputFiles({ name: `results-${student.local}.pdf`, mimeType: "application/pdf", buffer: pdfFor("English") });
+  await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents where application_id = '${applicationId}' and category = 'English Test' and is_current`), { timeout: 60_000 }).toBe("1");
+  markStudentDocumentRead(applicationId, "English Test", { english_type: "IELTS Academic", english_score: "7.0", english_date: "2025-03-01" });
+  await expect(wizard.getByTestId("bulk-item-english")).toHaveAttribute("data-state", "done", { timeout: 30_000 });
+  await expect(page.getByTestId("bulk-continue")).toBeEnabled();
+  await page.getByTestId("bulk-continue").click();
+  // The card view: every section as a card, what is missing marked, then sign and submit.
+  await expect(page.getByTestId("one-page-cards")).toBeVisible({ timeout: 60_000 });
+  // STUDENT-PHONE-OPTIONAL: the mobile is not shown or asked.
+  await expect(page.getByTestId("one-page-cards")).not.toContainText("Mobile");
+  expect(sql(`select (a.data->'wizard'->>'bulkDone') || '/' || (s.details->>'holds_visa') || '/' || (s.details->>'english_pathway') from public.enrollment_applications a
+    join public.enrollment_students s on s.id = a.student_id where a.id = '${applicationId}'`)).toBe("true/Yes/English test");
+  await page.screenshot({ path: "test-results/bulk-cards.png", fullPage: true });
+});
+
 test("the student document wizard: upload, reading, emergency contact and the phone rules look and behave as before", async ({ page }) => {
   test.setTimeout(240_000);
   const student = person("wizard-student");
@@ -107,12 +164,16 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   await expect(page.locator("#wizard-title")).toBeVisible();
   const wizard = page.getByRole("dialog");
   const next = wizard.getByRole("button", { name: "Next" });
+  // BULK-DOCUMENTS: the documents start with the choice; this walk is the one-at-a-time path.
+  await wizard.getByTestId("doc-mode-steps").click();
   await expect(wizard.getByText("Upload file")).toBeVisible();
   await shot(page, "student-wizard-upload");
   await domSnapshot(page, '[role="dialog"]', "student-wizard-upload");
 
   let applicationId = "";
   const upload = async (category: string, file: string, read: Record<string, string>) => {
+    // The next screen is shown (nothing uploaded on it yet) before its file is chosen.
+    await expect(wizard.getByText("Ready for review")).toHaveCount(0);
     await wizard.locator('input[type="file"]').first().setInputFiles({ name: file, mimeType: "application/pdf", buffer: pdfFor(category === "English Test" ? "English" : category) });
     await expect.poll(() => sql(`select count(*) from public.enrollment_application_documents where filename = '${file}' and category = '${category}' and is_current`)).not.toBe("0");
     applicationId ||= sql(`select application_id from public.enrollment_application_documents where filename = '${file}' order by created_at desc limit 1`);
@@ -125,9 +186,11 @@ test("the student document wizard: upload, reading, emergency contact and the ph
   };
   await upload("Passport", `passport-${student.local}.pdf`, { first_name: "WIZARD", last_name: "STUDENT", dob: "1999-04-05", passport_number: "PA1234567", passport_expiry: "2034-01-01", nationality: "India" });
   await expect(page.getByText(/We filled 6 fields from your passport\. Please review\./)).toBeVisible();
+  await wizard.getByRole("group", { name: /Australian permanent resident/ }).getByText("No", { exact: true }).click();
   await expect(next).toBeEnabled();
   await shot(page, "student-wizard-uploaded");
   await next.click();
+  await expect(wizard.getByText("Required. Upload the visa grant notice or VEVO record.")).toBeVisible();
   await upload("Visa", `visa-${student.local}.pdf`, { visa_subclass: "500", visa_grant_number: "0012345678901", visa_stay_until: "2034-01-01" });
   await next.click();
   await upload("English Test", `english-${student.local}.pdf`, { english_type: "IELTS Academic", english_score: "7.0" });
@@ -430,7 +493,6 @@ test("student picker: an admin searches, selects an existing student (mobile pre
   await page.getByTestId("student-result").click();
   await expect(page.getByTestId("student-picked")).toContainText(`Pickable ${tag}`);
   await expect(page.getByTestId("student-picked")).toContainText(who.email);
-  await expect(page.locator("#student-mobile")).not.toHaveValue("");
   await page.getByRole("radio", { name: "No" }).check();
   await page.getByTestId("student-continue").click();
   await expect(page.getByRole("heading", { name: "New application", level: 2 })).toBeVisible({ timeout: 30_000 });
@@ -453,12 +515,13 @@ test("student picker: an agent adds a new student from the popup (search text pr
   await expect(form.locator("#new-student-first")).toHaveValue("Newbie");
   await expect(form.locator("#new-student-last")).toHaveValue(`Student${tag}`);
   await form.locator("#new-student-email").fill(fresh.email);
-  await form.locator("#new-student-mobile").fill(fresh.local);
+  // STUDENT-PHONE-OPTIONAL: no mobile is asked when adding a student.
+  await expect(form.locator("#new-student-mobile")).toHaveCount(0);
   await shot(page, "student-picker-new-student");
   await page.getByTestId("new-student-save").click();
   await expect(page.getByTestId("student-picked")).toContainText(`Newbie Student${tag}`);
   await expect(page.getByTestId("student-picked")).toContainText(fresh.email);
-  expect(sql(`select agency_id || '|' || agent_id || '|' || date_of_birth from public.enrollment_students where lower(email) = '${fresh.email}'`)).toBe(`${agency}|${agent.agentId}|2001-04-15`);
+  expect(sql(`select agency_id || '|' || agent_id || '|' || coalesce(phone, 'none') from public.enrollment_students where lower(email) = '${fresh.email}'`)).toBe(`${agency}|${agent.agentId}|none`);
   await expect(page.getByTestId("student-continue")).toBeEnabled();
 });
 
@@ -476,7 +539,6 @@ test("student picker: a duplicate email in the popup says it is in use and offer
   await expect(form.locator("#new-student-email")).toHaveValue(taken.email);
   await form.locator("#new-student-first").fill("Second");
   await form.locator("#new-student-last").fill("Copy");
-  await form.locator("#new-student-mobile").fill(person("pick-dup-mobile").local);
   await page.getByTestId("new-student-save").click();
   await expect(form).toContainText("Email already in use.");
   await expect(page.getByTestId("new-student-in-use")).toContainText("Already Here");

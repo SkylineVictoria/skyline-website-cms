@@ -225,7 +225,10 @@ export default function ApplicationDetailPage() {
   // student (any handoff state) opens as the one page of cards, where the student checks, edits and signs; the wizard is only for
   // an application the student started themselves.
   // Only while blank (no details read from the passport yet): once the details are on it, the student gets the card view.
-  const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded
+  // BULK-DOCUMENTS (owner 2026-11-28): after "Upload all at once" the application goes on as the one page of cards, for every role.
+  const bulkDone = (application?.data?.wizard as { bulkDone?: boolean } | undefined)?.bulkDone === true;
+  const toCards = () => { closeWizard(); setWorkspaceKey((key) => key + 1); void load(); };
+  const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded && !bulkDone
     && !handoff?.state && !String((application.data?.values as Record<string, unknown> | undefined)?.first_name ?? "").trim();
 
   // PREVIOUS-DATA-REVIEW (owner 2026-11-27): a student applying again opens their new application in a popup "We have your details from
@@ -289,11 +292,11 @@ export default function ApplicationDetailPage() {
     return (
       <ApplicationWizard key={`${application.id}:${carryKey}`} applicationId={application.id}
         agencyName={application.agencyName || agency?.name || ""}
-        onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); navigate(paths.list, { replace: true }); }} />
+        onFinish={() => void handleWizardFinish()} onCards={toCards} onCancel={() => { closeWizard(); navigate(paths.list, { replace: true }); }} />
     );
   }
   const returningStudent = role === "student";
-  if (needsInitialWizard(application) && !handoff?.state && !returningStudent) {
+  if (needsInitialWizard(application) && !handoff?.state && !returningStudent && !bulkDone) {
     return (
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -305,7 +308,7 @@ export default function ApplicationDetailPage() {
           onDeleted={(message) => { closeWizard(); toast.show(message); navigate(paths.list, { replace: true }); }} />
         {wizardOpen ? <ApplicationWizard key={`${application.id}:${carryKey}`} applicationId={application.id}
           agencyName={application.agencyName || agency?.name || ""}
-          onFinish={() => void handleWizardFinish()} onCancel={() => { closeWizard(); void load(); }} /> : null}
+          onFinish={() => void handleWizardFinish()} onCards={toCards} onCancel={() => { closeWizard(); void load(); }} /> : null}
         <Toast message={toast.message} onDismiss={toast.dismiss} />
       </div>
     );
@@ -620,7 +623,7 @@ export default function ApplicationDetailPage() {
         <ApplicationWizard
           applicationId={application.id}
           agencyName={agencyName}
-          onFinish={() => void handleWizardFinish()}
+          onFinish={() => void handleWizardFinish()} onCards={toCards}
           onCancel={closeWizard}
         />
       ) : null}

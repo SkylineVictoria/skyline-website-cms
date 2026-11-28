@@ -273,6 +273,7 @@ export default function NewApplicationPage() {
         agencyName={agency?.name ?? ""}
         onFinish={handleFinish}
         onCancel={() => void handleCancel()}
+        onCards={() => { if (authUser?.id) clearSession(authUser.id); navigate(paths.detail(applicationId), { replace: true }); }}
       />
     );
   }

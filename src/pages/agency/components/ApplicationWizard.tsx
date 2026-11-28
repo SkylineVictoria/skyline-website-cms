@@ -1,3 +1,4 @@
+import BulkDocumentUpload, { DocumentModeChoice } from "./BulkDocumentUpload";
 import { ruleBool, ruleNumber } from "@/lib/businessRules";
 import { RejectedDocumentError } from "@/lib/validatedDocumentUpload";
 import { hasValidatedDocumentPath } from "../../../../supabase/functions/_shared/document-category";
@@ -71,6 +72,8 @@ interface Props {
   onFinish: () => void;
   /** Called when the agent leaves the wizard (the draft is kept). */
   onCancel: () => void;
+  /** BULK-DOCUMENTS: after "Upload all at once", the application continues on the one page of cards (all roles). */
+  onCards?: () => void;
 }
 
 const WIZARD_CATEGORIES = new Set(WIZARD_STEPS.map((step) => step.category));
@@ -168,7 +171,7 @@ const USI_CONSENT_TEXT = "I consent to SLIT using/providing my USI for enrolment
 const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00`).getTime());
 
-export default function ApplicationWizard({ applicationId, agencyName, onFinish, onCancel }: Props) {
+export default function ApplicationWizard({ applicationId, agencyName, onFinish, onCancel, onCards }: Props) {
   const { profile, role } = usePortalAuth();
 
   const [loading, setLoading] = useState(true);
@@ -375,6 +378,8 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         if (active) setDraftIssuingCountry(pick("issuing_country").trim() || pick("passport_issuing_country").trim());
         const courses = Array.isArray(values.courses_of_interest) ? (values.courses_of_interest as unknown[]).map(String) : [];
         if (active) {
+          const savedMode = (application.data.wizard as { docMode?: string } | undefined)?.docMode;
+          if (savedMode === "bulk" || savedMode === "steps") setDocMode(savedMode);
           const saved = (application.data.wizard ?? {}) as { activeStep?: string; completedSteps?: string[]; courseChoice?: string; intakeChoice?: string; intakeLabel?: string; intakeJoin?: string; englishChoice?: string; studyChoice?: AusStudyAnswer; cambridgeChoice?: AusStudyAnswer };
           const last = ALL_STEPS.findIndex((item) => item.id === saved.activeStep);
           completedSteps.current = new Set(Array.isArray(saved.completedSteps) ? saved.completedSteps : []);
@@ -746,6 +751,72 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
    * uploaded) or No (skipped where the Business Rule allows it).
    */
   const [savingResidency, setSavingResidency] = useState(false);
+  /* BULK-DOCUMENTS (owner 2026-11-28): all documents at once, or one at a time (the guided steps). The same wizard for every role. */
+  const [docMode, setDocMode] = useState<"" | "bulk" | "steps">("");
+  const chooseMode = (mode: "bulk" | "steps", at?: string) => {
+    setDocMode(mode);
+    pendingWizard.current = { ...pendingWizard.current, docMode: mode };
+    markDirty();
+    void persist();
+    if (mode === "steps" && at) { const index = WIZARD_STEPS.findIndex((item) => item.id === at); if (index >= 0) void goTo(index); }
+  };
+  // The other documents are checked against the stored passport: while the passport is still uploading they wait here.
+  const bulkQueue = useRef<Array<{ stepId: string; files: File[] }>>([]);
+  const passportStored = documents.some((doc) => doc.category === WIZARD_STEPS[PASSPORT_STEP]?.category && !isExpiredPassport(doc));
+  const passportUploading = pending.some((item) => item.category === WIZARD_STEPS[PASSPORT_STEP]?.category && !item.error);
+  useEffect(() => {
+    if (!passportStored || !bulkQueue.current.length) return;
+    const queued = bulkQueue.current;
+    bulkQueue.current = [];
+    queued.forEach((entry) => bulkPick(entry.stepId, entry.files));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- flushed once the passport is stored
+  }, [passportStored]);
+  const bulkPick = (stepId: string, files: File[], passportComing = false) => {
+    const target = WIZARD_STEPS.find((item) => item.id === stepId);
+    if (!target || !files.length) return;
+    if (stepId !== "passport" && !passportStored && (passportUploading || passportComing)) { bulkQueue.current.push({ stepId, files }); return; }
+    const existing = target.multiple ? undefined
+      : documentsRef.current.find((doc) => doc.category === target.category && !dismissed.has(doc.id) && !isExpiredPassport(doc) && !isWrongDocument(doc));
+    if (existing) { setReplaceAsk({ target, files, current: existing.filename }); return; }
+    uploadPicked(target, files);
+  };
+  // The visa stays on the list (optional) until the passport is read: then the residency answers decide whether it is needed.
+  const bulkSteps = WIZARD_STEPS.filter((item) => !skipStep(item) || (item.id === "visa" && (!hasPassport || visaDocuments.length > 0))).map((item) => {
+    const docs = documents.filter((doc) => doc.category === item.category && !dismissed.has(doc.id) && !isExpiredPassport(doc) && !isWrongDocument(doc));
+    const rejected = rejectedDocs[item.category];
+    const problem = uploadRejections[item.category]
+      || (item.id === "passport" && expiredPassport ? `${expiredPassport.filename} has expired${expiredPassport.date ? ` (${formatExpiryDate(expiredPassport.date)})` : ""} and was not kept. Upload the current passport.` : "")
+      || (item.id === "licence" && rejectedLicence ? `${rejectedLicence.filename} is not an Australian driving licence, so it was not kept.` : "")
+      || (rejected ? `${rejected.filename} is not ${STEP_CHECKS[item.category]?.what ?? `the ${item.noun}`}, so it was not kept.` : "");
+    return { step: shownStep(item), required: stepRequired(item) && !skipStep(item), docs, pending: pending.filter((entry) => entry.category === item.category), problem: problem || undefined,
+      metOtherwise: item.id === "english" && englishAltMet ? "Met without a test result" : undefined };
+  });
+  const bulkBlockedNow = () => pending.some((item) => !item.error) || documents.some((doc) => isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id))
+    || bulkSteps.some((entry) => entry.required && !stepHasDoc(WIZARD_STEPS.find((item) => item.id === entry.step.id)!)) || !hasPassport || !residencyDone;
+  /** Saves what the document steps would have saved (residency, visa held, English by test result), then the card view. */
+  const continueFromBulk = async () => {
+    if (bulkBlockedNow()) return;
+    const values: Record<string, unknown> = {};
+    const domestic = isDomesticPassport(passportCountry);
+    if (!domestic) values[PR_ANSWER] = answers[PR_ANSWER] ?? "";
+    values.holds_visa = need === "none" ? "No" : need === "pr" ? "Yes" : visaDocuments.length > 0 ? "Yes" : "No";
+    if (!englishAlt && documents.some((doc) => doc.category === WIZARD_STEPS.find((item) => item.id === "english")?.category)) {
+      Object.assign(values, { english_pathway: ENGLISH_PATHWAY.test, aus_study_2yrs: "", cambridge_course: "" });
+    }
+    setSavingResidency(true);
+    setReadSaveError("");
+    try {
+      WIZARD_STEPS.forEach((item) => completedSteps.current.add(item.id));
+      pendingWizard.current = { ...pendingWizard.current, docMode: "bulk", bulkDone: true, completedSteps: [...completedSteps.current], activeStep: WIZARD_QUESTIONS[0]?.id };
+      if (!(await persist())) return;
+      await saveWizardDraft(applicationId, { values });
+      if (onCards) onCards(); else setStep(DOC_STEPS);
+    } catch (error) {
+      setReadSaveError(error instanceof Error ? error.message : "We could not save these answers. Try again.");
+    } finally {
+      setSavingResidency(false);
+    }
+  };
   const nextFromDocument = async () => {
     const values: Record<string, unknown> = {};
     if (current.id === "passport" && hasPassport) {
@@ -1095,7 +1166,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
       });
     } else if (target.id === "declare") {
       const mobile = filled("mobile");
-      const mobileProblem = mobile ? validateStoredPhone(mobile) : ruleBool("admissions.application_mobile_required", true) ? "Enter the student's mobile number." : "";
+      const mobileProblem = mobile ? validateStoredPhone(mobile) : ruleBool("admissions.application_mobile_required", false) ? "Enter the student's mobile number." : "";
       if (mobileProblem) errors.mobile = mobileProblem;
       values.mobile = mobile;
 
@@ -1196,11 +1267,16 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
     pending.some((item) => item.category === target.category && !item.error) ||
     documents.some((doc) => doc.category === target.category && isReading(doc) && !dismissed.has(doc.id) && !slowDocs.has(doc.id));
   const allSteps = ALL_STEPS;
+  const bulkBusy = WIZARD_STEPS.some((item) => stepBusy(item));
+  const bulkMissing = bulkSteps.filter((entry) => entry.required && !stepHasDoc(WIZARD_STEPS.find((item) => item.id === entry.step.id)!));
+  const bulkBlocked = bulkBusy || bulkMissing.length > 0 || !hasPassport || !residencyDone;
+  const bulkView = ready && docMode === "bulk" && !confirmMode && !submittedRef && !sentToStudent && step < DOC_STEPS;
+  const chooseView = ready && docMode === "" && !confirmMode && !submittedRef && step === 0 && documents.length === 0 && pending.length === 0;
   const wizardStages: WizardStage[] = stageRanges.map((range) => ({ ...range, busy: WIZARD_STEPS.some((item, i) => i >= range.from && i <= range.to && stepBusy(item)) }));
   // While this step's file uploads or is read, the wizard is locked so nothing else can be clicked.
   const removingExpired = !expiredPassport?.error && stepDocs.some(isExpiredPassport);
   const removingWrong = !rejectedDocs[current.category]?.error && stepDocs.some(isWrongDocument);
-  const locked = ready && !question && (stepBusy(current) || removingExpired || removingWrong);
+  const locked = ready && !question && !bulkView && !chooseView && (stepBusy(current) || removingExpired || removingWrong);
   // A file read too slowly unlocks the wizard but still holds Next until its result is in (or it is deleted).
   const slowHere = stepDocs.filter((doc) => isReading(doc) && slowDocs.has(doc.id));
   const rejectedHere = rejectedDocs[current.category];
@@ -1211,7 +1287,7 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   // The passport step also waits for the residency answers once the passport is in.
   const blockedByResidency = !question && current.id === "passport" && hasPassport && !residencyDone;
   // The document notices below belong to document screens only.
-  const onDocStep = !question;
+  const onDocStep = !question && !bulkView && !chooseView;
 
   // A document added somewhere else while the wizard is open (the full form, another tab or device, another person) must show here,
   // or the step keeps saying it is required and invites a second upload. Re-read the list when the window comes back into focus,
@@ -1286,6 +1362,17 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
           </>}
           <button type="button" onClick={() => leaveOnce.current()} className={`${primaryClass} mt-5`}>{role === "student" ? "OK" : "Continue"}</button>
         </div>
+      );
+    }
+    if (chooseView) return <DocumentModeChoice onBulk={() => chooseMode("bulk")} onSteps={() => chooseMode("steps")} />;
+    if (bulkView) {
+      return (
+        <>
+          {readSaveError ? <WizardNotice tone="error">{readSaveError}</WizardNotice> : null}
+          <BulkDocumentUpload steps={bulkSteps} onUpload={bulkPick} onRemove={handleRemoveDoc} locked={savingResidency}
+            onOneByOne={(at) => chooseMode("steps", at)}
+            residency={hasPassport ? <ResidencyQuestions issuingCountry={passportCountry} answers={answers} errors={answerErrors} onChange={(name, value) => { setAnswer(name, value); setAnswerErrors((prev) => ({ ...prev, [name]: "" })); }} /> : null} />
+        </>
       );
     }
     if (question) {
@@ -1437,7 +1524,13 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
         </>
       }
       footerEnd={
-        ready && !submittedRef ? (
+        chooseView ? null : bulkView ? (
+          <button type="button" onClick={() => void continueFromBulk()} disabled={savingResidency || bulkBusy || bulkMissing.length > 0 || !hasPassport || !residencyDone}
+            title={bulkMissing.length ? `Still needed: ${bulkMissing.map((entry) => entry.step.short).join(", ")}` : !residencyDone && hasPassport ? "Answer the residency question first" : undefined}
+            className={primaryClass} data-testid="bulk-continue">
+            {savingResidency ? <><i className="ri-loader-4-line animate-spin" aria-hidden="true" /> Saving&hellip;</> : <>Continue to the details <i className="ri-arrow-right-line" aria-hidden="true" /></>}
+          </button>
+        ) : ready && !submittedRef ? (
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
             {onDocStep && !hasFile && !blockedByPassport && !stepRequired(current) ? (
               <button

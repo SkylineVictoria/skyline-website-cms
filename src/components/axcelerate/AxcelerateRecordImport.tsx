@@ -49,6 +49,7 @@ const AGENT_LINK: Record<string, string> = {
 };
 const QUAL_LABEL: Record<string, string> = { created: 'imported', linked: 'matched to the Qualification already in Skyline', unchanged: 'already up to date', updated: 'updated', skipped: 'skipped (deleted in Skyline)', error: 'not imported' };
 
+const money = (cents: number) => (cents / 100).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
 /** AVETMISS outcome codes as staff read them (NAT00120). */
 const OUTCOME_LABEL: Record<string, string> = { '20': 'Competent', '30': 'Not yet competent', '40': 'Withdrawn', '41': 'Incomplete', '51': 'RPL granted', '52': 'RPL not granted', '60': 'Credit transfer', '61': 'Superseded', '70': 'Continuing', '85': 'Not yet started' };
 const UNIT_ACTION: Record<string, string> = { created: 'imported', updated: 'updated', unchanged: 'up to date', kept: 'kept from Skyline', open: 'no result yet', error: 'not imported' };
@@ -76,6 +77,10 @@ export function StudentOutcome({ r }: { r: StudentResult }) {
         </span>}
       </li>)}
     </ul>}
+    {r.fees && <p className={r.fees.action === 'error' ? 'text-red-700' : 'text-foreground-700'} data-testid="axcelerate-student-fees">
+      Fees: {r.fees.action === 'error' ? r.fees.message : `${r.fees.invoices} invoice${r.fees.invoices === 1 ? '' : 's'}, ${money(r.fees.totalCents)} invoiced, ${money(r.fees.paidCents)} paid, ${money(r.fees.balanceCents)} owing (${r.fees.payments} payment${r.fees.payments === 1 ? '' : 's'})`}
+      {(r.fees.warnings ?? []).map((w) => <span key={w} className="block text-foreground-600">{w}</span>)}
+    </p>}
     {(r.warnings ?? []).length > 0 && <ul className="mt-1 list-disc pl-5 text-foreground-600">{r.warnings!.map((w) => <li key={w}>{w}</li>)}</ul>}
   </div>;
 }

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Modal } from '@/pages/admin/components/ui';
-import { countsText, ENTITY_LABEL, runAxcelerateImport, useImportAllowed, type ImportEntity, type ImportRun } from '@/lib/axcelerateImport';
+import { ENTITY_LABEL, runAxcelerateImport, runTotals, useImportAllowed, type ImportEntity, type ImportRun } from '@/lib/axcelerateImport';
+import AxcelerateRunLog from './AxcelerateRunLog';
 
 const WHAT: Record<string, string> = {
   trainers: 'the trainers named on aXcelerate’s classes, as Active staff with the trainer role (no sign-in invitation is sent)',
@@ -31,7 +32,7 @@ export default function AxcelerateImportButton({ entities, mode = 'page', label,
     catch (e) { setError(e instanceof Error ? e.message : 'The import stopped.'); }
     finally { setBusy(false); }
   };
-  const entityKeys = run ? Object.keys(run.counts ?? {}) : [];
+  const totals = run ? runTotals(run) : null;
   return <>
     <Button variant={variant} size={size} icon="ri-download-cloud-2-line" onClick={() => { setOpen(true); setRun(null); setError(''); }} data-testid={`axcelerate-import-${mode}`}>
       {label ?? 'Import from aXcelerate'}
@@ -47,9 +48,9 @@ export default function AxcelerateImportButton({ entities, mode = 'page', label,
         <p className="text-foreground-600">Nothing is sent to aXcelerate. Records an admin changed in Skyline are kept (differences go to Conflicts); records deleted in Skyline are not brought back.</p>
         {error && <p role="alert" className="rounded border border-red-300 p-3 text-red-700">{error}</p>}
         {run && <div className="rounded border border-background-200 p-3" role="status" data-testid="axcelerate-import-progress">
-          <p className="font-medium">{run.status === 'running' ? `Working… (${run.cursor?.stage ?? 'starting'})` : run.status === 'done' ? 'Import finished.' : run.status === 'cancelled' ? 'Import cancelled.' : 'Import stopped.'}</p>
-          {entityKeys.length ? <ul className="mt-2 space-y-0.5">{entityKeys.map((k) => <li key={k}>{ENTITY_LABEL[k] ?? k}: {countsText(run.counts[k])}</li>)}</ul> : null}
-          {(run.cursor?.notes ?? []).map((n) => <p key={n} className="mt-1 text-foreground-600">{n}</p>)}
+          {/* // rule-policy: technical axcelerate-import-log 2026-11-28 owner (AXCELERATE-IMPORT-LOG): import result wording and log size; no configurable value. */}
+          <p className="font-medium">{run.status === 'running' ? `Working… (${run.cursor?.stage ?? 'starting'})` : run.status === 'done' ? (totals && !totals.brought && !totals.notBrought ? 'Import finished, but nothing came from aXcelerate.' : 'Import finished.') : run.status === 'cancelled' ? 'Import cancelled.' : 'Import stopped.'}</p>
+          <div className="mt-2"><AxcelerateRunLog run={run} /></div>
           {run.status !== 'running' && <p className="mt-2"><Link className="font-medium text-primary-700 hover:underline" to="/admin/integrations/axcelerate">Open the Import centre</Link> for errors, conflicts and the audit log.</p>}
         </div>}
       </div>

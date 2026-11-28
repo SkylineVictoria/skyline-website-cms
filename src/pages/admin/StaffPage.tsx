@@ -55,7 +55,7 @@ export default function StaffPage() {
   return (
     <div>
       <PageHeader breadcrumb="HRMS" title="Employees" description="Add an employee as Active straight away, or start their onboarding: a document link by email, then the offer letter to sign, then activation. The Onboarding tab lists everyone in between; Rejected / Withdrawn keeps the applications that did not go ahead."
-        actions={<><AxcelerateImportButton entities={["trainers"]} label="Import trainers from aXcelerate" /><Button onClick={() => setAdding(true)} icon="ri-user-add-line" data-testid="employee-add">Add employee</Button></>} />
+        actions={<><AxcelerateImportButton entities={["trainers"]} label="Import trainers from aXcelerate" onDone={() => setReload((n) => n + 1)} /><Button onClick={() => setAdding(true)} icon="ri-user-add-line" data-testid="employee-add">Add employee</Button></>} />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div role="tablist" aria-label="Filter by status" className="inline-flex rounded-md border border-background-300 p-0.5">
           {FILTERS.map((f) => (

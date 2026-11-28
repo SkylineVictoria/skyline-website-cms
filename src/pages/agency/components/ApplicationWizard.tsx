@@ -1275,8 +1275,9 @@ export default function ApplicationWizard({ applicationId, agencyName, onFinish,
   const bulkBusy = WIZARD_STEPS.some((item) => stepBusy(item));
   const bulkMissing = bulkSteps.filter((entry) => entry.required && !stepHasDoc(WIZARD_STEPS.find((item) => item.id === entry.step.id)!));
   const bulkBlocked = bulkBusy || bulkMissing.length > 0 || !hasPassport || !residencyDone;
-  const bulkView = ready && docMode === "bulk" && !confirmMode && !submittedRef && !sentToStudent && step < DOC_STEPS;
-  const chooseView = ready && docMode === "" && !confirmMode && !submittedRef && step === 0 && documents.length === 0 && pending.length === 0;
+  // A student confirming what the agent sent gets the same choice when documents are still missing (STUDENT-INVITE-DOCUMENTS).
+  const bulkView = ready && docMode === "bulk" && !submittedRef && !sentToStudent && step < DOC_STEPS;
+  const chooseView = ready && docMode === "" && !submittedRef && step === 0 && pending.length === 0 && (documents.length === 0 || confirmMode);
   const wizardStages: WizardStage[] = stageRanges.map((range) => ({ ...range, busy: WIZARD_STEPS.some((item, i) => i >= range.from && i <= range.to && stepBusy(item)) }));
   // While this step's file uploads or is read, the wizard is locked so nothing else can be clicked.
   const removingExpired = !expiredPassport?.error && stepDocs.some(isExpiredPassport);

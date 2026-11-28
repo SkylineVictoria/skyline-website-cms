@@ -243,6 +243,36 @@ test("find my documents from a cloud source: the chosen files are scanned and at
   await expect(wizard.getByTestId("bulk-staged")).toContainText("someone else's document");
 });
 
+// STUDENT-INVITE-DOCUMENTS (owner 2026-11-28): an application the agent sent to the student with documents still missing opens on the
+// documents step (all at once / one at a time / Find my documents), not straight on the one page of cards.
+test("a student opening an application sent to them with documents missing gets the documents choice first", async ({ page }) => {
+  test.setTimeout(240_000);
+  const student = person("invite-docs");
+  await page.goto("/login?mode=enroll&as=student");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByTestId("enrol-first-name").fill("Ines");
+  await page.getByTestId("enrol-last-name").fill("Vite");
+  await page.getByPlaceholder("you@example.com").fill(student.email);
+  await page.locator('input[type="password"]').fill(PASSWORD);
+  await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "Create student account" }).click();
+  const alone = page.getByRole("button", { name: /I am applying by myself/ });
+  await expect(alone.or(page.locator("#wizard-title"))).toBeVisible();
+  if (await alone.isVisible()) await alone.click();
+  await expect(page.getByRole("dialog").getByTestId("document-mode")).toBeVisible();
+  const applicationId = sql(`select a.id from public.enrollment_applications a join public.enrollment_students s on s.id = a.student_id where lower(s.email) = '${student.email}' order by a.created_at desc limit 1`);
+  // As if the agent had prepared it (the student's details on it) and sent it to the student, without documents.
+  sql(`update public.enrollment_applications set data = jsonb_set(coalesce(data, '{}'::jsonb), '{values,first_name}', '"Ines"') where id = '${applicationId}';
+    insert into skyline_private.application_handoffs(application_id, state, sent_at) values ('${applicationId}', 'with_student', now())
+    on conflict (application_id) do update set state = 'with_student', sent_at = now()`);
+  await page.evaluate(() => { for (const key of Object.keys(localStorage)) if (key.includes("wizard")) localStorage.removeItem(key); });
+  await page.goto(`/agency/applications/${applicationId}`);
+  await expect(page.getByRole("dialog").getByTestId("document-mode")).toBeVisible({ timeout: 30_000 });
+  await page.screenshot({ path: "test-results/invite-docs-choice.png" });
+  await page.getByRole("dialog").getByTestId("doc-mode-bulk").click();
+  await expect(page.getByRole("dialog").getByTestId("bulk-find")).toBeVisible();
+});
+
 test("the student document wizard: upload, reading, emergency contact and the phone rules look and behave as before", async ({ page }) => {
   test.setTimeout(240_000);
   const student = person("wizard-student");

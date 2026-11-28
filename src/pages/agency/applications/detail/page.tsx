@@ -228,6 +228,18 @@ export default function ApplicationDetailPage() {
   // BULK-DOCUMENTS (owner 2026-11-28): after "Upload all at once" the application goes on as the one page of cards, for every role.
   const bulkDone = (application?.data?.wizard as { bulkDone?: boolean } | undefined)?.bulkDone === true;
   const toCards = () => { closeWizard(); setWorkspaceKey((key) => key + 1); void load(); };
+  // STUDENT-INVITE-DOCUMENTS (owner 2026-11-28: "sent the student an invite, it opened only the one page with missing documents"): a
+  // student who opens an application their agent sent them, with a required document still missing (passport, English, academic),
+  // gets the documents step first (all at once, one at a time, or Find my documents), then the one page of cards.
+  const docsLoaded = useRef(false);
+  const [docsChecked, setDocsChecked] = useState(false);
+  const studentNeedsDocs = role === "student" && handoff?.state === "with_student" && application?.status === "draft" && docsChecked
+    && ["Passport", "Academic"].some((category) => !documents.some((doc) => doc.isCurrent !== false && doc.category === category));
+  useEffect(() => { if (!docsLoaded.current && !loading) { docsLoaded.current = true; setDocsChecked(true); } }, [loading]);
+  useEffect(() => {
+    if (studentNeedsDocs && !bulkDone && !wizardOpen) openWizard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once the student's documents are known to be missing
+  }, [studentNeedsDocs]);
   const studentBlank = role === "student" && !!application && needsInitialWizard(application) && handoffLoaded && !bulkDone
     && !handoff?.state && !String((application.data?.values as Record<string, unknown> | undefined)?.first_name ?? "").trim();
 
@@ -375,7 +387,7 @@ export default function ApplicationDetailPage() {
                 PDF
               </button>
             ) : null}
-            {!readOnly && !(role === "student" && handoff?.state) ? (
+            {!readOnly && (!(role === "student" && handoff?.state) || studentNeedsDocs) ? (
               <button
                 type="button"
                 onClick={openWizard}
@@ -619,7 +631,7 @@ export default function ApplicationDetailPage() {
         ) : null}
       </div>
 
-      {wizardOpen && !(role === "student" && handoff?.state) ? (
+      {wizardOpen && (!(role === "student" && handoff?.state) || studentNeedsDocs) ? (
         <ApplicationWizard
           applicationId={application.id}
           agencyName={agencyName}

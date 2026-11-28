@@ -399,3 +399,26 @@ test('OAuth refresh rotates provider credentials without exposing secrets or rac
  assert.deepEqual(await accessToken({id:'connection',connector_id:'xero',updated_at:'2026-11-11T12:00:00Z'},rpc,config,request),{token:'new-access',version:'2026-11-11T12:00:00Z',docusignProduction:false});
  assert.equal(acquired,1,'fresh access tokens do not start a second refresh');
 });
+test('aXcelerate (AXCELERATE-CONNECTION): two token headers, per-college address, safe paths, form-encoded writes',async()=>{
+ const {axcelerateFields,axcelerateBaseUrl,axcelerateRequest,axcelerateFetchArgs,axcelerateAnswer}=await import('../supabase/functions/_shared/integrations/axcelerate.ts');
+ const f=axcelerateFields(JSON.stringify({version:1,fields:{environment:'production',subdomain:'skyline',apiToken:'api-1234567890',wsToken:'ws-1234567890'}}));
+ assert.ok(f);assert.equal(axcelerateBaseUrl(f!),'https://skyline.app.axcelerate.com/api');
+ assert.equal(axcelerateBaseUrl({environment:'staging',subdomain:'skyline'}),'https://skyline.stg.axcelerate.com/api');
+ assert.equal(axcelerateFields(''),null);assert.equal(axcelerateFields('not json'),null);
+ assert.equal(axcelerateFields(JSON.stringify({fields:{environment:'production',subdomain:'evil.com/x',apiToken:'a',wsToken:'b'}})),null,'a subdomain can never point elsewhere');
+ for(const path of ['contacts','/contacts?x=1','/../admin','//evil.com','/a b','https://x.y/api'])assert.ok('error' in axcelerateRequest({method:'GET',path}),path);
+ assert.ok('error' in axcelerateRequest({method:'PATCH',path:'/contact'}));
+ assert.ok('error' in axcelerateRequest({method:'GET',path:'/contacts/search',params:{'bad name':'x'}}));
+ const get=axcelerateRequest({method:'get',path:'/contacts/search',params:{search:'Patel',displayLength:100,empty:null}});
+ assert.ok(!('error' in get));
+ const g=axcelerateFetchArgs(f!,get as Exclude<typeof get,{error:string}>);
+ assert.equal(g.url,'https://skyline.app.axcelerate.com/api/contacts/search?search=Patel&displayLength=100');
+ const h=g.init.headers as Record<string,string>;assert.equal(h.apitoken,'api-1234567890');assert.equal(h.wstoken,'ws-1234567890');assert.equal(g.init.body,undefined);assert.equal(g.init.redirect,'error');
+ const post=axcelerateRequest({method:'POST',path:'/course/enrol',params:{contactID:'5',instanceID:'9',type:'p'}});
+ const p=axcelerateFetchArgs(f!,post as Exclude<typeof post,{error:string}>);
+ assert.equal(p.url,'https://skyline.app.axcelerate.com/api/course/enrol');assert.equal(p.init.body,'contactID=5&instanceID=9&type=p');
+ assert.equal((p.init.headers as Record<string,string>)['Content-Type'],'application/x-www-form-urlencoded');
+ const a=await axcelerateAnswer(new Response('[{"CONTACTID":1}]',{status:200}));assert.deepEqual(a,{status:200,data:[{CONTACTID:1}],truncated:false});
+ const big=await axcelerateAnswer(new Response('x'.repeat(20)),10);assert.equal(big.truncated,true);assert.equal(String(big.data).length,10);
+ const limited=await axcelerateAnswer(new Response('slow down',{status:429,headers:{'Retry-After':'30'}}));assert.equal(limited.retryAfter,'30');assert.equal(limited.data,'slow down');
+});

@@ -207,7 +207,10 @@ Deno.serve(async (req: Request) => {
     let status: 'running' | 'done' | 'failed' | 'cancelled' = 'running';
     let lastError: string | null = null;
     try {
-      const result = await runImport({ client, rpc: (n, a) => admin.rpc(n, a), cricos, connection: conn.id, run: runId!, actor: who.user.id, entities, cursor, counts, deadline: started + BUDGET_MS, save });
+      // AXCELERATE-DOCUMENTS: a student's portfolio files go to the private bucket (staff read them through its policy).
+      const store = async (path: string, bytes: Uint8Array, mime: string) =>
+        !(await admin.storage.from('axcelerate-documents').upload(path, bytes, { contentType: mime, upsert: true })).error;
+      const result = await runImport({ client, rpc: (n, a) => admin.rpc(n, a), cricos, store, connection: conn.id, run: runId!, actor: who.user.id, entities, cursor, counts, deadline: started + BUDGET_MS, save });
       cursor = result.cursor; counts = result.counts;
       status = result.cancelled ? 'cancelled' : result.done ? 'done' : 'running';
     } catch (e) {

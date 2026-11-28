@@ -29,7 +29,11 @@ export type StudentResult = {
   qualifications?: { name: string; action: string; status?: string; message?: string; warnings?: string[]; units?: UnitResult[]; attendance?: AttendanceResult }[];
   /** The student's invoices and payments from aXcelerate (AXCELERATE-FEES). */
   fees?: FeesResult;
+  /** The student's aXcelerate portfolio files (AXCELERATE-DOCUMENTS). */
+  documents?: DocumentsResult;
 };
+/** A student's aXcelerate portfolio files: found, imported now, already in Skyline, deleted in Skyline (not brought back), not read. */
+export type DocumentsResult = { found: number; imported: number; kept: number; skipped: number; failed: number; warnings?: string[] };
 /** A Qualification's attendance from aXcelerate (AXCELERATE-ATTENDANCE): class days marked, kept (marked in Skyline), skipped. */
 export type AttendanceResult = { sessions: number; marked: number; kept: number; skipped: number };
 /** A student's aXcelerate invoices as imported (amounts in cents; void invoices left out of the sums). */
@@ -72,7 +76,14 @@ export type Cursor = {
 };
 type Row = Record<string, unknown>;
 type Answer = { status: number; data: unknown };
-export type ImportClient = { get(path: string, params?: Record<string, unknown>): Promise<Answer>; getAll(path: string, params?: Record<string, unknown>, opt?: { pageSize?: number; sizeParam?: 'displayLength' | 'limit'; maxRows?: number }): Promise<Row[]> };
+export type ImportClient = {
+  get(path: string, params?: Record<string, unknown>): Promise<Answer>;
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+  getAll(path: string, params?: Record<string, unknown>, opt?: { pageSize?: number; sizeParam?: 'displayLength' | 'limit'; maxRows?: number }): Promise<Row[]>;
+  /** A file read as bytes (AXCELERATE-DOCUMENTS); absent: documents are not imported. */
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+  getFile?(path: string, params?: Record<string, unknown>): Promise<{ status: number; contentType: string; bytes?: Uint8Array; fileName?: string; data?: unknown; tooLarge?: boolean }>;
+};
 export type ImportRpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: unknown; error: { message?: string } | null }>;
 export type ImportDeps = {
   client: ImportClient; rpc: ImportRpc; connection: string; run: string; actor: string; entities: ImportEntity[];
@@ -84,6 +95,8 @@ export type ImportDeps = {
   cricos?: (nationalCode: string) => Promise<string | null>;
   /** Saves progress; returns false when the run was cancelled. */
   save: (cursor: Cursor, counts: Counts) => Promise<boolean>;
+  /** Stores a student's document file in the private bucket (AXCELERATE-DOCUMENTS); absent: documents are not imported. */
+  store?: (path: string, bytes: Uint8Array, mime: string) => Promise<boolean>;
 };
 export type ImportResult = { done: boolean; cancelled: boolean; cursor: Cursor; counts: Counts };
 
@@ -229,6 +242,92 @@ async function importStudentInvoices(deps: ImportDeps, contactId: string, studen
     out.payments += v.payments ?? 0;
     if (!v.void) { out.totalCents += v.totalCents ?? 0; out.paidCents += v.paidCents ?? 0; out.balanceCents += v.balanceCents ?? 0; }
     out.warnings!.push(...(v.warnings ?? []));
+  }
+  return out;
+}
+
+/** The document types Skyline keeps (by file name extension when aXcelerate sends no type). */
+const DOC_TYPES: Record<string, string> = {
+  pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', txt: 'text/plain',
+};
+const docMime = (name: string, sent: string) => {
+  const byName = DOC_TYPES[(name.split('.').pop() ?? '').toLowerCase()];
+  return Object.values(DOC_TYPES).includes(sent) ? sent : byName ?? '';
+};
+const safeName = (s: string) => s.normalize('NFKD').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'file';
+/** Base64 bytes inside a JSON answer (a file sent as JSON), when aXcelerate does that. */
+function base64Bytes(v: unknown): Uint8Array | null {
+  if (typeof v !== 'string' || v.length < 8 || !/^[A-Za-z0-9+/=\s]+$/.test(v)) return null;
+  try { const b = atob(v.replace(/\s+/g, '')); const out = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) out[i] = b.charCodeAt(i); return out; } catch { return null; }
+}
+
+/**
+ * A student's documents (AXCELERATE-DOCUMENTS): aXcelerate's portfolio for the contact (GET /contact/portfolio), each file downloaded
+ * (GET /contact/portfolio/file) into the private bucket and listed on the student. A file already imported, or deleted in Skyline, is not
+ * downloaded again. The first file that cannot be read is kept in the import errors with the fields aXcelerate sent, so it can be mapped.
+ * Read only.
+ */
+export async function importStudentDocuments(deps: ImportDeps, c: Cursor, contactId: string, studentId: string): Promise<DocumentsResult> {
+  const out: DocumentsResult = { found: 0, imported: 0, kept: 0, skipped: 0, failed: 0, warnings: [] };
+  if (!deps.client.getFile || !deps.store) return out;
+  const a = await deps.client.get('/contact/portfolio', { contactID: contactId });
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+  if (a.status >= 300) { out.warnings!.push(`aXcelerate answered HTTP ${a.status} for the student's documents.`); return out; }
+  const items = list(a.data);
+  if (!c.notes!.some((n) => n.startsWith('aXcelerate portfolio'))) {
+    c.notes!.push(`aXcelerate portfolio: ${items.length} item(s) (fields: ${[...new Set(items.flatMap((e) => Object.keys(e)))].slice(0, 30).join(', ') || 'none'}).`);
+  }
+  let logged = false;
+  for (const item of items) {
+    const pid = text(item, 'PORTFOLIOID', 'ID');
+    const type = text(item, 'PORTFOLIOTYPE', 'PORTFOLIOTYPENAME', 'TYPENAME', 'TYPE');
+    const title = text(item, 'NAME', 'TITLE', 'DESCRIPTION');
+    const files = ['FILES', 'ATTACHMENTS', 'DOCUMENTS'].map((k) => item[k]).find(Array.isArray) as Row[] | undefined;
+    for (const f of files?.length ? files : [item]) {
+      const fid = text(f, 'FILEID', 'PORTFOLIOFILEID', 'ATTACHMENTID', 'DOCUMENTID') || (files ? text(f, 'ID') : '');
+      const fname = text(f, 'FILENAME', 'ORIGINALFILENAME', 'FILE', 'NAME') || title || `document-${pid}`;
+      if (!pid && !fid) continue;
+      out.found++;
+      const key = `${contactId}:${pid}:${fid || safeName(fname)}`.slice(0, 120);
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+      const st = await deps.rpc('axcelerate_document_status', { p_connection: deps.connection, p_key: key });
+      if (st.data === 'have') { out.kept++; continue; }
+      if (st.data === 'skipped') { out.skipped++; continue; }
+      const params: Record<string, unknown> = { contactID: contactId, portfolioID: pid };
+      if (fid) { params.fileID = fid; params.portfolioFileID = fid; }
+      if (fname) params.fileName = fname;
+      let why = '';
+      try {
+        const d = await deps.client.getFile('/contact/portfolio/file', params);
+        let bytes = d.bytes ?? null;
+        if (!bytes && d.data && typeof d.data === 'object') {
+          const j = (Array.isArray(d.data) ? d.data[0] : d.data) as Row;
+          bytes = base64Bytes(j?.FILEDATA ?? j?.DATA ?? j?.CONTENT ?? j?.FILE ?? j?.BASE64);
+        }
+        const name = d.fileName || fname;
+        const mime = docMime(name, d.contentType);
+        if (d.tooLarge) why = 'the file is larger than 25 MB';
+  // rule-policy: technical axcelerate-documents 2026-11-28 owner (AXCELERATE-DOCUMENTS): imported document types, size limit and access; fixed, no configurable value.
+        else if (d.status >= 300) why = `aXcelerate answered HTTP ${d.status}`;
+        else if (!bytes?.byteLength) why = `no file came back (${d.contentType || 'no type'}${d.data && typeof d.data === 'object' ? `; fields: ${Object.keys((Array.isArray(d.data) ? d.data[0] : d.data) as Row ?? {}).slice(0, 15).join(', ')}` : ''})`;
+        else if (!mime) why = `the file type is not kept (${d.contentType || name})`;
+        if (!why && bytes) {
+          const path = `${studentId}/${safeName(pid)}-${safeName(fid || 'file')}-${safeName(name)}`;
+          if (!(await deps.store(path, bytes, mime))) why = 'the file could not be stored';
+          else {
+            const r = await deps.rpc('axcelerate_import_document', { p_connection: deps.connection, p_run: deps.run, p_actor: deps.actor, p_student: studentId, p_key: key,
+              p_rec: { type, title, fileName: name, mime, size: bytes.byteLength, path, portfolioId: pid, fileId: fid, added: text(item, 'DATEADDED', 'CREATEDDATE', 'DATE') } });
+            if (r.error) why = r.error.message ?? 'not saved';
+            else { out.imported++; bump(deps.counts, 'document', 'created'); continue; }
+          }
+        }
+      } catch (e) { why = e instanceof Error ? e.message : 'not read'; }
+      out.failed++;
+      out.warnings!.push(`Document ${fname}: ${why}.`);
+      if (!logged) { logged = true; await fail(deps, 'document', key, `Document ${fname}`, `Document not imported: ${why}`, { ...item, FILES: undefined, FILE: f === item ? undefined : f }); }
+    }
   }
   return out;
 }
@@ -576,6 +675,8 @@ export async function runImport(deps: ImportDeps): Promise<ImportResult> {
               }
               // Invoices and payments (after the Qualifications, so each invoice finds its Qualification).
               result.fees = await importStudentInvoices(deps, id, out.id);
+              // Documents (AXCELERATE-DOCUMENTS): the student's portfolio files.
+              result.documents = await importStudentDocuments(deps, c, id, out.id);
             }
           }
         }

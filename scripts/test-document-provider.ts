@@ -424,11 +424,49 @@ test('aXcelerate client (AXCELERATE-IMPORT): read only: GET on the allow-list, e
  const fake=(async(url:RequestInfo|URL,init?:RequestInit)=>{seen.push(`${init?.method} ${String(url)}`);const off=Number(new URL(String(url)).searchParams.get('offset'));
   return new Response(JSON.stringify(off===0?[{ID:1},{ID:2}]:[{ID:3}]),{status:200});}) as typeof fetch;
  const client=axcelerateClient(f!,{fetch:fake,onCall:(p,s)=>{calls.push([p,s]);}});
- assert.deepEqual(Object.keys(client).sort(),['get','getAll']);
+ assert.deepEqual(Object.keys(client).sort(),['get','getAll','getFile']);
  const rows=await client.getAll('/courses',{type:'p'},{pageSize:2});
  assert.equal(rows.length,3);assert.ok(seen.every(x=>x.startsWith('GET https://skyline.app.axcelerate.com/api/courses?')));
  assert.deepEqual(calls,[['/courses',200],['/courses',200]]);assert.ok(!JSON.stringify(calls).includes('api-1234567890'));
  await assert.rejects(client.get('/course/enrol',{}),AxcelerateBlocked);assert.equal(seen.length,2,'a refused path makes no network call');
+});
+test('aXcelerate file reads (AXCELERATE-DOCUMENTS): bytes kept as they are, only the file paths, size cap, JSON answers as data',async()=>{
+ const {axcelerateFields,axcelerateClient,AxcelerateBlocked}=await import('../supabase/functions/_shared/integrations/axcelerate.ts');
+ const f=axcelerateFields(JSON.stringify({version:1,fields:{environment:'production',subdomain:'skyline',apiToken:'api-1234567890',wsToken:'ws-1234567890'}}))!;
+ const pdf=new Uint8Array([0x25,0x50,0x44,0x46,0xff,0x00,0x80,0xfe]);const seen:string[]=[];
+ const fake=(async(url:RequestInfo|URL,init?:RequestInit)=>{seen.push(`${init?.method} ${String(url)}`);const u=new URL(String(url));
+  if(u.searchParams.get('portfolioID')==='big')return new Response(pdf,{status:200,headers:{'Content-Type':'application/pdf','Content-Length':'999999999'}});
+  if(u.searchParams.get('portfolioID')==='json')return new Response('{"ERROR":true,"MESSAGES":"no file"}',{status:412,headers:{'Content-Type':'application/json'}});
+  return new Response(pdf,{status:200,headers:{'Content-Type':'application/pdf; charset=binary','Content-Disposition':'attachment; filename="passport scan.pdf"'}});}) as typeof fetch;
+ const client=axcelerateClient(f,{fetch:fake});
+ const ok=await client.getFile('/contact/portfolio/file',{contactID:1,portfolioID:'7'});
+ assert.equal(ok.status,200);assert.equal(ok.contentType,'application/pdf');assert.equal(ok.fileName,'passport scan.pdf');assert.deepEqual([...ok.bytes!],[...pdf],'binary bytes are kept exactly');
+ assert.ok(seen[0].startsWith('GET https://skyline.app.axcelerate.com/api/contact/portfolio/file?'));
+ assert.equal((await client.getFile('/contact/portfolio/file',{portfolioID:'big'})).tooLarge,true);
+ const j=await client.getFile('/contact/portfolio/file',{portfolioID:'json'});assert.equal(j.status,412);assert.equal(j.bytes,undefined);assert.deepEqual(j.data,{ERROR:true,MESSAGES:'no file'});
+ await assert.rejects(client.getFile('/contacts/search',{}),AxcelerateBlocked,'only the file reads download bytes');
+ await assert.rejects(client.getFile('/course/enrol',{}),AxcelerateBlocked);assert.equal(seen.length,3,'a refused path makes no network call');
+});
+test('aXcelerate student documents (AXCELERATE-DOCUMENTS): portfolio files stored once, deleted ones not brought back, unreadable logged',async()=>{
+ const {importStudentDocuments}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');
+ const bytes=new Uint8Array([0x25,0x50,0x44,0x46,1,2,3]);const stored:string[]=[];const rpcs:string[]=[];const status:Record<string,string>={};
+ const client={get:async(p:string)=>p==='/contact/portfolio'?{status:200,data:[
+   {PORTFOLIOID:7,PORTFOLIOTYPE:'Passport',NAME:'Passport',FILES:[{FILEID:3,FILENAME:'passport.pdf'},{FILEID:4,FILENAME:'old.pdf'}]},
+   {PORTFOLIOID:8,PORTFOLIOTYPE:'Visa',FILES:[{FILEID:5,FILENAME:'visa.exe'}]},{PORTFOLIOID:9,PORTFOLIOTYPE:'COE',FILES:[{FILEID:6,FILENAME:'coe.pdf'}]}]}:{status:404,data:null},
+  getAll:async()=>[],
+  getFile:async(_p:string,params?:Record<string,unknown>)=>params?.fileID==='6'?{status:412,contentType:'application/json',data:{ERROR:true,MESSAGES:'x'}}
+   :{status:200,contentType:params?.fileID==='5'?'application/octet-stream':'application/pdf',bytes}};
+ status['C1:7:4']='skipped';
+ const rpc=async(n:string,a:Record<string,unknown>)=>{rpcs.push(n);if(n==='axcelerate_document_status')return {data:status[String(a.p_key)]??'new',error:null};
+  if(n==='axcelerate_import_document'){status[String(a.p_key)]='have';return {data:{action:'created'},error:null};}return {data:null,error:null};};
+ const deps={client,rpc,store:async(path:string)=>{stored.push(path);return true;},connection:'k',run:'r',actor:'a',entities:['students'],cursor:{stage:'students',notes:[]},counts:{},deadline:Date.now()+60000,save:async()=>true} as never;
+ const c={stage:'students',notes:[] as string[]} as never;
+ const r=await importStudentDocuments(deps,c,'C1','S1');
+ assert.deepEqual({found:r.found,imported:r.imported,skipped:r.skipped,failed:r.failed},{found:4,imported:1,skipped:1,failed:2});
+ assert.deepEqual(stored,['S1/7-3-passport.pdf'],'only the readable, kept type is stored, under the student');
+ assert.ok((c as {notes:string[]}).notes[0].startsWith('aXcelerate portfolio: 3 item(s)'));
+ assert.equal(rpcs.filter(n=>n==='axcelerate_import_error').length,1,'the first unreadable file is logged once');
+ const again=await importStudentDocuments(deps,c,'C1','S1');assert.equal(again.kept,1);assert.equal(again.imported,0);assert.equal(stored.length,1,'a second Refresh downloads nothing new');
 });
 test('aXcelerate import engine (AXCELERATE-IMPORT): stages in order, page vs everything, resume, cancel, errors recorded',async()=>{
  const {runImport,stagesFor}=await import('../supabase/functions/_shared/integrations/axcelerate-import.ts');

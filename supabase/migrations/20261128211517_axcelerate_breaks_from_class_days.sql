@@ -20,6 +20,7 @@ begin
         from public.class_sessions s
         join public.axcelerate_links cl on cl.connection_id = p_connection and cl.entity = 'class_day' and cl.target_id = s.id::text
         join public.course_intakes ci on ci.id = s.intake_id
+  -- rule-policy: technical axcelerate-breaks 2026-11-28 owner (AXCELERATE-BREAKS): aXcelerate's term breaks are the 7+ day gaps in its class days; fixed import mapping, no configurable value.
        where ci.course_id = p_course and coalesce(s.status, '') <> 'cancelled'),
     x as (select dt, lead(dt) over (order by dt) as nxt from d)
     select dt + 1 as start_date, nxt - 1 as end_date from x where nxt - dt - 1 >= 7 order by dt
@@ -34,6 +35,7 @@ begin
     end if;
     perform public.axcelerate_import_break(p_connection, p_run, p_actor, p_course,
       jsonb_build_object('id', 'gap:' || g.start_date::text, 'label', 'Term break', 'start', g.start_date, 'end', g.end_date,
+  -- rule-policy: technical axcelerate-breaks 2026-11-28 owner (AXCELERATE-BREAKS): aXcelerate's term breaks are the 7+ day gaps in its class days; fixed import mapping, no configurable value.
         'source', 'aXcelerate class days (no classes from ' || g.start_date::text || ' to ' || g.end_date::text || ')'));
     n := n + 1;
   end loop;
@@ -53,8 +55,10 @@ revoke all on function public.axcelerate_class_breaks(uuid, uuid, uuid, text) fr
 do $$
 declare d text := pg_get_functiondef('public.axcelerate_import_unit_results(uuid, uuid, uuid, uuid, jsonb)'::regprocedure); a text;
 begin
+  -- rule-policy: technical axcelerate-breaks 2026-11-28 owner (AXCELERATE-BREAKS): aXcelerate's term breaks are the 7+ day gaps in its class days; fixed import mapping, no configurable value.
   a := '  -- Batches with aXcelerate class days take aXcelerate''s weekly days and times; the intake''s other batches copy them.';
   if (length(d) - length(replace(d, a, ''))) / length(a) <> 1 then raise exception 'axcelerate_import_unit_results: breaks anchor not found once'; end if;
+  -- rule-policy: technical axcelerate-breaks 2026-11-28 owner (AXCELERATE-BREAKS): the breaks run before the batches' classes are laid out; fixed import order.
   d := replace(d, a, '  -- aXcelerate''s term breaks (the gaps in its class days) first, so the classes laid out below skip them (AXCELERATE-BREAKS).
   perform public.axcelerate_class_breaks(p_connection, p_run, p_actor, i.course_id);
 ' || a);

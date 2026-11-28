@@ -12,11 +12,11 @@ export default function AxcelerateDashboardCard() {
       <div>
         <h2 className="font-heading text-base font-semibold text-foreground-950">Import everything from aXcelerate</h2>
         <p className="mt-1 text-sm text-foreground-600">
-          Brings trainers, classes and breaks into Skyline, in order, each on its own page. Nothing is sent to aXcelerate.{" "}
+          Brings trainers, classes, breaks and students into Skyline, in order, each on its own page. Nothing is sent to aXcelerate.{" "}
           <Link className="font-medium text-primary-700 hover:underline" to="/admin/integrations/axcelerate">Import centre</Link>
         </p>
       </div>
-      <AxcelerateImportButton entities={["trainers", "classes", "breaks"]} mode="everything" label="Import everything" variant="primary" />
+      <AxcelerateImportButton entities={["trainers", "classes", "breaks", "students"]} mode="everything" label="Import everything" variant="primary" />
     </Card>
   );
 }

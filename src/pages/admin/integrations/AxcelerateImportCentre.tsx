@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Badge, Button, Card, EmptyState, PageHeader, SectionTabs } from '@/pages/admin/components/ui';
 import AxcelerateImportButton from '@/components/axcelerate/AxcelerateImportButton';
 import {
-  cancelImport, continueAxcelerateImport, countsText, decideConflict, ENTITY_LABEL, importOverview, resolveImportError, runAxcelerateImport,
+  cancelImport, continueAxcelerateImport, countsText, decideConflict, decideReview, ENTITY_LABEL, importOverview, resolveImportError, runAxcelerateImport,
   setImportPermission, surveyAxcelerate, undoSkip, useImportAllowed, type ImportOverview, type Survey,
 } from '@/lib/axcelerateImport';
 
@@ -13,6 +13,7 @@ const ACTION_LABEL: Record<string, string> = {
   axcelerate_import_started: 'Import started', axcelerate_import_retried: 'Import retried', axcelerate_import_cancelled: 'Import cancelled',
   axcelerate_survey: 'Survey run', axcelerate_blocked_call: 'Blocked request (security)', axcelerate_connection_saved: 'Connection saved',
   axcelerate_connection_removed: 'Connection removed', axcelerate_conflict_decided: 'Conflict decided', axcelerate_skip_undone: 'Skipped record restored',
+  axcelerate_review_decided: 'Possible duplicate decided',
   permission_granted: 'Permission granted', permission_removed: 'Permission removed',
 };
 
@@ -42,6 +43,7 @@ export default function AxcelerateImportCentre() {
     { id: 'imports', label: 'Imports' },
     { id: 'errors', label: `Errors${data?.errors.length ? ` (${data.errors.length})` : ''}` },
     { id: 'conflicts', label: `Conflicts${data?.conflicts.length ? ` (${data.conflicts.length})` : ''}` },
+    { id: 'reviews', label: `Possible duplicates${data?.reviews?.length ? ` (${data.reviews.length})` : ''}` },
     { id: 'skipped', label: `Skipped${data?.skipped.length ? ` (${data.skipped.length})` : ''}` },
     { id: 'audit', label: 'Audit' },
     { id: 'permission', label: 'Permission' },
@@ -52,7 +54,7 @@ export default function AxcelerateImportCentre() {
   return <div data-testid="axcelerate-import-centre">
     <PageHeader title="aXcelerate Import centre" breadcrumb="External Integrations"
       description="Brings data from aXcelerate into Skyline, one way only: Skyline reads aXcelerate and never sends anything back. Imported records are ordinary Skyline records: edit, delete or merge them as usual."
-      actions={<AxcelerateImportButton entities={['trainers', 'classes', 'breaks']} mode="everything" label="Import everything" variant="primary" onDone={() => void load()} />} />
+      actions={<AxcelerateImportButton entities={['trainers', 'classes', 'breaks', 'students']} mode="everything" label="Import everything" variant="primary" onDone={() => void load()} />} />
     {error && <p role="alert" className="mb-4 rounded border border-red-300 p-3 text-sm text-red-700">{error}</p>}
     {notice && <p role="status" className="mb-4 rounded border border-green-300 p-3 text-sm">{notice}</p>}
     {!conn || !conn.saved ? <Card className="mb-4 p-4 text-sm">
@@ -131,6 +133,26 @@ export default function AxcelerateImportCentre() {
             </div></td>
           </tr>)}</tbody>
         </table>}
+      </Card>}
+
+      {tab === 'reviews' && <Card className="overflow-x-auto p-0">
+        {!data?.reviews?.length ? <p className="p-4 text-sm text-foreground-600">No possible duplicates. A student from aXcelerate waits here when a Skyline student already has the same email, the same mobile, or the same name and date of birth.</p> : <div className="divide-y divide-background-200" data-testid="axcelerate-reviews">
+          {data.reviews.map((v) => <div key={v.id} className="space-y-2 p-4 text-sm">
+            <p><span className="font-medium">aXcelerate: {v.label ?? v.axcelerateId}</span>
+              <span className="text-foreground-600">{[v.email, v.mobile, v.dob?.slice(0, 10)].filter(Boolean).length ? ` · ${[v.email, v.mobile, v.dob?.slice(0, 10)].filter(Boolean).join(' · ')}` : ''} · contact {v.axcelerateId}</span></p>
+            <ul className="space-y-1">{v.candidates.map((c) => <li key={c.id} className="flex flex-wrap items-center gap-2">
+              <span>Skyline: <Link className="font-medium text-primary-700 hover:underline" to={`/admin/students/${c.id}`}>{c.name || '(no name)'}</Link>
+                <span className="text-foreground-600">{[c.studentNumber, c.email, c.phone, c.dob].filter(Boolean).length ? ` · ${[c.studentNumber, c.email, c.phone, c.dob].filter(Boolean).join(' · ')}` : ''}</span></span>
+              <Badge tone="warn">{c.reasons.join(', ')}</Badge>
+              {c.linked ? <span className="text-xs text-foreground-500">already linked to another aXcelerate contact</span>
+                : <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => decideReview(v.id, 'link', c.id), 'Linked: empty fields filled, other differences are in Conflicts.')}>Same student: link</Button>}
+            </li>)}</ul>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => decideReview(v.id, 'create'), 'Created as a new student.')}>Different student: create</Button>
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(() => decideReview(v.id, 'dismiss'), 'Dismissed. The next import asks again.')}>Dismiss</Button>
+            </div>
+          </div>)}
+        </div>}
       </Card>}
 
       {tab === 'skipped' && <Card className="overflow-x-auto p-0">

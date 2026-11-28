@@ -7,6 +7,7 @@ const WHAT: Record<string, string> = {
   trainers: 'the trainers named on aXcelerate’s classes, as Active staff with the trainer role (no sign-in invitation is sent)',
   classes: 'aXcelerate’s classes as intakes, with their units, trainer and location; a course, unit, location or trainer that Skyline does not have yet is created',
   breaks: 'aXcelerate’s calendar events as term breaks of the courses that have classes from aXcelerate',
+  students: 'every student enrolled in aXcelerate, as students of the direct-students business (possible duplicates wait for review in the Import centre)',
 };
 
 /**
@@ -23,7 +24,7 @@ export default function AxcelerateImportButton({ entities, mode = 'page', label,
   const [run, setRun] = useState<ImportRun | null>(null);
   const [error, setError] = useState('');
   if (!allowed) return null;
-  const list = mode === 'everything' ? (['trainers', 'classes', 'breaks'] as ImportEntity[]) : entities;
+  const list = mode === 'everything' ? (['trainers', 'classes', 'breaks', 'students'] as ImportEntity[]) : entities;
   const start = async () => {
     setBusy(true); setError(''); setRun(null);
     try { setRun(await runAxcelerateImport({ entities: list, mode }, setRun)); onDone?.(); }

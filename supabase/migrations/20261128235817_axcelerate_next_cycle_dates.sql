@@ -7,7 +7,10 @@
 -- its start to the next unit's start in aXcelerate's class, breaks included), and in the next cycle a unit aXcelerate already has a date for
 -- (a student's unit enrolment after the class) starts on that date, the unit before it ending the day before (axcelerate_cycle_layout).
 -- Then each calendar-cycle batch (C<n>) takes its cycle's unit dates and its start and end (axcelerate_cycle_batches_sync); students' own
--- unit dates are not moved. Existing data: each imported course's calendars are built again.
+-- Owner follow-up ("make it match with master calendar"): the batch's students' units that are not finished follow the batch's unit dates
+-- too (a unit already started keeps its start; a unit with a result is never moved), through one narrow exception in the permanent-
+-- allocation guard (lms_allocation_private.preserve_allocation, setting skyline.cycle_sync_batch), and the batch's classes are laid out
+-- again on the new dates. Existing data: each imported course's calendars are built again.
 begin;
 
 create or replace function public.axcelerate_cycle_layout(p_connection uuid, p_course text, p_cycle integer, p_known boolean, p_rows jsonb)
@@ -43,9 +46,29 @@ begin
 end $$;
 revoke all on function public.axcelerate_cycle_layout(uuid, text, integer, boolean, jsonb) from public, anon, authenticated;
 
+-- The permanent-allocation guard: one narrow exception for the aXcelerate cycle sync (axcelerate_cycle_batches_sync): an unfinished
+-- allocation in the batch being synced may take the batch's unit dates; nothing else about it changes.
+do $$
+declare d text := pg_get_functiondef('lms_allocation_private.preserve_allocation()'::regprocedure); a text := '-- STUDENT-DELETE-EVERYTHING';
+begin
+  if (length(d) - length(replace(d, a, ''))) / length(a) <> 1 then raise exception 'preserve_allocation: anchor not found once'; end if;
+  d := replace(d, a, '-- AXCELERATE-NEXT-CYCLE: the cycle sync moves an unfinished allocation of the batch it syncs to the batch''s unit dates.
+ if tg_op = ''UPDATE'' and tg_table_name = ''lms_unit_students'' then
+  if coalesce(current_setting(''skyline.cycle_sync_batch'', true), '''') <> '''' and new.batch_id::text = current_setting(''skyline.cycle_sync_batch'', true)
+     and new.intake_id is not distinct from old.intake_id and new.unit_id is not distinct from old.unit_id
+     and new.student_id is not distinct from old.student_id and new.course_id is not distinct from old.course_id
+     and new.allocated_at is not distinct from old.allocated_at and new.carried_from_intake_id is not distinct from old.carried_from_intake_id
+     and old.actual_end_date is null and old.assigned_end_date >= public.course_intake_today() then
+   return new;
+  end if;
+ end if;
+ ' || a);
+  execute d;
+end $$;
+
 create or replace function public.axcelerate_cycle_batches_sync(p_connection uuid, p_course text)
 returns integer language plpgsql security definer set search_path = public as $$
-declare r record; n integer := 0; v_cycle integer; v_load text;
+declare r record; n integer := 0; v_cycle integer; v_load text; v_moved integer; v_warn text; v_today date := public.course_intake_today();
 begin
   for r in select b.id, x.axcelerate_id from public.axcelerate_links x join public.intake_batches b on b.id::text = x.target_id
             where x.connection_id = p_connection and x.entity = 'batch' and x.axcelerate_id like 'cycle:' || p_course || ':%' and b.archived_at is null loop
@@ -58,9 +81,24 @@ begin
             select unit_id, start_date, end_date from public.course_coe_units where course_id = p_course and cycle = v_cycle and v_load <> 'voe') m
      where xb.batch_id = r.id and xb.unit_id = m.unit_id and m.start_date is not null
        and (xb.start_date, xb.end_date) is distinct from (m.start_date, m.end_date);
+    get diagnostics v_moved = row_count;
     update public.intake_batches b set start_date = z.s, end_date = z.e, updated_at = now()
       from (select min(start_date) as s, max(end_date) as e from public.intake_batch_units where batch_id = r.id) z
      where b.id = r.id and z.s is not null and (b.start_date, b.end_date) is distinct from (z.s, z.e);
+    -- The batch's students' unfinished units follow (a started unit keeps its start; a unit with a result stays).
+    perform set_config('skyline.cycle_sync_batch', r.id::text, true);
+    update public.lms_unit_students u
+       set assigned_start_date = case when u.assigned_start_date <= v_today then u.assigned_start_date else xb.start_date end,
+           assigned_end_date = xb.end_date
+      from public.intake_batch_units xb
+     where u.batch_id = r.id and xb.batch_id = r.id and xb.unit_id = u.unit_id
+       and coalesce(u.outcome_code, '') not in ('20', '30', '40', '41', '51', '52', '60', '61')
+       and u.assigned_end_date >= v_today and u.actual_end_date is null
+       and (u.assigned_start_date, u.assigned_end_date) is distinct from
+           (case when u.assigned_start_date <= v_today then u.assigned_start_date else xb.start_date end, xb.end_date);
+    perform set_config('skyline.cycle_sync_batch', '', true);
+    -- Its classes again on the new dates.
+    if v_moved > 0 then v_warn := public.axcelerate_batch_timetable(r.id, null, null); end if;
     n := n + 1;
   end loop;
   return n;
